@@ -1,18 +1,18 @@
 version: '3.8'
 
 services:
-  ebay-mcp-server:
+  sidecar:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: ebay-mcp-server
+      dockerfile: services/sidecar/Dockerfile
+    container_name: ebay-sidecar
     restart: unless-stopped
     env_file:
-      - .env
+      - services/sidecar/.env
     ports:
-      - "3000:3000"
+      - '3000:3000'
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ['CMD', 'node', '-e', 'process.exit(0)']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -20,8 +20,8 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - ebay-mcp-network
+      - backend-services-network
 
 networks:
-  ebay-mcp-network:
+  backend-services-network:
     driver: bridge

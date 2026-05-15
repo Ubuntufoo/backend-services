@@ -1,0 +1,8 @@
+packages:
+  - 'services/sidecar'
+  - 'services/watcher-service'
+  - 'services/image-service'
+  - 'services/r2-service'
+  - 'services/gemini-service'
+  - 'services/ebay-service'
+  - 'services/job-runner'

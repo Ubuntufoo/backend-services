@@ -1,26 +1,57 @@
-# eBay API MCP Server
+# Backend Services — eBay Inventory Manager
 
 <div align="center">
 
-[![npm version](https://img.shields.io/npm/v/ebay-mcp)](https://www.npmjs.com/package/ebay-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/ebay-mcp)](https://www.npmjs.com/package/ebay-mcp)
-[![Tests](https://img.shields.io/badge/tests-958%20passing-brightgreen)](tests/)
-[![API Coverage](https://img.shields.io/badge/API%20coverage-100%25-success)](src/tools/)
+[![pnpm workspaces](https://img.shields.io/badge/monorepo-pnpm%20workspaces-blue)](pnpm-workspace.yaml)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Contributors Welcome](https://img.shields.io/badge/contributors-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Services](https://img.shields.io/badge/services-7-brightgreen)](#services)
 
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/yosefhayim-ebay-api-mcp-server-badge.png)](https://mseep.ai/app/yosefhayim-ebay-api-mcp-server)
-<a href="https://www.buymeacoffee.com/yosefhayim" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+A **pnpm monorepo** containing backend services for the eBay Inventory Manager. Includes:
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server providing AI assistants with comprehensive access to eBay's Sell APIs. Includes **325 tools** for inventory management, order fulfillment, marketing campaigns, analytics, developer tools, and more.
-
-**API Coverage:** 100% (270 unique eBay API endpoints)
+- **Sidecar**: Model Context Protocol (MCP) server with 325+ eBay API tools
+- **Watcher**: File system monitoring for asset uploads
+- **Image Service**: Image processing and transforms
+- **R2 Service**: Cloudflare R2 storage integration
+- **Gemini Service**: AI-powered image analysis and listing generation
+- **eBay Service**: eBay API client with OAuth and inventory sync
+- **Job Runner**: Background job queue for publish/sync workflows
 
 </div>
 
 ---
 
-## One-Click AI Setup
+## Quick Start
+
+Install dependencies and start all services:
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Start only the sidecar (MCP server):
+
+```bash
+pnpm dev:sidecar
+```
+
+Build all services:
+
+```bash
+pnpm build
+```
+
+For detailed documentation, see [SERVICES.md](SERVICES.md) and [AGENTS.md](AGENTS.md).
+
+---
+
+## Sidecar: eBay API MCP Server
+
+The **sidecar** service is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server providing AI assistants with comprehensive access to eBay's Sell APIs. Includes **325 tools** for inventory management, order fulfillment, marketing campaigns, analytics, developer tools, and more.
+
+**API Coverage:** 100% (270 unique eBay API endpoints)
+
+### One-Click AI Setup
 
 > **Let your AI assistant set this up for you!** Copy the prompt below and paste it into Claude, ChatGPT, or any AI assistant with MCP support.
 
@@ -56,40 +87,11 @@ If I don't have eBay credentials yet, guide me through creating a developer acco
 
 ## ⚠️ Disclaimer
 
-**IMPORTANT: Please read this disclaimer carefully before using this software.**
-
-This is an **open-source project** provided "as is" without warranty of any kind, either express or implied. By using this software, you acknowledge and agree to the following:
-
-- **No Liability:** The authors, contributors, and maintainers of this project accept **NO responsibility or liability** for any damages, losses, or issues that may arise from using this software, including but not limited to:
-  - Data loss or corruption
-  - Financial losses
-  - Service disruptions
-  - eBay account suspension or termination
-  - Violations of eBay's Terms of Service or API usage policies
-  - Any other direct or indirect damages
-
-- **eBay API Usage:** This project is an unofficial third-party implementation and is **NOT affiliated with, endorsed by, or sponsored by eBay Inc.** You are solely responsible for:
-  - Complying with [eBay's API Terms of Use](https://developer.ebay.com/join/api-license-agreement)
-  - Ensuring your usage stays within eBay's rate limits and policies
-  - Managing your eBay Developer credentials securely
-  - Understanding and complying with [eBay's data handling requirements](https://developer.ebay.com/api-docs/static/data-handling-update.html)
-  - Any actions performed through the API
-
 - **Use at Your Own Risk:** This software is provided for educational and development purposes. Users must:
   - Test thoroughly in eBay's sandbox environment before production use
   - Understand the API calls being made on their behalf
   - Maintain backups of critical data
   - Monitor their API usage and account status
-
-- **Security:** You are responsible for:
-  - Keeping your API credentials secure
-  - Properly configuring environment variables
-  - Understanding the security implications of MCP server usage
-  - Following security best practices
-
-- **No Warranty:** This software is provided without any guarantees of functionality, reliability, or fitness for a particular purpose.
-
-**By using this software, you accept all risks and agree to hold harmless the authors, contributors, and maintainers from any claims, damages, or liabilities.**
 
 For official eBay API support, please refer to the [eBay Developer Program](https://developer.ebay.com/).
 
@@ -239,28 +241,6 @@ EBAY_USER_REFRESH_TOKEN=your_refresh_token  # For higher rate limits
 **User Tokens (Recommended):** 10,000-50,000 requests/day - the setup wizard handles the OAuth flow automatically. Tokens refresh automatically.
 
 For detailed OAuth setup and comprehensive configuration guide, see the [Configuration Documentation](docs/auth/CONFIGURATION.md).
-
-### MCP Client Compatibility
-
-This server supports **9 AI clients** with auto-configuration via `npm run setup`:
-
-| Client                 | Platform              | Config Path                                                                  | Status             |
-| ---------------------- | --------------------- | ---------------------------------------------------------------------------- | ------------------ |
-| **Claude Desktop**     | macOS, Windows, Linux | `~/Library/Application Support/Claude/claude_desktop_config.json`            | ✅ Auto-configured |
-| **Cursor IDE**         | macOS, Windows, Linux | `~/.cursor/mcp.json`                                                         | ✅ Auto-configured |
-| **Zed Editor**         | macOS, Windows, Linux | `~/.config/zed/settings.json`                                                | ✅ Auto-configured |
-| **Cline**              | VSCode Extension      | `~/...globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` | ✅ Auto-configured |
-| **Continue.dev**       | VSCode, JetBrains     | `~/.continue/config.json`                                                    | ✅ Auto-configured |
-| **Windsurf (Codeium)** | macOS, Windows, Linux | `~/.codeium/windsurf/mcp_config.json`                                        | ✅ Auto-configured |
-| **Roo Code**           | VSCode Extension      | `~/...globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json`   | ✅ Auto-configured |
-| **Claude Code CLI**    | Terminal              | `~/.claude.json`                                                             | ✅ Auto-configured |
-| **Amazon Q Developer** | AWS                   | `~/.aws/amazonq/mcp.json`                                                    | ✅ Auto-configured |
-
-**Configuration Requirements:**
-
-- MCP Protocol version: 1.0+
-- Transport: STDIO (default) or HTTP
-- Node.js runtime: 18.0.0 or higher
 
 **Quick Setup for Any Client:**
 
@@ -626,36 +606,3 @@ Check current eBay API health, incidents, and fixes:
 - [OAuth Quick Reference](docs/auth/OAUTH_QUICK_REFERENCE.md) - **Complete OAuth authentication guide with scopes, troubleshooting, and examples**
 - [OAuth Setup Guide](docs/auth/) - Detailed authentication configuration
 - [Contributing Guidelines](CONTRIBUTING.md) - How to contribute to this project
-- [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines and expectations
-- [Changelog](CHANGELOG.md) - Version history and release notes
-- [Security Policy](SECURITY.md) - Vulnerability reporting guidelines
-
-### Support
-
-- [Issue Tracker](https://github.com/YosefHayim/ebay-mcp/issues) - Bug reports and feature requests
-- [Bug Report Template](BUG_REPORT.md) - Detailed bug reporting guide
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Contributors
-
-Thanks to all the amazing contributors who have helped make this project better! 🎉
-
-<a href="https://github.com/YosefHayim/ebay-mcp/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=YosefHayim/ebay-mcp" alt="Contributors" />
-</a>
-
-## Acknowledgments
-
-- [eBay Developers Program](https://developer.ebay.com/) for API access
-- [Model Context Protocol](https://modelcontextprotocol.io/) for the MCP specification
-
----
-
-<div align="center">
-
-**[Support this project](https://www.buymeacoffee.com/yosefhayim)** | Created by [Yosef Hayim Sabag](https://github.com/YosefHayim)
-
-</div>
