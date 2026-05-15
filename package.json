@@ -23,15 +23,22 @@
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm -r check",
     "fix": "pnpm -r fix",
-    "lint": "eslint services/**/*.ts",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"vitest.config.ts\" \"eslint.config.js\"",
     "format": "prettier --write \"services/**/src/**/*.{ts,js,json,md}\"",
     "prepare": "husky install"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@vitest/coverage-v8": "^4.1.6",
+    "@vitest/eslint-plugin": "^1.6.17",
+    "@vitest/ui": "^4.1.6",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-n": "^17.24.0",
+    "husky": "^9.1.7",
     "prettier": "^3.8.1",
-    "husky": "^9.1.7"
+    "typescript-eslint": "^8.56.1",
+    "vitest": "^4.1.6"
   },
   "packageManager": "pnpm@10.14.0",
   "engines": {

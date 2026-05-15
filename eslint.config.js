@@ -2,7 +2,7 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import pluginN from 'eslint-plugin-n';
-import vitest from 'eslint-plugin-vitest';
+import vitest from '@vitest/eslint-plugin';
 import eslintConfigPrettier from 'eslint-config-prettier';
 
 export default tseslint.config(
@@ -192,10 +192,20 @@ export default tseslint.config(
       '@typescript-eslint/await-thenable': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+      'vitest/no-conditional-expect': 'off',
       'no-console': 'off',
     },
   },
 
+  // Generated schema and tool definition files intentionally use assertion-heavy builders.
+  {
+    files: ['src/schemas/**/*.ts', 'src/tools/**/*.ts', 'src/scripts/test-endpoints.ts'],
+    rules: {
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+    },
+  },
+
   // Disable rules that conflict with Prettier
-  eslintConfigPrettier,
+  eslintConfigPrettier
 );
