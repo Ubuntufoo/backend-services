@@ -6,13 +6,12 @@
   "include": [
     "src/**/*",
     "tests/**/*",
+    "services/**/src/**/*.ts",
+    "services/**/src/**/*.d.ts",
+    "services/**/tests/**/*.ts",
     "services/**/vitest.config.ts",
     "vitest.config.ts",
     "eslint.config.js"
   ],
-  "exclude": [
-    "node_modules",
-    "build",
-    "docs"
-  ]
+  "exclude": ["node_modules", "build", "docs"]
 }
