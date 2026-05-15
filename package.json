@@ -23,7 +23,7 @@
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm -r check",
     "fix": "pnpm -r fix",
-    "lint": "eslint services/**/*.ts",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"vitest.config.ts\" \"eslint.config.js\"",
     "format": "prettier --write \"services/**/src/**/*.{ts,js,json,md}\"",
     "prepare": "husky install"
   },

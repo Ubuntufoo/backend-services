@@ -1,6 +1,6 @@
 import cors from 'cors';
 import { randomUUID } from 'crypto';
-import express, { type Request, type RequestHandler, type Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import helmet from 'helmet';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -120,10 +120,7 @@ async function createMcpServer(serverUrl: string): Promise<McpServer> {
   return runtime.server;
 }
 
-async function createAuthMiddleware(
-  config: HttpTransportConfig,
-  serverUrl: string
-): Promise<RequestHandler | undefined> {
+async function createAuthMiddleware(config: HttpTransportConfig, serverUrl: string) {
   if (!config.authEnabled) {
     console.error('OAuth is disabled. Server running in unauthenticated mode.');
     return undefined;
@@ -155,7 +152,7 @@ async function createAuthMiddleware(
   }
 }
 
-function createRequestLogger(): RequestHandler {
+function createRequestLogger() {
   return (req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
