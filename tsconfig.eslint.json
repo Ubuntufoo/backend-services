@@ -6,6 +6,7 @@
   "include": [
     "src/**/*",
     "tests/**/*",
+    "services/**/vitest.config.ts",
     "vitest.config.ts",
     "eslint.config.js"
   ],
