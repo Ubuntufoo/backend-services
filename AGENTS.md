@@ -2,7 +2,7 @@ Backend Services (backend-services)
 
 Overview
 
-This repository provides the server-side components for the eBay Inventory Manager. The codebase follows a phased monorepo model tuned for a local-only, single-user workflow:
+This repository provides the server-side components for Murphy Family Hobby's eBay inventory manager. The codebase follows a phased monorepo model tuned for a local-only, single-user workflow:
 
 - `services/sidecar` is the only implemented runtime package today.
 - Other responsibilities are planned boundaries and should stay inside the sidecar or the main app until real extraction pressure exists.
