@@ -10,6 +10,7 @@ import { getVersion } from '@/utils/version.js';
 // Get the current directory for loading scope files and .env
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
 // Load .env from the package root (two levels up from src/config/), not process.cwd().
 // MCP servers inherit cwd from the host (e.g. Claude Code's project dir), so
@@ -27,7 +28,7 @@ interface ScopeDefinition {
  */
 function getProductionScopes(): string[] {
   try {
-    const scopesPath = join(__dirname, '../../docs/auth/production_scopes.json');
+    const scopesPath = join(repoRoot, 'docs/auth/production_scopes.json');
     const scopesData = readFileSync(scopesPath, 'utf-8');
     const scopes: ScopeDefinition[] = JSON.parse(scopesData);
 
@@ -51,7 +52,7 @@ function getProductionScopes(): string[] {
  */
 function getSandboxScopes(): string[] {
   try {
-    const scopesPath = join(__dirname, '../../docs/auth/sandbox_scopes.json');
+    const scopesPath = join(repoRoot, 'docs/auth/sandbox_scopes.json');
     const scopesData = readFileSync(scopesPath, 'utf-8');
     const scopes: ScopeDefinition[] = JSON.parse(scopesData);
 
@@ -201,7 +202,7 @@ export function getEbayConfig(): EbayConfig {
   // Only require client credentials - tokens can be optional (generated from refresh token)
   if (clientId === '' || clientSecret === '') {
     console.error(
-      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin your .env file at project root'
+      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin services/sidecar/.env'
     );
   }
 
@@ -367,7 +368,7 @@ export const mcpConfig: Implementation = {
   name: 'eBay API Model Context Protocol Server',
   version: getVersion(),
   title: 'eBay API Model Context Protocol Server',
-  websiteUrl: 'https://github.com/YosefHayim/ebay-mcp',
+  websiteUrl: 'https://github.com/Ubuntufoo/backend-services/tree/main/services/sidecar',
   icons: [
     {
       src: iconUrl('16x16'),

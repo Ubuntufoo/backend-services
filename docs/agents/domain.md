@@ -4,7 +4,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Layout
 
-This is a single-context repo.
+This is a phased monorepo with one active runtime package.
 
 Before exploring, read these if they exist:
 
@@ -21,7 +21,10 @@ If these files do not exist, proceed silently. Do not suggest creating them upfr
 ├── docs/adr/
 │   ├── 0001-example-decision.md
 │   └── 0002-example-decision.md
-└── src/
+└── services/
+    └── sidecar/
+        ├── src/
+        └── tests/
 ```
 
 ## Use the glossary's vocabulary
