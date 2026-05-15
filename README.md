@@ -1,21 +1,21 @@
 # Backend Services
 
-This repository is the backend monorepo for the eBay Inventory Manager. It is intentionally in a phased state:
+This repository is the backend monorepo for the eBay Inventory Manager. It is intentionally optimized for a local-only, single-user workflow:
 
 - `services/sidecar` is the only implemented runtime package today.
-- The other service directories are planning placeholders that document future boundaries without pretending to be production-ready packages.
+- Future boundaries are documented, but they should stay inside the sidecar or the main app until scale or operational pressure proves a real extraction is needed.
 
 ## Current Status
 
 | Service | Status | Notes |
 | --- | --- | --- |
-| `sidecar` | Implemented | Canonical MCP/eBay server package with tests, linting, and Docker support. |
-| `watcher-service` | Planned | Event ingestion and workflow triggering. |
-| `image-service` | Planned | Image transforms, metadata extraction, and thumbnail generation. |
-| `r2-service` | Planned | Cloudflare R2 uploads and signed URL issuance. |
-| `gemini-service` | Planned | Gemini-backed enrichment and structured listing analysis. |
-| `ebay-service` | Planned | Shared eBay-specific domain workflows beyond the sidecar. |
-| `job-runner` | Planned | Background jobs, retries, and queue orchestration. |
+| `sidecar` | Implemented | Canonical MCP/eBay server package with tests and local setup support. |
+| `watcher-service` | Planned boundary | Keep as a sidecar or app module unless event volume justifies extraction. |
+| `image-service` | Planned boundary | Keep image transforms local until they need isolated runtime scaling. |
+| `r2-service` | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service. |
+| `gemini-service` | Planned boundary | Prefer in-process orchestration with request guards before extraction. |
+| `ebay-service` | Planned boundary | Extract only if eBay workflows outgrow the sidecar package boundary. |
+| `job-runner` | Planned boundary | Prefer app- or Supabase-driven background work before adding a worker process. |
 
 ## Canonical Layout
 
@@ -23,17 +23,13 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 backend-services/
   services/
     sidecar/              # Active package
-    watcher-service/      # Planned boundary
-    image-service/        # Planned boundary
-    r2-service/           # Planned boundary
-    gemini-service/       # Planned boundary
-    ebay-service/         # Planned boundary
-    job-runner/           # Planned boundary
   docs/                   # Shared reference material
   scripts/                # Repo-level guardrails
 ```
 
 The root package is orchestration-only. It does not own application runtime code.
+
+Planned service boundaries live in documentation, not in placeholder workspace packages or required runtime folders.
 
 ## Workspace Commands
 
@@ -65,6 +61,15 @@ pnpm sync
 pnpm update:api-status
 pnpm dev:sidecar
 ```
+
+## Local-Only Defaults
+
+For a local-only setup with cloud Supabase integration:
+
+- run `services/sidecar` directly on your machine
+- keep Supabase hosted instead of adding a local database stack here
+- keep planned watcher, image, R2, Gemini, eBay, and job-runner concerns as modules or Supabase-triggered workflows until a second runtime is clearly necessary
+- avoid containerization and multi-process orchestration unless deployment needs actually appear
 
 ## Guardrails
 

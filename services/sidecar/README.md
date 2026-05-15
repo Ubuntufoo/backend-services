@@ -38,13 +38,9 @@ cp services/sidecar/.env.example services/sidecar/.env
 
 The sidecar reads its `.env` file from the package root, not from the repo root.
 
-## Docker
+## Local-Only Operation
 
-From the repo root:
-
-```bash
-docker-compose up --build sidecar
-```
+This package is intended to run directly on your machine for local development and single-user use. It does not require Docker or a local Supabase stack when your Supabase project is hosted.
 
 ## Scope
 
@@ -53,6 +49,7 @@ The sidecar currently owns:
 - MCP stdio startup
 - HTTP transport and OAuth metadata
 - eBay REST and Trading API clients
+- direct integration points to your hosted Supabase-backed app workflow
 - Tool definitions, schemas, and handlers
 - Setup, diagnostics, and API sync scripts
 - Unit and integration tests
