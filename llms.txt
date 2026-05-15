@@ -1,37 +1,28 @@
-# ebay-mcp
+# backend-services
 
-> Local MCP server that exposes 325 tools covering 100% of the eBay Sell APIs to AI coding assistants (Claude, Cursor, Windsurf, and any MCP-compatible client). Runs entirely on your machine — no cloud relay.
-
-Built with TypeScript/Node.js. Supports OAuth 2.0 and eBay Trading API (legacy XML). Configurable via `.env` or an interactive setup wizard.
+> Phased backend monorepo for the eBay Inventory Manager. The canonical runtime package is `services/sidecar`, which exposes eBay Sell APIs to MCP-compatible local assistants.
 
 ## Getting Started
 
-- [README](https://github.com/YosefHayim/ebay-mcp/blob/main/README.md): Full setup guide, configuration reference, and usage examples
-- [.env.example](https://github.com/YosefHayim/ebay-mcp/blob/main/.env.example): All supported environment variables with descriptions
-- [CONTRIBUTING.md](https://github.com/YosefHayim/ebay-mcp/blob/main/CONTRIBUTING.md): How to add tools, run tests, and open PRs
-- [CHANGELOG.md](https://github.com/YosefHayim/ebay-mcp/blob/main/CHANGELOG.md): Full version history
+- [Root README](https://github.com/Ubuntufoo/backend-services/blob/main/README.md): Monorepo overview and workspace commands
+- [Sidecar README](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/README.md): Setup, usage, and development guide for the active package
+- [AGENTS.md](https://github.com/Ubuntufoo/backend-services/blob/main/AGENTS.md): Architecture intent and service boundaries
 
-## API Coverage
+## Active Runtime Surface
 
-- [Account](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/account.ts): Business policies, fulfillment, payment, return policies, privileges
-- [Inventory](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/inventory.ts): Listings, offers, inventory items, inventory item groups, bulk operations
-- [Marketing](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/marketing.ts): Promotions, campaigns, ads, reports
-- [Fulfillment](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/fulfillment.ts): Orders, payments, shipping, returns
-- [Analytics](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/analytics.ts): Seller standards, traffic reports, customer service metrics
-- [Communication](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/communication.ts): Buyer messages, notifications, message templates
-- [Taxonomy](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/taxonomy.ts): Category trees, item aspects, item conditions
-- [Metadata](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/metadata.ts): Return policies, sales tax jurisdictions, automotive compatibility
-- [Developer](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/developer.ts): Rate limits, signing keys, client registration
-- [Trading](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/trading.ts): Legacy XML API — fixed-price listing management (create, revise, relist, end)
-- [Token Management](https://github.com/YosefHayim/ebay-mcp/blob/main/src/tools/definitions/token-management.ts): OAuth token retrieval, refresh, and diagnostics
+- [Account](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/account.ts)
+- [Inventory](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/inventory.ts)
+- [Marketing](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/marketing.ts)
+- [Fulfillment](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/fulfillment.ts)
+- [Analytics](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/analytics.ts)
+- [Communication](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/communication.ts)
+- [Taxonomy](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/taxonomy.ts)
+- [Metadata](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/metadata.ts)
+- [Developer](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/developer.ts)
+- [Trading](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/trading.ts)
+- [Token Management](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/token-management.ts)
 
-## Security & Compliance
+## Shared References
 
-- [SECURITY.md](https://github.com/YosefHayim/ebay-mcp/blob/main/SECURITY.md): Vulnerability reporting and security policy
-- [EBAY_COMPLIANCE.md](https://github.com/YosefHayim/ebay-mcp/blob/main/EBAY_COMPLIANCE.md): eBay API terms compliance notes
-- [CODE_OF_CONDUCT.md](https://github.com/YosefHayim/ebay-mcp/blob/main/CODE_OF_CONDUCT.md): Community standards
-
-## Optional
-
-- [API_STATUS.md](https://github.com/YosefHayim/ebay-mcp/blob/main/docs/API_STATUS.md): Live eBay API endpoint health snapshot (auto-updated weekly)
-- [Docker](https://github.com/YosefHayim/ebay-mcp/blob/main/Dockerfile): Container setup for running the server
+- [docs/API_STATUS.md](https://github.com/Ubuntufoo/backend-services/blob/main/docs/API_STATUS.md)
+- [docs/auth/CONFIGURATION.md](https://github.com/Ubuntufoo/backend-services/blob/main/docs/auth/CONFIGURATION.md)

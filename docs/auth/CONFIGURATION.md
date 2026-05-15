@@ -602,7 +602,7 @@ EBAY_USER_REFRESH_TOKEN=v^1.1#r^1#i^1#p^3#I^3#f^0#t^H4sIAAAAAAAAAOVXa2...
 
 1. Verify the `.env` file exists and is writable
 2. Check file permissions (should be readable/writable by the process)
-3. Ensure the `.env` file is in the project root directory
+3. Ensure the `.env` file is in `services/sidecar/.env`
 4. Check server logs for any file write errors
 
 ### Diagnostic Tools
@@ -636,8 +636,8 @@ Exports a detailed diagnostic report that you can share when seeking help.
 If you're still experiencing issues:
 
 1. **Check Existing Resources:**
-   - Review [GitHub Issues](https://github.com/YosefHayim/ebay-mcp/issues)
-   - Search [GitHub Discussions](https://github.com/YosefHayim/ebay-mcp/discussions)
+   - Review the sidecar README and setup steps
+   - Re-run `pnpm diagnose` from the repo root
 
 2. **Create a New Issue:**
    - Include your diagnostic report (`npm run diagnose:export`)
@@ -658,4 +658,4 @@ If you're still experiencing issues:
 
 ---
 
-**Need Help?** If you encounter issues not covered in this guide, please [open a GitHub issue](https://github.com/YosefHayim/ebay-mcp/issues) or [start a discussion](https://github.com/YosefHayim/ebay-mcp/discussions).
+**Need Help?** If you encounter issues not covered in this guide, review `services/sidecar/README.md`, re-run `pnpm diagnose`, and inspect your package-local `.env` configuration.
