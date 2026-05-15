@@ -64,7 +64,7 @@ I want to set up the eBay MCP Server for my AI assistant. Please help me:
 1. Install the eBay MCP server:
    npm install -g ebay-mcp
 
-2. I need to configure it for [Codex]
+2. I need to configure it for [Claude Desktop / Cursor / Cline / Zed / Continue.dev / Windsurf / Claude Code CLI / Amazon Q]
 
 3. My eBay credentials are:
    - Client ID: [YOUR_CLIENT_ID]
