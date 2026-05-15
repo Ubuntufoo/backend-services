@@ -152,7 +152,6 @@ Files:
 - `src/auth/oauth.ts`
 - `src/tools/handlers.ts`
 - `src/scripts/setup.ts`
-- `src/scripts/interactive-setup.ts`
 - `src/scripts/setup-shared.ts`
 
 Problem:
