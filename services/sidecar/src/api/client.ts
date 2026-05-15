@@ -1,7 +1,9 @@
+import { DotEnvCredentialStore } from '@/auth/credential-session.js';
 import { EbayOAuthClient } from '@/auth/oauth.js';
 import { getBaseUrl } from '@/config/environment.js';
 import type { EbayApiError, EbayConfig } from '@/types/ebay.js';
 import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import { fileURLToPath } from 'url';
 import { apiLogger, logRequest, logResponse, logErrorResponse } from '@/utils/logger.js';
 
 // Extended Axios config with retry tracking
@@ -76,7 +78,10 @@ export class EbayApiClient {
 
   constructor(config: EbayConfig) {
     this.config = config;
-    this.authClient = new EbayOAuthClient(config);
+    this.authClient = new EbayOAuthClient(
+      config,
+      new DotEnvCredentialStore(() => fileURLToPath(new URL('../../.env', import.meta.url)))
+    );
     this.baseUrl = getBaseUrl(config.environment);
     this.rateLimitTracker = new RateLimitTracker();
 

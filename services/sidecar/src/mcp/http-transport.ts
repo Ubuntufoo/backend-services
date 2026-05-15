@@ -95,7 +95,7 @@ function createServerConfig(serverUrl: string): Implementation {
     name: 'ebay-mcp',
     version: getVersion(),
     title: 'eBay API MCP Server',
-    websiteUrl: 'https://github.com/YosefHayim/ebay-mcp',
+    websiteUrl: 'https://github.com/Ubuntufoo/backend-services/tree/main/services/sidecar',
     icons: iconSizes.map((size) => ({
       src: `${iconBaseUrl}/${size}.png`,
       mimeType: 'image/png',
@@ -197,7 +197,8 @@ export async function createHttpMcpApp(config: HttpTransportConfig): Promise<exp
       resourceServerUrl: serverUrl,
       authServerMetadata: getAuthServerMetadataUrl(config),
       scopesSupported: config.oauth.requiredScopes,
-      resourceDocumentation: 'https://github.com/YosefHayim/ebay-mcp',
+      resourceDocumentation:
+        'https://github.com/Ubuntufoo/backend-services/tree/main/services/sidecar',
       resourceName: 'eBay API MCP Server',
       ebayEnvironment: ebayConfig.environment,
       ebayScopes: getDefaultScopes(ebayConfig.environment),
