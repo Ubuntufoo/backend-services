@@ -27,7 +27,7 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
     "check:layout": "node ./scripts/verify-canonical-layout.mjs",
-    "check": "pnpm run check:layout && pnpm --filter sidecar check",
+    "check": "pnpm run check:layout && pnpm -r --if-present check",
     "fix": "pnpm --filter sidecar fix",
     "format": "pnpm --filter sidecar fix",
     "prepare": "husky install"

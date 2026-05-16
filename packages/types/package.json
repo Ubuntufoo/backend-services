@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
-    "test": "pnpm run typecheck"
+    "test": "pnpm run typecheck",
+    "check": "pnpm run typecheck"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
