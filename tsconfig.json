@@ -2,6 +2,12 @@
   "files": [],
   "references": [
     {
+      "path": "./packages/types"
+    },
+    {
+      "path": "./packages/env"
+    },
+    {
       "path": "./services/sidecar"
     }
   ]

@@ -87,3 +87,11 @@ GEMINI.md
 .mcp.json
 Taskfile.yml
 bun.lock
+
+# Ignore repo-local spec/agent/roadmap docs (allow contributors to keep local copies)
+**/AGENTS.md
+**/agents.md
+**/ROADMAP.md
+**/roadmap.md
+**/SPEC.md
+**/spec.md

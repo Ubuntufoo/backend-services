@@ -2,10 +2,12 @@ import { config } from 'dotenv';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { loadEnv, EnvValidationError } from '@ebay-inventory/env';
 import type { EbayConfig } from '@/types/ebay.js';
 import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
 import { LocaleEnum } from '@/types/ebay-enums.js';
 import { getVersion } from '@/utils/version.js';
+import { z } from 'zod';
 
 // Get the current directory for loading scope files and .env
 const __filename = fileURLToPath(import.meta.url);
@@ -16,6 +18,37 @@ const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 // MCP servers inherit cwd from the host (e.g. Claude Code's project dir), so
 // process.cwd() may point to an unrelated project with a different .env.
 config({ path: join(__dirname, '../../.env'), quiet: true });
+
+const requiredEbayCredential = (name: string): z.ZodString =>
+  z
+    .string({
+      required_error: `${name} is not set. OAuth will not work.`,
+      invalid_type_error: `${name} is not set. OAuth will not work.`,
+    })
+    .trim()
+    .min(1, `${name} is not set. OAuth will not work.`);
+
+const sidecarRuntimeEnvSchema = z.object({
+  EBAY_CLIENT_ID: requiredEbayCredential('EBAY_CLIENT_ID'),
+  EBAY_CLIENT_SECRET: requiredEbayCredential('EBAY_CLIENT_SECRET'),
+  EBAY_ENVIRONMENT: z
+    .enum(['production', 'sandbox'], {
+      errorMap: () => ({
+        message: 'EBAY_ENVIRONMENT must be either "production" or "sandbox".',
+      }),
+    })
+    .optional(),
+});
+
+export type SidecarRuntimeEnv = z.infer<typeof sidecarRuntimeEnvSchema>;
+
+export function loadSidecarRuntimeEnv(): SidecarRuntimeEnv {
+  return loadEnv({
+    serviceName: 'sidecar',
+    schema: sidecarRuntimeEnvSchema,
+    env: process.env,
+  });
+}
 
 // Type for scope JSON structure
 interface ScopeDefinition {
@@ -131,19 +164,16 @@ export function validateEnvironmentConfig(): {
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  // Check required environment variables
-  if (!process.env.EBAY_CLIENT_ID) {
-    errors.push('EBAY_CLIENT_ID is not set. OAuth will not work.');
-  }
-
-  if (!process.env.EBAY_CLIENT_SECRET) {
-    errors.push('EBAY_CLIENT_SECRET is not set. OAuth will not work.');
-  }
-
-  // Validate EBAY_ENVIRONMENT
   const environment = process.env.EBAY_ENVIRONMENT;
-  if (environment && environment !== 'production' && environment !== 'sandbox') {
-    errors.push(`EBAY_ENVIRONMENT must be either "production" or "sandbox", got: "${environment}"`);
+
+  try {
+    loadSidecarRuntimeEnv();
+  } catch (error) {
+    if (error instanceof EnvValidationError) {
+      errors.push(...error.issues.map((issue) => issue.message));
+    } else {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
   }
 
   // Check if environment is set
