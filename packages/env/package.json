@@ -8,7 +8,7 @@
   "types": "build/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./build/index.d.ts",
       "import": "./build/index.js"
     }
   },
