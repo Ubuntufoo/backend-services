@@ -1,12 +1,14 @@
 # ROADMAP
 
+Note: Commented out early tasks that have been completed to keep the focus on upcoming work.
+
 | Phase | Area | Task | Output |
 |---:|---|---|---|
-| 0 | BE | Set up pnpm workspace scripts | Can run services from root |
+<!-- | 0 | BE | Set up pnpm workspace scripts | Can run services from root |
 | 0 | BE | Add shared TypeScript config | Consistent TS across services |
 | 0 | BE | Add shared env validation package | Each service can validate required env vars |
 | 0 | BE | Add shared types package | Shared `ListingStatus`, `JobType`, `CaptureMode` types |
-| 0 | FE | Set up app shell | Basic dashboard route loads |
+| 0 | FE | Set up app shell | Basic dashboard route loads | -->
 | 1 | DB | Create listings table | Core listing data exists |
 | 1 | DB | Create jobs table | Background work can be queued |
 | 1 | DB | Create orders table | Order checks can be stored later |
