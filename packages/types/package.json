@@ -1,0 +1,23 @@
+{
+  "name": "@ebay-inventory/types",
+  "version": "0.0.0",
+  "description": "Shared workflow domain types for eBay Inventory Manager backend services.",
+  "type": "module",
+  "private": true,
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
+    "test": "pnpm run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
