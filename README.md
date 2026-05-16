@@ -1,6 +1,6 @@
 # Backend Services
 
-This repository is the backend monorepo for Murphy Family Hobby's eBay inventory manager. It is intentionally optimized for a local-only, single-user workflow:
+This repository is the backend monorepo for the eBay Inventory Manager. It is intentionally optimized for a local-only, single-user workflow:
 
 - `services/sidecar` is the only implemented runtime package today.
 - Future boundaries are documented, but they should stay inside the sidecar or the main app until scale or operational pressure proves a real extraction is needed.
