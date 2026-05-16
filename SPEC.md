@@ -99,7 +99,6 @@
 | default_package_type          | text        | Default package type              | PWE                    |
 | handling_days                 | integer     | Default handling time             | 1                      |
 | gemini_daily_limit            | integer     | Daily Gemini cap                  | 500                    |
-| max_listings_per_day          | integer     | Personal workflow cap             | 100                    |
 | max_order_syncs_per_day       | integer     | Planned order checks per day      | 4                      |
 | ebay_marketplace_id           | text        | Default eBay marketplace          | EBAY_US                |
 | updated_at                    | timestamptz | Last settings update              | -                      |
