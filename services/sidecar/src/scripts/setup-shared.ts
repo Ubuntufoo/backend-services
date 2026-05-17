@@ -4,7 +4,7 @@ import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 /**
  * Load existing key/value config from the canonical repo-root .env.local file.
  */
-export function loadExistingConfig(_projectRoot: string): Record<string, string> {
+export function loadExistingConfig(): Record<string, string> {
   const envPath = ROOT_ENV_LOCAL_PATH;
   const envConfig: Record<string, string> = {};
 

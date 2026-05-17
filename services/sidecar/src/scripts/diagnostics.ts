@@ -208,7 +208,7 @@ async function generateDiagnosticReport(exportPath?: string): Promise<Diagnostic
   const securityResults = await runSecurityChecks(PROJECT_ROOT);
 
   // Run configuration validation
-  const validationSummary = await validateSetup(PROJECT_ROOT);
+  const validationSummary = await validateSetup();
 
   // Detect LLM clients
   const llmClients = detectLLMClients();
@@ -292,7 +292,7 @@ async function runDiagnostics(exportReport = false): Promise<void> {
 
   // Configuration validation
   console.log(chalk.bold.cyan('📋 Configuration Validation\n'));
-  const validationSummary = await validateSetup(PROJECT_ROOT);
+  const validationSummary = await validateSetup();
   displayRecommendations(validationSummary);
 
   // If we have credentials, test authentication

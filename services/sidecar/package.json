@@ -37,7 +37,7 @@
   "dependencies": {
     "@ebay-inventory/env": "workspace:*",
     "@modelcontextprotocol/sdk": "1.27.1",
-    "@supabase/supabase-js": "^2.105.4",
+    "@supabase/supabase-js": "2.78.0",
     "axios": "^1.13.6",
     "chalk": "^5.6.2",
     "cors": "^2.8.6",

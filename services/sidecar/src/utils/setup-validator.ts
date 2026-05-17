@@ -36,7 +36,7 @@ export interface ValidationSummary {
 /**
  * Validate .env.local file exists and is readable
  */
-function validateEnvFile(_projectRoot: string): ValidationResult {
+function validateEnvFile(): ValidationResult {
   const envPath = ROOT_ENV_LOCAL_PATH;
 
   if (!existsSync(envPath)) {
@@ -249,13 +249,13 @@ function validateSupabaseClientInitialization(envVars: Record<string, string>): 
 /**
  * Run all validation tests
  */
-export async function validateSetup(projectRoot: string): Promise<ValidationSummary> {
+export async function validateSetup(): Promise<ValidationSummary> {
   const results: ValidationResult[] = [];
 
   console.log(chalk.bold.cyan('\n🧪 Running Configuration Tests...\n'));
 
   // Test 1: .env.local file exists
-  const envFileResult = validateEnvFile(projectRoot);
+  const envFileResult = validateEnvFile();
   results.push(envFileResult);
   printResult(envFileResult);
 

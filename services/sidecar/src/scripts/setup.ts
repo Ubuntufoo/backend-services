@@ -316,7 +316,7 @@ function formatDate(date: Date): string {
 
 function saveConfig(envConfig: Record<string, string>, environment: string): void {
   const envPath = ROOT_ENV_LOCAL_PATH;
-  const existingConfig = loadExistingConfig(REPO_ROOT);
+  const existingConfig = loadExistingConfig();
   const mergedConfig = {
     ...existingConfig,
     ...envConfig,
@@ -404,7 +404,7 @@ function displayUserInfo(userInfo: EbayUserInfo): void {
  * Runs the interactive eBay MCP setup wizard from the script entry point.
  */
 export async function runSetup(): Promise<void> {
-  const existingConfig = loadExistingConfig(REPO_ROOT);
+  const existingConfig = loadExistingConfig();
   const detectedClients = detectLLMClients();
   const availableClients = detectedClients.filter((c) => c.detected);
 
@@ -967,7 +967,7 @@ async function main(): Promise<void> {
     console.log(ui.bold.cyan('  Running Diagnostics...\n'));
     const securityResults = await runSecurityChecks(REPO_ROOT);
     displaySecurityResults(securityResults);
-    const summary = await validateSetup(REPO_ROOT);
+    const summary = await validateSetup();
     displayRecommendations(summary);
     process.exit(0);
   }
