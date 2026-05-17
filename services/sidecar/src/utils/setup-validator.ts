@@ -386,7 +386,9 @@ export function displayRecommendations(summary: ValidationSummary): void {
   if (summary.failed > 0) {
     console.log(chalk.red('  ❌ Configuration has errors'));
     console.log(chalk.gray('     • Review the failed tests above'));
-    console.log(chalk.gray('     • Update your backend-services/.env.local file with correct values'));
+    console.log(
+      chalk.gray('     • Update your backend-services/.env.local file with correct values')
+    );
     console.log(chalk.gray('     • Run the setup wizard again: npm run setup\n'));
   } else {
     console.log(chalk.green('  ✅ Configuration is complete and valid'));

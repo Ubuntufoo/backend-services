@@ -15,10 +15,11 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
-    "test": "pnpm run typecheck",
+    "test": "pnpm run typecheck && vitest run",
     "check": "pnpm run typecheck"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
   }
 }
