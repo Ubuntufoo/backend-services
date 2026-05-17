@@ -8,12 +8,12 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 0 | BE | Add shared TypeScript config | Consistent TS across services |
 | 0 | BE | Add shared env validation package | Each service can validate required env vars |
 | 0 | BE | Add shared types package | Shared `ListingStatus`, `JobType`, `CaptureMode` types |
-| 0 | FE | Set up app shell | Basic dashboard route loads | -->
+| 0 | FE | Set up app shell | Basic dashboard route loads | 
 | 1 | DB | Create listings table | Core listing data exists |
 | 1 | DB | Create jobs table | Background work can be queued |
 | 1 | DB | Create orders table | Order checks can be stored later |
 | 1 | DB | Create daily_usage table | Gemini/order sync usage can be tracked |
-| 1 | DB | Create app_settings table | Typed single-row config exists |
+| 1 | DB | Create app_settings table | Typed single-row config exists | -->
 | 1 | BE | Add Supabase service client | Backend services can read/write DB |
 | 1 | FE | Add Supabase browser client | UI can display listings |
 | 1 | FE | Create basic listings table view | Listings visible in UI |
