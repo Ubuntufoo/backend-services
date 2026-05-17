@@ -14,8 +14,9 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 1 | DB | Create orders table | Order checks can be stored later |
 | 1 | DB | Create daily_usage table | Gemini/order sync usage can be tracked |
 | 1 | DB | Create app_settings table | Typed single-row config exists | -->
-| 1 | BE | Add Supabase service client | Backend services can read/write DB |
-| 1 | FE | Add Supabase browser client | UI can display listings |
+| 1 | BE | Wire sidecar DB-facing endpoints to shared repositories | Sidecar can read/write listings, jobs, orders, and app_settings through the shared data layer |
+| 1 | BE | Replace temporary Database type with generated Supabase types | Shared data layer uses generated table types instead of hand-written temporary types |
+| 1 | FE | Add Supabase browser client/auth | UI can display listings |
 | 1 | FE | Create basic listings table view | Listings visible in UI |
 | 2 | FE | Add Create Test Listing form | Can manually create listing row |
 | 2 | FE | Add fields for `seller_hints`, `title`, `description`, `price`, `category_id`, `item_specifics` | Review/edit UI starts taking shape |
@@ -33,7 +34,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 4 | FE | Add Generate button from `assets_ready` | Manual AI generation works |
 | 4 | FE | Show generating locked state | Prevents duplicate edits |
 | 4 | FE | Show `needs_review` state | User can review generated draft |
-| 4 | FE | Add Pricing buttons to UI that build structured URL strings | External link to pricing websites|
+| 4 | FE | Add Pricing buttons to UI that build structured URL strings | External pricing links available from review UI |
 | 4 | DB | Track `generated_at`, `last_error` fields | Basic AI debugging exists |
 | 5 | BE | `watcher-service`: read `capture_mode` from `app_settings` | Watcher knows grouping size |
 | 5 | BE | `watcher-service`: watch `/incoming` | New files detected |
@@ -61,7 +62,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7 | BE | Add retry behavior for recoverable errors | Manual retry supported |
 | 8 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work |
 | 8 | BE | `job-runner`: schedule 4 order checks/day | Controlled API usage |
-| 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date` |
+| 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, `sale_price` |
 | 8 | BE | Match order SKU to `listing_id` | Sold listing identified |
 | 8 | DB | Update listing status to `sold` | Sale tracked |
 | 8 | FE | Add Unshipped Orders panel | Packing queue visible |

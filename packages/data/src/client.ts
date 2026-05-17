@@ -1,8 +1,6 @@
 import { loadSupabaseEnv, type SupabaseEnv } from '@ebay-inventory/env';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { loadRootEnvironment } from '@/config/env-paths.js';
-
-loadRootEnvironment();
+import type { Database } from './database.js';
 
 export interface SupabaseServiceClientConfig {
   projectRef: string;
@@ -10,6 +8,8 @@ export interface SupabaseServiceClientConfig {
   serviceRoleKey: string;
   url: string;
 }
+
+export type SupabaseDataClient = Pick<SupabaseClient<Database>, 'from'>;
 
 export function loadSupabaseServiceClientConfig(
   env: NodeJS.ProcessEnv = process.env
@@ -24,18 +24,15 @@ export function loadSupabaseServiceClientConfig(
   };
 }
 
-export function createSupabaseServiceClient(env: NodeJS.ProcessEnv = process.env): SupabaseClient {
+export function createSupabaseServiceClient(
+  env: NodeJS.ProcessEnv = process.env
+): SupabaseClient<Database> {
   const config = loadSupabaseServiceClientConfig(env);
 
-  return createClient(config.url, config.serviceRoleKey, {
+  return createClient<Database>(config.url, config.serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
-    },
-    global: {
-      headers: {
-        'X-Client-Info': 'ebay-inventory-sidecar/service',
-      },
     },
   });
 }

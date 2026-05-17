@@ -7,7 +7,7 @@
   "types": "build/index.d.ts",
   "private": true,
   "scripts": {
-    "build:deps": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build",
+    "build:deps": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build && pnpm --filter @ebay-inventory/data build",
     "build": "pnpm run build:deps && tsc --build && tsc-alias",
     "start": "node build/index.js",
     "dev": "pnpm run build:deps && tsx src/index.ts",
@@ -35,6 +35,7 @@
   "author": "Yosef Hayim Sabag",
   "license": "MIT",
   "dependencies": {
+    "@ebay-inventory/data": "workspace:*",
     "@ebay-inventory/env": "workspace:*",
     "@ebay-inventory/types": "workspace:*",
     "@modelcontextprotocol/sdk": "1.27.1",

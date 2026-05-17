@@ -5,10 +5,10 @@
  */
 
 import chalk from 'chalk';
+import { createSupabaseServiceClient } from '@ebay-inventory/data';
 import { existsSync, readFileSync } from 'fs';
 import { EbayOAuthClient } from '../auth/oauth.js';
 import { getOAuthAuthorizationUrl } from '../config/environment.js';
-import { createSupabaseServiceClient } from '../supabase/client.js';
 import { ROOT_ENV_LOCAL_PATH } from '../config/env-paths.js';
 import { parseEnvFile } from './env-parser.js';
 import type { EbayConfig } from '../types/ebay.js';
