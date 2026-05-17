@@ -2,10 +2,7 @@
 
 import { loadSidecarRootEnv } from '@ebay-inventory/env';
 import { ROOT_ENV_LOCAL_PATH, loadRootEnvironment } from '@/config/env-paths.js';
-import {
-  createSupabaseServiceClient,
-  loadSupabaseServiceClientConfig,
-} from '@/supabase/client.js';
+import { createSupabaseServiceClient, loadSupabaseServiceClientConfig } from '@/supabase/client.js';
 
 loadRootEnvironment();
 

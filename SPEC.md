@@ -122,3 +122,7 @@
 | listed                  | active_live              | eBay confirms listing is active/live                            |
 | sold                    | awaiting_packaging       | Sold item needs to be packed                                    |
 | sold                    | shipped                  | Item has been shipped                                           |
+
+Notes:
+- `sub_status` is required and should never be `null`.
+- Use `idle` as the canonical fallback sub-status when a record is in a main status without an active in-flight sub-state.

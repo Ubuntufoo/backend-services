@@ -36,9 +36,7 @@ export interface CredentialStore {
  * Credential store that merges token updates into the repo-root .env.local file.
  */
 export class DotEnvCredentialStore implements CredentialStore {
-  constructor(
-    private readonly getEnvPath: () => string = () => ROOT_ENV_LOCAL_PATH
-  ) {}
+  constructor(private readonly getEnvPath: () => string = () => ROOT_ENV_LOCAL_PATH) {}
 
   write(updates: Record<string, string>): void {
     try {

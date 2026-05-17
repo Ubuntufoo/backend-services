@@ -24,9 +24,7 @@ export function loadSupabaseServiceClientConfig(
   };
 }
 
-export function createSupabaseServiceClient(
-  env: NodeJS.ProcessEnv = process.env
-): SupabaseClient {
+export function createSupabaseServiceClient(env: NodeJS.ProcessEnv = process.env): SupabaseClient {
   const config = loadSupabaseServiceClientConfig(env);
 
   return createClient(config.url, config.serviceRoleKey, {

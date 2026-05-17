@@ -88,7 +88,9 @@ class EndpointTester {
     if (forceSandbox) {
       console.log('⚠️  SAFETY: Forcing SANDBOX mode for comprehensive testing');
       console.log('   Production mode is disabled to prevent accidental data modification');
-      console.log('   Set EBAY_ENVIRONMENT=sandbox in backend-services/.env.local to suppress this warning\n');
+      console.log(
+        '   Set EBAY_ENVIRONMENT=sandbox in backend-services/.env.local to suppress this warning\n'
+      );
     }
 
     const config: EbayConfig = {

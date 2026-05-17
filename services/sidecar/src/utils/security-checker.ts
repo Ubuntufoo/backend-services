@@ -76,11 +76,11 @@ export function checkGitignore(projectRoot: string): SecurityCheckResult {
   }
 
   return {
-      check: '.gitignore Security',
-      passed: false,
-      message: '.env.local is not in .gitignore - credentials could be committed!',
-      severity: 'critical',
-      fix: 'Add ".env.local" to your .gitignore file immediately',
+    check: '.gitignore Security',
+    passed: false,
+    message: '.env.local is not in .gitignore - credentials could be committed!',
+    severity: 'critical',
+    fix: 'Add ".env.local" to your .gitignore file immediately',
   };
 }
 
