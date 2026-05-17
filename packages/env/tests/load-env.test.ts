@@ -4,6 +4,8 @@ import {
   EnvValidationError,
   formatEnvValidationErrors,
   loadEnv,
+  loadSidecarRootEnv,
+  loadSupabaseEnv,
 } from '../src/index.js';
 
 const serviceName = 'test-service';
@@ -80,5 +82,35 @@ describe('loadEnv', () => {
     expect(message).toContain('test-service environment validation failed');
     expect(message).toContain('REQUIRED_VALUE');
     expect(message).toContain('REQUIRED_VALUE is required');
+  });
+
+  it('loads Supabase configuration with required publishable and service keys', () => {
+    const env = loadSupabaseEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+      },
+    });
+
+    expect(env.SUPABASE_PROJECT_REF).toBe('fmiliwxthjonjwywuqta');
+    expect(env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY).toBe('sb_publishable_test');
+  });
+
+  it('loads the combined sidecar root environment contract', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        EBAY_CLIENT_ID: 'client-id',
+        EBAY_CLIENT_SECRET: 'client-secret',
+      },
+    });
+
+    expect(env.EBAY_ENVIRONMENT).toBe('sandbox');
+    expect(env.EBAY_CLIENT_ID).toBe('client-id');
   });
 });

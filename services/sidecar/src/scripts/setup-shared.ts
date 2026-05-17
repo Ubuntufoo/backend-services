@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 
 /**
- * Load existing key/value config from the project .env file.
+ * Load existing key/value config from the canonical repo-root .env.local file.
  */
-export function loadExistingConfig(projectRoot: string): Record<string, string> {
-  const envPath = join(projectRoot, '.env');
+export function loadExistingConfig(): Record<string, string> {
+  const envPath = ROOT_ENV_LOCAL_PATH;
   const envConfig: Record<string, string> = {};
 
   if (!existsSync(envPath)) {

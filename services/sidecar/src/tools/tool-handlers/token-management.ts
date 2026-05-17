@@ -11,7 +11,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
     const environment = (process.env.EBAY_ENVIRONMENT ?? 'sandbox') as 'production' | 'sandbox';
     const envRedirectUri = process.env.EBAY_REDIRECT_URI;
 
-    // Use redirectUri from args if provided, otherwise use from .env
+    // Use redirectUri from args if provided, otherwise use from .env.local
     const redirectUri = (args.redirectUri as string | undefined) ?? envRedirectUri;
     const scopes = args.scopes as string[] | undefined;
     const state = args.state as string | undefined;
@@ -22,7 +22,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
 
     if (!redirectUri) {
       throw new Error(
-        'Redirect URI is required. Either provide it as a parameter or set EBAY_REDIRECT_URI in your .env file.'
+        'Redirect URI is required. Either provide it as a parameter or set EBAY_REDIRECT_URI in backend-services/.env.local.'
       );
     }
 
@@ -192,7 +192,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
           return {
             success: true,
             message:
-              'User tokens stored successfully in memory. Access token validated and refreshed if needed. To persist tokens, update EBAY_USER_REFRESH_TOKEN in .env file.',
+              'User tokens stored successfully in memory. Access token validated and refreshed if needed. To persist tokens, update EBAY_USER_REFRESH_TOKEN in backend-services/.env.local.',
             tokenInfo: api.getTokenInfo(),
             refreshed: true,
           };
@@ -211,7 +211,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
       return {
         success: true,
         message:
-          'User tokens successfully stored in memory. These tokens will be used for all subsequent API requests and will be automatically refreshed when needed. To persist tokens, update EBAY_USER_REFRESH_TOKEN in .env file.',
+          'User tokens successfully stored in memory. These tokens will be used for all subsequent API requests and will be automatically refreshed when needed. To persist tokens, update EBAY_USER_REFRESH_TOKEN in backend-services/.env.local.',
         tokenInfo: api.getTokenInfo(),
         refreshed: false,
       };
@@ -265,7 +265,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
           tokenType: tokenData.token_type,
           scope: tokenData.scope,
         },
-        note: 'The refresh token has been saved to your .env file for future use.',
+        note: 'The refresh token has been saved to backend-services/.env.local for future use.',
       };
     } catch (error) {
       throw new Error(
@@ -280,7 +280,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
     // Check if user tokens are available
     if (!api.hasUserTokens()) {
       throw new Error(
-        'No user tokens available. Please set user tokens first using ebay_set_user_tokens_with_expiry or add EBAY_USER_REFRESH_TOKEN to your .env file.'
+        'No user tokens available. Please set user tokens first using ebay_set_user_tokens_with_expiry or add EBAY_USER_REFRESH_TOKEN to backend-services/.env.local.'
       );
     }
 

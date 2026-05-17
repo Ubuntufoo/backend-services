@@ -7,9 +7,10 @@ import { homedir, platform } from 'os';
 import axios from 'axios';
 import chalk from 'chalk';
 import { checkForUpdates } from '../utils/version.js';
-import { config } from 'dotenv';
+import stringify from 'dotenv-stringify';
 import { fileURLToPath } from 'url';
 import { getOAuthAuthorizationUrl } from '../config/environment.js';
+import { ROOT_ENV_LOCAL_PATH, REPO_ROOT, loadRootEnvironment } from '../config/env-paths.js';
 import { defineWizard, runWizard, ClackRenderer } from '../utils/setup-wizard.js';
 import { loadExistingConfig } from './setup-shared.js';
 import { configureLLMClient, detectLLMClients } from '../utils/llm-client-detector.js';
@@ -17,13 +18,9 @@ import { runSecurityChecks, displaySecurityResults } from '../utils/security-che
 import { validateSetup, displayRecommendations } from '../utils/setup-validator.js';
 import type { EbayTokenCore } from '../types/ebay.js';
 
-config({ quiet: true });
+loadRootEnvironment();
 
 checkForUpdates();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PROJECT_ROOT = join(__dirname, '../..');
 
 const MARKETPLACE_OPTIONS: { value: string; label: string }[] = [
   { value: 'EBAY_US', label: 'EBAY_US — United States' },
@@ -318,30 +315,21 @@ function formatDate(date: Date): string {
 }
 
 function saveConfig(envConfig: Record<string, string>, environment: string): void {
-  const envPath = join(PROJECT_ROOT, '.env');
-  const marketplaceLine = envConfig.EBAY_MARKETPLACE_ID
-    ? `EBAY_MARKETPLACE_ID=${envConfig.EBAY_MARKETPLACE_ID}`
-    : '# EBAY_MARKETPLACE_ID=EBAY_US';
-  const contentLanguageLine = envConfig.EBAY_CONTENT_LANGUAGE
-    ? `EBAY_CONTENT_LANGUAGE=${envConfig.EBAY_CONTENT_LANGUAGE}`
-    : '# EBAY_CONTENT_LANGUAGE=en-US';
+  const envPath = ROOT_ENV_LOCAL_PATH;
+  const existingConfig = loadExistingConfig();
+  const mergedConfig = {
+    ...existingConfig,
+    ...envConfig,
+    EBAY_ENVIRONMENT: environment,
+  };
+
   writeFileSync(
     envPath,
-    `# eBay MCP Server Configuration
+    `# Local runtime configuration for backend-services
 # Last Updated: ${formatDate(new Date())}
 # Environment: ${environment}
 
-EBAY_CLIENT_ID=${envConfig.EBAY_CLIENT_ID || ''}
-EBAY_CLIENT_SECRET=${envConfig.EBAY_CLIENT_SECRET || ''}
-EBAY_REDIRECT_URI=${envConfig.EBAY_REDIRECT_URI || ''}
-EBAY_ENVIRONMENT=${environment}
-${marketplaceLine}
-${contentLanguageLine}
-
-EBAY_USER_REFRESH_TOKEN=${envConfig.EBAY_USER_REFRESH_TOKEN || ''}
-EBAY_USER_ACCESS_TOKEN=${envConfig.EBAY_USER_ACCESS_TOKEN || ''}
-EBAY_APP_ACCESS_TOKEN=${envConfig.EBAY_APP_ACCESS_TOKEN || ''}
-`,
+${stringify(mergedConfig)}`,
     'utf-8'
   );
 }
@@ -416,7 +404,7 @@ function displayUserInfo(userInfo: EbayUserInfo): void {
  * Runs the interactive eBay MCP setup wizard from the script entry point.
  */
 export async function runSetup(): Promise<void> {
-  const existingConfig = loadExistingConfig(PROJECT_ROOT);
+  const existingConfig = loadExistingConfig();
   const detectedClients = detectLLMClients();
   const availableClients = detectedClients.filter((c) => c.detected);
 
@@ -846,7 +834,7 @@ export async function runSetup(): Promise<void> {
           await new Promise((r) => {
             setTimeout(r, 400);
           });
-          const success = configureLLMClient(client.name, PROJECT_ROOT);
+          const success = configureLLMClient(client.name, REPO_ROOT);
           stopSpinner();
           if (success) showSuccess(`Configured ${client.displayName}`);
           else showError(`Failed to configure ${client.displayName}`);
@@ -860,7 +848,7 @@ export async function runSetup(): Promise<void> {
     },
   });
 
-  // ── Persist final .env ─────────────────────────────────────────────────────
+  // ── Persist final .env.local ───────────────────────────────────────────────
 
   const marketplaceId =
     answers.marketplace === '__custom__'
@@ -897,7 +885,7 @@ export async function runSetup(): Promise<void> {
   });
   saveConfig(finalConfig, environment);
   stopSave();
-  showSuccess('Configuration saved to .env\n');
+  showSuccess('Configuration saved to backend-services/.env.local\n');
 
   console.log(LOGO);
   console.log(ui.bold.white('            MCP Server Setup Wizard by Yosef Hayim Sabag'));
@@ -977,9 +965,9 @@ async function main(): Promise<void> {
   if (args.diagnose) {
     console.clear();
     console.log(ui.bold.cyan('  Running Diagnostics...\n'));
-    const securityResults = await runSecurityChecks(PROJECT_ROOT);
+    const securityResults = await runSecurityChecks(REPO_ROOT);
     displaySecurityResults(securityResults);
-    const summary = await validateSetup(PROJECT_ROOT);
+    const summary = await validateSetup();
     displayRecommendations(summary);
     process.exit(0);
   }

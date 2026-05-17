@@ -8,8 +8,7 @@
 
 import chalk from 'chalk';
 import { writeFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { runSecurityChecks, displaySecurityResults } from '../utils/security-checker.js';
 import { validateSetup, displayRecommendations } from '../utils/setup-validator.js';
 import { parseEnvFile } from '../utils/env-parser.js';
@@ -17,11 +16,10 @@ import { detectLLMClients } from '../utils/llm-client-detector.js';
 import { displayScopeVerification, parseScopeString } from '../utils/scope-helper.js';
 import { readEnvironment } from './setup-shared.js';
 import { EbaySellerApi } from '../api/index.js';
+import { REPO_ROOT, ROOT_ENV_LOCAL_PATH } from '../config/env-paths.js';
 import type { EbayConfig } from '../types/ebay.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PROJECT_ROOT = join(__dirname, '../..');
+const PROJECT_ROOT = REPO_ROOT;
 
 interface DiagnosticReport {
   timestamp: string;
@@ -204,14 +202,13 @@ async function displayAuthenticationTest(config: EbayConfig): Promise<void> {
  * Generate diagnostic report
  */
 async function generateDiagnosticReport(exportPath?: string): Promise<DiagnosticReport> {
-  const envPath = join(PROJECT_ROOT, '.env');
-  const envVars = parseEnvFile(envPath);
+  const envVars = parseEnvFile(ROOT_ENV_LOCAL_PATH);
 
   // Run security checks
   const securityResults = await runSecurityChecks(PROJECT_ROOT);
 
   // Run configuration validation
-  const validationSummary = await validateSetup(PROJECT_ROOT);
+  const validationSummary = await validateSetup();
 
   // Detect LLM clients
   const llmClients = detectLLMClients();
@@ -276,8 +273,7 @@ async function runDiagnostics(exportReport = false): Promise<void> {
   displaySecurityResults(securityResults);
 
   // Configuration status
-  const envPath = join(PROJECT_ROOT, '.env');
-  const envVars = parseEnvFile(envPath);
+  const envVars = parseEnvFile(ROOT_ENV_LOCAL_PATH);
   displayConfigurationStatus(envVars);
 
   // LLM client detection
@@ -296,7 +292,7 @@ async function runDiagnostics(exportReport = false): Promise<void> {
 
   // Configuration validation
   console.log(chalk.bold.cyan('📋 Configuration Validation\n'));
-  const validationSummary = await validateSetup(PROJECT_ROOT);
+  const validationSummary = await validateSetup();
   displayRecommendations(validationSummary);
 
   // If we have credentials, test authentication

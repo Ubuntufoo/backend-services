@@ -117,7 +117,7 @@ export const chatGptTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          'Optional redirect URI registered with your eBay application (RuName). If not provided, will use EBAY_REDIRECT_URI from .env file.'
+          'Optional redirect URI registered with your eBay application (RuName). If not provided, will use EBAY_REDIRECT_URI from backend-services/.env.local.'
         ),
       scopes: z
         .array(z.string())

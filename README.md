@@ -44,6 +44,7 @@ pnpm test
 pnpm test:coverage
 pnpm check
 pnpm dev
+pnpm validate:env
 ```
 
 These commands target the canonical `services/sidecar` package through the workspace configuration.
@@ -56,6 +57,7 @@ Useful root-level convenience commands:
 
 ```bash
 pnpm setup
+pnpm validate:env
 pnpm diagnose
 pnpm sync
 pnpm update:api-status
@@ -66,6 +68,7 @@ pnpm dev:sidecar
 
 For a local-only setup with cloud Supabase integration:
 
+- keep shared runtime secrets in `backend-services/.env.local`
 - run `services/sidecar` directly on your machine
 - keep Supabase hosted instead of adding a local database stack here
 - keep planned watcher, image, R2, Gemini, eBay, and job-runner concerns as modules or Supabase-triggered workflows until a second runtime is clearly necessary
