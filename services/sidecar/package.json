@@ -12,13 +12,14 @@
     "start": "node build/index.js",
     "dev": "pnpm run build:deps && tsx src/index.ts",
     "lint": "eslint .",
+    "validate:env": "tsx src/scripts/validate-env.ts",
     "test": "pnpm run build:deps && vitest run",
     "test:coverage": "pnpm run build:deps && vitest run --coverage",
     "setup": "tsx src/scripts/setup.ts",
     "sync": "tsx src/scripts/dev-sync.ts",
     "update:api-status": "tsx src/scripts/update-api-status-doc.ts",
     "diagnose": "tsx src/scripts/diagnostics.ts",
-    "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
+    "typecheck": "pnpm run build:deps && tsc --noEmit --pretty false -p tsconfig.json",
     "check": "pnpm run typecheck && pnpm run lint && prettier --check \"src/**/*.{ts,js,json,md}\" \"tests/**/*.ts\" \"README.md\"",
     "fix": "eslint . --fix && prettier --write \"src/**/*.{ts,js,json,md}\" \"tests/**/*.ts\" \"README.md\""
   },
@@ -36,6 +37,7 @@
   "dependencies": {
     "@ebay-inventory/env": "workspace:*",
     "@modelcontextprotocol/sdk": "1.27.1",
+    "@supabase/supabase-js": "^2.105.4",
     "axios": "^1.13.6",
     "chalk": "^5.6.2",
     "cors": "^2.8.6",

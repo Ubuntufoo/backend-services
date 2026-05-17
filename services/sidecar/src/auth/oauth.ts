@@ -20,7 +20,7 @@ import { authLogger } from '@/utils/logger.js';
 
 /**
  * Manages eBay OAuth 2.0 authentication
- * Loads tokens exclusively from environment variables (.env file)
+ * Loads tokens exclusively from environment variables (.env.local file)
  * Supports both client credentials (app tokens) and user access tokens with refresh
  */
 export class EbayOAuthClient {
@@ -54,7 +54,7 @@ export class EbayOAuthClient {
       });
 
       // Immediately refresh to get a valid access token and scopes
-      authLogger.info('Refreshing access token using refresh token from .env');
+      authLogger.info('Refreshing access token using refresh token from .env.local');
       try {
         await this.refreshUserToken();
         authLogger.info('Access token refreshed successfully');
@@ -63,7 +63,7 @@ export class EbayOAuthClient {
       } catch (error) {
         authLogger.error('Failed to refresh access token', {
           error: error instanceof Error ? error.message : String(error),
-          hint: 'The EBAY_USER_REFRESH_TOKEN in .env may be invalid or expired',
+          hint: 'The EBAY_USER_REFRESH_TOKEN in .env.local may be invalid or expired',
         });
         // Clear invalid tokens
         this.userTokens = null;
@@ -122,7 +122,7 @@ export class EbayOAuthClient {
         authLogger.error('User refresh token expired. User needs to re-authorize.');
         this.userTokens = null;
         throw new Error(
-          'User authorization expired. Please update EBAY_USER_REFRESH_TOKEN in .env with a new refresh token.'
+          'User authorization expired. Please update EBAY_USER_REFRESH_TOKEN in backend-services/.env.local with a new refresh token.'
         );
       }
     }
@@ -138,7 +138,7 @@ export class EbayOAuthClient {
 
   /**
    * Set user access token and refresh token
-   * Stores tokens in memory and updates .env file for persistence
+   * Stores tokens in memory and updates .env.local for persistence
    */
   setUserTokens(
     accessToken: string,
@@ -154,7 +154,7 @@ export class EbayOAuthClient {
       refreshTokenExpiry,
     });
 
-    // Update .env file with new tokens
+    // Update .env.local with new tokens
     this.credentialStore.write({
       EBAY_USER_ACCESS_TOKEN: accessToken,
       EBAY_USER_REFRESH_TOKEN: refreshToken,
@@ -199,7 +199,7 @@ export class EbayOAuthClient {
       this.appAccessToken = response.data.access_token;
       this.appAccessTokenExpiry = createAppAccessTokenExpiry(response.data.expires_in);
 
-      // Update .env file with app access token
+      // Update .env.local with app access token
       this.credentialStore.write({
         EBAY_APP_ACCESS_TOKEN: this.appAccessToken,
       });
@@ -217,7 +217,7 @@ export class EbayOAuthClient {
 
   /**
    * Exchange authorization code for user access token
-   * Persists received tokens to .env automatically
+   * Persists received tokens to .env.local automatically
    */
   async exchangeCodeForToken(code: string): Promise<EbayUserToken> {
     if (!this.config.redirectUri) {
@@ -252,7 +252,7 @@ export class EbayOAuthClient {
         tokenData,
       });
 
-      // Persist tokens to .env so they survive process restarts.
+      // Persist tokens to .env.local so they survive process restarts.
       this.credentialStore.write({
         EBAY_USER_ACCESS_TOKEN: tokenData.access_token,
         EBAY_USER_REFRESH_TOKEN: tokenData.refresh_token,
@@ -270,7 +270,7 @@ export class EbayOAuthClient {
   }
 
   /**
-   * Refresh user access token using refresh token from .env
+   * Refresh user access token using refresh token from .env.local
    * This method is public and can be called by LLMs when encountering authentication errors
    */
   async refreshUserToken(): Promise<void> {
@@ -308,17 +308,17 @@ export class EbayOAuthClient {
         tokenData,
       });
 
-      // Update .env file with new tokens
+      // Update .env.local with new tokens
       const envUpdates: Record<string, string> = {
         EBAY_USER_ACCESS_TOKEN: tokenData.access_token,
       };
 
-      // Reconcile .env with the authoritative in-memory refresh token.
+      // Reconcile .env.local with the authoritative in-memory refresh token.
       if (this.userTokens.userRefreshToken !== process.env.EBAY_USER_REFRESH_TOKEN) {
         envUpdates.EBAY_USER_REFRESH_TOKEN = this.userTokens.userRefreshToken;
       }
 
-      // Write updates to .env file
+      // Write updates to .env.local
       this.credentialStore.write(envUpdates);
     } catch (error) {
       if (axios.isAxiosError(error)) {
@@ -342,7 +342,7 @@ export class EbayOAuthClient {
 
   /**
    * Clear all authentication tokens from memory
-   * Note: To persist this change, remove EBAY_USER_REFRESH_TOKEN from .env
+   * Note: To persist this change, remove EBAY_USER_REFRESH_TOKEN from .env.local
    */
   clearAllTokens(): void {
     this.appAccessToken = null;

@@ -19,6 +19,7 @@
     "dev": "pnpm --filter sidecar dev",
     "dev:sidecar": "pnpm --filter sidecar dev",
     "setup": "pnpm --filter sidecar setup",
+    "validate:env": "pnpm --filter sidecar validate:env",
     "sync": "pnpm --filter sidecar sync",
     "update:api-status": "pnpm --filter sidecar update:api-status",
     "diagnose": "pnpm --filter sidecar diagnose",

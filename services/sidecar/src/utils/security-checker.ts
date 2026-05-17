@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
+import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 
 /**
  * Outcome of a pre-flight security or environment check.
@@ -44,7 +45,7 @@ export function checkNodeVersion(): SecurityCheckResult {
 }
 
 /**
- * Check if .env is in .gitignore
+ * Check if local env files are in .gitignore
  */
 export function checkGitignore(projectRoot: string): SecurityCheckResult {
   const gitignorePath = join(projectRoot, '.gitignore');
@@ -55,7 +56,7 @@ export function checkGitignore(projectRoot: string): SecurityCheckResult {
       passed: false,
       message: 'No .gitignore file found',
       severity: 'warning',
-      fix: 'Create a .gitignore file and add .env to it',
+      fix: 'Create a .gitignore file and add .env.local to it',
     };
   }
 
@@ -69,17 +70,17 @@ export function checkGitignore(projectRoot: string): SecurityCheckResult {
     return {
       check: '.gitignore Security',
       passed: true,
-      message: '.env files are properly ignored by git',
+      message: 'Local env files are properly ignored by git',
       severity: 'info',
     };
   }
 
   return {
-    check: '.gitignore Security',
-    passed: false,
-    message: '.env is not in .gitignore - credentials could be committed!',
-    severity: 'critical',
-    fix: 'Add ".env" to your .gitignore file immediately',
+      check: '.gitignore Security',
+      passed: false,
+      message: '.env.local is not in .gitignore - credentials could be committed!',
+      severity: 'critical',
+      fix: 'Add ".env.local" to your .gitignore file immediately',
   };
 }
 
@@ -174,11 +175,11 @@ export function checkDependencies(projectRoot: string): SecurityCheckResult {
 }
 
 /**
- * Check if git repo is initialized and .env is not tracked
+ * Check if git repo is initialized and .env.local is not tracked
  */
 export function checkGitTracking(projectRoot: string): SecurityCheckResult {
   const gitPath = join(projectRoot, '.git');
-  const envPath = join(projectRoot, '.env');
+  const envPath = ROOT_ENV_LOCAL_PATH;
 
   if (!existsSync(gitPath)) {
     return {
@@ -193,13 +194,13 @@ export function checkGitTracking(projectRoot: string): SecurityCheckResult {
     return {
       check: 'Git Tracking',
       passed: true,
-      message: '.env file does not exist yet',
+      message: '.env.local file does not exist yet',
       severity: 'info',
     };
   }
 
   try {
-    const result = execSync('git ls-files .env', {
+    const result = execSync('git ls-files .env.local', {
       cwd: projectRoot,
       encoding: 'utf-8',
     }).trim();
@@ -208,7 +209,7 @@ export function checkGitTracking(projectRoot: string): SecurityCheckResult {
       return {
         check: 'Git Tracking',
         passed: true,
-        message: '.env is not tracked by git',
+        message: '.env.local is not tracked by git',
         severity: 'info',
       };
     }
@@ -216,9 +217,9 @@ export function checkGitTracking(projectRoot: string): SecurityCheckResult {
     return {
       check: 'Git Tracking',
       passed: false,
-      message: '.env is tracked by git - SECURITY RISK!',
+      message: '.env.local is tracked by git - SECURITY RISK!',
       severity: 'critical',
-      fix: 'Run: git rm --cached .env && git commit -m "Remove .env from tracking"',
+      fix: 'Run: git rm --cached .env.local && git commit -m "Remove .env.local from tracking"',
     };
   } catch {
     return {

@@ -1,11 +1,11 @@
-import { config } from 'dotenv';
 import { EbaySellerApi } from '@/api/index.js';
+import { loadRootEnvironment } from '@/config/env-paths.js';
 import type { EbayConfig } from '@/types/ebay.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Load environment variables silently
-config({ quiet: true });
+// Load environment variables silently from the repo root.
+loadRootEnvironment();
 
 interface EndpointFailure {
   category: string;
@@ -88,7 +88,7 @@ class EndpointTester {
     if (forceSandbox) {
       console.log('⚠️  SAFETY: Forcing SANDBOX mode for comprehensive testing');
       console.log('   Production mode is disabled to prevent accidental data modification');
-      console.log('   Set EBAY_ENVIRONMENT=sandbox in .env to suppress this warning\n');
+      console.log('   Set EBAY_ENVIRONMENT=sandbox in backend-services/.env.local to suppress this warning\n');
     }
 
     const config: EbayConfig = {
@@ -101,7 +101,7 @@ class EndpointTester {
     // Validate config
     if (!config.clientId || !config.clientSecret) {
       throw new Error(
-        'Missing eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in .env'
+        'Missing eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env.local'
       );
     }
 

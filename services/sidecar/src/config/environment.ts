@@ -1,23 +1,18 @@
-import { config } from 'dotenv';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { loadEnv, EnvValidationError } from '@ebay-inventory/env';
+import { join } from 'path';
+import { loadSidecarRootEnv, EnvValidationError } from '@ebay-inventory/env';
 import type { EbayConfig } from '@/types/ebay.js';
 import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
 import { LocaleEnum } from '@/types/ebay-enums.js';
 import { getVersion } from '@/utils/version.js';
+import { loadRootEnvironment } from '@/config/env-paths.js';
 import { z } from 'zod';
 
-// Get the current directory for loading scope files and .env
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
-// Load .env from the package root (two levels up from src/config/), not process.cwd().
-// MCP servers inherit cwd from the host (e.g. Claude Code's project dir), so
-// process.cwd() may point to an unrelated project with a different .env.
-config({ path: join(__dirname, '../../.env'), quiet: true });
+// Load the canonical repo-root .env.local once during module initialization.
+loadRootEnvironment();
 
 const requiredEbayCredential = (name: string): z.ZodString =>
   z
@@ -43,11 +38,9 @@ const sidecarRuntimeEnvSchema = z.object({
 export type SidecarRuntimeEnv = z.infer<typeof sidecarRuntimeEnvSchema>;
 
 export function loadSidecarRuntimeEnv(): SidecarRuntimeEnv {
-  return loadEnv({
-    serviceName: 'sidecar',
-    schema: sidecarRuntimeEnvSchema,
-    env: process.env,
-  });
+  const env = loadSidecarRootEnv({ env: process.env });
+
+  return sidecarRuntimeEnvSchema.parse(env);
 }
 
 // Type for scope JSON structure
@@ -167,7 +160,7 @@ export function validateEnvironmentConfig(): {
   const environment = process.env.EBAY_ENVIRONMENT;
 
   try {
-    loadSidecarRuntimeEnv();
+    loadSidecarRootEnv({ env: process.env });
   } catch (error) {
     if (error instanceof EnvValidationError) {
       errors.push(...error.issues.map((issue) => issue.message));
@@ -232,7 +225,7 @@ export function getEbayConfig(): EbayConfig {
   // Only require client credentials - tokens can be optional (generated from refresh token)
   if (clientId === '' || clientSecret === '') {
     console.error(
-      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin services/sidecar/.env'
+      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env.local'
     );
   }
 

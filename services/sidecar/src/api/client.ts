@@ -1,9 +1,9 @@
 import { DotEnvCredentialStore } from '@/auth/credential-session.js';
+import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 import { EbayOAuthClient } from '@/auth/oauth.js';
 import { getBaseUrl } from '@/config/environment.js';
 import type { EbayApiError, EbayConfig } from '@/types/ebay.js';
 import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
-import { fileURLToPath } from 'url';
 import { apiLogger, logRequest, logResponse, logErrorResponse } from '@/utils/logger.js';
 
 // Extended Axios config with retry tracking
@@ -80,7 +80,7 @@ export class EbayApiClient {
     this.config = config;
     this.authClient = new EbayOAuthClient(
       config,
-      new DotEnvCredentialStore(() => fileURLToPath(new URL('../../.env', import.meta.url)))
+      new DotEnvCredentialStore(() => ROOT_ENV_LOCAL_PATH)
     );
     this.baseUrl = getBaseUrl(config.environment);
     this.rateLimitTracker = new RateLimitTracker();
@@ -265,7 +265,7 @@ export class EbayApiClient {
   private validateAccessToken(): void {
     if (!this.config.clientId || !this.config.clientSecret) {
       throw new Error(
-        'Missing required eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in your .env file.'
+        'Missing required eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env.local.'
       );
     }
   }

@@ -33,6 +33,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 4 | FE | Add Generate button from `assets_ready` | Manual AI generation works |
 | 4 | FE | Show generating locked state | Prevents duplicate edits |
 | 4 | FE | Show `needs_review` state | User can review generated draft |
+| 4 | FE | Add Pricing buttons to UI that build structured URL strings | External link to pricing websites|
 | 4 | DB | Track `generated_at`, `last_error` fields | Basic AI debugging exists |
 | 5 | BE | `watcher-service`: read `capture_mode` from `app_settings` | Watcher knows grouping size |
 | 5 | BE | `watcher-service`: watch `/incoming` | New files detected |

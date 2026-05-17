@@ -4,11 +4,12 @@
  * Tests the configuration after setup to ensure everything is working properly.
  */
 
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
 import chalk from 'chalk';
+import { existsSync, readFileSync } from 'fs';
 import { EbayOAuthClient } from '../auth/oauth.js';
 import { getOAuthAuthorizationUrl } from '../config/environment.js';
+import { createSupabaseServiceClient } from '../supabase/client.js';
+import { ROOT_ENV_LOCAL_PATH } from '../config/env-paths.js';
 import { parseEnvFile } from './env-parser.js';
 import type { EbayConfig } from '../types/ebay.js';
 
@@ -33,30 +34,30 @@ export interface ValidationSummary {
 }
 
 /**
- * Validate .env file exists and is readable
+ * Validate .env.local file exists and is readable
  */
-function validateEnvFile(projectRoot: string): ValidationResult {
-  const envPath = join(projectRoot, '.env');
+function validateEnvFile(_projectRoot: string): ValidationResult {
+  const envPath = ROOT_ENV_LOCAL_PATH;
 
   if (!existsSync(envPath)) {
     return {
-      test: '.env File Existence',
+      test: '.env.local File Existence',
       passed: false,
       message: 'Configuration file not found',
-      error: `.env file does not exist at ${envPath}`,
+      error: `.env.local file does not exist at ${envPath}`,
     };
   }
 
   try {
     readFileSync(envPath, 'utf-8');
     return {
-      test: '.env File Existence',
+      test: '.env.local File Existence',
       passed: true,
       message: 'Configuration file exists and is readable',
     };
   } catch (error) {
     return {
-      test: '.env File Existence',
+      test: '.env.local File Existence',
       passed: false,
       message: 'Configuration file cannot be read',
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -90,6 +91,31 @@ function validateAppCredentials(envVars: Record<string, string>): ValidationResu
     test: 'App Credentials',
     passed: true,
     message: 'All required app credentials are present',
+  };
+}
+
+function validateSupabaseConfiguration(envVars: Record<string, string>): ValidationResult {
+  const required = [
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_PROJECT_REF',
+  ];
+  const missing = required.filter((key) => !envVars[key] || envVars[key].trim() === '');
+
+  if (missing.length > 0) {
+    return {
+      test: 'Supabase Configuration',
+      passed: false,
+      message: 'Missing required Supabase configuration',
+      error: `Missing: ${missing.join(', ')}`,
+    };
+  }
+
+  return {
+    test: 'Supabase Configuration',
+    passed: true,
+    message: `Supabase project ref configured as "${envVars.SUPABASE_PROJECT_REF}"`,
   };
 }
 
@@ -201,6 +227,25 @@ function validateOAuthURL(config: EbayConfig): ValidationResult {
   }
 }
 
+function validateSupabaseClientInitialization(envVars: Record<string, string>): ValidationResult {
+  try {
+    createSupabaseServiceClient(envVars);
+
+    return {
+      test: 'Supabase Client Initialization',
+      passed: true,
+      message: 'Supabase service client initialized successfully',
+    };
+  } catch (error) {
+    return {
+      test: 'Supabase Client Initialization',
+      passed: false,
+      message: 'Failed to initialize Supabase service client',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
 /**
  * Run all validation tests
  */
@@ -209,7 +254,7 @@ export async function validateSetup(projectRoot: string): Promise<ValidationSumm
 
   console.log(chalk.bold.cyan('\n🧪 Running Configuration Tests...\n'));
 
-  // Test 1: .env file exists
+  // Test 1: .env.local file exists
   const envFileResult = validateEnvFile(projectRoot);
   results.push(envFileResult);
   printResult(envFileResult);
@@ -223,24 +268,35 @@ export async function validateSetup(projectRoot: string): Promise<ValidationSumm
     };
   }
 
-  // Parse .env file
-  const envPath = join(projectRoot, '.env');
-  const envVars = parseEnvFile(envPath);
+  // Parse .env.local file
+  const envVars = parseEnvFile(ROOT_ENV_LOCAL_PATH);
 
   // Test 2: App credentials
   const appCredsResult = validateAppCredentials(envVars);
   results.push(appCredsResult);
   printResult(appCredsResult);
 
-  // Test 3: Environment setting
+  // Test 3: Supabase configuration
+  const supabaseConfigResult = validateSupabaseConfiguration(envVars);
+  results.push(supabaseConfigResult);
+  printResult(supabaseConfigResult);
+
+  // Test 4: Environment setting
   const envResult = validateEnvironment(envVars);
   results.push(envResult);
   printResult(envResult);
 
-  // Test 4: User tokens (optional)
+  // Test 5: User tokens (optional)
   const userTokensResult = validateUserTokens(envVars);
   results.push(userTokensResult);
   printResult(userTokensResult);
+
+  // Test 6: Supabase client initialization
+  if (supabaseConfigResult.passed) {
+    const supabaseClientResult = validateSupabaseClientInitialization(envVars);
+    results.push(supabaseClientResult);
+    printResult(supabaseClientResult);
+  }
 
   // If app credentials are valid, test OAuth functionality
   if (appCredsResult.passed) {
@@ -251,12 +307,12 @@ export async function validateSetup(projectRoot: string): Promise<ValidationSumm
       environment: (envVars.EBAY_ENVIRONMENT || 'sandbox') as 'sandbox' | 'production',
     };
 
-    // Test 5: OAuth initialization
+    // Test 7: OAuth initialization
     const oauthInitResult = await validateOAuthInitialization(config);
     results.push(oauthInitResult);
     printResult(oauthInitResult);
 
-    // Test 6: OAuth URL generation
+    // Test 8: OAuth URL generation
     if (oauthInitResult.passed) {
       const oauthURLResult = validateOAuthURL(config);
       results.push(oauthURLResult);
@@ -321,14 +377,16 @@ export function displayRecommendations(summary: ValidationSummary): void {
     console.log(chalk.gray('     • You can only use app token for limited API access'));
     console.log(chalk.gray('     • To enable full API access, use the ebay_get_oauth_url tool'));
     console.log(
-      chalk.gray('     • Then save your refresh token to EBAY_USER_REFRESH_TOKEN in .env\n')
+      chalk.gray(
+        '     • Then save your refresh token to EBAY_USER_REFRESH_TOKEN in backend-services/.env.local\n'
+      )
     );
   }
 
   if (summary.failed > 0) {
     console.log(chalk.red('  ❌ Configuration has errors'));
     console.log(chalk.gray('     • Review the failed tests above'));
-    console.log(chalk.gray('     • Update your .env file with correct values'));
+    console.log(chalk.gray('     • Update your backend-services/.env.local file with correct values'));
     console.log(chalk.gray('     • Run the setup wizard again: npm run setup\n'));
   } else {
     console.log(chalk.green('  ✅ Configuration is complete and valid'));

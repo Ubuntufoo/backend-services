@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import stringify from 'dotenv-stringify';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 import type { EbayConfig, EbayUserToken, StoredTokenData } from '@/types/ebay.js';
 
 /**
@@ -33,10 +33,12 @@ export interface CredentialStore {
 }
 
 /**
- * Credential store that merges token updates into the project .env file.
+ * Credential store that merges token updates into the repo-root .env.local file.
  */
 export class DotEnvCredentialStore implements CredentialStore {
-  constructor(private readonly getEnvPath: () => string = () => join(process.cwd(), '.env')) {}
+  constructor(
+    private readonly getEnvPath: () => string = () => ROOT_ENV_LOCAL_PATH
+  ) {}
 
   write(updates: Record<string, string>): void {
     try {
@@ -219,7 +221,7 @@ export function buildCredentialDisplay(input: CredentialDisplayInput) {
       redirectUri: redirectUri || 'Not set',
     },
     tokens: {
-      refreshToken: refreshToken ? maskToken(refreshToken) : 'Not set (in .env)',
+      refreshToken: refreshToken ? maskToken(refreshToken) : 'Not set (in .env.local)',
       accessToken: userTokens?.userAccessToken
         ? maskToken(userTokens.userAccessToken)
         : 'Not available',

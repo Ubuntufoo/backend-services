@@ -30,13 +30,14 @@ pnpm test:coverage
 
 ## Environment
 
-Copy the package-local example file and configure your credentials:
+Copy the repo-root example file and configure your credentials:
 
 ```bash
-cp services/sidecar/.env.example services/sidecar/.env
+cp env.example .env.local
 ```
 
-The sidecar reads its `.env` file from the package root, not from the repo root.
+The sidecar reads shared runtime configuration from the repo root `backend-services/.env.local`.
+Use `pnpm validate:env` from the repo root to verify the Supabase and eBay configuration before starting schema work.
 
 ## Local-Only Operation
 
