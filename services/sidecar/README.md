@@ -50,7 +50,7 @@ The sidecar currently owns:
 - MCP stdio startup
 - HTTP transport and OAuth metadata
 - eBay REST and Trading API clients
-- DB-facing endpoints and orchestration for the hosted Supabase-backed app workflow
+- local workflow support and DB-facing orchestration for apps that use hosted Supabase externally
 - Tool definitions, schemas, and handlers
 - Setup, diagnostics, and API sync scripts
 - Unit and integration tests
