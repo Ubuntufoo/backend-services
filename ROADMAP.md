@@ -14,7 +14,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 1 | DB | Create orders table | Order checks can be stored later |
 | 1 | DB | Create daily_usage table | Gemini/order sync usage can be tracked |
 | 1 | DB | Create app_settings table | Typed single-row config exists | -->
-| 1 | BE | Wire sidecar DB-facing endpoints to shared repositories | Sidecar can read/write listings, jobs, orders, and app_settings through the shared data layer |
+1	BE	Add REST API routes in sidecar backed by shared repository service layer	Frontend can read/write listings, jobs, orders, and app_settings through sidecar REST endpoints
 | 1 | BE | Replace temporary Database type with generated Supabase types | Shared data layer uses generated table types instead of hand-written temporary types |
 | 1 | FE | Add Supabase browser client/auth | UI can display listings |
 | 1 | FE | Create basic listings table view | Listings visible in UI |

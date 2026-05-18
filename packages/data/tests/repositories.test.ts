@@ -15,6 +15,7 @@ import {
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
+  listListings,
   listJobsByListingId,
   saveListingArtifacts,
   saveGeneratedListingFields,
@@ -197,6 +198,28 @@ function createListClient<TTable extends string, TRow>(
   } as unknown as SupabaseDataClient;
 }
 
+function createListAllClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRows: TRow[]
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        select: vi.fn(async (columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            data: expectedRows,
+            error: null,
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 function createUpdateClient<TTable extends string, TRow>(
   table: TTable,
   expectedRow: TRow,
@@ -255,6 +278,9 @@ describe('shared repositories', () => {
 
     const fetchClient = createSelectClient('listings', listingRow, 'listing_id', 'LIST-001');
     await expect(getListingByListingId(fetchClient, 'LIST-001')).resolves.toEqual(listingRow);
+
+    const listClient = createListAllClient('listings', [listingRow]);
+    await expect(listListings(listClient)).resolves.toEqual([listingRow]);
   });
 
   it('updates listings and persists stateless worker outputs', async () => {

@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createBearerAuthMiddleware } from '@/auth/oauth-middleware.js';
 import { createMetadataRouter, getProtectedResourceMetadataUrl } from '@/auth/oauth-metadata.js';
+import { createDataApiRouter } from '@/http/data-router.js';
 import { TokenVerifier } from '@/auth/token-verifier.js';
 import { getDefaultScopes, getEbayConfig } from '@/config/environment.js';
 import { createEbayMcpRuntime } from '@/mcp/runtime.js';
@@ -215,6 +216,13 @@ export async function createHttpMcpApp(config: HttpTransportConfig): Promise<exp
 
   const authMiddleware = await createAuthMiddleware(config, serverUrl);
   const transports = new Map<string, StreamableHTTPServerTransport>();
+  const dataApiRouter = createDataApiRouter();
+
+  if (authMiddleware) {
+    app.use('/api', authMiddleware, dataApiRouter);
+  } else {
+    app.use('/api', dataApiRouter);
+  }
 
   const mcpPostHandler = async (req: Request, res: Response): Promise<void> => {
     const sessionHeader = req.headers['mcp-session-id'];

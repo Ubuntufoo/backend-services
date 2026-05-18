@@ -1,6 +1,7 @@
 import type { ListingInsert, ListingRow, ListingUpdate } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
 import {
+  type MultiResult,
   requireOptionalResult,
   requireSingleResult,
   type SingleResult,
@@ -101,6 +102,16 @@ export async function getListingByListingId(
     .maybeSingle()) as SingleResult<ListingRow>;
 
   return requireOptionalResult(result);
+}
+
+export async function listListings(client: SupabaseDataClient): Promise<ListingRow[]> {
+  const result = (await client.from('listings').select('*')) as MultiResult<ListingRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
 }
 
 export async function updateListing(
