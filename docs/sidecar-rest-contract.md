@@ -170,7 +170,7 @@ Validation failures use this shape:
 Observed validation rules:
 
 - Missing required `mode` returns `message: "Required"` and `path: "mode"`.
-- Wrong types return field-specific messages such as `"price must be a number"` or `"title must be a string"`.
+- Wrong types return schema-specific messages. Example: numeric fields use Zod's default message such as `"Expected number, received string"`, while trimmed string fields use messages such as `"title must be a string"`.
 - Empty strings for trimmed string fields return `"... is required"`.
 - Unknown top-level fields are rejected because the schema is strict. Example:
 
