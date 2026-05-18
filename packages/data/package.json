@@ -13,8 +13,9 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build && tsc --build",
-    "typecheck": "tsc --noEmit --pretty false -p tsconfig.test.json",
+    "build:deps": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build",
+    "build": "pnpm run build:deps && tsc --build",
+    "typecheck": "pnpm run build:deps && tsc --noEmit --pretty false -p tsconfig.test.json",
     "test": "pnpm run typecheck && vitest run",
     "check": "pnpm run test"
   },
