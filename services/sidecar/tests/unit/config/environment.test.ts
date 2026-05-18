@@ -10,14 +10,13 @@ describe('Environment Configuration', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
-    // Create a fresh copy of process.env for each test
+    // Isolate these tests from any dotenv-loaded values on the developer machine.
     process.env = {
-      ...originalEnv,
       NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
       SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
       SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
-    };
+    } as NodeJS.ProcessEnv;
   });
 
   afterEach(() => {

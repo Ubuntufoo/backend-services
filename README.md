@@ -74,7 +74,7 @@ pnpm dev:sidecar
 
 For a local-only setup with cloud Supabase integration:
 
-- keep shared runtime secrets in `backend-services/.env.local`
+- keep shared runtime config in `backend-services/.env` and machine-local overrides or tokens in `backend-services/.env.local`
 - run `services/sidecar` directly on your machine
 - keep Supabase hosted instead of adding a local database stack here
 - keep reusable Supabase access in `packages/data` instead of reimplementing service clients inside runtime packages

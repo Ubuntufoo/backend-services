@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -67,6 +70,50 @@ describe('loadEnv', () => {
     });
 
     expect(env.MODE).toBe('sandbox');
+  });
+
+  it('loads multiple dotenv files in order and lets later files override earlier ones', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'load-env-'));
+    const envPath = join(tempDir, '.env');
+    const envLocalPath = join(tempDir, '.env.local');
+    const originalRequiredValue = process.env.REQUIRED_VALUE;
+    const originalMode = process.env.MODE;
+
+    writeFileSync(
+      envPath,
+      ['REQUIRED_VALUE=from-env', 'MODE=production', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=base'].join(
+        '\n'
+      )
+    );
+    writeFileSync(envLocalPath, ['REQUIRED_VALUE=from-env-local', 'MODE=sandbox'].join('\n'));
+
+    delete process.env.REQUIRED_VALUE;
+    delete process.env.MODE;
+
+    try {
+      const env = loadEnv({
+        serviceName,
+        schema,
+        dotenvPaths: [envPath, envLocalPath],
+      });
+
+      expect(env).toEqual({
+        REQUIRED_VALUE: 'from-env-local',
+        MODE: 'sandbox',
+      });
+    } finally {
+      if (originalRequiredValue === undefined) {
+        delete process.env.REQUIRED_VALUE;
+      } else {
+        process.env.REQUIRED_VALUE = originalRequiredValue;
+      }
+
+      if (originalMode === undefined) {
+        delete process.env.MODE;
+      } else {
+        process.env.MODE = originalMode;
+      }
+    }
   });
 
   it('formats validation errors with service and variable context', () => {

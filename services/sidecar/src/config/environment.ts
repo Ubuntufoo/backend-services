@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
-// Load the canonical repo-root .env.local once during module initialization.
+// Load repo-root .env first, then .env.local so local overrides win.
 loadRootEnvironment();
 
 const requiredEbayCredential = (name: string): z.ZodString =>
@@ -225,7 +225,7 @@ export function getEbayConfig(): EbayConfig {
   // Only require client credentials - tokens can be optional (generated from refresh token)
   if (clientId === '' || clientSecret === '') {
     console.error(
-      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env.local'
+      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env or backend-services/.env.local'
     );
   }
 

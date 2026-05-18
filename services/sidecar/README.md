@@ -33,10 +33,12 @@ pnpm test:coverage
 Copy the repo-root example file and configure your credentials:
 
 ```bash
-cp env.example .env.local
+cp env.example .env
 ```
 
-The sidecar reads shared runtime configuration from the repo root `backend-services/.env.local`.
+The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
+and then applies `backend-services/.env.local` on top of it for machine-local overrides.
+Static shared config can live in either file, but OAuth tokens and other local-only secrets should stay in `.env.local`.
 Use `pnpm validate:env` from the repo root to verify the shared Supabase data-layer and eBay configuration before starting schema work.
 
 ## Local-Only Operation

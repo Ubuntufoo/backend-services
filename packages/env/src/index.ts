@@ -1,5 +1,5 @@
-import { config as loadDotenv } from 'dotenv';
-import { existsSync } from 'fs';
+import { config as loadDotenv, parse as parseDotenv } from 'dotenv';
+import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import type { ZodError, ZodIssue, ZodTypeAny } from 'zod';
 
@@ -58,9 +58,17 @@ export const sidecarRootEnvSchema = supabaseEnvSchema.extend({
 export type SidecarRootEnv = z.infer<typeof sidecarRootEnvSchema>;
 
 export function loadDotenvFiles(paths: string[]): void {
+  const initialKeys = new Set(Object.keys(process.env));
+
   for (const path of paths) {
     if (existsSync(path)) {
-      loadDotenv({ path, quiet: true });
+      const parsed = parseDotenv(readFileSync(path, 'utf-8'));
+
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!initialKeys.has(key) || process.env[key] === undefined) {
+          process.env[key] = value;
+        }
+      }
     }
   }
 }

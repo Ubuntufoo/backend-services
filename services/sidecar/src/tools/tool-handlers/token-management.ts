@@ -22,7 +22,7 @@ export const tokenManagementHandlers: ToolHandlerMap = {
 
     if (!redirectUri) {
       throw new Error(
-        'Redirect URI is required. Either provide it as a parameter or set EBAY_REDIRECT_URI in backend-services/.env.local.'
+        'Redirect URI is required. Either provide it as a parameter or set EBAY_REDIRECT_URI in backend-services/.env or backend-services/.env.local.'
       );
     }
 
