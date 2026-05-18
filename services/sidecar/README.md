@@ -19,6 +19,7 @@ Or directly in this package:
 
 ```bash
 pnpm dev
+pnpm dev:stdio
 pnpm setup
 pnpm diagnose
 pnpm sync
@@ -30,13 +31,18 @@ pnpm test:coverage
 
 ## Environment
 
-Copy the repo-root example file and configure your credentials:
+Copy the repo-root example file and configure your environment:
 
 ```bash
-cp env.example .env.local
+cp env.example .env
 ```
 
-The sidecar reads shared runtime configuration from the repo root `backend-services/.env.local`.
+`pnpm dev` starts the HTTP sidecar from `src/server-http.ts`.
+Use `pnpm dev:stdio` only when you explicitly want the stdio MCP server from `src/index.ts`.
+
+The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
+and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.
+For DB-only local development, set `EBAY_ENABLED=false` and `OAUTH_ENABLED=false`; in that mode, eBay developer credentials are not required.
 Use `pnpm validate:env` from the repo root to verify the shared Supabase data-layer and eBay configuration before starting schema work.
 
 ## Local-Only Operation
@@ -47,8 +53,8 @@ This package is intended to run directly on your machine for local development a
 
 The sidecar currently owns:
 
-- MCP stdio startup
 - HTTP transport and OAuth metadata
+- MCP stdio startup
 - eBay REST and Trading API clients
 - local workflow support and DB-facing orchestration for apps that use hosted Supabase externally
 - Tool definitions, schemas, and handlers

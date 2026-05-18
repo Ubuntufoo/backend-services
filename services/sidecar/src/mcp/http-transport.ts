@@ -11,10 +11,11 @@ import { createBearerAuthMiddleware } from '@/auth/oauth-middleware.js';
 import { createMetadataRouter, getProtectedResourceMetadataUrl } from '@/auth/oauth-metadata.js';
 import { createDataApiRouter } from '@/http/data-router.js';
 import { TokenVerifier } from '@/auth/token-verifier.js';
-import { getDefaultScopes, getEbayConfig } from '@/config/environment.js';
+import { getDefaultScopes, getEbayConfig, isEbayEnabled } from '@/config/environment.js';
 import { createEbayMcpRuntime } from '@/mcp/runtime.js';
 import type { EbayConfig } from '@/types/ebay.js';
 import { getVersion } from '@/utils/version.js';
+import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 
 /**
  * OAuth settings for protecting the HTTP MCP transport.
@@ -32,6 +33,8 @@ export interface HttpOAuthConfig {
  */
 export interface HttpTransportConfig {
   authEnabled: boolean;
+  dataAccess?: SidecarDataAccess;
+  ebayEnabled: boolean;
   ebayConfig?: EbayConfig;
   host: string;
   oauth: HttpOAuthConfig;
@@ -54,6 +57,7 @@ export function createHttpTransportConfigFromEnv(
   return {
     host: env.MCP_HOST || 'localhost',
     port: Number(env.MCP_PORT) || 3000,
+    ebayEnabled: isEbayEnabled(env),
     oauth: {
       authServerUrl: env.OAUTH_AUTH_SERVER_URL ?? 'http://localhost:8080/realms/master',
       clientId: env.OAUTH_CLIENT_ID,
@@ -105,17 +109,20 @@ function createServerConfig(serverUrl: string): Implementation {
   };
 }
 
-async function createMcpServer(serverUrl: string): Promise<McpServer> {
+async function createMcpServer(serverUrl: string, ebayEnabled: boolean): Promise<McpServer> {
   const runtime = createEbayMcpRuntime({
+    ebayEnabled,
     serverConfig: createServerConfig(serverUrl),
   });
 
-  try {
-    await runtime.initializeApi();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Failed to initialize eBay API client: ${message}`);
-    throw error;
+  if (runtime.api) {
+    try {
+      await runtime.initializeApi();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to initialize eBay API client: ${message}`);
+      throw error;
+    }
   }
 
   return runtime.server;
@@ -180,7 +187,7 @@ function sendInvalidSession(res: Response): void {
 export async function createHttpMcpApp(config: HttpTransportConfig): Promise<express.Application> {
   const app = express();
   const serverUrl = getHttpServerUrl(config);
-  const ebayConfig = config.ebayConfig ?? getEbayConfig();
+  const ebayConfig = config.ebayEnabled ? (config.ebayConfig ?? getEbayConfig()) : undefined;
 
   app.use(
     cors({
@@ -201,8 +208,8 @@ export async function createHttpMcpApp(config: HttpTransportConfig): Promise<exp
       resourceDocumentation:
         'https://github.com/Ubuntufoo/backend-services/tree/main/services/sidecar',
       resourceName: 'eBay API MCP Server',
-      ebayEnvironment: ebayConfig.environment,
-      ebayScopes: getDefaultScopes(ebayConfig.environment),
+      ebayEnvironment: ebayConfig?.environment,
+      ebayScopes: ebayConfig ? getDefaultScopes(ebayConfig.environment) : undefined,
     })
   );
 
@@ -210,13 +217,14 @@ export async function createHttpMcpApp(config: HttpTransportConfig): Promise<exp
     res.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
+      ebay_enabled: config.ebayEnabled,
       oauth_enabled: config.authEnabled,
     });
   });
 
   const authMiddleware = await createAuthMiddleware(config, serverUrl);
   const transports = new Map<string, StreamableHTTPServerTransport>();
-  const dataApiRouter = createDataApiRouter();
+  const dataApiRouter = createDataApiRouter({ dataAccess: config.dataAccess });
 
   if (authMiddleware) {
     app.use('/api', authMiddleware, dataApiRouter);
@@ -247,7 +255,7 @@ export async function createHttpMcpApp(config: HttpTransportConfig): Promise<exp
         }
       };
 
-      const server = await createMcpServer(serverUrl);
+      const server = await createMcpServer(serverUrl, config.ebayEnabled);
       await server.connect(transport);
     } else {
       res.status(400).json({

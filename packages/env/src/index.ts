@@ -23,6 +23,7 @@ const requiredNonEmptyString = (name: string) =>
     .min(1, `${name} is required`);
 
 const optionalNonEmptyString = () => z.string().trim().min(1).optional();
+const optionalTrimmedString = () => z.string().trim().optional();
 
 export const supabaseEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: requiredNonEmptyString('NEXT_PUBLIC_SUPABASE_URL').url(
@@ -38,22 +39,57 @@ export const supabaseEnvSchema = z.object({
 
 export type SupabaseEnv = z.infer<typeof supabaseEnvSchema>;
 
-export const sidecarRootEnvSchema = supabaseEnvSchema.extend({
-  SIDECAR_API_URL: optionalNonEmptyString(),
-  GEMINI_API_KEY: optionalNonEmptyString(),
-  GEMINI_MODEL: optionalNonEmptyString(),
-  EBAY_CLIENT_ID: requiredNonEmptyString('EBAY_CLIENT_ID'),
-  EBAY_CLIENT_SECRET: requiredNonEmptyString('EBAY_CLIENT_SECRET'),
-  EBAY_REDIRECT_URI: optionalNonEmptyString(),
-  EBAY_ENVIRONMENT: z.enum(['production', 'sandbox']).default('sandbox'),
-  EBAY_USER_REFRESH_TOKEN: optionalNonEmptyString(),
-  EBAY_USER_ACCESS_TOKEN: optionalNonEmptyString(),
-  EBAY_APP_ACCESS_TOKEN: optionalNonEmptyString(),
-  EBAY_MARKETPLACE_ID: optionalNonEmptyString(),
-  EBAY_CONTENT_LANGUAGE: optionalNonEmptyString(),
-  EBAY_LOG_LEVEL: optionalNonEmptyString(),
-  EBAY_ENABLE_FILE_LOGGING: z.enum(['true', 'false']).optional(),
-});
+export const sidecarRootEnvSchema = supabaseEnvSchema
+  .extend({
+    SIDECAR_API_URL: optionalNonEmptyString(),
+    GEMINI_API_KEY: optionalNonEmptyString(),
+    GEMINI_MODEL: optionalNonEmptyString(),
+    EBAY_ENABLED: z.enum(['true', 'false']).default('true'),
+    EBAY_CLIENT_ID: optionalNonEmptyString(),
+    EBAY_CLIENT_SECRET: optionalNonEmptyString(),
+    EBAY_REDIRECT_URI: optionalNonEmptyString(),
+    EBAY_ENVIRONMENT: optionalTrimmedString(),
+    EBAY_USER_REFRESH_TOKEN: optionalNonEmptyString(),
+    EBAY_USER_ACCESS_TOKEN: optionalNonEmptyString(),
+    EBAY_APP_ACCESS_TOKEN: optionalNonEmptyString(),
+    EBAY_MARKETPLACE_ID: optionalNonEmptyString(),
+    EBAY_CONTENT_LANGUAGE: optionalNonEmptyString(),
+    EBAY_LOG_LEVEL: optionalNonEmptyString(),
+    EBAY_ENABLE_FILE_LOGGING: z.enum(['true', 'false']).optional(),
+  })
+  .superRefine((env, ctx) => {
+    if (env.EBAY_ENABLED === 'false') {
+      return;
+    }
+
+    if (!env.EBAY_CLIENT_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'EBAY_CLIENT_ID is required',
+        path: ['EBAY_CLIENT_ID'],
+      });
+    }
+
+    if (!env.EBAY_CLIENT_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'EBAY_CLIENT_SECRET is required',
+        path: ['EBAY_CLIENT_SECRET'],
+      });
+    }
+
+    if (
+      env.EBAY_ENVIRONMENT !== undefined &&
+      env.EBAY_ENVIRONMENT !== 'production' &&
+      env.EBAY_ENVIRONMENT !== 'sandbox'
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'EBAY_ENVIRONMENT must be either "production" or "sandbox".',
+        path: ['EBAY_ENVIRONMENT'],
+      });
+    }
+  });
 
 export type SidecarRootEnv = z.infer<typeof sidecarRootEnvSchema>;
 

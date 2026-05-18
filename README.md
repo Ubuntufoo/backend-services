@@ -62,19 +62,25 @@ End-user setup, local development, and MCP-specific usage now live in [services/
 Useful root-level convenience commands:
 
 ```bash
+pnpm dev
 pnpm setup
 pnpm validate:env
 pnpm diagnose
 pnpm sync
 pnpm update:api-status
 pnpm dev:sidecar
+pnpm dev:sidecar:stdio
 ```
+
+`pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
+Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
 
 ## Local-Only Defaults
 
 For a local-only setup with cloud Supabase integration:
 
-- keep shared runtime secrets in `backend-services/.env.local`
+- keep shared runtime config in `backend-services/.env` and machine-local overrides or tokens in `backend-services/.env.local`
+- for DB-only local development, set `EBAY_ENABLED=false` and `OAUTH_ENABLED=false`
 - run `services/sidecar` directly on your machine
 - keep Supabase hosted instead of adding a local database stack here
 - keep reusable Supabase access in `packages/data` instead of reimplementing service clients inside runtime packages

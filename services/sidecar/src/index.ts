@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { validateEnvironmentConfig } from '@/config/environment.js';
+import { isEbayEnabled, validateEnvironmentConfig } from '@/config/environment.js';
 import { createEbayMcpRuntime, type EbayMcpRuntime } from '@/mcp/runtime.js';
 import { runSetup } from '@/scripts/setup.js';
 import { serverLogger, getLogPaths } from '@/utils/logger.js';
@@ -27,7 +27,10 @@ class EbayMcpServer {
   private runtime: EbayMcpRuntime;
 
   constructor() {
-    this.runtime = createEbayMcpRuntime({ logToolExecution: true });
+    this.runtime = createEbayMcpRuntime({
+      ebayEnabled: isEbayEnabled(process.env),
+      logToolExecution: true,
+    });
     this.setupErrorHandling();
   }
 
@@ -68,9 +71,12 @@ class EbayMcpServer {
       process.exit(1);
     }
 
-    // Initialize API (load tokens from storage)
-    serverLogger.info('Initializing API client');
-    await this.initialize();
+    if (this.runtime.api) {
+      serverLogger.info('Initializing API client');
+      await this.initialize();
+    } else {
+      serverLogger.info('eBay integration disabled; MCP runtime started without eBay tools');
+    }
 
     // Log log file locations if file logging is enabled
     if (process.env.EBAY_ENABLE_FILE_LOGGING === 'true') {

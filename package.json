@@ -18,6 +18,7 @@
     "build": "pnpm -r --if-present build",
     "dev": "pnpm --filter sidecar dev",
     "dev:sidecar": "pnpm --filter sidecar dev",
+    "dev:sidecar:stdio": "pnpm --filter sidecar dev:stdio",
     "setup": "pnpm --filter sidecar setup",
     "validate:env": "pnpm --filter sidecar validate:env",
     "sync": "pnpm --filter sidecar sync",

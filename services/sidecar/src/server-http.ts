@@ -39,6 +39,7 @@ function logConfiguration(): void {
   console.log(`Host: ${CONFIG.host}`);
   console.log(`Port: ${CONFIG.port}`);
   console.log(`OAuth Enabled: ${CONFIG.authEnabled}`);
+  console.log(`eBay Enabled: ${CONFIG.ebayEnabled}`);
 
   if (CONFIG.authEnabled) {
     console.log(`Auth Server: ${CONFIG.oauth.authServerUrl}`);
