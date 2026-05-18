@@ -15,10 +15,10 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 1 | DB | Create daily_usage table | Gemini/order sync usage can be tracked |
 | 1 | DB | Create app_settings table | Typed single-row config exists |
 | 1 | BE | Add REST API routes in sidecar backed by shared repository service layer | Frontend can read/write listings, jobs, orders, and app_settings through sidecar REST endpoints |  
-| 1 | BE | Replace temporary Database type with generated Supabase types | Shared data layer uses generated table types instead of hand-written temporary types | -->
-| 1 | FE | Add Supabase browser client/auth | UI can display listings |
-| 1 | FE | Create basic listings table view | Listings visible in UI |
-| 2 | FE | Add Create Test Listing form | Can manually create listing row |
+| 1 | BE | Replace temporary Database type with generated Supabase types | Shared data layer uses generated table types instead of hand-written temporary types |
+| 1 | FE | Add sidecar REST API client | UI can fetch listings and app settings through sidecar REST endpoints |
+| 1 | FE | Create basic listings table view | Listings visible in UI | 
+| 2 | FE | Add Create Test Listing form | Can manually create listing row | -->
 | 2 | FE | Add fields for `seller_hints`, `title`, `description`, `price`, `category_id`, `item_specifics` | Review/edit UI starts taking shape |
 | 2 | FE | Add status controls for test flow | Can manually move status through early stages |
 | 2 | BE | Add basic listing API endpoints or server actions | UI can create/update listings safely |
