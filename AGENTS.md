@@ -24,6 +24,13 @@ Responsibilities and contract
 - `ebay-service`: planned boundary for shared eBay-domain workflows if they become large enough to extract from the sidecar.
 - `job-runner`: planned boundary for retries, scheduling, and background workflows if app- or Supabase-driven automation stops being enough.
 
+Short term goal - first real milestone:
+Create one listing manually in the UI, attach image URLs, run Gemini, review/edit, and save needs_review.
+Not watcher.
+Not eBay.
+Not order sync.
+Once that works, every backend service has a clear target.
+
 Repo rules
 
 - Treat `services/sidecar` as the only canonical runtime package until another service is explicitly promoted.

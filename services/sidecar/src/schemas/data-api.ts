@@ -1,0 +1,72 @@
+import { CAPTURE_MODES } from '@ebay-inventory/types';
+import { z } from 'zod';
+import { listingWorkflowStateSchema } from '@/workflow/listing-workflow.js';
+
+const trimmedStringSchema = (name: string): z.ZodString =>
+  z
+    .string({
+      required_error: `${name} is required`,
+      invalid_type_error: `${name} must be a string`,
+    })
+    .trim()
+    .min(1, `${name} is required`);
+
+const nullableTrimmedStringSchema = (name: string): z.ZodOptional<z.ZodNullable<z.ZodString>> =>
+  trimmedStringSchema(name).nullable().optional();
+
+const listingTypeSchema = z.enum(['single', 'lot']);
+const captureModeSchema = z.enum(CAPTURE_MODES);
+const listingModeSchema = z.enum(['manual', 'test']);
+
+const itemSpecificsSchema = z.record(z.string(), z.unknown());
+
+export const listingIdParamsSchema = z.object({
+  listingId: trimmedStringSchema('listingId'),
+});
+
+export const editableListingFieldsSchema = z
+  .object({
+    captureMode: captureModeSchema.nullable().optional(),
+    categoryId: nullableTrimmedStringSchema('categoryId'),
+    conditionId: nullableTrimmedStringSchema('conditionId'),
+    conditionNotes: nullableTrimmedStringSchema('conditionNotes'),
+    description: nullableTrimmedStringSchema('description'),
+    eseEligible: z.boolean().nullable().optional(),
+    estimatedWeightOz: z.number().finite().nonnegative().nullable().optional(),
+    handlingDays: z.number().int().nonnegative().nullable().optional(),
+    imageUrls: z.array(trimmedStringSchema('imageUrl')).optional(),
+    itemSpecifics: itemSpecificsSchema.optional(),
+    listingType: listingTypeSchema.nullable().optional(),
+    merchantLocationKey: nullableTrimmedStringSchema('merchantLocationKey'),
+    packageType: nullableTrimmedStringSchema('packageType'),
+    price: z.number().finite().nonnegative().nullable().optional(),
+    sellerHints: nullableTrimmedStringSchema('sellerHints'),
+    shippingProfile: nullableTrimmedStringSchema('shippingProfile'),
+    sku: nullableTrimmedStringSchema('sku'),
+    title: nullableTrimmedStringSchema('title'),
+  })
+  .strict();
+
+export const createListingRequestSchema = editableListingFieldsSchema
+  .extend({
+    listingId: trimmedStringSchema('listingId').optional(),
+    mode: listingModeSchema,
+  })
+  .strict();
+
+export const updateListingRequestSchema = editableListingFieldsSchema.refine(
+  (value) => Object.values(value).some((field) => field !== undefined),
+  {
+    message: 'At least one editable field is required.',
+  }
+);
+
+export const updateListingWorkflowStateRequestSchema = listingWorkflowStateSchema;
+
+export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
+export type CreateListingRequest = z.infer<typeof createListingRequestSchema>;
+export type ListingIdParams = z.infer<typeof listingIdParamsSchema>;
+export type UpdateListingRequest = z.infer<typeof updateListingRequestSchema>;
+export type UpdateListingWorkflowStateRequest = z.infer<
+  typeof updateListingWorkflowStateRequestSchema
+>;

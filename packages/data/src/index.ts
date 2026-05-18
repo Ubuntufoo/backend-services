@@ -33,6 +33,7 @@ export { createJob, getJobById, listJobsByListingId, updateJob } from './reposit
 export {
   createListing,
   getListingByListingId,
+  listListings,
   saveGeneratedListingFields,
   saveListingArtifacts,
   savePublishedListing,
