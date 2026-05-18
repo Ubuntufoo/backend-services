@@ -178,6 +178,53 @@ describe('data API router', () => {
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 
+  it('updates allowlisted editable fields with the repository payload shape', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
+      title: 'Updated title',
+      conditionNotes: 'Minor wear',
+      estimatedWeightOz: 12,
+      imageUrls: ['https://cdn.example.com/1.jpg'],
+      itemSpecifics: { Brand: 'Acme' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      capture_mode: undefined,
+      category_id: undefined,
+      condition_id: undefined,
+      condition_notes: 'Minor wear',
+      description: undefined,
+      ese_eligible: undefined,
+      estimated_weight_oz: 12,
+      handling_days: undefined,
+      image_urls: ['https://cdn.example.com/1.jpg'],
+      item_specifics: { Brand: 'Acme' },
+      listing_type: undefined,
+      merchant_location_key: undefined,
+      package_type: undefined,
+      price: undefined,
+      seller_hints: undefined,
+      shipping_profile: undefined,
+      sku: undefined,
+      title: 'Updated title',
+    });
+  });
+
+  it('returns immediately when listing params are invalid before body validation', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/%20').send({
+      status: 'listed',
+    });
+
+    expect(response.status).toBe(400);
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid workflow-state pairs before persistence', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
@@ -209,6 +256,19 @@ describe('data API router', () => {
     });
   });
 
+  it('returns immediately when workflow params are invalid before body validation', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/%20/workflow-state').send({
+      status: 'record_created',
+      subStatus: 'publish_queued',
+    });
+
+    expect(response.status).toBe(400);
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
   it('reads app settings through the shared repository access', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
@@ -218,5 +278,21 @@ describe('data API router', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual(appSettingsRow);
     expect(dataAccess.appSettings.get).toHaveBeenCalledOnce();
+  });
+
+  it('returns a generic message for server errors', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.list = vi.fn(async () => {
+      throw new Error('duplicate key value violates unique constraint "listings_pkey"');
+    });
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/listings');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      error: 'server_error',
+      message: 'An unexpected server error occurred.',
+    });
   });
 });

@@ -90,4 +90,50 @@ describe('sidecar data access', () => {
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);
     expect(getAppSettingsMock).toHaveBeenCalledWith(client, undefined);
   });
+
+  it('delegates jobs and orders calls to the matching shared repository helpers', async () => {
+    const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
+    const dataAccess = createSidecarDataAccess();
+    const client = createSupabaseServiceClientMock.mock.results[0]?.value;
+
+    await dataAccess.jobs.create({
+      job_type: 'process_images',
+      listing_id: 'LIST-001',
+      status: 'queued',
+    });
+    await dataAccess.jobs.getById('job-row-id');
+    await dataAccess.jobs.listByListingId('LIST-001');
+    await dataAccess.jobs.update('job-row-id', { status: 'running' });
+
+    await dataAccess.orders.create({
+      listing_id: 'LIST-001',
+      order_id: 'ORDER-001',
+    });
+    await dataAccess.orders.getByOrderId('ORDER-001');
+    await dataAccess.orders.update('ORDER-001', { fulfillment_status: 'shipped' });
+
+    expect(createJobMock).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        job_type: 'process_images',
+        listing_id: 'LIST-001',
+        status: 'queued',
+      })
+    );
+    expect(getJobByIdMock).toHaveBeenCalledWith(client, 'job-row-id');
+    expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });
+
+    expect(createOrderMock).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        listing_id: 'LIST-001',
+        order_id: 'ORDER-001',
+      })
+    );
+    expect(getOrderByOrderIdMock).toHaveBeenCalledWith(client, 'ORDER-001');
+    expect(updateOrderMock).toHaveBeenCalledWith(client, 'ORDER-001', {
+      fulfillment_status: 'shipped',
+    });
+  });
 });

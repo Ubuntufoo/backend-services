@@ -207,12 +207,25 @@ function createListAllClient<TTable extends string, TRow>(
       expect(name).toBe(table);
 
       return {
-        select: vi.fn(async (columns: string) => {
+        select: vi.fn((columns: string) => {
           expect(columns).toBe('*');
 
           return {
-            data: expectedRows,
-            error: null,
+            order: vi.fn((column: string, options: { ascending: boolean }) => {
+              expect(column).toBe('updated_at');
+              expect(options).toEqual({ ascending: false });
+
+              return {
+                limit: vi.fn(async (value: number) => {
+                  expect(value).toBe(100);
+
+                  return {
+                    data: expectedRows,
+                    error: null,
+                  };
+                }),
+              };
+            }),
           };
         }),
       };

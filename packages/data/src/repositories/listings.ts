@@ -105,7 +105,11 @@ export async function getListingByListingId(
 }
 
 export async function listListings(client: SupabaseDataClient): Promise<ListingRow[]> {
-  const result = (await client.from('listings').select('*')) as MultiResult<ListingRow>;
+  const result = (await client
+    .from('listings')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(100)) as MultiResult<ListingRow>;
 
   if (result.error) {
     throw new Error(result.error.message);

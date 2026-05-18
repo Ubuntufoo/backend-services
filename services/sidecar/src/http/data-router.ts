@@ -54,11 +54,17 @@ function toStatusCode(error: unknown): number {
 
 function sendRouteError(res: Response, error: unknown): void {
   const statusCode = toStatusCode(error);
-  const message = error instanceof Error ? error.message : 'Unknown error';
+  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+  const responseMessage =
+    statusCode === 500 ? 'An unexpected server error occurred.' : errorMessage;
+
+  if (statusCode === 500) {
+    console.error('Data API route error:', error);
+  }
 
   res.status(statusCode).json({
     error: statusCode === 400 ? 'invalid_request' : statusCode === 404 ? 'not_found' : 'server_error',
-    message,
+    message: responseMessage,
   });
 }
 
@@ -151,8 +157,12 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
 
   router.patch('/listings/:listingId', async (req: Request, res: Response) => {
     const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
     const body = parseOrSend(res, updateListingRequestSchema, req.body);
-    if (!params || !body) {
+    if (!body) {
       return;
     }
 
@@ -169,8 +179,12 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
 
   router.patch('/listings/:listingId/workflow-state', async (req: Request, res: Response) => {
     const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
     const body = parseOrSend(res, updateListingWorkflowStateRequestSchema, req.body);
-    if (!params || !body) {
+    if (!body) {
       return;
     }
 
