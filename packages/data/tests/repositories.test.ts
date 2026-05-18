@@ -17,12 +17,14 @@ import {
   getOrderByOrderId,
   listJobsByListingId,
   saveListingArtifacts,
+  saveGeneratedListingFields,
   savePublishedListing,
+  updateListing,
   updateAppSettings,
   updateJob,
-  updateListing,
   updateOrder,
 } from '../src/index.js';
+import { requireSingleResult } from '../src/repositories/shared.js';
 
 const listingRow: ListingRow = {
   approved_for_export_at: null,
@@ -285,6 +287,49 @@ describe('shared repositories', () => {
       })
     ).resolves.toEqual(listingRow);
 
+    const generatedClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
+      expect(payload).toEqual({
+        capture_mode: 'single_1_image',
+        category_id: 'CATEGORY-1',
+        condition_id: '3000',
+        condition_notes: 'Minor wear',
+        description: 'Updated description',
+        ese_eligible: true,
+        estimated_weight_oz: 12,
+        handling_days: 3,
+        item_specifics: { Brand: 'Acme' },
+        listing_type: 'single',
+        merchant_location_key: 'LOC-1',
+        package_type: 'box',
+        price: 24.99,
+        seller_hints: 'Use padded envelope',
+        shipping_profile: 'standard',
+        title: 'Updated title',
+      });
+    });
+
+    await expect(
+      saveGeneratedListingFields(generatedClient, {
+        listingId: 'LIST-001',
+        captureMode: 'single_1_image',
+        categoryId: 'CATEGORY-1',
+        conditionId: '3000',
+        conditionNotes: 'Minor wear',
+        description: 'Updated description',
+        eseEligible: true,
+        estimatedWeightOz: 12,
+        handlingDays: 3,
+        itemSpecifics: { Brand: 'Acme' },
+        listingType: 'single',
+        merchantLocationKey: 'LOC-1',
+        packageType: 'box',
+        price: 24.99,
+        sellerHints: 'Use padded envelope',
+        shippingProfile: 'standard',
+        title: 'Updated title',
+      })
+    ).resolves.toEqual(listingRow);
+
     const publishClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
       expect(payload).toEqual({
         ebay_listing_id: 'EBAY-001',
@@ -295,10 +340,22 @@ describe('shared repositories', () => {
     await expect(
       savePublishedListing(publishClient, {
         listingId: 'LIST-001',
-        ebay_listing_id: 'EBAY-001',
-        exported_at: '2026-05-17T01:00:00.000Z',
+        ebayListingId: 'EBAY-001',
+        exportedAt: '2026-05-17T01:00:00.000Z',
       })
     ).resolves.toEqual(listingRow);
+  });
+
+  it('keeps falsey single-row data values intact', () => {
+    expect(
+      requireSingleResult(
+        {
+          data: 0,
+          error: null,
+        },
+        'missing'
+      )
+    ).toBe(0);
   });
 
   it('creates, fetches, lists, and updates jobs', async () => {

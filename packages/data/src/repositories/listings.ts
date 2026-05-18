@@ -16,32 +16,65 @@ export interface ListingArtifactsUpdate {
 }
 
 export interface GeneratedListingFieldsUpdate {
-  capture_mode?: ListingUpdate['capture_mode'];
-  category_id?: ListingUpdate['category_id'];
-  condition_id?: ListingUpdate['condition_id'];
-  condition_notes?: ListingUpdate['condition_notes'];
+  captureMode?: ListingUpdate['capture_mode'];
+  categoryId?: ListingUpdate['category_id'];
+  conditionId?: ListingUpdate['condition_id'];
+  conditionNotes?: ListingUpdate['condition_notes'];
   description?: ListingUpdate['description'];
-  ese_eligible?: ListingUpdate['ese_eligible'];
-  estimated_weight_oz?: ListingUpdate['estimated_weight_oz'];
-  handling_days?: ListingUpdate['handling_days'];
-  item_specifics?: ListingUpdate['item_specifics'];
+  eseEligible?: ListingUpdate['ese_eligible'];
+  estimatedWeightOz?: ListingUpdate['estimated_weight_oz'];
+  handlingDays?: ListingUpdate['handling_days'];
+  itemSpecifics?: ListingUpdate['item_specifics'];
   listingId: string;
-  listing_type?: ListingUpdate['listing_type'];
-  merchant_location_key?: ListingUpdate['merchant_location_key'];
-  package_type?: ListingUpdate['package_type'];
+  listingType?: ListingUpdate['listing_type'];
+  merchantLocationKey?: ListingUpdate['merchant_location_key'];
+  packageType?: ListingUpdate['package_type'];
   price?: ListingUpdate['price'];
-  seller_hints?: ListingUpdate['seller_hints'];
-  shipping_profile?: ListingUpdate['shipping_profile'];
+  sellerHints?: ListingUpdate['seller_hints'];
+  shippingProfile?: ListingUpdate['shipping_profile'];
   title?: ListingUpdate['title'];
 }
 
 export interface PublishedListingUpdate {
-  ebay_listing_id?: ListingUpdate['ebay_listing_id'];
-  ebay_listing_status?: ListingUpdate['ebay_listing_status'];
-  ebay_listing_url?: ListingUpdate['ebay_listing_url'];
-  ebay_offer_id?: ListingUpdate['ebay_offer_id'];
-  exported_at?: ListingUpdate['exported_at'];
+  ebayListingId?: ListingUpdate['ebay_listing_id'];
+  ebayListingStatus?: ListingUpdate['ebay_listing_status'];
+  ebayListingUrl?: ListingUpdate['ebay_listing_url'];
+  ebayOfferId?: ListingUpdate['ebay_offer_id'];
+  exportedAt?: ListingUpdate['exported_at'];
   listingId: string;
+}
+
+function mapGeneratedListingFieldsUpdate(
+  input: GeneratedListingFieldsUpdate
+): ListingUpdate {
+  return {
+    capture_mode: input.captureMode,
+    category_id: input.categoryId,
+    condition_id: input.conditionId,
+    condition_notes: input.conditionNotes,
+    description: input.description,
+    ese_eligible: input.eseEligible,
+    estimated_weight_oz: input.estimatedWeightOz,
+    handling_days: input.handlingDays,
+    item_specifics: input.itemSpecifics,
+    listing_type: input.listingType,
+    merchant_location_key: input.merchantLocationKey,
+    package_type: input.packageType,
+    price: input.price,
+    seller_hints: input.sellerHints,
+    shipping_profile: input.shippingProfile,
+    title: input.title,
+  };
+}
+
+function mapPublishedListingUpdate(input: PublishedListingUpdate): ListingUpdate {
+  return {
+    ebay_listing_id: input.ebayListingId,
+    ebay_listing_status: input.ebayListingStatus,
+    ebay_listing_url: input.ebayListingUrl,
+    ebay_offer_id: input.ebayOfferId,
+    exported_at: input.exportedAt,
+  };
 }
 
 export async function createListing(
@@ -102,16 +135,16 @@ export async function saveGeneratedListingFields(
   client: SupabaseDataClient,
   input: GeneratedListingFieldsUpdate
 ): Promise<ListingRow> {
-  const { listingId, ...changes } = input;
+  const { listingId } = input;
 
-  return await updateListing(client, listingId, changes);
+  return await updateListing(client, listingId, mapGeneratedListingFieldsUpdate(input));
 }
 
 export async function savePublishedListing(
   client: SupabaseDataClient,
   input: PublishedListingUpdate
 ): Promise<ListingRow> {
-  const { listingId, ...changes } = input;
+  const { listingId } = input;
 
-  return await updateListing(client, listingId, changes);
+  return await updateListing(client, listingId, mapPublishedListingUpdate(input));
 }

@@ -20,7 +20,7 @@ export function requireSingleResult<TData>(
     throw new Error(result.error.message);
   }
 
-  if (!result.data) {
+  if (result.data === null) {
     throw new Error(missingMessage);
   }
 
