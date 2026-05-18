@@ -29,8 +29,8 @@ export type Database = Omit<GeneratedDatabase, 'public'> & {
         > & {
           capture_mode: CaptureMode | null;
           listing_type: 'single' | 'lot' | null;
-          status: ListingStatus | null;
-          sub_status: ListingSubStatus | null;
+          status: ListingStatus;
+          sub_status: ListingSubStatus;
         };
         Insert: Omit<
           GeneratedListings['Insert'],
@@ -38,8 +38,8 @@ export type Database = Omit<GeneratedDatabase, 'public'> & {
         > & {
           capture_mode?: CaptureMode | null;
           listing_type?: 'single' | 'lot' | null;
-          status?: ListingStatus | null;
-          sub_status?: ListingSubStatus | null;
+          status: ListingStatus;
+          sub_status: ListingSubStatus;
         };
         Update: Omit<
           GeneratedListings['Update'],
