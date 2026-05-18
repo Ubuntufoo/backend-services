@@ -1,5 +1,5 @@
 import type { CaptureMode, ListingStatus, ListingSubStatus } from '@ebay-inventory/types';
-import type { Database as GeneratedDatabase, Json } from './database-generated.js';
+import type { Database as GeneratedDatabase } from './database-generated.js';
 
 export type { Json } from './database-generated.js';
 
