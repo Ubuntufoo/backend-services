@@ -145,24 +145,71 @@ describe('data API router', () => {
     const app = createApp(dataAccess);
 
     const response = await request(app).post('/api/listings').send({
-      listingId: 'TEST-001',
       mode: 'test',
-      sku: 'SKU-001',
-      title: 'Test listing',
     });
 
     expect(response.status).toBe(201);
-    expect(dataAccess.listings.create).toHaveBeenCalledWith(
+    expect(response.body).toEqual(
       expect.objectContaining({
-        listing_id: 'TEST-001',
-        sku: 'SKU-001',
+        listing_id: expect.stringMatching(/^test-/),
         status: 'record_created',
         sub_status: 'idle',
-        title: 'Test listing',
         image_urls: [],
         item_specifics: {},
       })
     );
+    expect(dataAccess.listings.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listing_id: expect.stringMatching(/^test-/),
+        status: 'record_created',
+        sub_status: 'idle',
+        image_urls: [],
+        item_specifics: {},
+      })
+    );
+  });
+
+  it('rejects create requests without the required mode field', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings').send({
+      title: 'Test listing',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: 'Required',
+          path: 'mode',
+        },
+      ],
+    });
+    expect(dataAccess.listings.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects create requests with unknown fields', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings').send({
+      mode: 'test',
+      status: 'needs_review',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: 'Unrecognized key(s) in object: \'status\'',
+          path: '',
+        },
+      ],
+    });
+    expect(dataAccess.listings.create).not.toHaveBeenCalled();
   });
 
   it('rejects non-allowlisted editable field updates', async () => {
