@@ -179,8 +179,8 @@ export type Database = {
           shipping_profile: string | null;
           sku: string | null;
           sold_at: string | null;
-          status: string | null;
-          sub_status: string | null;
+          status: string;
+          sub_status: string;
           title: string | null;
           updated_at: string;
         };
@@ -218,8 +218,8 @@ export type Database = {
           shipping_profile?: string | null;
           sku?: string | null;
           sold_at?: string | null;
-          status?: string | null;
-          sub_status?: string | null;
+          status: string;
+          sub_status: string;
           title?: string | null;
           updated_at?: string;
         };
