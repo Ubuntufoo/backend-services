@@ -3,6 +3,7 @@
 This repository is the backend monorepo for the eBay Inventory Manager. It is intentionally optimized for a local-only, single-user workflow:
 
 - `services/sidecar` is the only implemented runtime package today.
+- `packages/data` owns the shared Supabase client and typed repository helpers used by that runtime.
 - Future boundaries are documented, but they should stay inside the sidecar or the main app until scale or operational pressure proves a real extraction is needed.
 
 ## Current Status
@@ -21,6 +22,10 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 
 ```text
 backend-services/
+  packages/
+    data/                 # Shared Supabase data layer
+    env/                  # Shared environment contracts
+    types/                # Shared workflow/domain types
   services/
     sidecar/              # Active package
   docs/                   # Shared reference material
@@ -48,6 +53,7 @@ pnpm validate:env
 ```
 
 These commands target the canonical `services/sidecar` package through the workspace configuration.
+Shared packages participate in the workspace build and test graph.
 
 ## Sidecar
 
@@ -71,6 +77,7 @@ For a local-only setup with cloud Supabase integration:
 - keep shared runtime secrets in `backend-services/.env.local`
 - run `services/sidecar` directly on your machine
 - keep Supabase hosted instead of adding a local database stack here
+- keep reusable Supabase access in `packages/data` instead of reimplementing service clients inside runtime packages
 - keep planned watcher, image, R2, Gemini, eBay, and job-runner concerns as modules or Supabase-triggered workflows until a second runtime is clearly necessary
 - avoid containerization and multi-process orchestration unless deployment needs actually appear
 

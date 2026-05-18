@@ -6,13 +6,13 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: createClientMock,
 }));
 
-describe('shared Supabase service client', () => {
+describe('Supabase shared client', () => {
   afterEach(() => {
     createClientMock.mockClear();
   });
 
-  it('loads the service client config from environment variables', async () => {
-    const { loadSupabaseServiceClientConfig } = await import('@ebay-inventory/data');
+  it('loads service-role config from the shared env contract', async () => {
+    const { loadSupabaseServiceClientConfig } = await import('../src/index.js');
 
     const config = loadSupabaseServiceClientConfig({
       NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
@@ -29,8 +29,8 @@ describe('shared Supabase service client', () => {
     });
   });
 
-  it('creates a server-only Supabase client with the service role key', async () => {
-    const { createSupabaseServiceClient } = await import('@ebay-inventory/data');
+  it('creates a backend-safe service client', async () => {
+    const { createSupabaseServiceClient } = await import('../src/index.js');
 
     createSupabaseServiceClient({
       NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
@@ -42,12 +42,12 @@ describe('shared Supabase service client', () => {
     expect(createClientMock).toHaveBeenCalledWith(
       'https://fmiliwxthjonjwywuqta.supabase.co',
       'service-role-test',
-      expect.objectContaining({
+      {
         auth: {
           autoRefreshToken: false,
           persistSession: false,
         },
-      })
+      }
     );
   });
 });

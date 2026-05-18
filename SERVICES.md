@@ -8,16 +8,24 @@ This repository uses a phased monorepo model.
 | --- | --- | --- |
 | `services/sidecar` | Active | MCP server and canonical eBay integration runtime. |
 
+## Shared Packages
+
+| Directory | Status | Purpose |
+| --- | --- | --- |
+| `packages/data` | Active shared package | Shared Supabase client, CRUD-style repositories, and workflow transition helpers used by the active runtime. |
+| `packages/env` | Active shared package | Shared environment validation contracts. |
+| `packages/types` | Active shared package | Shared workflow and domain types. |
+
 ## Planned Boundaries
 
 | Boundary | Status | Planned responsibility |
 | --- | --- | --- |
-| `watcher-service` | Planned module | Consume asset events and trigger downstream workflows. |
+| `watcher-service` | Planned module | Consume asset events, create initial listing rows, and enqueue jobs through shared data helpers. |
 | `image-service` | Planned module | Image normalization, EXIF stripping, derivatives, and metadata extraction. |
 | `r2-service` | Planned module | Cloudflare R2 uploads, proxying, and signed URL issuance. |
 | `gemini-service` | Planned module | AI enrichment, validation, caching, and rate limiting around Gemini requests. |
 | `ebay-service` | Planned module | Shared eBay-domain orchestration that may be extracted from the sidecar later. |
-| `job-runner` | Planned module | Queue-backed jobs, retries, monitoring, and workflow execution. |
+| `job-runner` | Planned module | Queue-backed jobs, workflow status transitions, output persistence, retries, and monitoring. |
 
 ## Promotion Rules
 
@@ -42,9 +50,11 @@ pnpm dev
 For a local-only, single-user workflow with cloud Supabase integration, prefer:
 
 - one local Node process for the sidecar
+- one shared Supabase data layer instead of per-service client wrappers
 - hosted Supabase services
 - Supabase functions, cron, or app-triggered jobs before introducing `job-runner`
 - direct module boundaries inside the sidecar before extracting watcher, image, R2, Gemini, or eBay-specific processes
+- stateless image, R2, Gemini, and eBay service modules unless direct DB access becomes necessary later
 
 ## Shared Infrastructure
 

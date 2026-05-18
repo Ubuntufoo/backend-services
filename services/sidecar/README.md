@@ -37,7 +37,7 @@ cp env.example .env.local
 ```
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env.local`.
-Use `pnpm validate:env` from the repo root to verify the Supabase and eBay configuration before starting schema work.
+Use `pnpm validate:env` from the repo root to verify the shared Supabase data-layer and eBay configuration before starting schema work.
 
 ## Local-Only Operation
 
@@ -50,9 +50,11 @@ The sidecar currently owns:
 - MCP stdio startup
 - HTTP transport and OAuth metadata
 - eBay REST and Trading API clients
-- local workflow support for apps that use hosted Supabase externally
+- local workflow support and DB-facing orchestration for apps that use hosted Supabase externally
 - Tool definitions, schemas, and handlers
 - Setup, diagnostics, and API sync scripts
 - Unit and integration tests
+
+Reusable Supabase access now lives in `packages/data`. Future watcher-service and job-runner extraction should consume that shared layer rather than reintroducing sidecar-local client code.
 
 Future services should be extracted from the sidecar only after they have a concrete runtime boundary and their own validation surface.

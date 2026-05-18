@@ -1,0 +1,448 @@
+import { describe, expect, it, vi } from 'vitest';
+import type {
+  AppSettingsRow,
+  JobRow,
+  ListingRow,
+  OrderRow,
+  SupabaseDataClient,
+} from '../src/index.js';
+import {
+  createAppSettings,
+  createJob,
+  createListing,
+  createOrder,
+  getAppSettings,
+  getJobById,
+  getListingByListingId,
+  getOrderByOrderId,
+  listJobsByListingId,
+  saveListingArtifacts,
+  saveGeneratedListingFields,
+  savePublishedListing,
+  updateListing,
+  updateAppSettings,
+  updateJob,
+  updateOrder,
+} from '../src/index.js';
+import { requireSingleResult } from '../src/repositories/shared.js';
+
+const listingRow: ListingRow = {
+  approved_for_export_at: null,
+  capture_mode: null,
+  category_id: null,
+  condition_id: null,
+  condition_notes: null,
+  created_at: '2026-05-17T00:00:00.000Z',
+  description: null,
+  ebay_listing_id: null,
+  ebay_listing_status: null,
+  ebay_listing_url: null,
+  ebay_offer_id: null,
+  ese_eligible: null,
+  estimated_weight_oz: null,
+  exported_at: null,
+  handling_days: null,
+  id: 'listing-row-id',
+  image_urls: [],
+  item_specifics: {},
+  last_error_at: null,
+  last_error_code: null,
+  listing_id: 'LIST-001',
+  listing_type: null,
+  merchant_location_key: null,
+  package_type: null,
+  price: null,
+  r2_delete_after: null,
+  r2_deleted_at: null,
+  r2_object_keys: [],
+  r2_retention_policy: null,
+  seller_hints: null,
+  shipping_profile: null,
+  sku: 'SKU-001',
+  sold_at: null,
+  status: 'record_created',
+  sub_status: 'idle',
+  title: null,
+  updated_at: '2026-05-17T00:00:00.000Z',
+};
+
+const jobRow: JobRow = {
+  created_at: '2026-05-17T00:00:00.000Z',
+  id: 'job-row-id',
+  job_type: 'process_images',
+  last_error: null,
+  last_error_at: null,
+  last_error_code: null,
+  listing_id: 'LIST-001',
+  next_run_at: null,
+  status: 'queued',
+  updated_at: '2026-05-17T00:00:00.000Z',
+};
+
+const orderRow: OrderRow = {
+  created_at: '2026-05-17T00:00:00.000Z',
+  ebay_listing_id: null,
+  fulfillment_status: null,
+  id: 'order-row-id',
+  listing_id: 'LIST-001',
+  order_id: 'ORDER-001',
+  order_status: 'open',
+  quantity_sold: 1,
+  sale_price: 12.5,
+  ship_by_date: null,
+  sku: 'SKU-001',
+  updated_at: '2026-05-17T00:00:00.000Z',
+};
+
+const appSettingsRow: AppSettingsRow = {
+  capture_mode: 'single_1_image',
+  default_fulfillment_policy_id: null,
+  default_package_type: null,
+  default_payment_policy_id: null,
+  default_return_policy_id: null,
+  default_shipping_profile: null,
+  ebay_marketplace_id: 'EBAY_US',
+  gemini_daily_limit: 500,
+  handling_days: 2,
+  id: 'default',
+  incoming_folder_path: '/incoming',
+  max_order_syncs_per_day: 25,
+  merchant_location_key: null,
+  office_location_name: null,
+  processed_folder_path: '/processed',
+  r2_retention_days_after_sold: 30,
+  updated_at: '2026-05-17T00:00:00.000Z',
+};
+
+function createInsertClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRow: TRow,
+  onInsert?: (payload: unknown) => void
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        insert: vi.fn((payload: unknown) => {
+          onInsert?.(payload);
+
+          return {
+            select: vi.fn(() => ({
+              single: vi.fn(async () => ({
+                data: expectedRow,
+                error: null,
+              })),
+            })),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createSelectClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRow: TRow | null,
+  column: string,
+  value: string
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn((actualColumn: string, actualValue: string) => {
+            expect(actualColumn).toBe(column);
+            expect(actualValue).toBe(value);
+
+            return {
+              maybeSingle: vi.fn(async () => ({
+                data: expectedRow,
+                error: null,
+              })),
+            };
+          }),
+        })),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createListClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRows: TRow[],
+  column: string,
+  value: string
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(async (actualColumn: string, actualValue: string) => {
+            expect(actualColumn).toBe(column);
+            expect(actualValue).toBe(value);
+
+            return {
+              data: expectedRows,
+              error: null,
+            };
+          }),
+        })),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createUpdateClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRow: TRow,
+  column: string,
+  value: string,
+  onUpdate?: (payload: unknown) => void
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        update: vi.fn((payload: unknown) => {
+          onUpdate?.(payload);
+
+          return {
+            eq: vi.fn((actualColumn: string, actualValue: string) => {
+              expect(actualColumn).toBe(column);
+              expect(actualValue).toBe(value);
+
+              return {
+                select: vi.fn(() => ({
+                  single: vi.fn(async () => ({
+                    data: expectedRow,
+                    error: null,
+                  })),
+                })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+describe('shared repositories', () => {
+  it('creates and fetches listings', async () => {
+    const createClient = createInsertClient('listings', listingRow, (payload) => {
+      expect(payload).toEqual({
+        listing_id: 'LIST-001',
+        sku: 'SKU-001',
+        status: 'record_created',
+        sub_status: 'idle',
+      });
+    });
+
+    const created = await createListing(createClient, {
+      listing_id: 'LIST-001',
+      sku: 'SKU-001',
+      status: 'record_created',
+      sub_status: 'idle',
+    });
+
+    expect(created).toEqual(listingRow);
+
+    const fetchClient = createSelectClient('listings', listingRow, 'listing_id', 'LIST-001');
+    await expect(getListingByListingId(fetchClient, 'LIST-001')).resolves.toEqual(listingRow);
+  });
+
+  it('updates listings and persists stateless worker outputs', async () => {
+    const updateClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
+      expect(payload).toEqual({
+        title: 'Updated title',
+      });
+    });
+
+    await expect(updateListing(updateClient, 'LIST-001', { title: 'Updated title' })).resolves.toEqual(
+      listingRow
+    );
+
+    const artifactsClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
+      expect(payload).toEqual({
+        image_urls: ['https://cdn.example.com/1.jpg'],
+        r2_delete_after: undefined,
+        r2_deleted_at: undefined,
+        r2_object_keys: ['images/LIST-001/1.jpg'],
+        r2_retention_policy: 'delete_after_sold',
+      });
+    });
+
+    await expect(
+      saveListingArtifacts(artifactsClient, {
+        imageUrls: ['https://cdn.example.com/1.jpg'],
+        listingId: 'LIST-001',
+        r2ObjectKeys: ['images/LIST-001/1.jpg'],
+        r2RetentionPolicy: 'delete_after_sold',
+      })
+    ).resolves.toEqual(listingRow);
+
+    const generatedClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
+      expect(payload).toEqual({
+        capture_mode: 'single_1_image',
+        category_id: 'CATEGORY-1',
+        condition_id: '3000',
+        condition_notes: 'Minor wear',
+        description: 'Updated description',
+        ese_eligible: true,
+        estimated_weight_oz: 12,
+        handling_days: 3,
+        item_specifics: { Brand: 'Acme' },
+        listing_type: 'single',
+        merchant_location_key: 'LOC-1',
+        package_type: 'box',
+        price: 24.99,
+        seller_hints: 'Use padded envelope',
+        shipping_profile: 'standard',
+        title: 'Updated title',
+      });
+    });
+
+    await expect(
+      saveGeneratedListingFields(generatedClient, {
+        listingId: 'LIST-001',
+        captureMode: 'single_1_image',
+        categoryId: 'CATEGORY-1',
+        conditionId: '3000',
+        conditionNotes: 'Minor wear',
+        description: 'Updated description',
+        eseEligible: true,
+        estimatedWeightOz: 12,
+        handlingDays: 3,
+        itemSpecifics: { Brand: 'Acme' },
+        listingType: 'single',
+        merchantLocationKey: 'LOC-1',
+        packageType: 'box',
+        price: 24.99,
+        sellerHints: 'Use padded envelope',
+        shippingProfile: 'standard',
+        title: 'Updated title',
+      })
+    ).resolves.toEqual(listingRow);
+
+    const publishClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
+      expect(payload).toEqual({
+        ebay_listing_id: 'EBAY-001',
+        exported_at: '2026-05-17T01:00:00.000Z',
+      });
+    });
+
+    await expect(
+      savePublishedListing(publishClient, {
+        listingId: 'LIST-001',
+        ebayListingId: 'EBAY-001',
+        exportedAt: '2026-05-17T01:00:00.000Z',
+      })
+    ).resolves.toEqual(listingRow);
+  });
+
+  it('keeps falsey single-row data values intact', () => {
+    expect(
+      requireSingleResult(
+        {
+          data: 0,
+          error: null,
+        },
+        'missing'
+      )
+    ).toBe(0);
+  });
+
+  it('creates, fetches, lists, and updates jobs', async () => {
+    const createClient = createInsertClient('jobs', jobRow, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'process_images',
+        listing_id: 'LIST-001',
+        status: 'queued',
+      });
+    });
+
+    await expect(
+      createJob(createClient, {
+        job_type: 'process_images',
+        listing_id: 'LIST-001',
+        status: 'queued',
+      })
+    ).resolves.toEqual(jobRow);
+
+    const getClient = createSelectClient('jobs', jobRow, 'id', 'job-row-id');
+    await expect(getJobById(getClient, 'job-row-id')).resolves.toEqual(jobRow);
+
+    const listClient = createListClient('jobs', [jobRow], 'listing_id', 'LIST-001');
+    await expect(listJobsByListingId(listClient, 'LIST-001')).resolves.toEqual([jobRow]);
+
+    const updateClient = createUpdateClient('jobs', jobRow, 'id', 'job-row-id', (payload) => {
+      expect(payload).toEqual({
+        status: 'running',
+      });
+    });
+
+    await expect(updateJob(updateClient, 'job-row-id', { status: 'running' })).resolves.toEqual(jobRow);
+  });
+
+  it('creates, fetches, and updates orders', async () => {
+    const createClient = createInsertClient('orders', orderRow, (payload) => {
+      expect(payload).toEqual({
+        listing_id: 'LIST-001',
+        order_id: 'ORDER-001',
+      });
+    });
+
+    await expect(
+      createOrder(createClient, {
+        listing_id: 'LIST-001',
+        order_id: 'ORDER-001',
+      })
+    ).resolves.toEqual(orderRow);
+
+    const getClient = createSelectClient('orders', orderRow, 'order_id', 'ORDER-001');
+    await expect(getOrderByOrderId(getClient, 'ORDER-001')).resolves.toEqual(orderRow);
+
+    const updateClient = createUpdateClient('orders', orderRow, 'order_id', 'ORDER-001', (payload) => {
+      expect(payload).toEqual({
+        fulfillment_status: 'shipped',
+      });
+    });
+
+    await expect(updateOrder(updateClient, 'ORDER-001', { fulfillment_status: 'shipped' })).resolves.toEqual(
+      orderRow
+    );
+  });
+
+  it('creates, fetches, and updates app settings', async () => {
+    const createClient = createInsertClient('app_settings', appSettingsRow, (payload) => {
+      expect(payload).toEqual({
+        capture_mode: 'single_1_image',
+        id: 'default',
+      });
+    });
+
+    await expect(
+      createAppSettings(createClient, {
+        capture_mode: 'single_1_image',
+        id: 'default',
+      })
+    ).resolves.toEqual(appSettingsRow);
+
+    const getClient = createSelectClient('app_settings', appSettingsRow, 'id', 'default');
+    await expect(getAppSettings(getClient)).resolves.toEqual(appSettingsRow);
+
+    const updateClient = createUpdateClient('app_settings', appSettingsRow, 'id', 'default', (payload) => {
+      expect(payload).toEqual({
+        handling_days: 3,
+      });
+    });
+
+    await expect(updateAppSettings(updateClient, { handling_days: 3 })).resolves.toEqual(appSettingsRow);
+  });
+});

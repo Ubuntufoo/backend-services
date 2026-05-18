@@ -1,0 +1,31 @@
+{
+  "name": "@ebay-inventory/data",
+  "version": "0.0.0",
+  "description": "Shared Supabase-backed data access for backend services.",
+  "type": "module",
+  "private": true,
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build && tsc --build",
+    "typecheck": "tsc --noEmit --pretty false -p tsconfig.test.json",
+    "test": "pnpm run typecheck && vitest run",
+    "check": "pnpm run test"
+  },
+  "dependencies": {
+    "@ebay-inventory/env": "workspace:*",
+    "@ebay-inventory/types": "workspace:*",
+    "@supabase/supabase-js": "2.78.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}
