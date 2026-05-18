@@ -1,281 +1,60 @@
 import type { CaptureMode, ListingStatus, ListingSubStatus } from '@ebay-inventory/types';
+import type { Database as GeneratedDatabase } from './database-generated.js';
 
-export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
+export type { Json } from './database-generated.js';
 
-export interface Database {
-  public: {
-    Tables: {
+type GeneratedPublicTables = GeneratedDatabase['public']['Tables'];
+type GeneratedAppSettings = GeneratedPublicTables['app_settings'];
+type GeneratedListings = GeneratedPublicTables['listings'];
+
+export type Database = Omit<GeneratedDatabase, 'public'> & {
+  public: Omit<GeneratedDatabase['public'], 'Tables'> & {
+    Tables: Omit<GeneratedPublicTables, 'app_settings' | 'listings'> & {
       app_settings: {
-        Row: {
+        Row: Omit<GeneratedAppSettings['Row'], 'capture_mode'> & {
           capture_mode: CaptureMode | null;
-          default_fulfillment_policy_id: string | null;
-          default_package_type: string | null;
-          default_payment_policy_id: string | null;
-          default_return_policy_id: string | null;
-          default_shipping_profile: string | null;
-          ebay_marketplace_id: string | null;
-          gemini_daily_limit: number | null;
-          handling_days: number | null;
-          id: string;
-          incoming_folder_path: string | null;
-          max_order_syncs_per_day: number | null;
-          merchant_location_key: string | null;
-          office_location_name: string | null;
-          processed_folder_path: string | null;
-          r2_retention_days_after_sold: number | null;
-          updated_at: string;
         };
-        Insert: {
+        Insert: Omit<GeneratedAppSettings['Insert'], 'capture_mode'> & {
           capture_mode?: CaptureMode | null;
-          default_fulfillment_policy_id?: string | null;
-          default_package_type?: string | null;
-          default_payment_policy_id?: string | null;
-          default_return_policy_id?: string | null;
-          default_shipping_profile?: string | null;
-          ebay_marketplace_id?: string | null;
-          gemini_daily_limit?: number | null;
-          handling_days?: number | null;
-          id?: string;
-          incoming_folder_path?: string | null;
-          max_order_syncs_per_day?: number | null;
-          merchant_location_key?: string | null;
-          office_location_name?: string | null;
-          processed_folder_path?: string | null;
-          r2_retention_days_after_sold?: number | null;
-          updated_at?: string;
         };
-        Update: {
+        Update: Omit<GeneratedAppSettings['Update'], 'capture_mode'> & {
           capture_mode?: CaptureMode | null;
-          default_fulfillment_policy_id?: string | null;
-          default_package_type?: string | null;
-          default_payment_policy_id?: string | null;
-          default_return_policy_id?: string | null;
-          default_shipping_profile?: string | null;
-          ebay_marketplace_id?: string | null;
-          gemini_daily_limit?: number | null;
-          handling_days?: number | null;
-          id?: string;
-          incoming_folder_path?: string | null;
-          max_order_syncs_per_day?: number | null;
-          merchant_location_key?: string | null;
-          office_location_name?: string | null;
-          processed_folder_path?: string | null;
-          r2_retention_days_after_sold?: number | null;
-          updated_at?: string;
         };
-        Relationships: [];
-      };
-      jobs: {
-        Row: {
-          created_at: string;
-          id: string;
-          job_type: string;
-          last_error: string | null;
-          last_error_at: string | null;
-          last_error_code: string | null;
-          listing_id: string | null;
-          next_run_at: string | null;
-          status: string;
-          updated_at: string;
-        };
-        Insert: {
-          created_at?: string;
-          id?: string;
-          job_type: string;
-          last_error?: string | null;
-          last_error_at?: string | null;
-          last_error_code?: string | null;
-          listing_id?: string | null;
-          next_run_at?: string | null;
-          status: string;
-          updated_at?: string;
-        };
-        Update: {
-          created_at?: string;
-          id?: string;
-          job_type?: string;
-          last_error?: string | null;
-          last_error_at?: string | null;
-          last_error_code?: string | null;
-          listing_id?: string | null;
-          next_run_at?: string | null;
-          status?: string;
-          updated_at?: string;
-        };
-        Relationships: [];
+        Relationships: GeneratedAppSettings['Relationships'];
       };
       listings: {
-        Row: {
-          approved_for_export_at: string | null;
+        Row: Omit<
+          GeneratedListings['Row'],
+          'capture_mode' | 'listing_type' | 'status' | 'sub_status'
+        > & {
           capture_mode: CaptureMode | null;
-          category_id: string | null;
-          condition_id: string | null;
-          condition_notes: string | null;
-          created_at: string;
-          description: string | null;
-          ebay_listing_id: string | null;
-          ebay_listing_status: string | null;
-          ebay_listing_url: string | null;
-          ebay_offer_id: string | null;
-          ese_eligible: boolean | null;
-          estimated_weight_oz: number | null;
-          exported_at: string | null;
-          handling_days: number | null;
-          id: string;
-          image_urls: Json;
-          item_specifics: Json;
-          last_error_at: string | null;
-          last_error_code: string | null;
-          listing_id: string;
           listing_type: 'single' | 'lot' | null;
-          merchant_location_key: string | null;
-          package_type: string | null;
-          price: number | null;
-          r2_delete_after: string | null;
-          r2_deleted_at: string | null;
-          r2_object_keys: Json;
-          r2_retention_policy: string | null;
-          seller_hints: string | null;
-          shipping_profile: string | null;
-          sku: string | null;
-          sold_at: string | null;
           status: ListingStatus;
           sub_status: ListingSubStatus;
-          title: string | null;
-          updated_at: string;
         };
-        Insert: {
-          approved_for_export_at?: string | null;
+        Insert: Omit<
+          GeneratedListings['Insert'],
+          'capture_mode' | 'listing_type' | 'status' | 'sub_status'
+        > & {
           capture_mode?: CaptureMode | null;
-          category_id?: string | null;
-          condition_id?: string | null;
-          condition_notes?: string | null;
-          created_at?: string;
-          description?: string | null;
-          ebay_listing_id?: string | null;
-          ebay_listing_status?: string | null;
-          ebay_listing_url?: string | null;
-          ebay_offer_id?: string | null;
-          ese_eligible?: boolean | null;
-          estimated_weight_oz?: number | null;
-          exported_at?: string | null;
-          handling_days?: number | null;
-          id?: string;
-          image_urls?: Json;
-          item_specifics?: Json;
-          last_error_at?: string | null;
-          last_error_code?: string | null;
-          listing_id: string;
           listing_type?: 'single' | 'lot' | null;
-          merchant_location_key?: string | null;
-          package_type?: string | null;
-          price?: number | null;
-          r2_delete_after?: string | null;
-          r2_deleted_at?: string | null;
-          r2_object_keys?: Json;
-          r2_retention_policy?: string | null;
-          seller_hints?: string | null;
-          shipping_profile?: string | null;
-          sku?: string | null;
-          sold_at?: string | null;
           status: ListingStatus;
           sub_status: ListingSubStatus;
-          title?: string | null;
-          updated_at?: string;
         };
-        Update: {
-          approved_for_export_at?: string | null;
+        Update: Omit<
+          GeneratedListings['Update'],
+          'capture_mode' | 'listing_type' | 'status' | 'sub_status'
+        > & {
           capture_mode?: CaptureMode | null;
-          category_id?: string | null;
-          condition_id?: string | null;
-          condition_notes?: string | null;
-          created_at?: string;
-          description?: string | null;
-          ebay_listing_id?: string | null;
-          ebay_listing_status?: string | null;
-          ebay_listing_url?: string | null;
-          ebay_offer_id?: string | null;
-          ese_eligible?: boolean | null;
-          estimated_weight_oz?: number | null;
-          exported_at?: string | null;
-          handling_days?: number | null;
-          id?: string;
-          image_urls?: Json;
-          item_specifics?: Json;
-          last_error_at?: string | null;
-          last_error_code?: string | null;
-          listing_id?: string;
           listing_type?: 'single' | 'lot' | null;
-          merchant_location_key?: string | null;
-          package_type?: string | null;
-          price?: number | null;
-          r2_delete_after?: string | null;
-          r2_deleted_at?: string | null;
-          r2_object_keys?: Json;
-          r2_retention_policy?: string | null;
-          seller_hints?: string | null;
-          shipping_profile?: string | null;
-          sku?: string | null;
-          sold_at?: string | null;
-          status?: ListingStatus;
-          sub_status?: ListingSubStatus;
-          title?: string | null;
-          updated_at?: string;
+          status?: ListingStatus | null;
+          sub_status?: ListingSubStatus | null;
         };
-        Relationships: [];
-      };
-      orders: {
-        Row: {
-          created_at: string;
-          ebay_listing_id: string | null;
-          fulfillment_status: string | null;
-          id: string;
-          listing_id: string | null;
-          order_id: string;
-          order_status: string | null;
-          quantity_sold: number | null;
-          sale_price: number | null;
-          ship_by_date: string | null;
-          sku: string | null;
-          updated_at: string;
-        };
-        Insert: {
-          created_at?: string;
-          ebay_listing_id?: string | null;
-          fulfillment_status?: string | null;
-          id?: string;
-          listing_id?: string | null;
-          order_id: string;
-          order_status?: string | null;
-          quantity_sold?: number | null;
-          sale_price?: number | null;
-          ship_by_date?: string | null;
-          sku?: string | null;
-          updated_at?: string;
-        };
-        Update: {
-          created_at?: string;
-          ebay_listing_id?: string | null;
-          fulfillment_status?: string | null;
-          id?: string;
-          listing_id?: string | null;
-          order_id?: string;
-          order_status?: string | null;
-          quantity_sold?: number | null;
-          sale_price?: number | null;
-          ship_by_date?: string | null;
-          sku?: string | null;
-          updated_at?: string;
-        };
-        Relationships: [];
+        Relationships: GeneratedListings['Relationships'];
       };
     };
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
-    Enums: Record<string, never>;
-    CompositeTypes: Record<string, never>;
   };
-}
+};
 
 type PublicTables = Database['public']['Tables'];
 
@@ -287,6 +66,10 @@ export type TableUpdate<TTableName extends TableName> = PublicTables[TTableName]
 export type AppSettingsRow = TableRow<'app_settings'>;
 export type AppSettingsInsert = TableInsert<'app_settings'>;
 export type AppSettingsUpdate = TableUpdate<'app_settings'>;
+
+export type DailyUsageRow = TableRow<'daily_usage'>;
+export type DailyUsageInsert = TableInsert<'daily_usage'>;
+export type DailyUsageUpdate = TableUpdate<'daily_usage'>;
 
 export type JobRow = TableRow<'jobs'>;
 export type JobInsert = TableInsert<'jobs'>;

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add eBay Trading API support to ebay-mcp with six MCP tools for full fixed-price listing management.
+**Goal:** Add eBay Trading API support to the sidecar with six MCP tools for full fixed-price listing management.
 
 **Architecture:** New `TradingApiClient` handles XML serialization/deserialization via `fast-xml-parser` (already a dependency). New `TradingApi` class exposes methods matching existing API module patterns. Six new MCP tools wire into the existing tool registry.
 
@@ -749,7 +749,7 @@ Expected: All tests pass
 **Step 3: Smoke test against live eBay**
 
 ```bash
-cd /path/to/ebay-mcp && node -e "
+cd /path/to/backend-services && node -e "
 const dotenv = require('dotenv');
 dotenv.config();
 // ... refresh token, then test getActiveListings via TradingApi
@@ -766,8 +766,8 @@ git push -u origin feat/trading-api
 
 ---
 
-### Task 7: Create PR to Upstream
+### Task 7: Create PR
 
-Create PR from `<your-fork>/ebay-mcp:feat/trading-api` to `YosefHayim/ebay-mcp:main`.
+Create a PR from your working branch in this repository to its default branch.
 
 Include the .env quoting fix from the earlier branch too, or note it as a dependency.

@@ -1,12 +1,12 @@
-# Trading API Support for ebay-mcp
+# Trading API Support for the Sidecar
 
 ## Problem
 
-The ebay-mcp server only wraps eBay's REST Sell APIs. Listings created through eBay's UI (or the older Trading API) are invisible to the REST inventory endpoints. This means common seller operations — checking active listings, updating quantities, revising prices — don't work for most existing sellers.
+The sidecar server only wraps eBay's REST Sell APIs. Listings created through eBay's UI (or the older Trading API) are invisible to the REST inventory endpoints. This means common seller operations — checking active listings, updating quantities, revising prices — don't work for most existing sellers.
 
 ## Solution
 
-Add eBay Trading API support to ebay-mcp with six MCP tools for full fixed-price listing management.
+Add eBay Trading API support to the sidecar with six MCP tools for full fixed-price listing management.
 
 ## Architecture
 
@@ -54,4 +54,4 @@ All tools target fixed-price listings. Auction support is out of scope for now.
 
 ## Workflow
 
-Build on your fork of `ebay-mcp`, create branch `feat/trading-api`, then open a PR to `YosefHayim/ebay-mcp` when proven.
+Build on a feature branch in this repository, then open a PR to the default branch when proven.
