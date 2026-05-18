@@ -100,10 +100,22 @@ export function createEbayMcpRuntime(options: EbayMcpRuntimeOptions = {}): EbayM
   const server = new McpServer(options.serverConfig ?? mcpConfig);
   const entries = ebayEnabled ? getToolEntries() : [];
 
+  if (!api) {
+    serverLogger.info('Registering 0 tools');
+
+    return {
+      api,
+      server,
+      async initializeApi() {
+        return;
+      },
+    };
+  }
+
   serverLogger.info(`Registering ${entries.length} tools`);
 
   for (const entry of entries) {
-    registerTool(server, api as EbaySellerApi, entry, options.logToolExecution ?? false);
+    registerTool(server, api, entry, options.logToolExecution ?? false);
   }
 
   return {
