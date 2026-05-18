@@ -265,7 +265,7 @@ export class EbayApiClient {
   private validateAccessToken(): void {
     if (!this.config.clientId || !this.config.clientSecret) {
       throw new Error(
-        'Missing required eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env.local.'
+        'Missing required eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env or backend-services/.env.local.'
       );
     }
   }

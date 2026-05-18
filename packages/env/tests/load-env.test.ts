@@ -110,7 +110,37 @@ describe('loadEnv', () => {
       },
     });
 
-    expect(env.EBAY_ENVIRONMENT).toBe('sandbox');
+    expect(env.EBAY_ENVIRONMENT).toBeUndefined();
     expect(env.EBAY_CLIENT_ID).toBe('client-id');
+  });
+
+  it('allows DB-only sidecar env when EBAY_ENABLED=false', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        EBAY_ENABLED: 'false',
+      },
+    });
+
+    expect(env.EBAY_ENABLED).toBe('false');
+    expect(env.EBAY_CLIENT_ID).toBeUndefined();
+    expect(env.EBAY_CLIENT_SECRET).toBeUndefined();
+  });
+
+  it('requires eBay credentials when EBAY_ENABLED=true', () => {
+    expect(() =>
+      loadSidecarRootEnv({
+        env: {
+          NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+          SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+          SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+          EBAY_ENABLED: 'true',
+        },
+      })
+    ).toThrow(/EBAY_CLIENT_ID is required/);
   });
 });

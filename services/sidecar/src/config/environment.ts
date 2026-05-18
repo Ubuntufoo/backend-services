@@ -11,29 +11,49 @@ import { z } from 'zod';
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
-// Load the canonical repo-root .env.local once during module initialization.
+// Load the canonical repo-root env files once during module initialization.
 loadRootEnvironment();
 
-const requiredEbayCredential = (name: string): z.ZodString =>
-  z
-    .string({
-      required_error: `${name} is not set. OAuth will not work.`,
-      invalid_type_error: `${name} is not set. OAuth will not work.`,
-    })
-    .trim()
-    .min(1, `${name} is not set. OAuth will not work.`);
+const sidecarRuntimeEnvSchema = z
+  .object({
+    EBAY_ENABLED: z.enum(['true', 'false']).default('true'),
+    EBAY_CLIENT_ID: z.string().trim().optional(),
+    EBAY_CLIENT_SECRET: z.string().trim().optional(),
+    EBAY_ENVIRONMENT: z.string().trim().optional(),
+  })
+  .superRefine((env, ctx) => {
+    if (env.EBAY_ENABLED === 'false') {
+      return;
+    }
 
-const sidecarRuntimeEnvSchema = z.object({
-  EBAY_CLIENT_ID: requiredEbayCredential('EBAY_CLIENT_ID'),
-  EBAY_CLIENT_SECRET: requiredEbayCredential('EBAY_CLIENT_SECRET'),
-  EBAY_ENVIRONMENT: z
-    .enum(['production', 'sandbox'], {
-      errorMap: () => ({
+    if (!env.EBAY_CLIENT_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'EBAY_CLIENT_ID is not set. OAuth will not work.',
+        path: ['EBAY_CLIENT_ID'],
+      });
+    }
+
+    if (!env.EBAY_CLIENT_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'EBAY_CLIENT_SECRET is not set. OAuth will not work.',
+        path: ['EBAY_CLIENT_SECRET'],
+      });
+    }
+
+    if (
+      env.EBAY_ENVIRONMENT !== undefined &&
+      env.EBAY_ENVIRONMENT !== 'production' &&
+      env.EBAY_ENVIRONMENT !== 'sandbox'
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
         message: 'EBAY_ENVIRONMENT must be either "production" or "sandbox".',
-      }),
-    })
-    .optional(),
-});
+        path: ['EBAY_ENVIRONMENT'],
+      });
+    }
+  });
 
 export type SidecarRuntimeEnv = z.infer<typeof sidecarRuntimeEnvSchema>;
 
@@ -41,6 +61,10 @@ export function loadSidecarRuntimeEnv(): SidecarRuntimeEnv {
   const env = loadSidecarRootEnv({ env: process.env });
 
   return sidecarRuntimeEnvSchema.parse(env);
+}
+
+export function isEbayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.EBAY_ENABLED !== 'false';
 }
 
 // Type for scope JSON structure
@@ -158,6 +182,7 @@ export function validateEnvironmentConfig(): {
   const errors: string[] = [];
 
   const environment = process.env.EBAY_ENVIRONMENT;
+  const ebayEnabled = isEbayEnabled(process.env);
 
   try {
     loadSidecarRootEnv({ env: process.env });
@@ -170,14 +195,14 @@ export function validateEnvironmentConfig(): {
   }
 
   // Check if environment is set
-  if (!environment) {
+  if (ebayEnabled && !environment) {
     warnings.push(
       'EBAY_ENVIRONMENT not set. Defaulting to "sandbox". Set EBAY_ENVIRONMENT=production for production use.'
     );
   }
 
   // Check if redirect URI is set (needed for OAuth user flow)
-  if (!process.env.EBAY_REDIRECT_URI) {
+  if (ebayEnabled && !process.env.EBAY_REDIRECT_URI) {
     warnings.push(
       'EBAY_REDIRECT_URI is not set. User OAuth flow will not work. Set this to enable user token generation.'
     );
@@ -223,9 +248,9 @@ export function getEbayConfig(): EbayConfig {
   const contentLanguage = (process.env.EBAY_CONTENT_LANGUAGE ?? '').trim() || 'en-US';
 
   // Only require client credentials - tokens can be optional (generated from refresh token)
-  if (clientId === '' || clientSecret === '') {
+  if (isEbayEnabled(process.env) && (clientId === '' || clientSecret === '')) {
     console.error(
-      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env.local'
+      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env or backend-services/.env.local'
     );
   }
 

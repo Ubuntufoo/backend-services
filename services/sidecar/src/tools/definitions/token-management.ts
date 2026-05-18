@@ -42,7 +42,7 @@ export const tokenManagementTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          'Optional redirect URI registered with your eBay application (RuName). If not provided, will use EBAY_REDIRECT_URI from backend-services/.env.local.'
+          'Optional redirect URI registered with your eBay application (RuName). If not provided, will use EBAY_REDIRECT_URI from backend-services/.env or backend-services/.env.local.'
         ),
       scopes: z
         .array(z.string())

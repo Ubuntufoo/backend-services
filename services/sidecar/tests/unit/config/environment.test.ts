@@ -3,6 +3,7 @@ import {
   getEbayConfig,
   getBaseUrl,
   getAuthUrl,
+  isEbayEnabled,
   validateEnvironmentConfig,
 } from '@/config/environment.js';
 
@@ -10,14 +11,12 @@ describe('Environment Configuration', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
-    // Create a fresh copy of process.env for each test
     process.env = {
-      ...originalEnv,
       NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
       SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
       SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
-    };
+    } as NodeJS.ProcessEnv;
   });
 
   afterEach(() => {
@@ -177,6 +176,7 @@ describe('Environment Configuration', () => {
     });
 
     it('should fail validation when CLIENT_ID is missing', () => {
+      process.env.EBAY_ENABLED = 'true';
       delete process.env.EBAY_CLIENT_ID;
       process.env.EBAY_CLIENT_SECRET = 'test_secret';
 
@@ -187,6 +187,7 @@ describe('Environment Configuration', () => {
     });
 
     it('should fail validation when CLIENT_SECRET is missing', () => {
+      process.env.EBAY_ENABLED = 'true';
       process.env.EBAY_CLIENT_ID = 'test_id';
       delete process.env.EBAY_CLIENT_SECRET;
 
@@ -197,6 +198,7 @@ describe('Environment Configuration', () => {
     });
 
     it('should fail validation for invalid environment value', () => {
+      process.env.EBAY_ENABLED = 'true';
       process.env.EBAY_CLIENT_ID = 'test_id';
       process.env.EBAY_CLIENT_SECRET = 'test_secret';
       process.env.EBAY_ENVIRONMENT = 'invalid';
@@ -208,6 +210,7 @@ describe('Environment Configuration', () => {
     });
 
     it('should warn when ENVIRONMENT is not set', () => {
+      process.env.EBAY_ENABLED = 'true';
       process.env.EBAY_CLIENT_ID = 'test_id';
       process.env.EBAY_CLIENT_SECRET = 'test_secret';
       delete process.env.EBAY_ENVIRONMENT;
@@ -219,6 +222,7 @@ describe('Environment Configuration', () => {
     });
 
     it('should warn when REDIRECT_URI is not set', () => {
+      process.env.EBAY_ENABLED = 'true';
       process.env.EBAY_CLIENT_ID = 'test_id';
       process.env.EBAY_CLIENT_SECRET = 'test_secret';
       delete process.env.EBAY_REDIRECT_URI;
@@ -227,6 +231,29 @@ describe('Environment Configuration', () => {
 
       expect(result.isValid).toBe(true);
       expect(result.warnings.some((w) => w.includes('EBAY_REDIRECT_URI'))).toBe(true);
+    });
+
+    it('should allow DB-only mode without eBay credentials', () => {
+      process.env.EBAY_ENABLED = 'false';
+      delete process.env.EBAY_CLIENT_ID;
+      delete process.env.EBAY_CLIENT_SECRET;
+      delete process.env.EBAY_REDIRECT_URI;
+      delete process.env.EBAY_ENVIRONMENT;
+
+      const result = validateEnvironmentConfig();
+
+      expect(result.isValid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+      expect(result.warnings.some((w) => w.includes('EBAY_REDIRECT_URI'))).toBe(false);
+      expect(result.warnings.some((w) => w.includes('EBAY_ENVIRONMENT'))).toBe(false);
+    });
+
+    it('reports eBay enabled state from env', () => {
+      expect(isEbayEnabled(process.env)).toBe(true);
+
+      process.env.EBAY_ENABLED = 'false';
+
+      expect(isEbayEnabled(process.env)).toBe(false);
     });
   });
 });

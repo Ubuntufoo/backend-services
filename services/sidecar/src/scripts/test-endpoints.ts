@@ -89,7 +89,7 @@ class EndpointTester {
       console.log('⚠️  SAFETY: Forcing SANDBOX mode for comprehensive testing');
       console.log('   Production mode is disabled to prevent accidental data modification');
       console.log(
-        '   Set EBAY_ENVIRONMENT=sandbox in backend-services/.env.local to suppress this warning\n'
+        '   Set EBAY_ENVIRONMENT=sandbox in backend-services/.env or backend-services/.env.local to suppress this warning\n'
       );
     }
 
@@ -103,7 +103,7 @@ class EndpointTester {
     // Validate config
     if (!config.clientId || !config.clientSecret) {
       throw new Error(
-        'Missing eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env.local'
+        'Missing eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env or backend-services/.env.local'
       );
     }
 
