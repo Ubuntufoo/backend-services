@@ -99,6 +99,10 @@ export function createR2ImageStorageClient(
 ): S3Client {
   const config = loadR2ImageStorageConfig(env);
 
+  return createR2ImageStorageClientFromConfig(config);
+}
+
+function createR2ImageStorageClientFromConfig(config: R2ImageStorageConfig): S3Client {
   return new S3Client({
     region: config.region,
     endpoint: config.s3Endpoint,
@@ -136,7 +140,7 @@ export async function uploadImage(
   }
 
   const config = options.config ?? loadR2ImageStorageConfig(options.env);
-  const client = options.client ?? createR2ImageStorageClient(options.env);
+  const client = options.client ?? createR2ImageStorageClientFromConfig(config);
   const objectKey = buildR2ImageObjectKey(input, options.objectId);
 
   await client.send(

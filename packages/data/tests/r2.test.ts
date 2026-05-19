@@ -99,6 +99,48 @@ describe('shared R2 image upload service', () => {
     });
   });
 
+  it('uses a provided config to create the upload client when no client is passed', async () => {
+    sendMock.mockResolvedValue({ ETag: '"etag-value"' });
+
+    const { uploadImage } = await import('../src/index.js');
+
+    await uploadImage(
+      {
+        listingId: 'listing-123',
+        filename: 'front.png',
+        contentType: 'image/png',
+        body: Buffer.from('image-bytes'),
+      },
+      {
+        config: {
+          accountId: 'account-id',
+          accessKeyId: 'config-access-key',
+          secretAccessKey: 'config-secret-key',
+          bucketName: 'config-bucket',
+          publicBaseUrl: 'https://images.example.com',
+          region: 'auto',
+          s3Endpoint: 'https://config-endpoint.example.com',
+        },
+        objectId: 'fixed-object-id',
+      }
+    );
+
+    expect(s3ClientMock).toHaveBeenCalledWith({
+      credentials: {
+        accessKeyId: 'config-access-key',
+        secretAccessKey: 'config-secret-key',
+      },
+      endpoint: 'https://config-endpoint.example.com',
+      region: 'auto',
+    });
+    expect(putObjectCommandMock).toHaveBeenCalledWith({
+      Body: Buffer.from('image-bytes'),
+      Bucket: 'config-bucket',
+      ContentType: 'image/png',
+      Key: 'listings/listing-123/fixed-object-id-front.png',
+    });
+  });
+
   it('rejects empty upload bodies before attempting to send an object', async () => {
     const { uploadImage } = await import('../src/index.js');
 

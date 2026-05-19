@@ -20,7 +20,7 @@
     "check": "pnpm run test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1049.0",
+    "@aws-sdk/client-s3": "3.967.0",
     "@ebay-inventory/env": "workspace:*",
     "@ebay-inventory/types": "workspace:*",
     "@supabase/supabase-js": "2.78.0"
