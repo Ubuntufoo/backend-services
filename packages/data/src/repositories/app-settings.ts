@@ -6,7 +6,7 @@ import {
   type SingleResult,
 } from './shared.js';
 
-const defaultAppSettingsId = 'default';
+export const DEFAULT_APP_SETTINGS_ID = 'default';
 
 export async function createAppSettings(
   client: SupabaseDataClient,
@@ -23,7 +23,7 @@ export async function createAppSettings(
 
 export async function getAppSettings(
   client: SupabaseDataClient,
-  id = defaultAppSettingsId
+  id = DEFAULT_APP_SETTINGS_ID
 ): Promise<AppSettingsRow | null> {
   const result = (await client
     .from('app_settings')
@@ -37,7 +37,7 @@ export async function getAppSettings(
 export async function updateAppSettings(
   client: SupabaseDataClient,
   changes: AppSettingsUpdate,
-  id = defaultAppSettingsId
+  id = DEFAULT_APP_SETTINGS_ID
 ): Promise<AppSettingsRow> {
   const result = await client
     .from('app_settings')

@@ -19,6 +19,7 @@ const createAppSettingsMock = vi.fn();
 const updateAppSettingsMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
+  DEFAULT_APP_SETTINGS_ID: 'default',
   createAppSettings: createAppSettingsMock,
   createJob: createJobMock,
   createListing: createListingMock,
@@ -88,7 +89,7 @@ describe('sidecar data access', () => {
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
     expect(updateListingMock).toHaveBeenCalledWith(client, 'LIST-001', listingUpdate);
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);
-    expect(getAppSettingsMock).toHaveBeenCalledWith(client, undefined);
+    expect(getAppSettingsMock).toHaveBeenCalledWith(client, 'default');
   });
 
   it('delegates jobs and orders calls to the matching shared repository helpers', async () => {

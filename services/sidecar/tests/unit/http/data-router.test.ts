@@ -217,6 +217,19 @@ describe('data API router', () => {
     const app = createApp(dataAccess);
 
     const response = await request(app).patch('/api/listings/LIST-001').send({
+      shippingProfile: 'fast-shipping',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('invalid_request');
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects workflow fields on the seller-editable listing patch', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
       status: 'listed',
     });
 
@@ -225,37 +238,30 @@ describe('data API router', () => {
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 
-  it('updates allowlisted editable fields with the repository payload shape', async () => {
+  it('updates only the seller-editable fields with the repository payload shape', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
     const response = await request(app).patch('/api/listings/LIST-001').send({
-      title: 'Updated title',
+      categoryId: 'CATEGORY-001',
       conditionNotes: 'Minor wear',
-      estimatedWeightOz: 12,
-      imageUrls: ['https://cdn.example.com/1.jpg'],
+      conditionId: 'CONDITION-001',
+      description: 'Updated description',
       itemSpecifics: { Brand: 'Acme' },
+      price: 19.99,
+      sellerHints: 'Ship in original packaging',
+      title: 'Updated title',
     });
 
     expect(response.status).toBe(200);
     expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
-      capture_mode: undefined,
-      category_id: undefined,
-      condition_id: undefined,
+      category_id: 'CATEGORY-001',
+      condition_id: 'CONDITION-001',
       condition_notes: 'Minor wear',
-      description: undefined,
-      ese_eligible: undefined,
-      estimated_weight_oz: 12,
-      handling_days: undefined,
-      image_urls: ['https://cdn.example.com/1.jpg'],
+      description: 'Updated description',
       item_specifics: { Brand: 'Acme' },
-      listing_type: undefined,
-      merchant_location_key: undefined,
-      package_type: undefined,
-      price: undefined,
-      seller_hints: undefined,
-      shipping_profile: undefined,
-      sku: undefined,
+      price: 19.99,
+      seller_hints: 'Ship in original packaging',
       title: 'Updated title',
     });
   });
@@ -324,7 +330,35 @@ describe('data API router', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual(appSettingsRow);
-    expect(dataAccess.appSettings.get).toHaveBeenCalledOnce();
+    expect(dataAccess.appSettings.get).toHaveBeenCalledWith('default');
+  });
+
+  it('returns not_found when app settings are missing', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get = vi.fn(async () => null);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/app-settings');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      error: 'not_found',
+      message: 'App settings "default" were not found.',
+    });
+  });
+
+  it('returns not_found when a listing lookup misses', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => null);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/listings/LIST-404');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      error: 'not_found',
+      message: 'Listing "LIST-404" was not found.',
+    });
   });
 
   it('returns a generic message for server errors', async () => {

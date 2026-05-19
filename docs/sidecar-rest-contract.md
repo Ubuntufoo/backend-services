@@ -17,6 +17,124 @@ Contract verified from:
 - Routes are mounted under `/api`
 - Local create-listing endpoint: `POST /api/listings`
 
+## `GET /api/listings`
+
+Returns the current listing collection sorted by the backend repository layer.
+
+### Success response
+
+HTTP `200 OK`
+
+```json
+{
+  "listings": []
+}
+```
+
+The route returns a `listings` array and uses the shared data repository directly.
+
+### Errors
+
+- `404 not_found` is not used by this route.
+- Unexpected persistence failures return `500 server_error` with the standard JSON shape below.
+
+## `GET /api/listings/:listingId`
+
+Returns one listing by `listingId`.
+
+### Path parameters
+
+- `listingId`: required non-empty string
+
+### Success response
+
+HTTP `200 OK`
+
+Returns the full `listings` row.
+
+### Not found
+
+HTTP `404 Not Found`
+
+```json
+{
+  "error": "not_found",
+  "message": "Listing \"LIST-404\" was not found."
+}
+```
+
+## `PATCH /api/listings/:listingId`
+
+Updates the seller-editable listing fields only.
+
+### Accepted request body fields
+
+Only these fields are accepted:
+
+- `sellerHints`
+- `title`
+- `description`
+- `price`
+- `categoryId`
+- `itemSpecifics`
+- `conditionId`
+- `conditionNotes`
+
+### Rejected fields
+
+This route rejects workflow and system fields such as:
+
+- `status`
+- `subStatus`
+- `captureMode`
+- `listingType`
+- `shippingProfile`
+- `sku`
+- `imageUrls`
+- `merchantLocationKey`
+- `packageType`
+- `eseEligible`
+- `estimatedWeightOz`
+- `handlingDays`
+
+Unknown top-level keys are also rejected.
+
+## `PATCH /api/listings/:listingId/workflow-state`
+
+Updates only the workflow `status`/`subStatus` pair.
+
+### Request body
+
+```json
+{
+  "status": "approved_for_export",
+  "subStatus": "publish_queued"
+}
+```
+
+The route validates that the pair is valid before persistence. It is separate from the seller-editable listing PATCH route and is the only backend route in this phase that can change workflow state.
+
+## `GET /api/app-settings`
+
+Reads the singleton `app_settings` row with `id = "default"`.
+
+### Success response
+
+HTTP `200 OK`
+
+Returns the full `app_settings` row.
+
+### Not found
+
+HTTP `404 Not Found`
+
+```json
+{
+  "error": "not_found",
+  "message": "App settings \"default\" were not found."
+}
+```
+
 ## `POST /api/listings`
 
 Creates a listing row in the shared `listings` table for the sidecar-driven workflow.
