@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { DEFAULT_APP_SETTINGS_ID, type Json, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
+import { DEFAULT_APP_SETTINGS_ID, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -81,7 +81,7 @@ function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpd
     estimated_weight_oz: input.estimatedWeightOz,
     handling_days: input.handlingDays,
     image_urls: input.imageUrls,
-    item_specifics: input.itemSpecifics as Json | undefined,
+    item_specifics: input.itemSpecifics as ListingUpdate['item_specifics'],
     listing_type: input.listingType,
     merchant_location_key: input.merchantLocationKey,
     package_type: input.packageType,
@@ -101,7 +101,7 @@ function mapSellerEditableListingFields(
     condition_id: input.conditionId,
     condition_notes: input.conditionNotes,
     description: input.description,
-    item_specifics: input.itemSpecifics as Json | undefined,
+    item_specifics: input.itemSpecifics as ListingUpdate['item_specifics'],
     price: input.price,
     seller_hints: input.sellerHints,
     title: input.title,
@@ -123,7 +123,7 @@ function buildListingInsert(input: CreateListingRequest): ListingInsert {
   return {
     ...mapEditableListingFields(input),
     image_urls: input.imageUrls ?? [],
-    item_specifics: (input.itemSpecifics ?? {}) as Json,
+    item_specifics: (input.itemSpecifics ?? {}) as ListingInsert['item_specifics'],
     listing_id: listingId,
     status: initialWorkflowState.status,
     sub_status: initialWorkflowState.subStatus,
