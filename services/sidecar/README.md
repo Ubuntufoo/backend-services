@@ -49,6 +49,8 @@ Use `pnpm validate:env` from the repo root to verify the shared Supabase data-la
 
 This package is intended to run directly on your machine for local development and single-user use. It does not require Docker or a local Supabase stack when your Supabase project is hosted.
 
+The default `app_settings` row is seeded in `supabase/migrations/20260518120000_seed_default_app_settings.sql`. Apply it through the normal Supabase migration flow for your local database if you are running one.
+
 ## Scope
 
 The sidecar currently owns:
