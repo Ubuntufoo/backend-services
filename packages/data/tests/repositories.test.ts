@@ -348,6 +348,53 @@ describe('shared repositories', () => {
       })
     ).resolves.toEqual(listingRow);
 
+    const optimisticMetadataClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('listings');
+
+        return {
+          update: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              image_urls: ['https://cdn.example.com/1.jpg', 'https://cdn.example.com/2.jpg'],
+              r2_object_keys: ['images/LIST-001/1.jpg', 'images/LIST-001/2.jpg'],
+            });
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('listing_id');
+                expect(firstValue).toBe('LIST-001');
+
+                return {
+                  eq: vi.fn((secondColumn: string, secondValue: string) => {
+                    expect(secondColumn).toBe('updated_at');
+                    expect(secondValue).toBe('2026-05-17T00:00:00.000Z');
+
+                    return {
+                      select: vi.fn(() => ({
+                        maybeSingle: vi.fn(async () => ({
+                          data: null,
+                          error: null,
+                        })),
+                      })),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(
+      saveListingImageMetadata(optimisticMetadataClient, {
+        imageUrls: ['https://cdn.example.com/1.jpg', 'https://cdn.example.com/2.jpg'],
+        listingId: 'LIST-001',
+        r2ObjectKeys: ['images/LIST-001/1.jpg', 'images/LIST-001/2.jpg'],
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      })
+    ).resolves.toBeNull();
+
     const generatedClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
       expect(payload).toEqual({
         capture_mode: 'single_1_image',

@@ -17,6 +17,7 @@ export interface ListingArtifactsUpdate {
 }
 
 export interface ListingImageMetadataUpdate {
+  expectedUpdatedAt?: string;
   imageUrls: string[];
   listingId: string;
   r2ObjectKeys: string[];
@@ -155,11 +156,30 @@ export async function saveListingArtifacts(
 export async function saveListingImageMetadata(
   client: SupabaseDataClient,
   input: ListingImageMetadataUpdate
-): Promise<ListingRow> {
-  return await updateListing(client, input.listingId, {
-    image_urls: input.imageUrls,
-    r2_object_keys: input.r2ObjectKeys,
-  });
+): Promise<ListingRow | null> {
+  if (!input.expectedUpdatedAt) {
+    return await updateListing(client, input.listingId, {
+      image_urls: input.imageUrls,
+      r2_object_keys: input.r2ObjectKeys,
+    });
+  }
+
+  const result = (await client
+    .from('listings')
+    .update({
+      image_urls: input.imageUrls,
+      r2_object_keys: input.r2ObjectKeys,
+    })
+    .eq('listing_id', input.listingId)
+    .eq('updated_at', input.expectedUpdatedAt)
+    .select()
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? null;
 }
 
 export async function saveGeneratedListingFields(

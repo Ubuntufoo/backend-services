@@ -49,7 +49,7 @@ export interface SidecarDataAccess {
     create(input: ListingInsert): Promise<ListingRow>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
     list(): Promise<ListingRow[]>;
-    saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow>;
+    saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow | null>;
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
   };
