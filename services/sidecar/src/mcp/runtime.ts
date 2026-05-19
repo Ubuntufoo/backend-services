@@ -106,8 +106,8 @@ export function createEbayMcpRuntime(options: EbayMcpRuntimeOptions = {}): EbayM
     return {
       api,
       server,
-      async initializeApi() {
-        return;
+      initializeApi() {
+        return Promise.resolve();
       },
     };
   }
