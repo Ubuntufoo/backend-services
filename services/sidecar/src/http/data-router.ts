@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { DEFAULT_APP_SETTINGS_ID, type Json, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
+import { DEFAULT_APP_SETTINGS_ID, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -7,6 +7,7 @@ import {
   createListingRequestSchema,
   listingIdParamsSchema,
   updateListingRequestSchema,
+  updateListingImageUrlsRequestSchema,
   updateListingWorkflowStateRequestSchema,
   type CreateListingRequest,
   type EditableListingFieldsInput,
@@ -80,7 +81,7 @@ function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpd
     estimated_weight_oz: input.estimatedWeightOz,
     handling_days: input.handlingDays,
     image_urls: input.imageUrls,
-    item_specifics: input.itemSpecifics as Json | undefined,
+    item_specifics: input.itemSpecifics as ListingUpdate['item_specifics'],
     listing_type: input.listingType,
     merchant_location_key: input.merchantLocationKey,
     package_type: input.packageType,
@@ -100,11 +101,19 @@ function mapSellerEditableListingFields(
     condition_id: input.conditionId,
     condition_notes: input.conditionNotes,
     description: input.description,
-    item_specifics: input.itemSpecifics as Json | undefined,
+    item_specifics: input.itemSpecifics as ListingUpdate['item_specifics'],
     price: input.price,
     seller_hints: input.sellerHints,
     title: input.title,
   };
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === 'string');
 }
 
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
@@ -114,7 +123,7 @@ function buildListingInsert(input: CreateListingRequest): ListingInsert {
   return {
     ...mapEditableListingFields(input),
     image_urls: input.imageUrls ?? [],
-    item_specifics: (input.itemSpecifics ?? {}) as Json,
+    item_specifics: (input.itemSpecifics ?? {}) as ListingInsert['item_specifics'],
     listing_id: listingId,
     status: initialWorkflowState.status,
     sub_status: initialWorkflowState.subStatus,
@@ -188,6 +197,44 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         mapSellerEditableListingFields(body)
       );
       res.json(listing);
+    } catch (error) {
+      sendRouteError(res, error);
+    }
+  });
+
+  router.patch('/listings/:listingId/image-urls', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    const body = parseOrSend(res, updateListingImageUrlsRequestSchema, req.body);
+    if (!body) {
+      return;
+    }
+
+    try {
+      const listing = await getDataAccess().listings.getByListingId(params.listingId);
+
+      if (!listing) {
+        res.status(404).json({
+          error: 'not_found',
+          message: `Listing "${params.listingId}" was not found.`,
+        });
+        return;
+      }
+
+      const updatedListing = await getDataAccess().listings.saveImageMetadata({
+        listingId: params.listingId,
+        imageUrls: body.imageUrls,
+        r2ObjectKeys: asStringArray(listing.r2_object_keys),
+      });
+
+      if (!updatedListing) {
+        throw new Error(`Listing "${params.listingId}" was not updated.`);
+      }
+
+      res.json(updatedListing);
     } catch (error) {
       sendRouteError(res, error);
     }
