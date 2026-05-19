@@ -47,6 +47,19 @@ export const editableListingFieldsSchema = z
   })
   .strict();
 
+export const sellerEditableListingFieldsSchema = z
+  .object({
+    categoryId: nullableTrimmedStringSchema('categoryId'),
+    conditionId: nullableTrimmedStringSchema('conditionId'),
+    conditionNotes: nullableTrimmedStringSchema('conditionNotes'),
+    description: nullableTrimmedStringSchema('description'),
+    itemSpecifics: itemSpecificsSchema.optional(),
+    price: z.number().finite().nonnegative().nullable().optional(),
+    sellerHints: nullableTrimmedStringSchema('sellerHints'),
+    title: nullableTrimmedStringSchema('title'),
+  })
+  .strict();
+
 export const createListingRequestSchema = editableListingFieldsSchema
   .extend({
     listingId: trimmedStringSchema('listingId').optional(),
@@ -54,7 +67,7 @@ export const createListingRequestSchema = editableListingFieldsSchema
   })
   .strict();
 
-export const updateListingRequestSchema = editableListingFieldsSchema.refine(
+export const updateListingRequestSchema = sellerEditableListingFieldsSchema.refine(
   (value) => Object.values(value).some((field) => field !== undefined),
   {
     message: 'At least one editable field is required.',
@@ -64,6 +77,9 @@ export const updateListingRequestSchema = editableListingFieldsSchema.refine(
 export const updateListingWorkflowStateRequestSchema = listingWorkflowStateSchema;
 
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
+export type SellerEditableListingFieldsInput = z.infer<
+  typeof sellerEditableListingFieldsSchema
+>;
 export type CreateListingRequest = z.infer<typeof createListingRequestSchema>;
 export type ListingIdParams = z.infer<typeof listingIdParamsSchema>;
 export type UpdateListingRequest = z.infer<typeof updateListingRequestSchema>;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { type Json, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
+import { DEFAULT_APP_SETTINGS_ID, type Json, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -10,6 +10,7 @@ import {
   updateListingWorkflowStateRequestSchema,
   type CreateListingRequest,
   type EditableListingFieldsInput,
+  type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 
@@ -87,6 +88,21 @@ function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpd
     seller_hints: input.sellerHints,
     shipping_profile: input.shippingProfile,
     sku: input.sku,
+    title: input.title,
+  };
+}
+
+function mapSellerEditableListingFields(
+  input: SellerEditableListingFieldsInput
+): ListingUpdate {
+  return {
+    category_id: input.categoryId,
+    condition_id: input.conditionId,
+    condition_notes: input.conditionNotes,
+    description: input.description,
+    item_specifics: input.itemSpecifics as Json | undefined,
+    price: input.price,
+    seller_hints: input.sellerHints,
     title: input.title,
   };
 }
@@ -169,7 +185,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     try {
       const listing = await getDataAccess().listings.update(
         params.listingId,
-        mapEditableListingFields(body)
+        mapSellerEditableListingFields(body)
       );
       res.json(listing);
     } catch (error) {
@@ -202,7 +218,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
 
   router.get('/app-settings', async (_req: Request, res: Response) => {
     try {
-      const appSettings = await getDataAccess().appSettings.get();
+      const appSettings = await getDataAccess().appSettings.get(DEFAULT_APP_SETTINGS_ID);
 
       if (!appSettings) {
         res.status(404).json({

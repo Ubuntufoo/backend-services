@@ -1,4 +1,5 @@
 import {
+  DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   createJob,
   createListing,
@@ -82,7 +83,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     },
     appSettings: {
       create: async (input) => await createAppSettings(client, input),
-      get: async (id) => await getAppSettings(client, id),
+      get: async (id = DEFAULT_APP_SETTINGS_ID) => await getAppSettings(client, id),
       update: async (changes, id) => await updateAppSettings(client, changes, id),
     },
   };

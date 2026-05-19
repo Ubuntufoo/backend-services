@@ -28,6 +28,7 @@ export {
   type SupabaseServiceClientConfig,
 } from './client.js';
 export {
+  DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   getAppSettings,
   updateAppSettings,
