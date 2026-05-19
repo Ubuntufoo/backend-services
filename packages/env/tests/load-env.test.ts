@@ -4,6 +4,7 @@ import {
   EnvValidationError,
   formatEnvValidationErrors,
   loadEnv,
+  loadR2Env,
   loadSidecarRootEnv,
   loadSupabaseEnv,
 } from '../src/index.js';
@@ -112,6 +113,57 @@ describe('loadEnv', () => {
 
     expect(env.EBAY_ENVIRONMENT).toBeUndefined();
     expect(env.EBAY_CLIENT_ID).toBe('client-id');
+  });
+
+  it('loads required R2 configuration with the explicit S3 endpoint', () => {
+    const env = loadR2Env({
+      env: {
+        R2_ACCOUNT_ID: 'account-id',
+        R2_ACCESS_KEY_ID: 'access-key-id',
+        R2_SECRET_ACCESS_KEY: 'secret-access-key',
+        R2_BUCKET_NAME: 'listing-images',
+        R2_S3_ENDPOINT: 'https://account-id.r2.cloudflarestorage.com',
+        R2_PUBLIC_BASE_URL: 'https://images.example.com',
+      },
+    });
+
+    expect(env).toEqual({
+      R2_ACCOUNT_ID: 'account-id',
+      R2_ACCESS_KEY_ID: 'access-key-id',
+      R2_SECRET_ACCESS_KEY: 'secret-access-key',
+      R2_BUCKET_NAME: 'listing-images',
+      R2_S3_ENDPOINT: 'https://account-id.r2.cloudflarestorage.com',
+      R2_PUBLIC_BASE_URL: 'https://images.example.com',
+    });
+  });
+
+  it('accepts the legacy R2 endpoint variable and normalizes it', () => {
+    const env = loadR2Env({
+      env: {
+        R2_ACCOUNT_ID: 'account-id',
+        R2_ACCESS_KEY_ID: 'access-key-id',
+        R2_SECRET_ACCESS_KEY: 'secret-access-key',
+        R2_BUCKET_NAME: 'listing-images',
+        R2_ENDPOINT: 'https://account-id.r2.cloudflarestorage.com',
+        R2_PUBLIC_BASE_URL: 'https://images.example.com',
+      },
+    });
+
+    expect(env.R2_S3_ENDPOINT).toBe('https://account-id.r2.cloudflarestorage.com');
+  });
+
+  it('requires an R2 S3 endpoint when R2 config is loaded', () => {
+    expect(() =>
+      loadR2Env({
+        env: {
+          R2_ACCOUNT_ID: 'account-id',
+          R2_ACCESS_KEY_ID: 'access-key-id',
+          R2_SECRET_ACCESS_KEY: 'secret-access-key',
+          R2_BUCKET_NAME: 'listing-images',
+          R2_PUBLIC_BASE_URL: 'https://images.example.com',
+        },
+      })
+    ).toThrow(/R2_S3_ENDPOINT is required/);
   });
 
   it('allows DB-only sidecar env when EBAY_ENABLED=false', () => {

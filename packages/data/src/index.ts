@@ -22,6 +22,16 @@ export type {
   TableUpdate,
 } from './database.js';
 export {
+  buildR2ImageObjectKey,
+  buildR2PublicUrl,
+  createR2ImageStorageClient,
+  loadR2ImageStorageConfig,
+  uploadImage,
+  type R2ImageStorageConfig,
+  type UploadImageInput,
+  type UploadImageResult,
+} from './r2.js';
+export {
   createSupabaseServiceClient,
   loadSupabaseServiceClientConfig,
   type SupabaseDataClient,

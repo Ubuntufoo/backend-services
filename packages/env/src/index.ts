@@ -24,11 +24,13 @@ const requiredNonEmptyString = (name: string) =>
 
 const optionalNonEmptyString = () => z.string().trim().min(1).optional();
 const optionalTrimmedString = () => z.string().trim().optional();
+const requiredUrlString = (name: string) =>
+  requiredNonEmptyString(name).url(`${name} must be a valid URL`);
+const optionalUrlString = (name: string) =>
+  z.string().trim().url(`${name} must be a valid URL`).optional();
 
 export const supabaseEnvSchema = z.object({
-  NEXT_PUBLIC_SUPABASE_URL: requiredNonEmptyString('NEXT_PUBLIC_SUPABASE_URL').url(
-    'NEXT_PUBLIC_SUPABASE_URL must be a valid URL'
-  ),
+  NEXT_PUBLIC_SUPABASE_URL: requiredUrlString('NEXT_PUBLIC_SUPABASE_URL'),
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: requiredNonEmptyString(
     'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'
   ),
@@ -38,6 +40,37 @@ export const supabaseEnvSchema = z.object({
 });
 
 export type SupabaseEnv = z.infer<typeof supabaseEnvSchema>;
+
+const rawR2EnvSchema = z
+  .object({
+    R2_ACCOUNT_ID: requiredNonEmptyString('R2_ACCOUNT_ID'),
+    R2_ACCESS_KEY_ID: requiredNonEmptyString('R2_ACCESS_KEY_ID'),
+    R2_SECRET_ACCESS_KEY: requiredNonEmptyString('R2_SECRET_ACCESS_KEY'),
+    R2_BUCKET_NAME: requiredNonEmptyString('R2_BUCKET_NAME'),
+    R2_S3_ENDPOINT: optionalUrlString('R2_S3_ENDPOINT'),
+    R2_ENDPOINT: optionalUrlString('R2_ENDPOINT'),
+    R2_PUBLIC_BASE_URL: requiredUrlString('R2_PUBLIC_BASE_URL'),
+  })
+  .superRefine((env, ctx) => {
+    if (env.R2_S3_ENDPOINT || env.R2_ENDPOINT) {
+      return;
+    }
+
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'R2_S3_ENDPOINT is required',
+      path: ['R2_S3_ENDPOINT'],
+    });
+  });
+
+export interface R2Env {
+  R2_ACCOUNT_ID: string;
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+  R2_BUCKET_NAME: string;
+  R2_S3_ENDPOINT: string;
+  R2_PUBLIC_BASE_URL: string;
+}
 
 export const sidecarRootEnvSchema = supabaseEnvSchema
   .extend({
@@ -56,6 +89,13 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     EBAY_CONTENT_LANGUAGE: optionalNonEmptyString(),
     EBAY_LOG_LEVEL: optionalNonEmptyString(),
     EBAY_ENABLE_FILE_LOGGING: z.enum(['true', 'false']).optional(),
+    R2_ACCOUNT_ID: optionalNonEmptyString(),
+    R2_ACCESS_KEY_ID: optionalNonEmptyString(),
+    R2_SECRET_ACCESS_KEY: optionalNonEmptyString(),
+    R2_BUCKET_NAME: optionalNonEmptyString(),
+    R2_S3_ENDPOINT: optionalTrimmedString(),
+    R2_ENDPOINT: optionalTrimmedString(),
+    R2_PUBLIC_BASE_URL: optionalTrimmedString(),
   })
   .superRefine((env, ctx) => {
     if (env.EBAY_ENABLED === 'false') {
@@ -160,6 +200,25 @@ export function loadSupabaseEnv(
     serviceName: 'supabase',
     schema: supabaseEnvSchema,
   });
+}
+
+export function loadR2Env(
+  options: Omit<LoadEnvOptions<typeof rawR2EnvSchema>, 'serviceName' | 'schema'> = {}
+): R2Env {
+  const env = loadEnv({
+    ...options,
+    serviceName: 'r2',
+    schema: rawR2EnvSchema,
+  });
+
+  return {
+    R2_ACCOUNT_ID: env.R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY,
+    R2_BUCKET_NAME: env.R2_BUCKET_NAME,
+    R2_S3_ENDPOINT: env.R2_S3_ENDPOINT ?? env.R2_ENDPOINT!,
+    R2_PUBLIC_BASE_URL: env.R2_PUBLIC_BASE_URL,
+  };
 }
 
 export function loadSidecarRootEnv(
