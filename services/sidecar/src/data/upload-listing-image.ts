@@ -54,22 +54,18 @@ export async function uploadListingImage(
         };
       }
 
-      if (attempt === MAX_METADATA_SAVE_RETRIES) {
-        throw new Error(
-          `Exceeded metadata persistence retries for listing "${input.listingId}".`
-        );
+      if (attempt < MAX_METADATA_SAVE_RETRIES) {
+        const refreshedListing = await dataAccess.listings.getByListingId(input.listingId);
+        if (!refreshedListing) {
+          throw new Error(
+            `Listing "${input.listingId}" was deleted while persisting uploaded image metadata.`
+          );
+        }
+        listing = refreshedListing;
       }
-
-      const refreshedListing = await dataAccess.listings.getByListingId(input.listingId);
-      if (!refreshedListing) {
-        throw new Error(
-          `Listing "${input.listingId}" was deleted while persisting uploaded image metadata.`
-        );
-      }
-      listing = refreshedListing;
     }
 
-    throw new Error(`Failed to persist uploaded listing image metadata for listing "${input.listingId}".`);
+    throw new Error(`Exceeded metadata persistence retries for listing "${input.listingId}".`);
   } catch (error) {
     throw new Error(
       `Failed to persist uploaded listing image metadata for listing "${input.listingId}" after uploading R2 object "${objectKey}".`,
