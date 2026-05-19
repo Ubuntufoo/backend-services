@@ -125,6 +125,7 @@ function buildListingInsert(input: CreateListingRequest): ListingInsert {
     image_urls: input.imageUrls ?? [],
     item_specifics: (input.itemSpecifics ?? {}) as Json,
     listing_id: listingId,
+    r2_object_keys: [],
     status: initialWorkflowState.status,
     sub_status: initialWorkflowState.subStatus,
   };

@@ -25,30 +25,36 @@ export type Database = Omit<GeneratedDatabase, 'public'> & {
       listings: {
         Row: Omit<
           GeneratedListings['Row'],
-          'capture_mode' | 'listing_type' | 'status' | 'sub_status'
+          'capture_mode' | 'listing_type' | 'status' | 'sub_status' | 'image_urls' | 'r2_object_keys'
         > & {
           capture_mode: CaptureMode | null;
+          image_urls: string[];
           listing_type: 'single' | 'lot' | null;
           status: ListingStatus;
           sub_status: ListingSubStatus;
+          r2_object_keys: string[];
         };
         Insert: Omit<
           GeneratedListings['Insert'],
-          'capture_mode' | 'listing_type' | 'status' | 'sub_status'
+          'capture_mode' | 'listing_type' | 'status' | 'sub_status' | 'image_urls' | 'r2_object_keys'
         > & {
           capture_mode?: CaptureMode | null;
+          image_urls?: string[];
           listing_type?: 'single' | 'lot' | null;
           status: ListingStatus;
           sub_status: ListingSubStatus;
+          r2_object_keys?: string[];
         };
         Update: Omit<
           GeneratedListings['Update'],
-          'capture_mode' | 'listing_type' | 'status' | 'sub_status'
+          'capture_mode' | 'listing_type' | 'status' | 'sub_status' | 'image_urls' | 'r2_object_keys'
         > & {
           capture_mode?: CaptureMode | null;
+          image_urls?: string[];
           listing_type?: 'single' | 'lot' | null;
           status?: ListingStatus | null;
           sub_status?: ListingSubStatus | null;
+          r2_object_keys?: string[];
         };
         Relationships: GeneratedListings['Relationships'];
       };
