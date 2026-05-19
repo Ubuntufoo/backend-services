@@ -19,6 +19,22 @@ const captureModeSchema = z.enum(CAPTURE_MODES);
 const listingModeSchema = z.enum(['manual', 'test']);
 
 const itemSpecificsSchema = z.record(z.string(), z.unknown());
+const publicImageUrlSchema = z
+  .string({
+    required_error: 'imageUrl is required',
+    invalid_type_error: 'imageUrl must be a string',
+  })
+  .trim()
+  .min(1, 'imageUrl is required')
+  .url('imageUrl must be a valid URL')
+  .refine((value) => {
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'imageUrl must use http or https');
 
 export const listingIdParamsSchema = z.object({
   listingId: trimmedStringSchema('listingId'),
@@ -74,6 +90,12 @@ export const updateListingRequestSchema = sellerEditableListingFieldsSchema.refi
   }
 );
 
+export const updateListingImageUrlsRequestSchema = z
+  .object({
+    imageUrls: z.array(publicImageUrlSchema),
+  })
+  .strict();
+
 export const updateListingWorkflowStateRequestSchema = listingWorkflowStateSchema;
 
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
@@ -83,6 +105,9 @@ export type SellerEditableListingFieldsInput = z.infer<
 export type CreateListingRequest = z.infer<typeof createListingRequestSchema>;
 export type ListingIdParams = z.infer<typeof listingIdParamsSchema>;
 export type UpdateListingRequest = z.infer<typeof updateListingRequestSchema>;
+export type UpdateListingImageUrlsRequest = z.infer<
+  typeof updateListingImageUrlsRequestSchema
+>;
 export type UpdateListingWorkflowStateRequest = z.infer<
   typeof updateListingWorkflowStateRequestSchema
 >;

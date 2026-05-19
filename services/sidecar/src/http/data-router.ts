@@ -7,6 +7,7 @@ import {
   createListingRequestSchema,
   listingIdParamsSchema,
   updateListingRequestSchema,
+  updateListingImageUrlsRequestSchema,
   updateListingWorkflowStateRequestSchema,
   type CreateListingRequest,
   type EditableListingFieldsInput,
@@ -107,6 +108,14 @@ function mapSellerEditableListingFields(
   };
 }
 
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
   const listingId = input.listingId ?? `${input.mode}-${randomUUID()}`;
   const initialWorkflowState = createIdleWorkflowState('record_created');
@@ -188,6 +197,44 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         mapSellerEditableListingFields(body)
       );
       res.json(listing);
+    } catch (error) {
+      sendRouteError(res, error);
+    }
+  });
+
+  router.patch('/listings/:listingId/image-urls', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    const body = parseOrSend(res, updateListingImageUrlsRequestSchema, req.body);
+    if (!body) {
+      return;
+    }
+
+    try {
+      const listing = await getDataAccess().listings.getByListingId(params.listingId);
+
+      if (!listing) {
+        res.status(404).json({
+          error: 'not_found',
+          message: `Listing "${params.listingId}" was not found.`,
+        });
+        return;
+      }
+
+      const updatedListing = await getDataAccess().listings.saveImageMetadata({
+        listingId: params.listingId,
+        imageUrls: body.imageUrls,
+        r2ObjectKeys: asStringArray(listing.r2_object_keys),
+      });
+
+      if (!updatedListing) {
+        throw new Error(`Listing "${params.listingId}" was not updated.`);
+      }
+
+      res.json(updatedListing);
     } catch (error) {
       sendRouteError(res, error);
     }

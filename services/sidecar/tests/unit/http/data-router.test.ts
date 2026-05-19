@@ -241,6 +241,19 @@ describe('data API router', () => {
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 
+  it('keeps imageUrls out of the seller-editable listing patch', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
+      imageUrls: ['https://example.com/front.jpg'],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('invalid_request');
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
   it('updates only the seller-editable fields with the repository payload shape', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
@@ -279,6 +292,69 @@ describe('data API router', () => {
 
     expect(response.status).toBe(400);
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('updates listing image_urls through the dedicated test-only route', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      image_urls: ['https://old.example.com/front.jpg'],
+      r2_object_keys: ['listings/LIST-001/existing.jpg'],
+    }));
+    dataAccess.listings.saveImageMetadata = vi.fn(async (input) => ({
+      ...listingRow,
+      image_urls: input.imageUrls,
+      r2_object_keys: input.r2ObjectKeys,
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001/image-urls').send({
+      imageUrls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+    });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
+    expect(dataAccess.listings.saveImageMetadata).toHaveBeenCalledWith({
+      listingId: 'LIST-001',
+      imageUrls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+      r2ObjectKeys: ['listings/LIST-001/existing.jpg'],
+    });
+    expect(response.body).toEqual({
+      ...listingRow,
+      image_urls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+      r2_object_keys: ['listings/LIST-001/existing.jpg'],
+    });
+  });
+
+  it('rejects invalid image URL payloads on the dedicated image route', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001/image-urls').send({
+      imageUrls: ['file:///tmp/front.jpg'],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('invalid_request');
+    expect(dataAccess.listings.getByListingId).not.toHaveBeenCalled();
+    expect(dataAccess.listings.saveImageMetadata).not.toHaveBeenCalled();
+  });
+
+  it('returns not_found when the image URL route targets a missing listing', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => null);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-404/image-urls').send({
+      imageUrls: ['https://example.com/front.jpg'],
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      error: 'not_found',
+      message: 'Listing "LIST-404" was not found.',
+    });
+    expect(dataAccess.listings.saveImageMetadata).not.toHaveBeenCalled();
   });
 
   it('rejects invalid workflow-state pairs before persistence', async () => {
