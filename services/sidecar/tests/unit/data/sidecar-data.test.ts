@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ListingInsert, ListingUpdate, ListingWorkflowTransitionInput } from '@ebay-inventory/data';
+import type {
+  ListingImageMetadataUpdate,
+  ListingInsert,
+  ListingUpdate,
+  ListingWorkflowTransitionInput,
+} from '@ebay-inventory/data';
 
 const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
 const listListingsMock = vi.fn();
@@ -7,6 +12,7 @@ const getListingByListingIdMock = vi.fn();
 const createListingMock = vi.fn();
 const updateListingMock = vi.fn();
 const updateListingWorkflowStateMock = vi.fn();
+const saveListingImageMetadataMock = vi.fn();
 const getAppSettingsMock = vi.fn();
 const createJobMock = vi.fn();
 const getJobByIdMock = vi.fn();
@@ -31,6 +37,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getOrderByOrderId: getOrderByOrderIdMock,
   listJobsByListingId: listJobsByListingIdMock,
   listListings: listListingsMock,
+  saveListingImageMetadata: saveListingImageMetadataMock,
   updateAppSettings: updateAppSettingsMock,
   updateJob: updateJobMock,
   updateListing: updateListingMock,
@@ -75,6 +82,11 @@ describe('sidecar data access', () => {
     const listingUpdate = {
       title: 'Updated title',
     } as ListingUpdate;
+    const imageMetadataUpdate = {
+      imageUrls: ['https://cdn.example.com/1.jpg'],
+      listingId: 'LIST-001',
+      r2ObjectKeys: ['listings/LIST-001/1.jpg'],
+    } as ListingImageMetadataUpdate;
     const workflowUpdate = {
       listingId: 'LIST-001',
       status: 'approved_for_export',
@@ -83,11 +95,13 @@ describe('sidecar data access', () => {
 
     await dataAccess.listings.create(listingInsert);
     await dataAccess.listings.update('LIST-001', listingUpdate);
+    await dataAccess.listings.saveImageMetadata(imageMetadataUpdate);
     await dataAccess.listings.updateWorkflowState(workflowUpdate);
     await dataAccess.appSettings.get();
 
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
     expect(updateListingMock).toHaveBeenCalledWith(client, 'LIST-001', listingUpdate);
+    expect(saveListingImageMetadataMock).toHaveBeenCalledWith(client, imageMetadataUpdate);
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);
     expect(getAppSettingsMock).toHaveBeenCalledWith(client, 'default');
   });

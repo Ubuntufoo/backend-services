@@ -78,6 +78,9 @@ function createDataAccess(): SidecarDataAccess {
       })),
       getByListingId: vi.fn(async () => listingRow),
       list: vi.fn(async () => [listingRow]),
+      saveImageMetadata: vi.fn(async (_input) => ({
+        ...listingRow,
+      })),
       update: vi.fn(async (_listingId: string, changes: ListingUpdate) => ({
         ...listingRow,
         ...changes,

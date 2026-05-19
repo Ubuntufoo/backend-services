@@ -11,6 +11,7 @@ import {
   getOrderByOrderId,
   listJobsByListingId,
   listListings,
+  saveListingImageMetadata,
   updateAppSettings,
   updateJob,
   updateListing,
@@ -23,6 +24,7 @@ import {
   type JobRow,
   type JobUpdate,
   type ListingInsert,
+  type ListingImageMetadataUpdate,
   type ListingRow,
   type ListingUpdate,
   type ListingWorkflowTransitionInput,
@@ -47,6 +49,7 @@ export interface SidecarDataAccess {
     create(input: ListingInsert): Promise<ListingRow>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
     list(): Promise<ListingRow[]>;
+    saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow | null>;
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
   };
@@ -67,6 +70,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       create: async (input) => await createListing(client, input),
       getByListingId: async (listingId) => await getListingByListingId(client, listingId),
       list: async () => await listListings(client),
+      saveImageMetadata: async (input) => await saveListingImageMetadata(client, input),
       update: async (listingId, changes) => await updateListing(client, listingId, changes),
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
     },
