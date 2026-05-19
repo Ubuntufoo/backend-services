@@ -162,7 +162,7 @@ export type Database = {
           exported_at: string | null;
           handling_days: number | null;
           id: string;
-          image_urls: Json;
+          image_urls: string[];
           item_specifics: Json;
           last_error_at: string | null;
           last_error_code: string | null;
@@ -173,7 +173,7 @@ export type Database = {
           price: number | null;
           r2_delete_after: string | null;
           r2_deleted_at: string | null;
-          r2_object_keys: Json;
+          r2_object_keys: string[];
           r2_retention_policy: string | null;
           seller_hints: string | null;
           shipping_profile: string | null;
@@ -201,7 +201,7 @@ export type Database = {
           exported_at?: string | null;
           handling_days?: number | null;
           id?: string;
-          image_urls?: Json;
+          image_urls?: string[];
           item_specifics?: Json;
           last_error_at?: string | null;
           last_error_code?: string | null;
@@ -212,7 +212,7 @@ export type Database = {
           price?: number | null;
           r2_delete_after?: string | null;
           r2_deleted_at?: string | null;
-          r2_object_keys?: Json;
+          r2_object_keys?: string[];
           r2_retention_policy?: string | null;
           seller_hints?: string | null;
           shipping_profile?: string | null;
@@ -240,7 +240,7 @@ export type Database = {
           exported_at?: string | null;
           handling_days?: number | null;
           id?: string;
-          image_urls?: Json;
+          image_urls?: string[];
           item_specifics?: Json;
           last_error_at?: string | null;
           last_error_code?: string | null;
@@ -251,7 +251,7 @@ export type Database = {
           price?: number | null;
           r2_delete_after?: string | null;
           r2_deleted_at?: string | null;
-          r2_object_keys?: Json;
+          r2_object_keys?: string[];
           r2_retention_policy?: string | null;
           seller_hints?: string | null;
           shipping_profile?: string | null;

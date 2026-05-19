@@ -210,6 +210,7 @@ The route applies these defaults before inserting the row:
 - `status`: always `"record_created"`
 - `sub_status`: always `"idle"`
 - `image_urls`: `[]` when `imageUrls` is omitted
+- `r2_object_keys`: `[]`
 - `item_specifics`: `{}` when `itemSpecifics` is omitted
 
 Client input cannot override `status` or `sub_status` on this route.

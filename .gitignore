@@ -5,6 +5,7 @@ node_modules/
 .yarn/
 
 # Ignore repo-local spec/agent/roadmap docs (allow contributors to keep local copies)
+
 AGENTS.md
 agents.md
 ROADMAP.md
@@ -88,6 +89,7 @@ Desktop.ini
 !.vscode/launch.json
 !.vscode/extensions.json
 .vscode-test
+.github/
 
 # Tooling and local agent files
 /CLAUDE.md

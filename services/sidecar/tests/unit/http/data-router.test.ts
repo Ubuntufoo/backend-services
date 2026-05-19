@@ -158,6 +158,7 @@ describe('data API router', () => {
         status: 'record_created',
         sub_status: 'idle',
         image_urls: [],
+        r2_object_keys: [],
         item_specifics: {},
       })
     );
@@ -167,6 +168,7 @@ describe('data API router', () => {
         status: 'record_created',
         sub_status: 'idle',
         image_urls: [],
+        r2_object_keys: [],
         item_specifics: {},
       })
     );
