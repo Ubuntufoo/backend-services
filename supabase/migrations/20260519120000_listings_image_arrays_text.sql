@@ -3,8 +3,8 @@ returns text[]
 language sql
 immutable
 as $$
-  select coalesce(array_agg(value), '{}'::text[])
-  from jsonb_array_elements_text(input) as value
+  select coalesce(array_agg(value order by ordinality), '{}'::text[])
+  from jsonb_array_elements_text(input) with ordinality as items(value, ordinality)
 $$;
 
 alter table public.listings
