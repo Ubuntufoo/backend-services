@@ -18,6 +18,7 @@ import {
   listListings,
   listJobsByListingId,
   saveListingArtifacts,
+  saveListingImageMetadata,
   saveGeneratedListingFields,
   savePublishedListing,
   updateListing,
@@ -323,6 +324,27 @@ describe('shared repositories', () => {
         listingId: 'LIST-001',
         r2ObjectKeys: ['images/LIST-001/1.jpg'],
         r2RetentionPolicy: 'delete_after_sold',
+      })
+    ).resolves.toEqual(listingRow);
+
+    const imageMetadataClient = createUpdateClient(
+      'listings',
+      listingRow,
+      'listing_id',
+      'LIST-001',
+      (payload) => {
+        expect(payload).toEqual({
+          image_urls: ['https://cdn.example.com/1.jpg'],
+          r2_object_keys: ['images/LIST-001/1.jpg'],
+        });
+      }
+    );
+
+    await expect(
+      saveListingImageMetadata(imageMetadataClient, {
+        imageUrls: ['https://cdn.example.com/1.jpg'],
+        listingId: 'LIST-001',
+        r2ObjectKeys: ['images/LIST-001/1.jpg'],
       })
     ).resolves.toEqual(listingRow);
 

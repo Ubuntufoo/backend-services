@@ -55,6 +55,7 @@ function createDataAccess(): SidecarDataAccess {
       create: async () => listingRow,
       getByListingId: async () => listingRow,
       list: async () => [listingRow],
+      saveImageMetadata: async () => listingRow,
       update: async () => listingRow,
       updateWorkflowState: async () => listingRow,
     },

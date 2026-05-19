@@ -16,6 +16,12 @@ export interface ListingArtifactsUpdate {
   r2RetentionPolicy?: string | null;
 }
 
+export interface ListingImageMetadataUpdate {
+  imageUrls: string[];
+  listingId: string;
+  r2ObjectKeys: string[];
+}
+
 export interface GeneratedListingFieldsUpdate {
   captureMode?: ListingUpdate['capture_mode'];
   categoryId?: ListingUpdate['category_id'];
@@ -143,6 +149,16 @@ export async function saveListingArtifacts(
     r2_deleted_at: input.r2DeletedAt,
     r2_object_keys: input.r2ObjectKeys,
     r2_retention_policy: input.r2RetentionPolicy,
+  });
+}
+
+export async function saveListingImageMetadata(
+  client: SupabaseDataClient,
+  input: ListingImageMetadataUpdate
+): Promise<ListingRow> {
+  return await updateListing(client, input.listingId, {
+    image_urls: input.imageUrls,
+    r2_object_keys: input.r2ObjectKeys,
   });
 }
 

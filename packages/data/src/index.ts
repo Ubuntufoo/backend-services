@@ -50,10 +50,12 @@ export {
   listListings,
   saveGeneratedListingFields,
   saveListingArtifacts,
+  saveListingImageMetadata,
   savePublishedListing,
   updateListing,
   type GeneratedListingFieldsUpdate,
   type ListingArtifactsUpdate,
+  type ListingImageMetadataUpdate,
   type PublishedListingUpdate,
 } from './repositories/listings.js';
 export { createOrder, getOrderByOrderId, updateOrder } from './repositories/orders.js';
