@@ -13,6 +13,8 @@ const JOB_ERROR_CODE_MISSING_LISTING_ID = 'generate_ai_missing_listing_id';
 const JOB_ERROR_CODE_LISTING_NOT_FOUND = 'generate_ai_listing_not_found';
 const JOB_ERROR_CODE_LISTING_NOT_ELIGIBLE = 'generate_ai_listing_not_eligible';
 const JOB_ERROR_CODE_MISSING_IMAGE_URLS = 'generate_ai_missing_image_urls';
+const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
+const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
 
 type GenerateListingDraftFn = (
   input: GenerateListingDraftInput
@@ -113,15 +115,31 @@ function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHin
   };
 }
 
-function buildGeneratedListingUpdate(
+function buildGeneratedListingAspects(
+  draft: Awaited<ReturnType<typeof generateListingDraft>>
+): NonNullable<ListingUpdate['item_specifics']> {
+  return {
+    ...draft.aspects,
+    ...(draft.categorySuggestion
+      ? { [CATEGORY_SUGGESTION_ASPECT_KEY]: draft.categorySuggestion }
+      : {}),
+    ...(draft.conditionSuggestion
+      ? { [CONDITION_SUGGESTION_ASPECT_KEY]: draft.conditionSuggestion }
+      : {}),
+  };
+}
+
+function buildGeneratedListingReviewUpdate(
   draft: Awaited<ReturnType<typeof generateListingDraft>>
 ): ListingUpdate {
   return {
     description: draft.description,
-    item_specifics: draft.aspects,
+    item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,
     last_error_code: null,
     price: draft.priceSuggestion ?? null,
+    status: 'needs_review',
+    sub_status: 'review_pending',
     title: draft.title,
   };
 }
@@ -286,12 +304,10 @@ async function runGenerateAiJob(
       userHints: buildUserHints(listing),
     });
 
-    await options.dataAccess.listings.update(listingId, buildGeneratedListingUpdate(draft));
-    const reviewListing = await options.dataAccess.listings.updateWorkflowState({
+    const reviewListing = await options.dataAccess.listings.update(
       listingId,
-      status: 'needs_review',
-      subStatus: 'review_pending',
-    });
+      buildGeneratedListingReviewUpdate(draft)
+    );
     const completedJob = await options.dataAccess.jobs.update(job.id, {
       last_error: null,
       last_error_at: null,

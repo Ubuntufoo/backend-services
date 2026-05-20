@@ -62,10 +62,12 @@ function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
+  onListingsUpdate,
   workflowStates = [],
 }: {
   job?: JobRow | null;
   listing?: ListingRow | null;
+  onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
 } = {}): SidecarDataAccess {
   const listingStates = workflowStates.length > 0 ? [...workflowStates] : listing ? [listing] : [];
@@ -86,6 +88,8 @@ function createDataAccess({
     if (!current) {
       throw new Error('listing missing');
     }
+
+    onListingsUpdate?.(changes, current);
 
     const nextState = {
       ...current,
@@ -196,7 +200,7 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).not.toHaveBeenCalled();
   });
 
-  it('transitions assets_ready to generating to needs_review and persists the generated draft', async () => {
+  it('transitions assets_ready to generating to needs_review and persists the generated draft in one final update', async () => {
     const dataAccess = createDataAccess({
       listing: createListingRow({
         item_specifics: {
@@ -257,21 +261,74 @@ describe('runSidecarJob', () => {
         item_specifics: {
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
+          CategorySuggestion: 'Sports Trading Cards',
+          ConditionSuggestion: 'Ungraded',
         },
         last_error_at: null,
         last_error_code: null,
         price: 249.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
         title: '1991 Upper Deck Michael Jordan',
       })
     );
-    expect(dataAccess.listings.updateWorkflowState).toHaveBeenNthCalledWith(2, {
-      listingId: 'LIST-001',
-      status: 'needs_review',
-      subStatus: 'review_pending',
-    });
+    expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
     expect(result.job.status).toBe('completed');
+  });
+
+  it('fails safely when final draft persistence update throws and does not leave partial draft fields behind', async () => {
+    const originalListing = createListingRow({
+      description: 'Original description',
+      item_specifics: {
+        Era: '90s',
+      },
+      price: 10,
+      title: 'Original title',
+    });
+    const dataAccess = createDataAccess({
+      listing: originalListing,
+      onListingsUpdate: (changes) => {
+        if (changes.status === 'needs_review' && changes.sub_status === 'review_pending') {
+          throw new Error('review transition write failed');
+        }
+      },
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-2' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.listing?.status).toBe('assets_ready');
+    expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(result.listing?.last_error_at).toBe('2026-05-20T13:00:00.000Z');
+    expect(result.listing?.last_error_code).toBe('generate_ai_failed');
+    expect(result.listing?.title).toBe('Original title');
+    expect(result.listing?.description).toBe('Original description');
+    expect(result.listing?.price).toBe(10);
+    expect(result.listing?.item_specifics).toEqual({
+      Era: '90s',
+    });
   });
 
   it('reverts the listing to a retryable state and records failure details when Gemini fails', async () => {
