@@ -462,6 +462,24 @@ describe('generateListingDraft', () => {
     ).rejects.toThrow('invalid JSON');
   });
 
+  it('rejects non-object JSON with a clear service error', async () => {
+    setGeminiResponse(JSON.stringify(['not', 'an', 'object']));
+
+    await expect(
+      generateListingDraft({
+        listingId: 'LIST-010A',
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      })
+    ).rejects.toBeInstanceOf(GeminiDraftServiceError);
+
+    await expect(
+      generateListingDraft({
+        listingId: 'LIST-010A',
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      })
+    ).rejects.toThrow('not an object');
+  });
+
   it('uses a configured Gemini model when GEMINI_MODEL is set', async () => {
     process.env.GEMINI_MODEL = 'gemini-3-pro-preview';
 
