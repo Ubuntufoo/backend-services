@@ -1,19 +1,24 @@
 import type { GenerateListingDraftInput } from './contracts.js';
 
 const OUTPUT_SCHEMA_DESCRIPTION = `{
-  "title": string,
-  "description": string,
-  "categorySuggestion": string | null,
-  "conditionSuggestion": string | null,
-  "aspects": Record<string, string | string[]>,
-  "priceSuggestion": number | null,
-  "confidence": {
-    "title"?: number,
-    "category"?: number,
-    "price"?: number,
-    "aspects"?: number
+  "title": "string",
+  "description": "string",
+  "categorySuggestion": "string or null",
+  "conditionSuggestion": "string or null",
+  "aspects": {
+    "Player": "string",
+    "Sport": "string",
+    "Card Manufacturer": "string",
+    "Season": "string"
   },
-  "warnings": string[]
+  "priceSuggestion": 0,
+  "confidence": {
+    "title": 0.0,
+    "category": 0.0,
+    "price": 0.0,
+    "aspects": 0.0
+  },
+  "warnings": ["string"]
 }`;
 
 export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput): string {

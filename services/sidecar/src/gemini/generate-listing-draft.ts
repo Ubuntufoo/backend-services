@@ -4,9 +4,9 @@ import {
   GeminiDraftServiceError,
   type GenerateListingDraftInput,
   type GeneratedListingDraft,
-  generatedListingDraftSchema,
   validateGenerateListingDraftInput,
 } from './contracts.js';
+import { parseGeneratedDraft } from './parse-generated-draft.js';
 import { buildGenerateListingDraftPrompt } from './prompt.js';
 
 export {
@@ -46,18 +46,12 @@ export function generateListingDraft(
         prompt,
       });
 
-      return generatedListingDraftSchema.parse({
-        title: '',
-        description: '',
-        categorySuggestion: null,
-        conditionSuggestion: null,
-        aspects: {},
-        priceSuggestion: null,
-        confidence: {},
-        warnings: ['Gemini raw response received; structured parsing is not implemented yet.'],
-        rawModelResponse: rawDraft.rawResponse,
-      });
+      return parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse);
     } catch (error) {
+      if (error instanceof GeminiDraftServiceError) {
+        throw error;
+      }
+
       throw new GeminiDraftServiceError(
         `Gemini draft generation failed for listing "${validatedInput.listingId}".`,
         { cause: error }
