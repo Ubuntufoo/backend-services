@@ -36,12 +36,14 @@ interface MockFetchResponse {
 function createFetchResponse({
   body,
   contentType,
+  contentLength,
   ok = true,
   status = 200,
   statusText = 'OK',
 }: {
   body: Uint8Array;
   contentType: string | null;
+  contentLength?: string | null;
   ok?: boolean;
   status?: number;
   statusText?: string;
@@ -52,13 +54,27 @@ function createFetchResponse({
     statusText,
     headers: {
       get(name: string): string | null {
-        return name.toLowerCase() === 'content-type' ? contentType : null;
+        const normalizedName = name.toLowerCase();
+
+        if (normalizedName === 'content-type') {
+          return contentType;
+        }
+
+        if (normalizedName === 'content-length') {
+          return contentLength ?? null;
+        }
+
+        return null;
       },
     },
     async arrayBuffer(): Promise<ArrayBuffer> {
       return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
     },
   };
+}
+
+function createAbortError(): DOMException {
+  return new DOMException('The operation was aborted.', 'AbortError');
 }
 
 vi.mock('@google/genai', () => ({
@@ -84,6 +100,7 @@ describe('getGeminiDraftClient', () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -209,5 +226,75 @@ describe('getGeminiDraftClient', () => {
         imageUrls: ['https://cdn.example.com/empty.jpg'],
       })
     ).rejects.toThrow('returned an empty response body');
+  });
+
+  it('rejects oversized HTTP image responses before buffering the body', async () => {
+    global.fetch = vi.fn(async function fetch() {
+      return createFetchResponse({
+        body: Uint8Array.from([1, 2, 3]),
+        contentType: 'image/jpeg',
+        contentLength: String(10 * 1024 * 1024 + 1),
+      });
+    }) as typeof fetch;
+
+    const client = getGeminiDraftClient('gemini-api-key');
+
+    await expect(
+      client.generateDraftRaw({
+        model: 'gemini-test-model',
+        listingId: 'LIST-005',
+        prompt: 'Prompt text',
+        imageUrls: ['https://cdn.example.com/huge.jpg'],
+      })
+    ).rejects.toThrow('exceeds the 10 MB limit');
+
+    expect(generateContentMock).not.toHaveBeenCalled();
+  });
+
+  it('times out slow HTTP image fetches with a clear error', async () => {
+    vi.useFakeTimers();
+
+    global.fetch = vi.fn(async function fetch(_input: string | URL, init?: RequestInit) {
+      const signal = init?.signal;
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: {
+          get(name: string): string | null {
+            return name.toLowerCase() === 'content-type' ? 'image/jpeg' : null;
+          },
+        },
+        async arrayBuffer(): Promise<ArrayBuffer> {
+          return await new Promise<ArrayBuffer>((_resolve, reject) => {
+            if (signal?.aborted) {
+              reject(createAbortError());
+              return;
+            }
+
+            signal?.addEventListener('abort', () => {
+              reject(createAbortError());
+            });
+          });
+        },
+      };
+    }) as typeof fetch;
+
+    const client = getGeminiDraftClient('gemini-api-key');
+    const draftPromise = client.generateDraftRaw({
+      model: 'gemini-test-model',
+      listingId: 'LIST-006',
+      prompt: 'Prompt text',
+      imageUrls: ['https://cdn.example.com/slow.jpg'],
+    });
+    void draftPromise.catch(() => undefined);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    await expect(draftPromise).rejects.toThrow('timed out after 12 seconds');
+    expect(generateContentMock).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });
