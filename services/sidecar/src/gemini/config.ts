@@ -9,7 +9,7 @@ const geminiDraftEnvSchema = z.object({
   GEMINI_MODEL: z.string().optional(),
 });
 
-export const DEFAULT_GEMINI_DRAFT_MODEL = 'gemini-3-flash-preview';
+export const DEFAULT_GEMINI_DRAFT_MODEL = 'gemini-3.1-flash-lite';
 
 export interface GeminiDraftConfig {
   apiKey?: string;
