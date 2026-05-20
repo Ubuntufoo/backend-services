@@ -1,3 +1,4 @@
+// cSpell:ignore Supabase
 import type { JobInsert, JobRow, JobUpdate } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
 import {
@@ -35,7 +36,11 @@ function isActiveGenerateAiConflict(error: unknown): error is SupabaseErrorWithC
 }
 
 export async function createJob(client: SupabaseDataClient, input: JobInsert): Promise<JobRow> {
-  const result = (await client.from('jobs').insert(input).select().single()) as SingleResult<JobRow>;
+  const result = (await client
+    .from('jobs')
+    .insert(input)
+    .select()
+    .single()) as SingleResult<JobRow>;
 
   return requireSingleResult(result, 'Job was not created.');
 }
@@ -92,7 +97,10 @@ export async function enqueueGenerateAiJob(
   throw new Error(insertResult.error.message);
 }
 
-export async function getJobById(client: SupabaseDataClient, jobId: string): Promise<JobRow | null> {
+export async function getJobById(
+  client: SupabaseDataClient,
+  jobId: string
+): Promise<JobRow | null> {
   const result = (await client
     .from('jobs')
     .select('*')

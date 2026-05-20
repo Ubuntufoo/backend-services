@@ -4,6 +4,7 @@
     "outDir": "./build",
     "rootDir": "./src",
     "baseUrl": "./",
+    "ignoreDeprecations": "5.0",
     "paths": {
       "@/*": ["./src/*"]
     },
