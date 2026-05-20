@@ -10,11 +10,13 @@ ROADMAP.md
 roadmap.md
 SPEC.md
 spec.md
+SERVICES.md
 
 # --- AI Tooling Engines & Local Hooks ---
 .codex-plugins/
 .rtk/
 .agents/skills/
+.agents/
 
 # Build and cache output
 build/
@@ -92,7 +94,6 @@ Desktop.ini
 !.vscode/launch.json
 !.vscode/extensions.json
 .vscode-test
-.github/
 
 # Tooling and local agent files
 /CLAUDE.md
