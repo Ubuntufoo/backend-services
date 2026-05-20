@@ -494,4 +494,19 @@ describe('generateListingDraft', () => {
       })
     );
   });
+
+  it('preserves provider root-cause text in Gemini draft service errors', async () => {
+    generateDraftRawMock.mockRejectedValueOnce(
+      new Error('INVALID_ARGUMENT: unsupported file_data URI')
+    );
+
+    await expect(
+      generateListingDraft({
+        listingId: 'LIST-012',
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      })
+    ).rejects.toThrow(
+      'Gemini draft generation failed for listing "LIST-012": INVALID_ARGUMENT: unsupported file_data URI'
+    );
+  });
 });
