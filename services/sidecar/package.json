@@ -36,6 +36,7 @@
   "author": "Yosef Hayim Sabag",
   "license": "MIT",
   "dependencies": {
+    "@google/genai": "^2.4.0",
     "@ebay-inventory/data": "workspace:*",
     "@ebay-inventory/env": "workspace:*",
     "@ebay-inventory/types": "workspace:*",

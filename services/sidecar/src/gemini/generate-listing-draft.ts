@@ -1,116 +1,67 @@
-import { z, type ZodIssue } from 'zod';
+import { getGeminiDraftClient } from './client.js';
+import { loadGeminiDraftConfig } from './config.js';
+import {
+  GeminiDraftServiceError,
+  type GenerateListingDraftInput,
+  type GeneratedListingDraft,
+  generatedListingDraftSchema,
+  validateGenerateListingDraftInput,
+} from './contracts.js';
+import { buildGenerateListingDraftPrompt } from './prompt.js';
 
-const listingIdSchema = z
-  .string({
-    required_error: 'listingId is required',
-    invalid_type_error: 'listingId must be a string',
-  })
-  .trim()
-  .min(1, 'listingId is required');
-
-const imageUrlSchema = z
-  .string({
-    required_error: 'imageUrls entries are required',
-    invalid_type_error: 'imageUrls entries must be strings',
-  })
-  .trim()
-  .min(1, 'imageUrls entries must be non-empty strings');
-
-const aspectValueSchema = z.union([z.string(), z.array(z.string())]);
-
-const userHintsSchema = z.object({
-  title: z.string().nullable().optional(),
-  notes: z.string().nullable().optional(),
-  category: z.string().nullable().optional(),
-  aspects: z.record(aspectValueSchema).nullable().optional(),
-  price: z.number().finite().nullable().optional(),
-});
-
-const confidenceSchema = z.object({
-  title: z.number().min(0).max(1).optional(),
-  category: z.number().min(0).max(1).optional(),
-  price: z.number().min(0).max(1).optional(),
-  aspects: z.number().min(0).max(1).optional(),
-});
-
-export const generateListingDraftInputSchema = z.object({
-  listingId: listingIdSchema,
-  imageUrls: z
-    .array(imageUrlSchema, {
-      required_error: 'imageUrls is required',
-      invalid_type_error: 'imageUrls must be an array',
-    })
-    .min(1, 'imageUrls must contain at least one image URL'),
-  userHints: userHintsSchema.optional(),
-});
-
-export const generatedListingDraftSchema = z.object({
-  title: z.string(),
-  description: z.string(),
-  categorySuggestion: z.string().nullable().optional(),
-  conditionSuggestion: z.string().nullable().optional(),
-  aspects: z.record(aspectValueSchema),
-  priceSuggestion: z.number().finite().nullable().optional(),
-  confidence: confidenceSchema.optional(),
-  warnings: z.array(z.string()),
-  rawModelResponse: z.unknown().optional(),
-});
-
-export type GenerateListingDraftInput = z.infer<typeof generateListingDraftInputSchema>;
-export type GeneratedListingDraft = z.infer<typeof generatedListingDraftSchema>;
-
-export class GeminiDraftServiceError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'GeminiDraftServiceError';
-  }
-}
-
-export class GeminiDraftValidationError extends GeminiDraftServiceError {
-  readonly issues: ZodIssue[];
-
-  constructor(issues: ZodIssue[]) {
-    super(formatValidationIssues(issues));
-    this.name = 'GeminiDraftValidationError';
-    this.issues = issues;
-  }
-}
-
-function formatValidationIssues(issues: ZodIssue[]): string {
-  return issues
-    .map((issue) =>
-      issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message
-    )
-    .join('; ');
-}
-
-function validateGenerateListingDraftInput(
-  input: GenerateListingDraftInput
-): GenerateListingDraftInput {
-  const result = generateListingDraftInputSchema.safeParse(input);
-
-  if (!result.success) {
-    throw new GeminiDraftValidationError(result.error.issues);
-  }
-
-  return result.data;
-}
+export {
+  GeminiDraftServiceError,
+  GeminiDraftValidationError,
+  aspectValueSchema,
+  generateListingDraftInputSchema,
+  generatedListingDraftSchema,
+  type GenerateListingDraftInput,
+  type GeneratedListingDraft,
+  type GenerateListingDraftUserHints,
+  userHintsSchema,
+} from './contracts.js';
 
 export function generateListingDraft(
   input: GenerateListingDraftInput
 ): Promise<GeneratedListingDraft> {
-  return Promise.resolve().then(() => {
-    validateGenerateListingDraftInput(input);
+  return Promise.resolve().then(async () => {
+    const validatedInput = validateGenerateListingDraftInput(input);
+    const config = loadGeminiDraftConfig();
 
-    return generatedListingDraftSchema.parse({
-      title: '',
-      description: '',
-      categorySuggestion: null,
-      conditionSuggestion: null,
-      aspects: {},
-      priceSuggestion: null,
-      confidence: {},
-      warnings: ['Gemini generation is not implemented yet.'],
-    });
+    if (!config.apiKey) {
+      throw new GeminiDraftServiceError(
+        'GEMINI_API_KEY is required to generate Gemini listing drafts.'
+      );
+    }
+
+    const client = getGeminiDraftClient(config.apiKey);
+    const prompt = buildGenerateListingDraftPrompt(validatedInput);
+
+    try {
+      const rawDraft = await client.generateDraftRaw({
+        model: config.model,
+        listingId: validatedInput.listingId,
+        imageUrls: validatedInput.imageUrls,
+        userHints: validatedInput.userHints,
+        prompt,
+      });
+
+      return generatedListingDraftSchema.parse({
+        title: '',
+        description: '',
+        categorySuggestion: null,
+        conditionSuggestion: null,
+        aspects: {},
+        priceSuggestion: null,
+        confidence: {},
+        warnings: ['Gemini raw response received; structured parsing is not implemented yet.'],
+        rawModelResponse: rawDraft.rawResponse,
+      });
+    } catch (error) {
+      throw new GeminiDraftServiceError(
+        `Gemini draft generation failed for listing "${validatedInput.listingId}".`,
+        { cause: error }
+      );
+    }
   });
 }
