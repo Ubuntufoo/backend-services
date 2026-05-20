@@ -43,7 +43,15 @@ export {
   getAppSettings,
   updateAppSettings,
 } from './repositories/app-settings.js';
-export { createJob, getJobById, listJobsByListingId, updateJob } from './repositories/jobs.js';
+export {
+  createJob,
+  enqueueGenerateAiJob,
+  getActiveGenerateAiJobByListingId,
+  getJobById,
+  listJobsByListingId,
+  updateJob,
+  type EnqueueGenerateAiJobResult,
+} from './repositories/jobs.js';
 export {
   createListing,
   getListingByListingId,

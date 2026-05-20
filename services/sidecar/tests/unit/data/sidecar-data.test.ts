@@ -15,6 +15,8 @@ const updateListingWorkflowStateMock = vi.fn();
 const saveListingImageMetadataMock = vi.fn();
 const getAppSettingsMock = vi.fn();
 const createJobMock = vi.fn();
+const enqueueGenerateAiJobMock = vi.fn();
+const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
 const updateJobMock = vi.fn();
@@ -31,7 +33,9 @@ vi.mock('@ebay-inventory/data', () => ({
   createListing: createListingMock,
   createOrder: createOrderMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
+  enqueueGenerateAiJob: enqueueGenerateAiJobMock,
   getAppSettings: getAppSettingsMock,
+  getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
@@ -116,6 +120,8 @@ describe('sidecar data access', () => {
       listing_id: 'LIST-001',
       status: 'queued',
     });
+    await dataAccess.jobs.enqueueGenerateAi('LIST-001');
+    await dataAccess.jobs.getActiveGenerateAiByListingId('LIST-001');
     await dataAccess.jobs.getById('job-row-id');
     await dataAccess.jobs.listByListingId('LIST-001');
     await dataAccess.jobs.update('job-row-id', { status: 'running' });
@@ -135,6 +141,8 @@ describe('sidecar data access', () => {
         status: 'queued',
       })
     );
+    expect(enqueueGenerateAiJobMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(getActiveGenerateAiJobByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getJobByIdMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });

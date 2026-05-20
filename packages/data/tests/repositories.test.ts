@@ -11,7 +11,9 @@ import {
   createJob,
   createListing,
   createOrder,
+  enqueueGenerateAiJob,
   getAppSettings,
+  getActiveGenerateAiJobByListingId,
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
@@ -79,6 +81,12 @@ const jobRow: JobRow = {
   next_run_at: null,
   status: 'queued',
   updated_at: '2026-05-17T00:00:00.000Z',
+};
+
+const generateAiJobRow: JobRow = {
+  ...jobRow,
+  id: 'job-generate-ai-row-id',
+  job_type: 'generate_ai',
 };
 
 const orderRow: OrderRow = {
@@ -194,6 +202,61 @@ function createListClient<TTable extends string, TRow>(
             };
           }),
         })),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createActiveGenerateAiLookupClient(expectedRow: JobRow | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('jobs');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('listing_id');
+              expect(firstValue).toBe('LIST-001');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('job_type');
+                  expect(secondValue).toBe('generate_ai');
+
+                  return {
+                    in: vi.fn((statusColumn: string, statuses: string[]) => {
+                      expect(statusColumn).toBe('status');
+                      expect(statuses).toEqual(['queued', 'running']);
+
+                      return {
+                        order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                          expect(orderColumn).toBe('created_at');
+                          expect(options).toEqual({ ascending: false });
+
+                          return {
+                            limit: vi.fn((value: number) => {
+                              expect(value).toBe(1);
+
+                              return {
+                                maybeSingle: vi.fn(async () => ({
+                                  data: expectedRow,
+                                  error: null,
+                                })),
+                              };
+                            }),
+                          };
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
       };
     }),
   } as unknown as SupabaseDataClient;
@@ -496,6 +559,197 @@ describe('shared repositories', () => {
     });
 
     await expect(updateJob(updateClient, 'job-row-id', { status: 'running' })).resolves.toEqual(jobRow);
+  });
+
+  it('looks up the newest active generate_ai job by listing id', async () => {
+    const lookupClient = createActiveGenerateAiLookupClient(generateAiJobRow);
+
+    await expect(getActiveGenerateAiJobByListingId(lookupClient, 'LIST-001')).resolves.toEqual(
+      generateAiJobRow
+    );
+  });
+
+  it('enqueues generate_ai jobs and reports fresh create vs already queued', async () => {
+    const createClient = createInsertClient('jobs', generateAiJobRow, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'generate_ai',
+        listing_id: 'LIST-001',
+        status: 'queued',
+      });
+    });
+
+    await expect(enqueueGenerateAiJob(createClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: false,
+      job: generateAiJobRow,
+    });
+  });
+
+  it('returns existing active generate_ai job when duplicate insert hits DB protection', async () => {
+    const duplicateClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'generate_ai',
+              listing_id: 'LIST-001',
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => ({
+                  data: null,
+                  error: {
+                    code: '23505',
+                    message:
+                      'duplicate key value violates unique constraint "jobs_generate_ai_active_listing_idx"',
+                  },
+                })),
+              })),
+            };
+          }),
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('*');
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('listing_id');
+                expect(firstValue).toBe('LIST-001');
+
+                return {
+                  eq: vi.fn((secondColumn: string, secondValue: string) => {
+                    expect(secondColumn).toBe('job_type');
+                    expect(secondValue).toBe('generate_ai');
+
+                    return {
+                      in: vi.fn((statusColumn: string, statuses: string[]) => {
+                        expect(statusColumn).toBe('status');
+                        expect(statuses).toEqual(['queued', 'running']);
+
+                        return {
+                          order: vi.fn(() => ({
+                            limit: vi.fn(() => ({
+                              maybeSingle: vi.fn(async () => ({
+                                data: generateAiJobRow,
+                                error: null,
+                              })),
+                            })),
+                          })),
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(enqueueGenerateAiJob(duplicateClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: true,
+      job: generateAiJobRow,
+    });
+  });
+
+  it('allows a second enqueue after historical generate_ai jobs because only active jobs conflict', async () => {
+    const queuedReplacementJob: JobRow = {
+      ...generateAiJobRow,
+      id: 'job-generate-ai-row-id-2',
+      status: 'queued',
+    };
+    const createClient = createInsertClient('jobs', queuedReplacementJob, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'generate_ai',
+        listing_id: 'LIST-001',
+        status: 'queued',
+      });
+    });
+
+    await expect(enqueueGenerateAiJob(createClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: false,
+      job: queuedReplacementJob,
+    });
+  });
+
+  it('makes concurrent generate_ai enqueue idempotent under duplicate constraint race', async () => {
+    let createdJob: JobRow | null = null;
+
+    const concurrentClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'generate_ai',
+              listing_id: 'LIST-001',
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => {
+                  if (!createdJob) {
+                    createdJob = {
+                      ...generateAiJobRow,
+                      id: 'job-concurrent-create',
+                    };
+
+                    return {
+                      data: createdJob,
+                      error: null,
+                    };
+                  }
+
+                  return {
+                    data: null,
+                    error: {
+                      code: '23505',
+                      message:
+                        'duplicate key value violates unique constraint "jobs_generate_ai_active_listing_idx"',
+                    },
+                  };
+                }),
+              })),
+            };
+          }),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                in: vi.fn(() => ({
+                  order: vi.fn(() => ({
+                    limit: vi.fn(() => ({
+                      maybeSingle: vi.fn(async () => ({
+                        data: createdJob,
+                        error: null,
+                      })),
+                    })),
+                  })),
+                })),
+              })),
+            })),
+          })),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    const [firstResult, secondResult] = await Promise.all([
+      enqueueGenerateAiJob(concurrentClient, 'LIST-001'),
+      enqueueGenerateAiJob(concurrentClient, 'LIST-001'),
+    ]);
+
+    expect(firstResult).toEqual({
+      alreadyQueued: false,
+      job: expect.objectContaining({ id: 'job-concurrent-create' }),
+    });
+    expect(secondResult).toEqual({
+      alreadyQueued: true,
+      job: expect.objectContaining({ id: 'job-concurrent-create' }),
+    });
   });
 
   it('creates, fetches, and updates orders', async () => {
