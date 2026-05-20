@@ -4,8 +4,10 @@ import {
   createJob,
   createListing,
   createOrder,
+  enqueueGenerateAiJob,
   createSupabaseServiceClient,
   getAppSettings,
+  getActiveGenerateAiJobByListingId,
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
@@ -20,6 +22,7 @@ import {
   type AppSettingsInsert,
   type AppSettingsRow,
   type AppSettingsUpdate,
+  type EnqueueGenerateAiJobResult,
   type JobInsert,
   type JobRow,
   type JobUpdate,
@@ -41,6 +44,8 @@ export interface SidecarDataAccess {
   };
   jobs: {
     create(input: JobInsert): Promise<JobRow>;
+    enqueueGenerateAi(listingId: string): Promise<EnqueueGenerateAiJobResult>;
+    getActiveGenerateAiByListingId(listingId: string): Promise<JobRow | null>;
     getById(jobId: string): Promise<JobRow | null>;
     listByListingId(listingId: string): Promise<JobRow[]>;
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
@@ -76,6 +81,9 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     },
     jobs: {
       create: async (input) => await createJob(client, input),
+      enqueueGenerateAi: async (listingId) => await enqueueGenerateAiJob(client, listingId),
+      getActiveGenerateAiByListingId: async (listingId) =>
+        await getActiveGenerateAiJobByListingId(client, listingId),
       getById: async (jobId) => await getJobById(client, jobId),
       listByListingId: async (listingId) => await listJobsByListingId(client, listingId),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),

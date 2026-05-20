@@ -1,4 +1,7 @@
 interface SupabaseErrorLike {
+  code?: string;
+  details?: string;
+  hint?: string;
   message: string;
 }
 
