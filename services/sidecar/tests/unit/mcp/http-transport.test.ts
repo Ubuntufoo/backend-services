@@ -63,6 +63,22 @@ function createDataAccess(): SidecarDataAccess {
       create: async () => {
         throw new Error('not implemented');
       },
+      enqueueGenerateAi: async () => ({
+        alreadyQueued: false,
+        job: {
+          created_at: '2026-05-17T00:00:00.000Z',
+          id: 'job-row-id',
+          job_type: 'generate_ai',
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          listing_id: 'LIST-001',
+          next_run_at: null,
+          status: 'queued',
+          updated_at: '2026-05-17T00:00:00.000Z',
+        },
+      }),
+      getActiveGenerateAiByListingId: async () => null,
       getById: async () => null,
       listByListingId: async () => [],
       update: async () => {

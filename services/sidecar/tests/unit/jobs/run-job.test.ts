@@ -132,6 +132,11 @@ function createDataAccess({
     },
     jobs: {
       create: jobsCreate,
+      enqueueGenerateAi: vi.fn(async () => ({
+        alreadyQueued: false,
+        job: queuedGenerateAiJob,
+      })),
+      getActiveGenerateAiByListingId: vi.fn(async () => queuedGenerateAiJob),
       getById: jobsGetById,
       listByListingId: jobsListByListingId,
       update: jobsUpdate,

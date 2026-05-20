@@ -94,6 +94,8 @@ function createDataAccess(): SidecarDataAccess {
     },
     jobs: {
       create: vi.fn(),
+      enqueueGenerateAi: vi.fn(),
+      getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
       listByListingId: vi.fn(),
       update: vi.fn(),
