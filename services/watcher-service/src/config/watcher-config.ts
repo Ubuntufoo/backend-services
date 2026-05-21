@@ -3,7 +3,7 @@ import {
   WATCHER_SUPPORTED_IMAGE_EXTENSIONS,
   type WatcherSupportedImageExtension,
 } from './image-extensions.js';
-import { resolveAbsoluteWatcherPath, resolveWatcherPathWithin } from './paths.js';
+import { resolveAbsoluteWatcherPath, resolveWatcherChildPath } from './paths.js';
 
 export const WATCHER_SERVICE_ENV_VARS = {
   baseDirectory: 'WATCHER_BASE_DIR',
@@ -55,10 +55,10 @@ export function createWatcherServiceConfig(
   );
   const incomingDirectory = env.WATCHER_INCOMING_DIR
     ? resolveAbsoluteWatcherPath(env.WATCHER_INCOMING_DIR, cwd)
-    : resolveWatcherPathWithin(baseDirectory, WATCHER_DEFAULT_INCOMING_DIRECTORY);
+    : resolveWatcherChildPath(baseDirectory, WATCHER_DEFAULT_INCOMING_DIRECTORY);
   const processedDirectory = env.WATCHER_PROCESSED_DIR
     ? resolveAbsoluteWatcherPath(env.WATCHER_PROCESSED_DIR, cwd)
-    : resolveWatcherPathWithin(baseDirectory, WATCHER_DEFAULT_PROCESSED_DIRECTORY);
+    : resolveWatcherChildPath(baseDirectory, WATCHER_DEFAULT_PROCESSED_DIRECTORY);
 
   return {
     baseDirectory,

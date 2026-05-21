@@ -4,6 +4,6 @@ export function resolveAbsoluteWatcherPath(pathValue: string, cwd = process.cwd(
   return normalize(resolve(cwd, pathValue));
 }
 
-export function resolveWatcherPathWithin(directory: string, segment: string): string {
+export function resolveWatcherChildPath(directory: string, segment: string): string {
   return normalize(resolve(directory, segment));
 }

@@ -11,7 +11,7 @@ import {
   isSupportedWatcherImagePath,
   normalizeWatcherImageExtension,
   resolveAbsoluteWatcherPath,
-  resolveWatcherPathWithin,
+  resolveWatcherChildPath,
 } from '../../../src/index.js';
 
 describe('watcher service config', () => {
@@ -73,9 +73,9 @@ describe('watcher service config', () => {
     expect(resolveAbsoluteWatcherPath('./incoming', '/repo/services/watcher-service')).toBe(
       '/repo/services/watcher-service/incoming'
     );
-    expect(
-      resolveWatcherPathWithin('/repo/services/watcher-service/watcher', '../processed')
-    ).toBe('/repo/services/watcher-service/processed');
+    expect(resolveWatcherChildPath('/repo/services/watcher-service/watcher', '../processed')).toBe(
+      '/repo/services/watcher-service/processed'
+    );
   });
 
   it('keeps the default directory constants available for future callers', () => {
