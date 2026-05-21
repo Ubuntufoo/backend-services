@@ -18,6 +18,19 @@ import type {
 import { LocaleEnum } from '@/types/ebay-enums.js';
 import { authLogger } from '@/utils/logger.js';
 
+interface OAuthErrorResponse {
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- eBay OAuth error field name */
+  error_description?: string;
+}
+
+const getAxiosErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError<OAuthErrorResponse>(error)) {
+    return error.response?.data?.error_description ?? error.message;
+  }
+
+  return error instanceof Error ? error.message : String(error);
+};
+
 /**
  * Manages eBay OAuth 2.0 authentication
  * Loads tokens exclusively from environment variables (.env.local file)
@@ -41,7 +54,7 @@ export class EbayOAuthClient {
     const envRefreshToken = process.env.EBAY_USER_REFRESH_TOKEN;
     const envAccessToken = process.env.EBAY_USER_ACCESS_TOKEN;
     const envAppToken = process.env.EBAY_APP_ACCESS_TOKEN ?? '';
-    const locale = this.config?.locale || LocaleEnum.en_US;
+    const locale = this.config?.locale ?? LocaleEnum.en_US;
 
     if (envRefreshToken) {
       authLogger.info('Loading tokens from environment variables');
@@ -49,7 +62,7 @@ export class EbayOAuthClient {
       this.userTokens = createStoredUserTokens({
         config: { ...this.config, locale },
         envAppToken,
-        accessToken: envAccessToken || '',
+        accessToken: envAccessToken ?? '',
         refreshToken: envRefreshToken,
       });
 
@@ -207,9 +220,7 @@ export class EbayOAuthClient {
       return this.appAccessToken;
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        throw new Error(
-          `Failed to get app access token: ${error.response?.data?.error_description || error.message}`
-        );
+        throw new Error(`Failed to get app access token: ${getAxiosErrorMessage(error)}`);
       }
       throw error;
     }
@@ -230,7 +241,7 @@ export class EbayOAuthClient {
     );
 
     try {
-      const response = await axios.post(
+      const response = await axios.post<EbayUserToken>(
         tokenUrl,
         new URLSearchParams({
           grant_type: 'authorization_code',
@@ -245,7 +256,7 @@ export class EbayOAuthClient {
         }
       );
 
-      const tokenData: EbayUserToken = response.data;
+      const tokenData = response.data;
 
       this.userTokens = createStoredUserTokensFromResponse({
         config: this.config,
@@ -261,9 +272,7 @@ export class EbayOAuthClient {
       return tokenData;
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        throw new Error(
-          `Failed to exchange code for token: ${error.response?.data?.error_description || error.message}`
-        );
+        throw new Error(`Failed to exchange code for token: ${getAxiosErrorMessage(error)}`);
       }
       throw error;
     }
@@ -293,14 +302,18 @@ export class EbayOAuthClient {
         refresh_token: this.userTokens.userRefreshToken,
       };
 
-      const response = await axios.post(authUrl, new URLSearchParams(params).toString(), {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: `Basic ${credentials}`,
-        },
-      });
+      const response = await axios.post<EbayUserTokenResponse>(
+        authUrl,
+        new URLSearchParams(params).toString(),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${credentials}`,
+          },
+        }
+      );
 
-      const tokenData = response.data as EbayUserTokenResponse;
+      const tokenData = response.data;
 
       this.userTokens = createStoredUserTokensFromResponse({
         config: this.config,
@@ -322,9 +335,7 @@ export class EbayOAuthClient {
       this.credentialStore.write(envUpdates);
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        throw new Error(
-          `Failed to refresh token: ${error.response?.data?.error_description || error.message}`
-        );
+        throw new Error(`Failed to refresh token: ${getAxiosErrorMessage(error)}`);
       }
       throw error;
     }

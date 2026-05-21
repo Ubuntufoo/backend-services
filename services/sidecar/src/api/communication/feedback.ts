@@ -18,7 +18,11 @@ export class FeedbackApi {
    * @param offset Zero-based pagination offset.
    * @throws Error if the request fails
    */
-  async getAwaitingFeedback(filter?: string, limit?: number, offset?: number) {
+  async getAwaitingFeedback(
+    filter?: string,
+    limit?: number,
+    offset?: number
+  ): Promise<unknown> {
     return await getPaginatedWithContextError(
       this.client,
       `${this.basePath}/awaiting_feedback`,
@@ -34,7 +38,7 @@ export class FeedbackApi {
    * Endpoint: GET /feedback
    * @throws Error if required parameters are missing or invalid
    */
-  async getFeedback(transactionId: string) {
+  async getFeedback(transactionId: string): Promise<unknown> {
     if (!transactionId || typeof transactionId !== 'string') {
       throw new Error('transactionId is required and must be a string');
     }
@@ -55,7 +59,7 @@ export class FeedbackApi {
    * Endpoint: GET /feedback_rating_summary
    * @throws Error if the request fails
    */
-  async getFeedbackRatingSummary() {
+  async getFeedbackRatingSummary(): Promise<unknown> {
     return await getPathWithContextError(
       this.client,
       `${this.basePath}/feedback_rating_summary`,
@@ -68,7 +72,7 @@ export class FeedbackApi {
    * Endpoint: POST /feedback
    * @throws Error if required parameters are missing or invalid
    */
-  async leaveFeedbackForBuyer(feedbackData: Record<string, unknown>) {
+  async leaveFeedbackForBuyer(feedbackData: Record<string, unknown>): Promise<unknown> {
     if (!feedbackData || typeof feedbackData !== 'object') {
       throw new Error('feedbackData is required and must be an object');
     }
@@ -87,7 +91,7 @@ export class FeedbackApi {
    * Endpoint: POST /respond_to_feedback
    * @throws Error if required parameters are missing or invalid
    */
-  async respondToFeedback(feedbackId: string, responseText: string) {
+  async respondToFeedback(feedbackId: string, responseText: string): Promise<unknown> {
     if (!feedbackId || typeof feedbackId !== 'string') {
       throw new Error('feedbackId is required and must be a string');
     }
@@ -111,7 +115,7 @@ export class FeedbackApi {
    * Get feedback summary
    * @deprecated Use getFeedbackRatingSummary() instead
    */
-  async getFeedbackSummary() {
+  async getFeedbackSummary(): Promise<unknown> {
     return await this.getFeedbackRatingSummary();
   }
 }

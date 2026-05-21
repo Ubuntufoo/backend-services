@@ -24,7 +24,11 @@ export class NegotiationApi {
    * @param offset Zero-based pagination offset.
    * @throws Error if the request fails
    */
-  async findEligibleItems(filter?: string, limit?: number, offset?: number) {
+  async findEligibleItems(
+    filter?: string,
+    limit?: number,
+    offset?: number
+  ): Promise<unknown> {
     const eligibleItemsPath = `${this.basePath}/find_eligible_items`;
     const queryParams = buildPaginatedQueryParams(filter, limit, offset);
 
@@ -43,7 +47,7 @@ export class NegotiationApi {
    * Endpoint: POST /send_offer_to_interested_buyers
    * @throws Error if required parameters are missing or invalid
    */
-  async sendOfferToInterestedBuyers(offerData: Record<string, unknown>) {
+  async sendOfferToInterestedBuyers(offerData: Record<string, unknown>): Promise<unknown> {
     if (!offerData || typeof offerData !== 'object') {
       throw new Error('offerData is required and must be an object');
     }
@@ -64,7 +68,7 @@ export class NegotiationApi {
    * @param offset Zero-based pagination offset.
    * @deprecated This method does not match any endpoint in the OpenAPI spec
    */
-  async getOffersToBuyers(filter?: string, limit?: number, offset?: number) {
+  async getOffersToBuyers(filter?: string, limit?: number, offset?: number): Promise<unknown> {
     const params = buildTruthyPaginatedParams(filter, limit, offset);
     return await getWithContextError(
       this.client,
@@ -79,7 +83,7 @@ export class NegotiationApi {
    * Endpoint: GET /offer
    * @throws Error if the request fails
    */
-  async getOffersForListing(filter?: string, limit?: number, offset?: number) {
+  async getOffersForListing(filter?: string, limit?: number, offset?: number): Promise<unknown> {
     return await this.getOffersToBuyers(filter, limit, offset);
   }
 
@@ -89,7 +93,7 @@ export class NegotiationApi {
    * @param offerId Offer identifier.
    * @throws Error if required parameters are missing or invalid
    */
-  async getOffer(offerId: string) {
+  async getOffer(offerId: string): Promise<unknown> {
     assertRequiredString(offerId, 'offerId');
     return await getPathWithContextError(
       this.client,

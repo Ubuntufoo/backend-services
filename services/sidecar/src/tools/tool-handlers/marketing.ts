@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Marketing API campaign, ad, promotion, and reporting tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const marketingHandlers: ToolHandlerMap = {
   ebay_get_campaigns: async (api, args) => {
     return await api.marketing.getCampaigns(

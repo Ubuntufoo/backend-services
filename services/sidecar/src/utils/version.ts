@@ -3,9 +3,9 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import updateNotifier from 'update-notifier';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PACKAGE_JSON_PATH = join(__dirname, '../../package.json');
+const filename = fileURLToPath(import.meta.url);
+const directoryName = dirname(filename);
+const PACKAGE_JSON_PATH = join(directoryName, '../../package.json');
 
 interface PackageJson {
   name: string;
@@ -36,7 +36,7 @@ export function getPackageJson(): PackageJson {
 
   try {
     const content = readFileSync(PACKAGE_JSON_PATH, 'utf-8');
-    const parsed = JSON.parse(content);
+    const parsed: unknown = JSON.parse(content);
     if (isPackageJson(parsed)) {
       cachedPackageJson = parsed;
       return cachedPackageJson;

@@ -2,13 +2,15 @@ import type { ToolHandlerMap } from './types.js';
 import { getApiStatusFeed } from '@/utils/api-status-feed.js';
 
 /** Handler map for Developer API application and keyset tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const developerHandlers: ToolHandlerMap = {
   SearchClaudeCodeDocs: (api, args) => {
+    const query = typeof args.query === 'string' ? args.query : JSON.stringify(args.query);
     return {
       content: [
         {
           type: 'text',
-          text: `Tool 'SearchClaudeCodeDocs' called with query: ${args.query}. This tool is not yet fully implemented.`,
+          text: `Tool 'SearchClaudeCodeDocs' called with query: ${query}. This tool is not yet fully implemented.`,
         },
       ],
     };

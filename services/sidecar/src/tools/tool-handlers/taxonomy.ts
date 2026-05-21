@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Taxonomy API category and compatibility tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const taxonomyHandlers: ToolHandlerMap = {
   ebay_get_default_category_tree_id: async (api, args) => {
     return await api.taxonomy.getDefaultCategoryTreeId(args.marketplaceId as string);

@@ -26,7 +26,7 @@ export interface EbayMcpRuntime {
   initializeApi(): Promise<void>;
 }
 
-function formatToolSuccess(result: unknown) {
+function formatToolSuccess(result: unknown): { content: { type: 'text'; text: string }[] } {
   return {
     content: [
       {
@@ -37,7 +37,10 @@ function formatToolSuccess(result: unknown) {
   };
 }
 
-function formatToolFailure(error: unknown) {
+function formatToolFailure(error: unknown): {
+  content: { type: 'text'; text: string }[];
+  isError: true;
+} {
   const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
   return {

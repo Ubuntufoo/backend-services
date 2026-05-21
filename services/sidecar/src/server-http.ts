@@ -30,6 +30,7 @@ function logEnvironmentValidation(): void {
       console.error(`  • ${error}`);
     });
     console.error('\nPlease fix the configuration errors and restart the server.\n');
+    /* eslint-disable-next-line n/no-process-exit -- invalid startup config should exit non-zero */
     process.exit(1);
   }
 }
@@ -85,11 +86,13 @@ async function main(): Promise<void> {
       console.log('\n Shutting down...');
       server.close(() => {
         console.log('✓ Server closed');
+        /* eslint-disable-next-line n/no-process-exit -- signal handler should terminate after clean shutdown */
         process.exit(0);
       });
     });
   } catch (error) {
     console.error('Fatal error starting server:', error);
+    /* eslint-disable-next-line n/no-process-exit -- fatal startup failure should exit non-zero */
     process.exit(1);
   }
 }

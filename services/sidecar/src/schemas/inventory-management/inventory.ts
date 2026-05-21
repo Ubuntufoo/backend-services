@@ -618,6 +618,7 @@ export const bulkPublishResponseSchema = z.object({
 /**
  * Convert Zod schemas to JSON Schema format for MCP tools
  */
+/* eslint-disable-next-line @typescript-eslint/explicit-function-return-type */
 export function getInventoryManagementJsonSchemas() {
   return {
     // Inventory Items

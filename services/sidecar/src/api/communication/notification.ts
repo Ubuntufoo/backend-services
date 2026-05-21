@@ -23,19 +23,23 @@ export class NotificationApi {
     return `${this.basePath}${endpoint}`;
   }
 
-  private async get(endpoint: string, failureMessage: string, params?: QueryParams) {
+  private async get(
+    endpoint: string,
+    failureMessage: string,
+    params?: QueryParams
+  ): Promise<unknown> {
     return await getWithApiError(this.client, this.path(endpoint), failureMessage, params);
   }
 
-  private async post(endpoint: string, failureMessage: string, body?: unknown) {
+  private async post(endpoint: string, failureMessage: string, body?: unknown): Promise<unknown> {
     return await postWithApiError(this.client, this.path(endpoint), failureMessage, body);
   }
 
-  private async put(endpoint: string, failureMessage: string, body?: unknown) {
+  private async put(endpoint: string, failureMessage: string, body?: unknown): Promise<unknown> {
     return await putWithApiError(this.client, this.path(endpoint), failureMessage, body);
   }
 
-  private async delete(endpoint: string, failureMessage: string) {
+  private async delete(endpoint: string, failureMessage: string): Promise<unknown> {
     return await deleteWithApiError(this.client, this.path(endpoint), failureMessage);
   }
 
@@ -44,7 +48,7 @@ export class NotificationApi {
     failureMessage: string,
     limit?: number,
     continuationToken?: string
-  ) {
+  ): Promise<unknown> {
     return await this.get(
       endpoint,
       failureMessage,
@@ -57,7 +61,7 @@ export class NotificationApi {
    * @param publicKeyId Public key identifier.
    * @throws Error if required parameters are missing or invalid
    */
-  async getPublicKey(publicKeyId: string) {
+  async getPublicKey(publicKeyId: string): Promise<unknown> {
     requireString(publicKeyId, 'publicKeyId');
     return await this.get(`/public_key/${publicKeyId}`, 'Failed to get public key');
   }
@@ -66,7 +70,7 @@ export class NotificationApi {
    * Get notification config
    * @throws Error if the request fails
    */
-  async getConfig() {
+  async getConfig(): Promise<unknown> {
     return await this.get('/config', 'Failed to get config');
   }
 
@@ -74,7 +78,7 @@ export class NotificationApi {
    * Update notification config
    * @throws Error if required parameters are missing or invalid
    */
-  async updateConfig(config: Record<string, unknown>) {
+  async updateConfig(config: Record<string, unknown>): Promise<unknown> {
     requireObject(config, 'config');
     return await this.put('/config', 'Failed to update config', config);
   }
@@ -83,7 +87,7 @@ export class NotificationApi {
    * Get all destinations (paginated)
    * @throws Error if the request fails
    */
-  async getDestinations(limit?: number, continuationToken?: string) {
+  async getDestinations(limit?: number, continuationToken?: string): Promise<unknown> {
     return await this.getContinuation(
       '/destination',
       'Failed to get destinations',
@@ -97,7 +101,7 @@ export class NotificationApi {
    * @param destinationId Destination identifier.
    * @throws Error if required parameters are missing or invalid
    */
-  async getDestination(destinationId: string) {
+  async getDestination(destinationId: string): Promise<unknown> {
     requireString(destinationId, 'destinationId');
     return await this.get(`/destination/${destinationId}`, 'Failed to get destination');
   }
@@ -106,7 +110,7 @@ export class NotificationApi {
    * Create destination
    * @throws Error if required parameters are missing or invalid
    */
-  async createDestination(destination: Record<string, unknown>) {
+  async createDestination(destination: Record<string, unknown>): Promise<unknown> {
     requireObject(destination, 'destination');
     return await this.post('/destination', 'Failed to create destination', destination);
   }
@@ -115,7 +119,10 @@ export class NotificationApi {
    * Update destination
    * @throws Error if required parameters are missing or invalid
    */
-  async updateDestination(destinationId: string, destination: Record<string, unknown>) {
+  async updateDestination(
+    destinationId: string,
+    destination: Record<string, unknown>
+  ): Promise<unknown> {
     requireString(destinationId, 'destinationId');
     requireObject(destination, 'destination');
     return await this.put(
@@ -129,7 +136,7 @@ export class NotificationApi {
    * Delete destination
    * @throws Error if required parameters are missing or invalid
    */
-  async deleteDestination(destinationId: string) {
+  async deleteDestination(destinationId: string): Promise<unknown> {
     requireString(destinationId, 'destinationId');
     return await this.delete(`/destination/${destinationId}`, 'Failed to delete destination');
   }
@@ -139,7 +146,7 @@ export class NotificationApi {
    * Endpoint: GET /subscription
    * @throws Error if the request fails
    */
-  async getSubscriptions(limit?: number, continuationToken?: string) {
+  async getSubscriptions(limit?: number, continuationToken?: string): Promise<unknown> {
     return await this.getContinuation(
       '/subscription',
       'Failed to get subscriptions',
@@ -153,7 +160,7 @@ export class NotificationApi {
    * Endpoint: POST /subscription
    * @throws Error if required parameters are missing or invalid
    */
-  async createSubscription(subscription: Record<string, unknown>) {
+  async createSubscription(subscription: Record<string, unknown>): Promise<unknown> {
     requireObject(subscription, 'subscription');
     return await this.post('/subscription', 'Failed to create subscription', subscription);
   }
@@ -164,7 +171,7 @@ export class NotificationApi {
    * @param subscriptionId Subscription identifier.
    * @throws Error if required parameters are missing or invalid
    */
-  async getSubscription(subscriptionId: string) {
+  async getSubscription(subscriptionId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     return await this.get(`/subscription/${subscriptionId}`, 'Failed to get subscription');
   }
@@ -174,7 +181,10 @@ export class NotificationApi {
    * Endpoint: PUT /subscription/{subscription_id}
    * @throws Error if required parameters are missing or invalid
    */
-  async updateSubscription(subscriptionId: string, subscription: Record<string, unknown>) {
+  async updateSubscription(
+    subscriptionId: string,
+    subscription: Record<string, unknown>
+  ): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     requireObject(subscription, 'subscription');
     return await this.put(
@@ -189,7 +199,7 @@ export class NotificationApi {
    * Endpoint: DELETE /subscription/{subscription_id}
    * @throws Error if required parameters are missing or invalid
    */
-  async deleteSubscription(subscriptionId: string) {
+  async deleteSubscription(subscriptionId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     return await this.delete(`/subscription/${subscriptionId}`, 'Failed to delete subscription');
   }
@@ -199,7 +209,7 @@ export class NotificationApi {
    * Endpoint: POST /subscription/{subscription_id}/disable
    * @throws Error if required parameters are missing or invalid
    */
-  async disableSubscription(subscriptionId: string) {
+  async disableSubscription(subscriptionId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     return await this.post(
       `/subscription/${subscriptionId}/disable`,
@@ -213,7 +223,7 @@ export class NotificationApi {
    * Endpoint: POST /subscription/{subscription_id}/enable
    * @throws Error if required parameters are missing or invalid
    */
-  async enableSubscription(subscriptionId: string) {
+  async enableSubscription(subscriptionId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     return await this.post(
       `/subscription/${subscriptionId}/enable`,
@@ -227,7 +237,7 @@ export class NotificationApi {
    * Endpoint: POST /subscription/{subscription_id}/test
    * @throws Error if required parameters are missing or invalid
    */
-  async testSubscription(subscriptionId: string) {
+  async testSubscription(subscriptionId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     return await this.post(
       `/subscription/${subscriptionId}/test`,
@@ -242,7 +252,7 @@ export class NotificationApi {
    * @param topicId Topic identifier.
    * @throws Error if required parameters are missing or invalid
    */
-  async getTopic(topicId: string) {
+  async getTopic(topicId: string): Promise<unknown> {
     requireString(topicId, 'topicId');
     return await this.get(`/topic/${topicId}`, 'Failed to get topic');
   }
@@ -252,7 +262,7 @@ export class NotificationApi {
    * Endpoint: GET /topic
    * @throws Error if the request fails
    */
-  async getTopics(limit?: number, continuationToken?: string) {
+  async getTopics(limit?: number, continuationToken?: string): Promise<unknown> {
     return await this.getContinuation('/topic', 'Failed to get topics', limit, continuationToken);
   }
 
@@ -261,7 +271,10 @@ export class NotificationApi {
    * Endpoint: POST /subscription/{subscription_id}/filter
    * @throws Error if required parameters are missing or invalid
    */
-  async createSubscriptionFilter(subscriptionId: string, filter: Record<string, unknown>) {
+  async createSubscriptionFilter(
+    subscriptionId: string,
+    filter: Record<string, unknown>
+  ): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     requireObject(filter, 'filter');
     return await this.post(
@@ -276,7 +289,7 @@ export class NotificationApi {
    * Endpoint: GET /subscription/{subscription_id}/filter/{filter_id}
    * @throws Error if required parameters are missing or invalid
    */
-  async getSubscriptionFilter(subscriptionId: string, filterId: string) {
+  async getSubscriptionFilter(subscriptionId: string, filterId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     requireString(filterId, 'filterId');
     return await this.get(
@@ -290,7 +303,7 @@ export class NotificationApi {
    * Endpoint: DELETE /subscription/{subscription_id}/filter/{filter_id}
    * @throws Error if required parameters are missing or invalid
    */
-  async deleteSubscriptionFilter(subscriptionId: string, filterId: string) {
+  async deleteSubscriptionFilter(subscriptionId: string, filterId: string): Promise<unknown> {
     requireString(subscriptionId, 'subscriptionId');
     requireString(filterId, 'filterId');
     return await this.delete(

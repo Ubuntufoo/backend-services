@@ -169,7 +169,7 @@ async function promptStep(
         initial: step.default ?? '',
         validate: (value: string) => {
           const requiredRule = step.validate?.some((rule) => rule.rule === 'required');
-          const isRequired = requiredRule || step.required === true;
+          const isRequired = requiredRule ?? step.required === true;
           if (!isRequired && value.trim().length === 0) return true;
           if (isRequired && value.trim().length === 0) return 'This field is required';
           return true;

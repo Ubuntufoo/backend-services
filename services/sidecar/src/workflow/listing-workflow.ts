@@ -7,7 +7,7 @@ import {
 } from '@ebay-inventory/types';
 import { z } from 'zod';
 
-const workflowStateValidationMessage = (status: string, subStatus: string) =>
+const workflowStateValidationMessage = (status: string, subStatus: string): string =>
   `subStatus "${subStatus}" is not valid for status "${status}"`;
 
 const listingIdSchema = z

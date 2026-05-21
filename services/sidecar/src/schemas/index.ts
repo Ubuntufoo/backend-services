@@ -64,6 +64,7 @@ import { getOtherApisJsonSchemas } from './other/other-apis.js';
  *
  * @returns An object containing all JSON schemas organized by API category
  */
+/* eslint-disable-next-line @typescript-eslint/explicit-function-return-type */
 export function getAllJsonSchemas() {
   return {
     accountManagement: getAccountManagementJsonSchemas(),

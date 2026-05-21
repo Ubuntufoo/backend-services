@@ -853,6 +853,7 @@ export const salesTaxJurisdictionsSchema = z.object({
  * Generates JSON schemas for all Metadata API endpoints
  * @returns Object containing JSON schemas for all endpoints
  */
+/* eslint-disable-next-line @typescript-eslint/explicit-function-return-type */
 export function getMetadataJsonSchemas() {
   return {
     // Marketplace Policies

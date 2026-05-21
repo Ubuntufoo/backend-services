@@ -160,6 +160,24 @@ describe('Environment Configuration', () => {
       expect(parsed.searchParams.get('client_id')).toBe('test_client_id');
       expect(parsed.searchParams.get('response_type')).toBe('code');
     });
+
+    it('should fall back to default scopes when custom scopes are empty', () => {
+      const url = getAuthUrl(
+        'test_client_id',
+        'https://localhost/callback',
+        'sandbox',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        []
+      );
+      const parsed = new URL(url);
+
+      const scope = parsed.searchParams.get('scope');
+      expect(scope).toBeTruthy();
+      expect(scope).toContain('sell.inventory');
+    });
   });
 
   describe('validateEnvironmentConfig', () => {

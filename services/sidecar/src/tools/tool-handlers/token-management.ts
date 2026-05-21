@@ -4,6 +4,7 @@ import { getOAuthAuthorizationUrl, validateScopes } from '@/config/environment.j
 import { convertToTimestamp, validateTokenExpiry } from '@/utils/date-converter.js';
 
 /** Handler map for OAuth token setup, refresh, validation, and status tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const tokenManagementHandlers: ToolHandlerMap = {
   ebay_get_oauth_url: (api, args) => {
     // Get config from environment

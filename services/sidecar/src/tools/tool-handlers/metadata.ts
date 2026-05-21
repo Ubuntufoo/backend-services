@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Metadata API marketplace and policy metadata tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const metadataHandlers: ToolHandlerMap = {
   ebay_get_automotive_parts_compatibility_policies: async (api, args) => {
     return await api.metadata.getAutomotivePartsCompatibilityPolicies(

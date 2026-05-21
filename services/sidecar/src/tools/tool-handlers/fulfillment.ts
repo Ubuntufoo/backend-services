@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Fulfillment API order, shipping, refund, and cancellation tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const fulfillmentHandlers: ToolHandlerMap = {
   ebay_get_orders: async (api, args) => {
     return await api.fulfillment.getOrders(

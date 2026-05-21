@@ -79,7 +79,7 @@ export function createMetadataRouter(config: MetadataConfig): Router {
   // Optional: Server info endpoint for debugging
   router.get('/.well-known/mcp-server-info', (req, res) => {
     const serverInfo: Record<string, unknown> = {
-      name: config.resourceName || 'MCP Resource Server',
+      name: config.resourceName ?? 'MCP Resource Server',
       version: '1.0.0',
       resource_url: config.resourceServerUrl,
       authorization_required: true,
@@ -95,7 +95,7 @@ export function createMetadataRouter(config: MetadataConfig): Router {
           config.ebayEnvironment === 'production'
             ? 'https://api.ebay.com'
             : 'https://api.sandbox.ebay.com',
-        scopes: config.ebayScopes || [],
+        scopes: config.ebayScopes ?? [],
         note: 'MCP OAuth scopes (scopes_supported) are separate from eBay API OAuth scopes (ebay.scopes)',
       };
     }

@@ -55,14 +55,14 @@ export function createHttpTransportConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env
 ): HttpTransportConfig {
   return {
-    host: env.MCP_HOST || 'localhost',
-    port: Number(env.MCP_PORT) || 3000,
+    host: env.MCP_HOST ?? 'localhost',
+    port: env.MCP_PORT ? Number(env.MCP_PORT) : 3000,
     ebayEnabled: isEbayEnabled(env),
     oauth: {
       authServerUrl: env.OAUTH_AUTH_SERVER_URL ?? 'http://localhost:8080/realms/master',
       clientId: env.OAUTH_CLIENT_ID,
       clientSecret: env.OAUTH_CLIENT_SECRET,
-      requiredScopes: (env.OAUTH_REQUIRED_SCOPES || 'mcp:tools')
+      requiredScopes: (env.OAUTH_REQUIRED_SCOPES ?? 'mcp:tools')
         .split(',')
         .map((scope) => scope.trim()),
       useIntrospection: env.OAUTH_USE_INTROSPECTION !== 'false',

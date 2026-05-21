@@ -219,7 +219,7 @@ export async function interactiveOAuthFlow(
   console.log(chalk.bold.cyan('\n🔐 Interactive OAuth Flow\n'));
 
   // Check if redirect URI is localhost
-  const redirectUri = config.redirectUri || 'http://localhost:3000/oauth/callback';
+  const redirectUri = config.redirectUri ?? 'http://localhost:3000/oauth/callback';
   const isLocalhost = redirectUri.includes('localhost') || redirectUri.includes('127.0.0.1');
 
   if (!isLocalhost) {
@@ -259,7 +259,7 @@ export async function interactiveOAuthFlow(
 
   if (result.error) {
     console.log(
-      chalk.red(`\n✗ Authorization failed: ${result.errorDescription || result.error}\n`)
+      chalk.red(`\n✗ Authorization failed: ${result.errorDescription ?? result.error}\n`)
     );
     return null;
   }

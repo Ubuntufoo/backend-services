@@ -42,6 +42,7 @@ import {
 } from '@/utils/communication/notification.js';
 
 /** Handler map for communication and feedback tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const communicationHandlers: ToolHandlerMap = {
   ebay_get_offers_to_buyers: async (api, args) => {
     const validated = getOffersToBuyersSchema.parse(args);

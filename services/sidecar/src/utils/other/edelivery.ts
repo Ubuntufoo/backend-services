@@ -18,7 +18,7 @@ const paramsSchema = z
   .optional();
 
 // Reusable schema for request body objects
-const requestBodySchema = (name: string) =>
+const requestBodySchema = (name: string): z.ZodRecord<z.ZodString, z.ZodUnknown> =>
   z.record(z.unknown(), {
     message: `${name} is required`,
     required_error: `${name.toLowerCase().replace(/\s+/g, '_')} is required`,

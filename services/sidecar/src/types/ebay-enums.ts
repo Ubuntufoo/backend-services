@@ -201,6 +201,7 @@ export enum Condition {
 }
 
 /** Listing locales (language/region) */
+/* eslint-disable @typescript-eslint/naming-convention */
 export enum LocaleEnum {
   en_US = 'en-US',
   en_CA = 'en-CA',
@@ -228,6 +229,7 @@ export enum LocaleEnum {
   en_IE = 'en-IE',
   en_MY = 'en-MY',
 }
+/* eslint-enable @typescript-eslint/naming-convention */
 
 /**
  * Listing Format Types

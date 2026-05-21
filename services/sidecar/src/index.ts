@@ -12,9 +12,11 @@ const args = process.argv.slice(2);
 if (args.includes('setup')) {
   try {
     await runSetup();
+    /* eslint-disable-next-line n/no-process-exit -- CLI setup mode should terminate immediately */
     process.exit(0);
   } catch (error) {
     console.error('Setup failed:', error instanceof Error ? error.message : error);
+    /* eslint-disable-next-line n/no-process-exit -- CLI setup mode should terminate immediately */
     process.exit(1);
   }
 }
@@ -45,6 +47,7 @@ class EbayMcpServer {
     process.on('SIGINT', async () => {
       serverLogger.info('Received SIGINT, shutting down...');
       await this.runtime.server.close();
+      /* eslint-disable-next-line n/no-process-exit -- signal handler should terminate after clean shutdown */
       process.exit(0);
     });
   }
@@ -68,6 +71,7 @@ class EbayMcpServer {
         serverLogger.error(error);
       });
       serverLogger.error('Please fix the configuration errors and restart the server.');
+      /* eslint-disable-next-line n/no-process-exit -- invalid startup config should exit non-zero */
       process.exit(1);
     }
 
@@ -101,5 +105,6 @@ server.run().catch((error) => {
     error: error instanceof Error ? error.message : String(error),
     stack: error instanceof Error ? error.stack : undefined,
   });
+  /* eslint-disable-next-line n/no-process-exit -- fatal startup failure should exit non-zero */
   process.exit(1);
 });

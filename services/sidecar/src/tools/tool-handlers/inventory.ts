@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Inventory API item, offer, location, and bulk tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const inventoryHandlers: ToolHandlerMap = {
   ebay_get_inventory_items: async (api, args) => {
     return await api.inventory.getInventoryItems(args.limit as number, args.offset as number);

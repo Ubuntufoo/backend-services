@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Analytics API reporting tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const analyticsHandlers: ToolHandlerMap = {
   ebay_get_traffic_report: async (api, args) => {
     return await api.analytics.getTrafficReport(

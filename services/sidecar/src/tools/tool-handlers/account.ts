@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Account Management API tool execution. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const accountHandlers: ToolHandlerMap = {
   ebay_get_custom_policies: async (api, args) => {
     return await api.account.getCustomPolicies(args.policyTypes as string);

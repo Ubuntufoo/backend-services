@@ -4,6 +4,8 @@
 
 import { type LocaleEnum } from './ebay-enums.js';
 
+/* eslint-disable @typescript-eslint/naming-convention */
+
 /**
  * Runtime configuration required to authenticate eBay API clients.
  */
@@ -259,3 +261,5 @@ export interface EbayOAuthParams {
   locale?: string;
   prompt?: 'login';
 }
+
+/* eslint-enable @typescript-eslint/naming-convention */

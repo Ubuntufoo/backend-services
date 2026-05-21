@@ -12,14 +12,14 @@ export class EDeliveryApi {
   /**
    * Create shipping quote
    */
-  async createShippingQuote(shippingQuoteRequest: Record<string, unknown>) {
+  async createShippingQuote(shippingQuoteRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/shipping_quote`, shippingQuoteRequest);
   }
 
   /**
    * Get shipping quote
    */
-  async getShippingQuote(shippingQuoteId: string) {
+  async getShippingQuote(shippingQuoteId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/shipping_quote/${shippingQuoteId}`);
   }
 
@@ -29,7 +29,7 @@ export class EDeliveryApi {
    * Get actual costs for shipped packages
    * Endpoint: GET /actual_costs
    */
-  async getActualCosts(params?: Record<string, string>) {
+  async getActualCosts(params?: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/actual_costs`, params);
   }
 
@@ -37,7 +37,7 @@ export class EDeliveryApi {
    * Get address preferences
    * Endpoint: GET /address_preference
    */
-  async getAddressPreferences() {
+  async getAddressPreferences(): Promise<unknown> {
     return await this.client.get(`${this.basePath}/address_preference`);
   }
 
@@ -45,7 +45,7 @@ export class EDeliveryApi {
    * Create address preference
    * Endpoint: POST /address_preference
    */
-  async createAddressPreference(addressPreference: Record<string, unknown>) {
+  async createAddressPreference(addressPreference: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/address_preference`, addressPreference);
   }
 
@@ -53,7 +53,7 @@ export class EDeliveryApi {
    * Get consign preferences
    * Endpoint: GET /consign_preference
    */
-  async getConsignPreferences() {
+  async getConsignPreferences(): Promise<unknown> {
     return await this.client.get(`${this.basePath}/consign_preference`);
   }
 
@@ -61,7 +61,7 @@ export class EDeliveryApi {
    * Create consign preference
    * Endpoint: POST /consign_preference
    */
-  async createConsignPreference(consignPreference: Record<string, unknown>) {
+  async createConsignPreference(consignPreference: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/consign_preference`, consignPreference);
   }
 
@@ -71,7 +71,7 @@ export class EDeliveryApi {
    * Get available shipping agents
    * Endpoint: GET /agents
    */
-  async getAgents(params?: Record<string, string>) {
+  async getAgents(params?: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/agents`, params);
   }
 
@@ -79,7 +79,7 @@ export class EDeliveryApi {
    * Get battery qualifications
    * Endpoint: GET /battery_qualifications
    */
-  async getBatteryQualifications(params?: Record<string, string>) {
+  async getBatteryQualifications(params?: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/battery_qualifications`, params);
   }
 
@@ -87,7 +87,7 @@ export class EDeliveryApi {
    * Get dropoff sites
    * Endpoint: GET /dropoff_sites
    */
-  async getDropoffSites(params: Record<string, string>) {
+  async getDropoffSites(params: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/dropoff_sites`, params);
   }
 
@@ -95,7 +95,7 @@ export class EDeliveryApi {
    * Get available shipping services
    * Endpoint: GET /services
    */
-  async getShippingServices(params?: Record<string, string>) {
+  async getShippingServices(params?: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/services`, params);
   }
 
@@ -105,7 +105,7 @@ export class EDeliveryApi {
    * Create a bundle of packages
    * Endpoint: POST /bundle
    */
-  async createBundle(bundleRequest: Record<string, unknown>) {
+  async createBundle(bundleRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/bundle`, bundleRequest);
   }
 
@@ -113,7 +113,7 @@ export class EDeliveryApi {
    * Get bundle by ID
    * Endpoint: GET /bundle/{bundle_id}
    */
-  async getBundle(bundleId: string) {
+  async getBundle(bundleId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/bundle/${bundleId}`);
   }
 
@@ -121,7 +121,7 @@ export class EDeliveryApi {
    * Cancel a bundle
    * Endpoint: POST /bundle/{bundle_id}/cancel
    */
-  async cancelBundle(bundleId: string) {
+  async cancelBundle(bundleId: string): Promise<unknown> {
     return await this.client.post(`${this.basePath}/bundle/${bundleId}/cancel`, {});
   }
 
@@ -129,7 +129,7 @@ export class EDeliveryApi {
    * Get bundle label
    * Endpoint: GET /bundle/{bundle_id}/label
    */
-  async getBundleLabel(bundleId: string) {
+  async getBundleLabel(bundleId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/bundle/${bundleId}/label`);
   }
 
@@ -139,7 +139,7 @@ export class EDeliveryApi {
    * Create a package
    * Endpoint: POST /package
    */
-  async createPackage(packageRequest: Record<string, unknown>) {
+  async createPackage(packageRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/package`, packageRequest);
   }
 
@@ -147,7 +147,7 @@ export class EDeliveryApi {
    * Get package by ID
    * Endpoint: GET /package/{package_id}
    */
-  async getPackage(packageId: string) {
+  async getPackage(packageId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/package/${packageId}`);
   }
 
@@ -155,7 +155,7 @@ export class EDeliveryApi {
    * Delete a package
    * Endpoint: DELETE /package/{package_id}
    */
-  async deletePackage(packageId: string) {
+  async deletePackage(packageId: string): Promise<unknown> {
     return await this.client.delete(`${this.basePath}/package/${packageId}`);
   }
 
@@ -163,7 +163,7 @@ export class EDeliveryApi {
    * Get package by order line item
    * Endpoint: GET /package/{order_line_item_id}/item
    */
-  async getPackageByOrderLineItem(orderLineItemId: string) {
+  async getPackageByOrderLineItem(orderLineItemId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/package/${orderLineItemId}/item`);
   }
 
@@ -171,7 +171,7 @@ export class EDeliveryApi {
    * Cancel a package
    * Endpoint: POST /package/{package_id}/cancel
    */
-  async cancelPackage(packageId: string) {
+  async cancelPackage(packageId: string): Promise<unknown> {
     return await this.client.post(`${this.basePath}/package/${packageId}/cancel`, {});
   }
 
@@ -179,7 +179,7 @@ export class EDeliveryApi {
    * Clone a package
    * Endpoint: POST /package/{package_id}/clone
    */
-  async clonePackage(packageId: string) {
+  async clonePackage(packageId: string): Promise<unknown> {
     return await this.client.post(`${this.basePath}/package/${packageId}/clone`, {});
   }
 
@@ -187,7 +187,7 @@ export class EDeliveryApi {
    * Confirm a package
    * Endpoint: POST /package/{package_id}/confirm
    */
-  async confirmPackage(packageId: string) {
+  async confirmPackage(packageId: string): Promise<unknown> {
     return await this.client.post(`${this.basePath}/package/${packageId}/confirm`, {});
   }
 
@@ -197,7 +197,7 @@ export class EDeliveryApi {
    * Bulk cancel packages
    * Endpoint: POST /package/bulk_cancel_packages
    */
-  async bulkCancelPackages(bulkCancelRequest: Record<string, unknown>) {
+  async bulkCancelPackages(bulkCancelRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(
       `${this.basePath}/package/bulk_cancel_packages`,
       bulkCancelRequest
@@ -208,7 +208,7 @@ export class EDeliveryApi {
    * Bulk confirm packages
    * Endpoint: POST /package/bulk_confirm_packages
    */
-  async bulkConfirmPackages(bulkConfirmRequest: Record<string, unknown>) {
+  async bulkConfirmPackages(bulkConfirmRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(
       `${this.basePath}/package/bulk_confirm_packages`,
       bulkConfirmRequest
@@ -219,7 +219,7 @@ export class EDeliveryApi {
    * Bulk delete packages
    * Endpoint: POST /package/bulk_delete_packages
    */
-  async bulkDeletePackages(bulkDeleteRequest: Record<string, unknown>) {
+  async bulkDeletePackages(bulkDeleteRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(
       `${this.basePath}/package/bulk_delete_packages`,
       bulkDeleteRequest
@@ -232,7 +232,7 @@ export class EDeliveryApi {
    * Get labels
    * Endpoint: GET /labels
    */
-  async getLabels(params?: Record<string, string>) {
+  async getLabels(params?: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/labels`, params);
   }
 
@@ -240,7 +240,7 @@ export class EDeliveryApi {
    * Get handover sheet
    * Endpoint: GET /handover_sheet
    */
-  async getHandoverSheet(params?: Record<string, string>) {
+  async getHandoverSheet(params?: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/handover_sheet`, params);
   }
 
@@ -248,7 +248,7 @@ export class EDeliveryApi {
    * Get tracking information
    * Endpoint: GET /tracking
    */
-  async getTracking(params: Record<string, string>) {
+  async getTracking(params: Record<string, string>): Promise<unknown> {
     return await this.client.get(`${this.basePath}/tracking`, params);
   }
 
@@ -258,7 +258,7 @@ export class EDeliveryApi {
    * Create a complaint
    * Endpoint: POST /complaint
    */
-  async createComplaint(complaintRequest: Record<string, unknown>) {
+  async createComplaint(complaintRequest: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/complaint`, complaintRequest);
   }
 }

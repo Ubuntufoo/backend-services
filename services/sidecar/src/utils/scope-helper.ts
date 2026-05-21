@@ -228,7 +228,7 @@ export function describeScopeFromOAuthUrl(scope: string): string {
 export function formatScopesForDisplay(scopes: string[]): string {
   return scopes
     .map((scope) => {
-      const shortName = scope.split('/').pop() || scope;
+      const shortName = scope.split('/').pop() ?? scope;
       return `  • ${shortName}`;
     })
     .join('\n');

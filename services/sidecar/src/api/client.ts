@@ -8,8 +8,8 @@ import { apiLogger, logRequest, logResponse, logErrorResponse } from '@/utils/lo
 
 // Extended Axios config with retry tracking
 interface AxiosConfigWithRetry extends AxiosRequestConfig {
-  __authRetryCount?: number;
-  __retryCount?: number;
+  authRetryCount?: number;
+  retryCount?: number;
 }
 
 /**
@@ -110,7 +110,7 @@ export class EbayApiClient {
 
         // Log outgoing request details
         logRequest(
-          config.method || 'GET',
+          config.method ?? 'GET',
           `${config.baseURL}${config.url}`,
           config.params as Record<string, unknown>,
           config.data
@@ -128,8 +128,8 @@ export class EbayApiClient {
     this.httpClient.interceptors.response.use(
       (response) => {
         // Extract rate limit info from headers if available
-        const remaining = response.headers['x-ebay-c-ratelimit-remaining'];
-        const limit = response.headers['x-ebay-c-ratelimit-limit'];
+        const remaining = response.headers['x-ebay-c-ratelimit-remaining'] as string | undefined;
+        const limit = response.headers['x-ebay-c-ratelimit-limit'] as string | undefined;
 
         // Log response details
         logResponse(response.status, response.statusText, response.data, remaining, limit);
@@ -158,11 +158,11 @@ export class EbayApiClient {
 
         // Handle authentication errors (401 Unauthorized)
         if (axiosError.response?.status === 401) {
-          const retryCount = config?.__authRetryCount || 0;
+          const retryCount = config?.authRetryCount ?? 0;
 
           // Only retry once to avoid infinite loops
           if (retryCount === 0 && config) {
-            config.__authRetryCount = 1;
+            config.authRetryCount = 1;
 
             apiLogger.warn('Authentication error (401). Attempting to refresh user token...');
 
@@ -188,8 +188,8 @@ export class EbayApiClient {
               // If refresh fails, provide clear guidance
               const ebayError = axiosError.response?.data as EbayApiError;
               const originalError =
-                ebayError.errors?.[0]?.longMessage ||
-                ebayError.errors?.[0]?.message ||
+                ebayError.errors?.[0]?.longMessage ??
+                ebayError.errors?.[0]?.message ??
                 'Invalid access token';
 
               throw new Error(
@@ -203,8 +203,8 @@ export class EbayApiClient {
           // If retry already attempted, provide helpful error message
           const ebayError = axiosError.response?.data as EbayApiError;
           const errorMessage =
-            ebayError.errors?.[0]?.longMessage ||
-            ebayError.errors?.[0]?.message ||
+            ebayError.errors?.[0]?.longMessage ??
+            ebayError.errors?.[0]?.message ??
             'Invalid access token';
 
           throw new Error(
@@ -215,7 +215,7 @@ export class EbayApiClient {
 
         // Handle rate limit errors (429)
         if (axiosError.response?.status === 429) {
-          const retryAfter = axiosError.response.headers['retry-after'];
+          const retryAfter = axiosError.response.headers['retry-after'] as string | undefined;
           const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : 60000;
 
           throw new Error(
@@ -226,10 +226,10 @@ export class EbayApiClient {
 
         // Handle server errors with retry suggestion (500, 502, 503, 504)
         if (axiosError.response?.status && axiosError.response.status >= 500 && config) {
-          const retryCount = config.__retryCount || 0;
+          const retryCount = config.retryCount ?? 0;
 
           if (retryCount < 3) {
-            config.__retryCount = retryCount + 1;
+            config.retryCount = retryCount + 1;
             const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
 
             apiLogger.warn(`Server error (${axiosError.response.status}). Retrying...`, {
@@ -248,8 +248,8 @@ export class EbayApiClient {
         if (axios.isAxiosError(axiosError) && axiosError.response?.data) {
           const ebayError = axiosError.response.data as EbayApiError;
           const errorMessage =
-            ebayError.errors?.[0]?.longMessage ||
-            ebayError.errors?.[0]?.message ||
+            ebayError.errors?.[0]?.longMessage ??
+            ebayError.errors?.[0]?.message ??
             axiosError.message;
           throw new Error(`eBay API Error: ${errorMessage}`);
         }
@@ -355,7 +355,7 @@ export class EbayApiClient {
   /**
    * Get token information for debugging
    */
-  getTokenInfo() {
+  getTokenInfo(): ReturnType<EbayOAuthClient['getTokenInfo']> {
     return this.authClient.getTokenInfo();
   }
 
@@ -369,7 +369,7 @@ export class EbayApiClient {
   /**
    * Get rate limit statistics
    */
-  getRateLimitStats() {
+  getRateLimitStats(): { current: number; max: number; windowMs: number } {
     return this.rateLimitTracker.getStats();
   }
 
@@ -455,8 +455,8 @@ export class EbayApiClient {
 
           const ebayError = error.response?.data as EbayApiError;
           const originalError =
-            ebayError.errors?.[0]?.longMessage ||
-            ebayError.errors?.[0]?.message ||
+            ebayError.errors?.[0]?.longMessage ??
+            ebayError.errors?.[0]?.message ??
             'Invalid access token';
 
           throw new Error(
