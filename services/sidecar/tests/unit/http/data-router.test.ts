@@ -50,7 +50,7 @@ const listingRow = {
 };
 
 const appSettingsRow = {
-  capture_mode: 'single_1_image',
+  capture_mode: 'single_2_image',
   default_fulfillment_policy_id: null,
   default_package_type: null,
   default_payment_policy_id: null,
@@ -216,6 +216,20 @@ describe('data API router', () => {
         },
       ],
     });
+    expect(dataAccess.listings.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects create requests with removed capture modes', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings').send({
+      mode: 'test',
+      captureMode: 'single_1_image',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('invalid_request');
     expect(dataAccess.listings.create).not.toHaveBeenCalled();
   });
 

@@ -91,6 +91,6 @@ export const JOB_TYPES = [
 
 export type JobType = (typeof JOB_TYPES)[number];
 
-export const CAPTURE_MODES = ['single_1_image', 'single_2_image', 'lot_3_image'] as const;
+export const CAPTURE_MODES = ['single_2_image', 'lot_3_image'] as const;
 
 export type CaptureMode = (typeof CAPTURE_MODES)[number];
