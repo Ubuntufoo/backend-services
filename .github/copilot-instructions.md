@@ -1,116 +1,33 @@
-@/Users/timothymurphy/.codex/RTK.md
-## 🖥️ Shell & Terminal Optimization (RTK)
-- **Environment:** This workspace uses `rtk` (Rust Token Killer) globally via `rtk init -g --codex` to hook and compress background terminal processes.
-- **Protocol:** Whenever running inherently verbose CLI commands (like testing pipelines, extensive git tree checks, or monorepo builds), explicitly prefix them with the `rtk` command to guarantee maximum token compression.
-- **Execution Examples:**
-  - `rtk pnpm verify-canonical-layout.mjs`
-  - `rtk git status` / `rtk git diff`
-  - `rtk next build`
-- **Scope Note:** Native file utilities (like internal `read` or `grep` tools) bypass global bash hooks. For heavy source files or deep pattern matches, use alternative shell paths like `rtk read <file>` or `rtk grep <pattern>` to keep your context window lean.
+## Shell & Terminal (RTK)
+- Use `rtk` to compress verbose CLI output: e.g. `rtk git status`, `rtk pnpm verify-canonical-layout.mjs`, `rtk next build`.
+- For native tools that bypass hooks use `rtk read <file>` or `rtk grep <pattern>`.
 
-# PR Review Protocol
-- ALWAYS operate exclusively in `--diff-only` execution mode for PR reviews.
-- Do not request or pull surrounding codebase files for context during automated PR evaluations.
-- Completely ignore `pnpm-lock.yaml`, database schemas, and env templates.
-- Truncate all outputs to raw technical syntax blocks if API usage bounds approach threshold limits.
+## PR Review
+- Use `--diff-only` mode. Do not pull surrounding files. Ignore pnpm-lock.yaml, DB schemas, and env templates. Trim outputs when near API limits.
 
-## Agent Context & Token Management Protocol
+## Context & Token Management
+- Prefer exact file paths; avoid bulk reads. Respect .gitignore. Skip node_modules, .git, and build outputs.
+- Batch related actions and extract only needed fields from tool outputs.
 
-To avoid rate limits and reduce token usage, follow these concise context rules.
+## Git Checks
+- Start with `git diff --stat` and `git status -s`.
+- Request full diffs only when needed. Clean stale .git/*.lock only if Git is blocked.
 
-### 1. File Discovery & Reading Boundaries
+## Multi-Project
+- Use workspace filters (e.g., `pnpm --filter <pkg>`). Avoid launching servers; suppress verbose logs.
 
-- Prefer exact file paths; avoid sweeping directory reads or open-ended searches.
-- Respect `.gitignore` and do not index docs unless asked.
-- Skip `node_modules`, `.git`, build outputs, and other large generated folders.
+## Branches & Commits
+- Always create a feature branch (feature/, fix/, chore/, refactor/). Never commit to main.
+- Verify worktree: branch, git status, uncommitted and unpushed changes. If dirty, stop and report files.
+- Use atomic conventional commits (feat:, fix:, refactor:, docs:, chore:, test:) and `git add -p`.
+- Run lint/tests before commit, then push and open a PR.
 
-### 2. Model Context Protocol (MCP) Efficiency
+## Pull Request Flow
+- branch → develop → commit → push → PR → merge → sync main. Keep PRs focused.
 
-- Batch related actions into one tool call per intent.
-- From large tool outputs, extract only the keys/fields needed for the task.
+## Testing
+- Run linters/tests before commits. Treat failures as blockers.
 
-### 3. Git Telemetry & Worktree Auditing
-
-- Start with `git diff --stat` and `git status -s` for concise workspace checks.
-- If a push succeeds but local Git reports it could not update a remote-tracking ref due to a `.lock` file, do not treat that as a failed push. Check the PR/remote branch first. Only clean stale `.git/**/*.lock` files if Git operations are actually blocked.
-- Request full diffs only when needed.
-- Keep edits tightly scoped to the active feature branch.
-
-### 4. Multi-Project & Server Scoping
-
-- Target package-level commands with workspace filters (e.g., `pnpm --filter <pkg>`).
-- Avoid launching unnecessary servers; suppress verbose logs (e.g., `--logLevel silent`).
-
-## Branch Management
-
-- Always create a new feature branch for every task. Never commit directly to `main`.
-- Branch naming:
-  - `feature/<task-name>`
-  - `fix/<task-name>`
-  - `chore/<task-name>`
-  - `refactor/<task-name>`
-- Never mix unrelated tasks in the same branch.
-
-## Version Control
-
-- Before starting work, check:
-  - `git status`
-  - current branch
-  - uncommitted changes
-  - unpushed commits
-- If the worktree is dirty:
-  - stop
-  - report modified files
-  - ask whether to stash, commit, discard, or continue
-- Never assume existing changes belong to the current task.
-- Use atomic commits with conventional commit messages:
-  - `feat:`
-  - `fix:`
-  - `refactor:`
-  - `docs:`
-  - `chore:`
-  - `test:`
-- Use `git add -p` to stage only related changes.
-- Never push directly to `main`.
-- After completing work:
-  - run lint/tests
-  - commit
-  - push branch
-  - open or prepare PR
-- Before new work, verify:
-  - previous branch pushed
-  - PR created or merged
-  - worktree clean
-- If resuming interrupted work, first report:
-  - current branch
-  - git status
-  - uncommitted changes
-  - unpushed commits
-  - PR status
-- If repository state is unclear, stop and ask.
-
-## Pull Request Workflow
-
-- Standard cycle:
-  - branch
-  - develop
-  - commit
-  - push
-  - PR
-  - merge
-  - sync `main`
-- Keep PRs focused to one concern.
-
-## Testing and Validation
-
-- Run linting/tests before every commit.
-- Treat failing checks as blockers.
-- Validate each logical sub-task before continuing.
-
-## Shared Workspace with OpenAI Codex
-
-- **Shared responsibility:** This repository is a shared workspace between GitHub Copilot and OpenAI Codex. Both assistants must prioritize version accuracy, code quality, and repository best practices when proposing edits.
-- **Version accuracy:** Verify referenced versions (dependencies, APIs, models) before suggesting changes; prefer explicit version pins and include a brief rationale for version bumps.
-- **Best practices:** Proposals should respect tests, linting, security, and documentation standards. If a change may affect compatibility, include migration notes or request tests.
-- **Coordination & conflicts:** When automated suggestions conflict, prefer conservative, well-tested approaches and surface conflicts for human review.
-- **Accountability:** Include a concise justification and suggested validation command (for example, `pnpm -w test`) with non-trivial edits so maintainers can verify changes.
+## Shared Workspace (Copilot & Codex)
+- Both assistants must prioritize accuracy, tests, and compatibility.
+- Prefer explicit version pins; include a brief rationale for bumps and a validation command (e.g., `pnpm -w test`).
