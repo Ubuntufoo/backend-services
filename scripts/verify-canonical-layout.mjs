@@ -8,8 +8,6 @@ const forbiddenPaths = [
   'src',
   'tests',
   'public',
-  '.env',
-  '.env.example',
   'Dockerfile',
   'eslint.config.js',
   'package-lock.json',
@@ -37,10 +35,6 @@ const forbiddenPaths = [
   'services/r2-service/tsconfig.json',
   'services/r2-service/src',
   'services/r2-service/tests',
-  'services/watcher-service/package.json',
-  'services/watcher-service/tsconfig.json',
-  'services/watcher-service/src',
-  'services/watcher-service/tests',
   'services/sidecar/pnpm-lock.yaml'
 ];
 

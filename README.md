@@ -11,7 +11,7 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 | Service | Status | Notes |
 | --- | --- | --- |
 | `sidecar` | Implemented | Canonical MCP/eBay server package with tests and local setup support. |
-| `watcher-service` | Planned boundary | Keep as a sidecar or app module unless event volume justifies extraction. |
+| `watcher-service` | Scaffolded | Config-only package for watcher path conventions and supported asset types; runtime behavior still pending. |
 | `image-service` | Planned boundary | Keep image transforms local until they need isolated runtime scaling. |
 | `r2-service` | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service. |
 | `gemini-service` | Planned boundary | Prefer in-process orchestration with request guards before extraction. |
@@ -28,13 +28,14 @@ backend-services/
     types/                # Shared workflow/domain types
   services/
     sidecar/              # Active package
+    watcher-service/      # Config scaffold for the future watcher runtime
   docs/                   # Shared reference material
   scripts/                # Repo-level guardrails
 ```
 
 The root package is orchestration-only. It does not own application runtime code.
 
-Planned service boundaries live in documentation, not in placeholder workspace packages or required runtime folders.
+Planned service boundaries stay documented until they are promoted into real packages.
 
 ## Workspace Commands
 
@@ -84,7 +85,7 @@ For a local-only setup with cloud Supabase integration:
 - run `services/sidecar` directly on your machine
 - keep Supabase hosted instead of adding a local database stack here
 - keep reusable Supabase access in `packages/data` instead of reimplementing service clients inside runtime packages
-- keep planned watcher, image, R2, Gemini, eBay, and job-runner concerns as modules or Supabase-triggered workflows until a second runtime is clearly necessary
+- keep planned image, R2, Gemini, eBay, and job-runner concerns as modules or Supabase-triggered workflows until a second runtime is clearly necessary
 - avoid containerization and multi-process orchestration unless deployment needs actually appear
 
 ## Guardrails

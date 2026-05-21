@@ -8,6 +8,12 @@ This repository uses a phased monorepo model.
 | --- | --- | --- |
 | `services/sidecar` | Active | MCP server and canonical eBay integration runtime. |
 
+## Scaffolded Packages
+
+| Directory | Status | Purpose |
+| --- | --- | --- |
+| `services/watcher-service` | Scaffolded package | Config and path conventions for the future watcher runtime. |
+
 ## Shared Packages
 
 | Directory | Status | Purpose |
@@ -20,7 +26,6 @@ This repository uses a phased monorepo model.
 
 | Boundary | Status | Planned responsibility |
 | --- | --- | --- |
-| `watcher-service` | Planned module | Consume asset events, create initial listing rows, and enqueue jobs through shared data helpers. |
 | `image-service` | Planned module | Image normalization, EXIF stripping, derivatives, and metadata extraction. |
 | `r2-service` | Planned module | Cloudflare R2 uploads, proxying, and signed URL issuance. |
 | `gemini-service` | Planned module | AI enrichment, validation, caching, and rate limiting around Gemini requests. |
@@ -36,7 +41,7 @@ A planned boundary should only become an active workspace package or separate pr
 3. It includes build, lint, typecheck, and test coverage suitable for CI.
 4. Its documentation explains env vars, commands, and integration expectations.
 
-Until then, planned boundaries remain documentation and in-process code organization, not standalone service folders or deployables.
+Until then, planned boundaries remain documentation and in-process code organization. Scaffolded packages like `services/watcher-service` are the exception because they already have a real workspace home and shared config surface.
 
 ## Local Development
 
