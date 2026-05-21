@@ -13,11 +13,15 @@
     }
   },
   "scripts": {
-    "build:deps": "pnpm exec tsc --build ../../packages/types/tsconfig.json",
+    "build:deps": "pnpm --filter @ebay-inventory/types build && pnpm --filter @ebay-inventory/data build",
     "build": "pnpm run build:deps && tsc --build",
     "typecheck": "pnpm run build:deps && tsc --noEmit --pretty false -p tsconfig.json",
     "test": "pnpm run typecheck && vitest run",
     "check": "pnpm run typecheck && pnpm run test"
+  },
+  "dependencies": {
+    "@ebay-inventory/data": "workspace:*",
+    "@ebay-inventory/types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",
