@@ -1,5 +1,9 @@
-import { GoogleGenAI, createPartFromUri } from '@google/genai';
+import { GoogleGenAI, createPartFromUri, type Part } from '@google/genai';
+import { GeminiDraftServiceError } from './contracts.js';
 import type { GenerateListingDraftUserHints } from './contracts.js';
+
+const HTTP_IMAGE_FETCH_TIMEOUT_MS = 12_000;
+const HTTP_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface GeminiDraftRawRequest {
   model: string;
@@ -18,7 +22,16 @@ export interface GeminiDraftClient {
   generateDraftRaw(request: GeminiDraftRawRequest): Promise<GeminiDraftRawResult>;
 }
 
-function inferMimeType(imageUrl: string): string {
+function sanitizeImageUrl(imageUrl: string): string {
+  try {
+    const parsed = new URL(imageUrl);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return imageUrl;
+  }
+}
+
+function inferMimeTypeFromUrl(imageUrl: string): string | undefined {
   const normalizedUrl = imageUrl.split('?')[0]?.toLowerCase() ?? '';
 
   if (normalizedUrl.endsWith('.png')) {
@@ -33,7 +46,126 @@ function inferMimeType(imageUrl: string): string {
     return 'image/gif';
   }
 
-  return 'image/jpeg';
+  if (normalizedUrl.endsWith('.jpg') || normalizedUrl.endsWith('.jpeg')) {
+    return 'image/jpeg';
+  }
+
+  return undefined;
+}
+
+function isHttpImageUrl(imageUrl: string): boolean {
+  return imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+}
+
+function parseMimeTypeHeader(contentType: string | null): string | undefined {
+  if (!contentType) {
+    return undefined;
+  }
+
+  return contentType.split(';')[0]?.trim().toLowerCase() || undefined;
+}
+
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('image/');
+}
+
+function formatImageUrlError(imageUrl: string, message: string): GeminiDraftServiceError {
+  return new GeminiDraftServiceError(`Image URL "${sanitizeImageUrl(imageUrl)}": ${message}`);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+async function buildImagePartFromHttpUrl(imageUrl: string): Promise<Part> {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), HTTP_IMAGE_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(imageUrl, {
+      signal: controller.signal,
+    });
+
+    const contentLength = response.headers.get('content-length');
+
+    if (contentLength) {
+      const declaredSize = Number.parseInt(contentLength, 10);
+
+      if (Number.isFinite(declaredSize) && declaredSize > HTTP_IMAGE_MAX_BYTES) {
+        throw formatImageUrlError(
+          imageUrl,
+          `is ${declaredSize} bytes and exceeds the 10 MB limit.`
+        );
+      }
+    }
+
+    if (!response.ok) {
+      throw formatImageUrlError(
+        imageUrl,
+        `returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}.`
+      );
+    }
+
+    const responseMimeType = parseMimeTypeHeader(response.headers.get('content-type'));
+
+    if (responseMimeType && !isImageMimeType(responseMimeType)) {
+      throw formatImageUrlError(
+        imageUrl,
+        `returned non-image content type "${responseMimeType}".`
+      );
+    }
+
+    const mimeType = responseMimeType ?? inferMimeTypeFromUrl(imageUrl);
+
+    if (!mimeType) {
+      throw formatImageUrlError(
+        imageUrl,
+        'did not provide an image Content-Type header and its MIME type could not be inferred.'
+      );
+    }
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+
+    if (bytes.length === 0) {
+      throw formatImageUrlError(imageUrl, 'returned an empty response body.');
+    }
+
+    if (bytes.length > HTTP_IMAGE_MAX_BYTES) {
+      throw formatImageUrlError(
+        imageUrl,
+        `returned ${bytes.length} bytes and exceeds the 10 MB limit.`
+      );
+    }
+
+    return {
+      inlineData: {
+        data: bytes.toString('base64'),
+        mimeType,
+      },
+    };
+  } catch (error) {
+    if (controller.signal.aborted || isAbortError(error)) {
+      throw formatImageUrlError(
+        imageUrl,
+        `timed out after ${HTTP_IMAGE_FETCH_TIMEOUT_MS / 1000} seconds.`
+      );
+    }
+
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+}
+
+async function buildImagePart(imageUrl: string): Promise<Part> {
+  if (isHttpImageUrl(imageUrl)) {
+    return await buildImagePartFromHttpUrl(imageUrl);
+  }
+
+  return createPartFromUri(
+    imageUrl,
+    inferMimeTypeFromUrl(imageUrl) ?? 'image/jpeg'
+  );
 }
 
 export function getGeminiDraftClient(apiKey: string): GeminiDraftClient {
@@ -41,6 +173,8 @@ export function getGeminiDraftClient(apiKey: string): GeminiDraftClient {
 
   return {
     async generateDraftRaw(request: GeminiDraftRawRequest): Promise<GeminiDraftRawResult> {
+      const imageParts = await Promise.all(request.imageUrls.map(async (imageUrl) => await buildImagePart(imageUrl)));
+
       const response = await client.models.generateContent({
         model: request.model,
         contents: [
@@ -48,9 +182,7 @@ export function getGeminiDraftClient(apiKey: string): GeminiDraftClient {
             role: 'user',
             parts: [
               { text: request.prompt },
-              ...request.imageUrls.map((imageUrl) =>
-                createPartFromUri(imageUrl, inferMimeType(imageUrl))
-              ),
+              ...imageParts,
             ],
           },
         ],

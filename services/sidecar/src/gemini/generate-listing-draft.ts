@@ -21,6 +21,22 @@ export {
   userHintsSchema,
 } from './contracts.js';
 
+function summarizeGeminiError(error: unknown): string {
+  if (error instanceof GeminiDraftServiceError) {
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.trim();
+
+    if (message.length > 0) {
+      return message.length > 300 ? `${message.slice(0, 297)}...` : message;
+    }
+  }
+
+  return 'Unknown Gemini draft generation error.';
+}
+
 export function generateListingDraft(
   input: GenerateListingDraftInput
 ): Promise<GeneratedListingDraft> {
@@ -53,7 +69,7 @@ export function generateListingDraft(
       }
 
       throw new GeminiDraftServiceError(
-        `Gemini draft generation failed for listing "${validatedInput.listingId}".`,
+        `Gemini draft generation failed for listing "${validatedInput.listingId}": ${summarizeGeminiError(error)}`,
         { cause: error }
       );
     }
