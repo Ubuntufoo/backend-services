@@ -205,6 +205,13 @@ importers:
         version: 4.1.6(@types/node@25.8.0)(@vitest/coverage-v8@4.1.6)(@vitest/ui@4.1.6)(vite@8.0.13(@types/node@25.8.0)(esbuild@0.28.0)(tsx@4.22.0))
 
   services/watcher-service:
+    dependencies:
+      '@ebay-inventory/data':
+        specifier: workspace:*
+        version: link:../../packages/data
+      '@ebay-inventory/types':
+        specifier: workspace:*
+        version: link:../../packages/types
     devDependencies:
       '@types/node':
         specifier: ^25.3.3
