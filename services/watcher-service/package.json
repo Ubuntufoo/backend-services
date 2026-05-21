@@ -1,0 +1,27 @@
+{
+  "name": "@ebay-inventory/watcher-service",
+  "version": "0.0.0",
+  "description": "Config and path conventions for the watcher-service boundary.",
+  "type": "module",
+  "private": true,
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    }
+  },
+  "scripts": {
+    "build:deps": "pnpm exec tsc --build ../../packages/types/tsconfig.json",
+    "build": "pnpm run build:deps && tsc --build",
+    "typecheck": "pnpm run build:deps && tsc --noEmit --pretty false -p tsconfig.json",
+    "test": "pnpm run typecheck && vitest run",
+    "check": "pnpm run typecheck && pnpm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

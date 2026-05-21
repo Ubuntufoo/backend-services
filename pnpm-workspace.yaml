@@ -1,3 +1,4 @@
 packages:
   - 'packages/*'
   - 'services/sidecar'
+  - 'services/watcher-service'
