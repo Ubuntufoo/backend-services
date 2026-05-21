@@ -357,7 +357,7 @@ export function getAuthUrl(
 
   const authBase = env === 'production' ? 'https://auth.ebay.com' : 'https://auth.sandbox.ebay.com';
 
-  const scopeList = scopes?.join('%20') ?? scope.join('%20');
+  const scopeList = scopes && scopes.length > 0 ? scopes.join('%20') : scope.join('%20');
 
   const authorizeParams = new URLSearchParams({
     client_id: clientId,
