@@ -40,7 +40,7 @@ export async function getPathWithContextError(
   client: EbayApiClient,
   path: string,
   failureMessage: string
-) {
+): Promise<unknown> {
   return await getWithApiError(client, path, failureMessage);
 }
 
@@ -58,7 +58,7 @@ export async function getWithContextError(
   path: string,
   params: Record<string, string | number>,
   failureMessage: string
-) {
+): Promise<unknown> {
   return await getWithApiError(client, path, failureMessage, params);
 }
 
@@ -80,7 +80,7 @@ export async function getPaginatedWithContextError(
   filter?: string,
   limit?: number,
   offset?: number
-) {
+): Promise<unknown> {
   const params = buildPaginatedQueryParams(filter, limit, offset);
   return await getWithContextError(client, path, params, failureMessage);
 }

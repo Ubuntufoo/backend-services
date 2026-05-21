@@ -12,7 +12,11 @@ export class ComplianceApi {
   /**
    * Get listing violations
    */
-  async getListingViolations(complianceType?: string, offset?: number, limit?: number) {
+  async getListingViolations(
+    complianceType?: string,
+    offset?: number,
+    limit?: number
+  ): Promise<unknown> {
     const params: Record<string, string | number> = {};
     if (complianceType) params.compliance_type = complianceType;
     if (offset) params.offset = offset;
@@ -23,7 +27,7 @@ export class ComplianceApi {
   /**
    * Get listing violation summary
    */
-  async getListingViolationsSummary(complianceType?: string) {
+  async getListingViolationsSummary(complianceType?: string): Promise<unknown> {
     const params: Record<string, string> = {};
     if (complianceType) params.compliance_type = complianceType;
     return await this.client.get(`${this.basePath}/listing_violation_summary`, params);
@@ -32,7 +36,7 @@ export class ComplianceApi {
   /**
    * Suppress a violation
    */
-  async suppressViolation(listingViolationId: string) {
+  async suppressViolation(listingViolationId: string): Promise<unknown> {
     return await this.client.post(`${this.basePath}/suppress_violation`, {
       listing_violation_id: listingViolationId,
     });
@@ -41,7 +45,11 @@ export class ComplianceApi {
   /**
    * Get compliance snapshot (alias for getListingViolations)
    */
-  async getComplianceSnapshot(complianceType?: string, offset?: number, limit?: number) {
+  async getComplianceSnapshot(
+    complianceType?: string,
+    offset?: number,
+    limit?: number
+  ): Promise<unknown> {
     return await this.getListingViolations(complianceType, offset, limit);
   }
 }

@@ -91,7 +91,7 @@ export class DeveloperApi {
    * Endpoint: POST /signing_key
    */
   async createSigningKey(request?: CreateSigningKeyRequest): Promise<SigningKey> {
-    return await this.client.post<SigningKey>(`${this.keyBasePath}/signing_key`, request || {});
+    return await this.client.post<SigningKey>(`${this.keyBasePath}/signing_key`, request ?? {});
   }
 
   /**

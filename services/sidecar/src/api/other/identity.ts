@@ -16,7 +16,7 @@ export class IdentityApi {
    * Get user information
    * Uses apiz.ebay.com instead of api.ebay.com
    */
-  async getUser() {
+  async getUser(): Promise<unknown> {
     const config = this.client.getConfig();
     const identityBaseUrl = getIdentityBaseUrl(config.environment);
     const fullUrl = `${identityBaseUrl}${this.basePath}/user`;

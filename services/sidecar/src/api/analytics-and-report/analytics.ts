@@ -13,7 +13,12 @@ export class AnalyticsApi {
    * Get traffic report for listings
    * @throws Error if required parameters are missing or invalid
    */
-  async getTrafficReport(dimension: string, filter: string, metric: string, sort?: string) {
+  async getTrafficReport(
+    dimension: string,
+    filter: string,
+    metric: string,
+    sort?: string
+  ): Promise<unknown> {
     // Input validation
     if (!dimension || typeof dimension !== 'string') {
       throw new Error('dimension is required and must be a string');
@@ -49,7 +54,7 @@ export class AnalyticsApi {
    * Endpoint: GET /seller_standards_profile
    * @throws Error if the request fails
    */
-  async findSellerStandardsProfiles() {
+  async findSellerStandardsProfiles(): Promise<unknown> {
     try {
       return await this.client.get(`${this.basePath}/seller_standards_profile`);
     } catch (error) {
@@ -64,7 +69,7 @@ export class AnalyticsApi {
    * Endpoint: GET /seller_standards_profile/{program}/{cycle}
    * @throws Error if required parameters are missing or invalid
    */
-  async getSellerStandardsProfile(program: string, cycle: string) {
+  async getSellerStandardsProfile(program: string, cycle: string): Promise<unknown> {
     // Input validation
     if (!program || typeof program !== 'string') {
       throw new Error('program is required and must be a string');
@@ -91,7 +96,7 @@ export class AnalyticsApi {
     customerServiceMetricType: string,
     evaluationType: string,
     evaluationMarketplaceId: string
-  ) {
+  ): Promise<unknown> {
     // Input validation
     if (!customerServiceMetricType || typeof customerServiceMetricType !== 'string') {
       throw new Error('customerServiceMetricType is required and must be a string');

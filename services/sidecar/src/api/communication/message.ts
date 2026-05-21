@@ -20,7 +20,7 @@ export class MessageApi {
    * Endpoint: POST /bulk_update_conversation
    * @throws Error if required parameters are missing or invalid
    */
-  async bulkUpdateConversation(updateData: Record<string, unknown>) {
+  async bulkUpdateConversation(updateData: Record<string, unknown>): Promise<unknown> {
     if (!updateData || typeof updateData !== 'object') {
       throw new Error('updateData is required and must be an object');
     }
@@ -42,7 +42,11 @@ export class MessageApi {
    * @param offset Zero-based pagination offset.
    * @throws Error if the request fails
    */
-  async getConversations(filter?: string, limit?: number, offset?: number) {
+  async getConversations(
+    filter?: string,
+    limit?: number,
+    offset?: number
+  ): Promise<unknown> {
     const conversationPath = `${this.basePath}/conversation`;
     const queryParams = this.buildConversationQueryParams(filter, limit, offset);
     return await getWithContextError(
@@ -75,7 +79,7 @@ export class MessageApi {
    * @param conversationId Conversation identifier.
    * @throws Error if required parameters are missing or invalid
    */
-  async getConversation(conversationId: string) {
+  async getConversation(conversationId: string): Promise<unknown> {
     assertRequiredString(conversationId, 'conversationId');
     return await getPathWithContextError(
       this.client,
@@ -89,7 +93,7 @@ export class MessageApi {
    * Endpoint: POST /send_message
    * @throws Error if required parameters are missing or invalid
    */
-  async sendMessage(messageData: Record<string, unknown>) {
+  async sendMessage(messageData: Record<string, unknown>): Promise<unknown> {
     if (!messageData || typeof messageData !== 'object') {
       throw new Error('messageData is required and must be an object');
     }
@@ -108,7 +112,7 @@ export class MessageApi {
    * Endpoint: POST /update_conversation
    * @throws Error if required parameters are missing or invalid
    */
-  async updateConversation(updateData: Record<string, unknown>) {
+  async updateConversation(updateData: Record<string, unknown>): Promise<unknown> {
     if (!updateData || typeof updateData !== 'object') {
       throw new Error('updateData is required and must be an object');
     }
@@ -126,7 +130,7 @@ export class MessageApi {
    * Search for messages
    * @deprecated Use getConversations() instead
    */
-  async searchMessages(filter?: string, limit?: number, offset?: number) {
+  async searchMessages(filter?: string, limit?: number, offset?: number): Promise<unknown> {
     return await this.getConversations(filter, limit, offset);
   }
 
@@ -134,7 +138,7 @@ export class MessageApi {
    * Get a specific message
    * @deprecated Use getConversation() instead
    */
-  async getMessage(messageId: string) {
+  async getMessage(messageId: string): Promise<unknown> {
     return await this.getConversation(messageId);
   }
 
@@ -142,7 +146,7 @@ export class MessageApi {
    * Reply to a message
    * @deprecated Use sendMessage() instead
    */
-  async replyToMessage(messageId: string, messageContent: string) {
+  async replyToMessage(messageId: string, messageContent: string): Promise<unknown> {
     return await this.sendMessage({
       conversation_id: messageId,
       message_content: messageContent,

@@ -44,7 +44,10 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_automotive_parts_compatibility_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getAutomotivePartsCompatibilityPolicies(marketplaceId: string, filter?: string) {
+  async getAutomotivePartsCompatibilityPolicies(
+    marketplaceId: string,
+    filter?: string
+  ): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_automotive_parts_compatibility_policies',
       marketplaceId,
@@ -58,7 +61,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_category_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getCategoryPolicies(marketplaceId: string, filter?: string) {
+  async getCategoryPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_category_policies',
       marketplaceId,
@@ -72,7 +75,10 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_extended_producer_responsibility_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getExtendedProducerResponsibilityPolicies(marketplaceId: string, filter?: string) {
+  async getExtendedProducerResponsibilityPolicies(
+    marketplaceId: string,
+    filter?: string
+  ): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_extended_producer_responsibility_policies',
       marketplaceId,
@@ -86,7 +92,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_hazardous_materials_labels
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getHazardousMaterialsLabels(marketplaceId: string) {
+  async getHazardousMaterialsLabels(marketplaceId: string): Promise<unknown> {
     return await this.getMarketplacePolicy(
       'get_hazardous_materials_labels',
       marketplaceId,
@@ -99,7 +105,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_item_condition_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getItemConditionPolicies(marketplaceId: string, filter?: string) {
+  async getItemConditionPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_item_condition_policies',
       marketplaceId,
@@ -113,7 +119,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_listing_structure_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getListingStructurePolicies(marketplaceId: string, filter?: string) {
+  async getListingStructurePolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_listing_structure_policies',
       marketplaceId,
@@ -127,7 +133,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_negotiated_price_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getNegotiatedPricePolicies(marketplaceId: string, filter?: string) {
+  async getNegotiatedPricePolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_negotiated_price_policies',
       marketplaceId,
@@ -141,7 +147,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_product_safety_labels
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getProductSafetyLabels(marketplaceId: string) {
+  async getProductSafetyLabels(marketplaceId: string): Promise<unknown> {
     return await this.getMarketplacePolicy(
       'get_product_safety_labels',
       marketplaceId,
@@ -154,7 +160,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_regulatory_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getRegulatoryPolicies(marketplaceId: string, filter?: string) {
+  async getRegulatoryPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_regulatory_policies',
       marketplaceId,
@@ -168,7 +174,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_return_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getReturnPolicies(marketplaceId: string, filter?: string) {
+  async getReturnPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_return_policies',
       marketplaceId,
@@ -182,7 +188,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_shipping_cost_type_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getShippingCostTypePolicies(marketplaceId: string, filter?: string) {
+  async getShippingCostTypePolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_shipping_cost_type_policies',
       marketplaceId,
@@ -196,7 +202,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_classified_ad_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getClassifiedAdPolicies(marketplaceId: string, filter?: string) {
+  async getClassifiedAdPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_classified_ad_policies',
       marketplaceId,
@@ -210,7 +216,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_currencies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getCurrencies(marketplaceId: string) {
+  async getCurrencies(marketplaceId: string): Promise<unknown> {
     return await this.getMarketplacePolicy(
       'get_currencies',
       marketplaceId,
@@ -223,7 +229,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_listing_type_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getListingTypePolicies(marketplaceId: string, filter?: string) {
+  async getListingTypePolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_listing_type_policies',
       marketplaceId,
@@ -237,7 +243,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_motors_listing_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getMotorsListingPolicies(marketplaceId: string, filter?: string) {
+  async getMotorsListingPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_motors_listing_policies',
       marketplaceId,
@@ -251,7 +257,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_shipping_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getShippingPolicies(marketplaceId: string, filter?: string) {
+  async getShippingPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_shipping_policies',
       marketplaceId,
@@ -265,7 +271,7 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_site_visibility_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getSiteVisibilityPolicies(marketplaceId: string, filter?: string) {
+  async getSiteVisibilityPolicies(marketplaceId: string, filter?: string): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_site_visibility_policies',
       marketplaceId,
@@ -279,7 +285,9 @@ export class MetadataApi {
    * Endpoint: POST /compatibilities/get_compatibilities_by_specification
    * @throws Error if specification is missing or invalid
    */
-  async getCompatibilitiesBySpecification(specification: Record<string, unknown>) {
+  async getCompatibilitiesBySpecification(
+    specification: Record<string, unknown>
+  ): Promise<unknown> {
     requireObject(specification, 'specification');
 
     return await withApiError('Failed to get compatibilities by specification', () =>
@@ -295,7 +303,7 @@ export class MetadataApi {
    * Endpoint: POST /compatibilities/get_compatibility_property_names
    * @throws Error if request data is missing or invalid
    */
-  async getCompatibilityPropertyNames(data: Record<string, unknown>) {
+  async getCompatibilityPropertyNames(data: Record<string, unknown>): Promise<unknown> {
     requireObject(data, 'data');
 
     return await withApiError('Failed to get compatibility property names', () =>
@@ -308,7 +316,7 @@ export class MetadataApi {
    * Endpoint: POST /compatibilities/get_compatibility_property_values
    * @throws Error if request data is missing or invalid
    */
-  async getCompatibilityPropertyValues(data: Record<string, unknown>) {
+  async getCompatibilityPropertyValues(data: Record<string, unknown>): Promise<unknown> {
     requireObject(data, 'data');
 
     return await withApiError('Failed to get compatibility property values', () =>
@@ -321,7 +329,7 @@ export class MetadataApi {
    * Endpoint: POST /compatibilities/get_multi_compatibility_property_values
    * @throws Error if request data is missing or invalid
    */
-  async getMultiCompatibilityPropertyValues(data: Record<string, unknown>) {
+  async getMultiCompatibilityPropertyValues(data: Record<string, unknown>): Promise<unknown> {
     requireObject(data, 'data');
 
     return await withApiError('Failed to get multi compatibility property values', () =>
@@ -337,7 +345,7 @@ export class MetadataApi {
    * Endpoint: POST /compatibilities/get_product_compatibilities
    * @throws Error if request data is missing or invalid
    */
-  async getProductCompatibilities(data: Record<string, unknown>) {
+  async getProductCompatibilities(data: Record<string, unknown>): Promise<unknown> {
     requireObject(data, 'data');
 
     return await withApiError('Failed to get product compatibilities', () =>
@@ -350,7 +358,7 @@ export class MetadataApi {
    * Endpoint: GET /country/{countryCode}/sales_tax_jurisdiction
    * @throws Error if countryCode is missing or invalid
    */
-  async getSalesTaxJurisdictions(countryCode: string) {
+  async getSalesTaxJurisdictions(countryCode: string): Promise<unknown> {
     requireString(countryCode, 'countryCode');
 
     return await withApiError('Failed to get sales tax jurisdictions', () =>
@@ -363,7 +371,10 @@ export class MetadataApi {
    * Endpoint: GET /marketplace/{marketplace_id}/get_product_compliance_policies
    * @throws Error if marketplaceId is missing or invalid
    */
-  async getProductCompliancePolicies(marketplaceId: string, filter?: string) {
+  async getProductCompliancePolicies(
+    marketplaceId: string,
+    filter?: string
+  ): Promise<unknown> {
     return await this.getFilteredMarketplacePolicy(
       'get_product_compliance_policies',
       marketplaceId,

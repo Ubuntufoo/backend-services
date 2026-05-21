@@ -26,8 +26,8 @@ export class RecommendationApi {
   ): Promise<PagedListingRecommendationCollection> {
     const params: Record<string, string | number> = {};
     if (filter) params.filter = filter;
-    if (limit) params.limit = limit;
-    if (offset) params.offset = offset;
+    if (limit !== undefined) params.limit = limit;
+    if (offset !== undefined) params.offset = offset;
 
     const headers: Record<string, string> = {};
     if (marketplaceId) {
@@ -36,7 +36,7 @@ export class RecommendationApi {
 
     return await this.client.post<PagedListingRecommendationCollection>(
       `${this.basePath}/find`,
-      requestBody || {},
+      requestBody ?? {},
       {
         params,
         headers,

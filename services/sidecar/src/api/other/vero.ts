@@ -13,21 +13,21 @@ export class VeroApi {
   /**
    * Create a VERO report to report intellectual property infringement
    */
-  async createVeroReport(reportData: Record<string, unknown>) {
+  async createVeroReport(reportData: Record<string, unknown>): Promise<unknown> {
     return await this.client.post(`${this.basePath}/vero_report`, reportData);
   }
 
   /**
    * Get a specific VERO report by ID
    */
-  async getVeroReport(veroReportId: string) {
+  async getVeroReport(veroReportId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/vero_report/${veroReportId}`);
   }
 
   /**
    * Get VERO report items (listings reported for infringement)
    */
-  async getVeroReportItems(filter?: string, limit?: number, offset?: number) {
+  async getVeroReportItems(filter?: string, limit?: number, offset?: number): Promise<unknown> {
     const params = buildTruthyPaginatedParams(filter, limit, offset);
     return await this.client.get(`${this.basePath}/vero_report_items`, params);
   }
@@ -35,14 +35,14 @@ export class VeroApi {
   /**
    * Get a specific VERO reason code by ID
    */
-  async getVeroReasonCode(veroReasonCodeId: string) {
+  async getVeroReasonCode(veroReasonCodeId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/vero_reason_code/${veroReasonCodeId}`);
   }
 
   /**
    * Get all available VERO reason codes
    */
-  async getVeroReasonCodes() {
+  async getVeroReasonCodes(): Promise<unknown> {
     return await this.client.get(`${this.basePath}/vero_reason_code`);
   }
 }

@@ -12,7 +12,12 @@ export class TranslationApi {
   /**
    * Translate listing text
    */
-  async translate(from: string, to: string, translationContext: string, text: string[]) {
+  async translate(
+    from: string,
+    to: string,
+    translationContext: string,
+    text: string[]
+  ): Promise<unknown> {
     return await this.client.post(`${this.basePath}/translate`, {
       from,
       to,
