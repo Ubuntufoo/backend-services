@@ -141,6 +141,20 @@ async function rollbackMovedFiles(
   }
 }
 
+export async function rollbackProcessedListingMove(
+  moveResult: ProcessedImageMoveResult,
+  fileSystem: ProcessedImageMoveFileSystem = DEFAULT_PROCESSED_IMAGE_MOVE_FILE_SYSTEM
+): Promise<void> {
+  try {
+    await rollbackMovedFiles(moveResult.images, fileSystem);
+    await removeDirectoryIfEmpty(moveResult.processedDirectory, fileSystem);
+  } catch (error) {
+    throw new Error(
+      `Processed listing rollback failed for ${moveResult.listingId}: ${getErrorMessage(error)}.`
+    );
+  }
+}
+
 export async function moveGroupedImagesToProcessedListing(
   input: ProcessedImageMoveInput,
   fileSystem: ProcessedImageMoveFileSystem = DEFAULT_PROCESSED_IMAGE_MOVE_FILE_SYSTEM

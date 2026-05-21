@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ListingRow } from '@ebay-inventory/data';
 
 import {
   consumeImageGrouping,
   createProcessIncomingImageBatchDependencies,
   processIncomingImageBatch,
+  WATCHER_LISTING_INSERT_MAX_ATTEMPTS,
   type ProcessedImageMoveFileSystem,
   type ProcessedImageMoveInput,
   type ProcessedImageMoveResult,
@@ -34,6 +36,75 @@ function createMoveResult(input: ProcessedImageMoveInput): ProcessedImageMoveRes
     listingId: input.listingId,
     processedDirectory: path.join(input.processedDirectory, input.listingId),
     images: createMovedImageRecords(input),
+  };
+}
+
+function createListingRow(result: ProcessedImageMoveResult, captureMode: WatcherCaptureMode): ListingRow {
+  return {
+    approved_for_export_at: null,
+    capture_mode: captureMode,
+    category_id: null,
+    condition_id: null,
+    condition_notes: null,
+    created_at: '2026-05-21T00:00:00.000Z',
+    description: null,
+    ebay_listing_id: null,
+    ebay_listing_status: null,
+    ebay_listing_url: null,
+    ebay_offer_id: null,
+    ese_eligible: null,
+    estimated_weight_oz: null,
+    exported_at: null,
+    generated_at: null,
+    handling_days: null,
+    id: `row-${result.listingId}`,
+    image_urls: result.images.map((image) => image.processedPath),
+    item_specifics: {},
+    last_error_at: null,
+    last_error_code: null,
+    last_error_context: {},
+    last_error_message: null,
+    listing_id: result.listingId,
+    listing_type: captureMode.startsWith('lot') ? 'lot' : 'single',
+    merchant_location_key: null,
+    package_type: null,
+    price: null,
+    r2_delete_after: null,
+    r2_deleted_at: null,
+    r2_object_keys: [],
+    r2_retention_policy: null,
+    seller_hints: null,
+    shipping_profile: null,
+    sku: null,
+    sold_at: null,
+    status: 'record_created',
+    sub_status: 'idle',
+    title: null,
+    updated_at: '2026-05-21T00:00:00.000Z',
+  };
+}
+
+function createDependencies(overrides: Partial<Parameters<typeof processIncomingImageBatch>[1]> = {}) {
+  const moveGroupedImagesToProcessedListing = vi.fn(async (input: ProcessedImageMoveInput) =>
+    createMoveResult(input)
+  );
+  const createWatcherListing = vi.fn(async (input) =>
+    createListingRow(createMoveResult({
+      listingId: input.listingId,
+      processedDirectory: '/processed',
+      images: input.images.map((image) => ({ path: image.processedPath })),
+    }), input.captureMode)
+  );
+
+  return {
+    getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image' as const),
+    consumeImageGrouping,
+    allocateNextListingId: vi.fn(async () => 'Single-000001'),
+    createWatcherListing,
+    isWatcherListingCollision: vi.fn(() => false),
+    moveGroupedImagesToProcessedListing,
+    rollbackProcessedListingMove: vi.fn(async () => undefined),
+    ...overrides,
   };
 }
 
@@ -84,10 +155,10 @@ describe('processIncomingImageBatch', () => {
         processedDirectory: '/processed',
       },
       {
-        getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-        consumeImageGrouping,
-        allocateNextListingId,
-        moveGroupedImagesToProcessedListing,
+        ...createDependencies({
+          allocateNextListingId,
+          moveGroupedImagesToProcessedListing,
+        }),
       }
     );
 
@@ -114,10 +185,11 @@ describe('processIncomingImageBatch', () => {
         processedDirectory: '/processed',
       },
       {
-        getActiveWatcherCaptureMode,
-        consumeImageGrouping,
-        allocateNextListingId,
-        moveGroupedImagesToProcessedListing,
+        ...createDependencies({
+          getActiveWatcherCaptureMode,
+          allocateNextListingId,
+          moveGroupedImagesToProcessedListing,
+        }),
       }
     );
 
@@ -139,6 +211,15 @@ describe('processIncomingImageBatch', () => {
       },
       listingIdRepository: {
         getLatestByPrefix: vi.fn(async () => null),
+      },
+      watcherListingRepository: {
+        createWatcherListing: vi.fn(async (input) =>
+          createListingRow(createMoveResult({
+            listingId: input.listingId,
+            processedDirectory: processedRoot,
+            images: input.images.map((image) => ({ path: image.processedPath })),
+          }), input.captureMode)
+        ),
       },
     });
 
@@ -177,6 +258,15 @@ describe('processIncomingImageBatch', () => {
               extension: '.png',
             },
           ],
+          listing: expect.objectContaining({
+            listing_id: 'Single-000001',
+            capture_mode: 'single_2_image',
+            image_urls: [
+              path.join(processedRoot, 'Single-000001', 'Single-000001_01.jpg'),
+              path.join(processedRoot, 'Single-000001', 'Single-000001_02.png'),
+            ],
+            status: 'record_created',
+          }),
         },
       ],
       groupingState: {
@@ -202,17 +292,24 @@ describe('processIncomingImageBatch', () => {
       return createMoveResult(input);
     });
 
+    const createWatcherListing = vi.fn(async (input) => {
+      callOrder.push(`insert:${input.listingId}`);
+      return createListingRow(createMoveResult({
+        listingId: input.listingId,
+        processedDirectory: '/processed',
+        images: input.images.map((image) => ({ path: image.processedPath })),
+      }), input.captureMode);
+    });
     const batchPromise = processIncomingImageBatch(
       {
         incoming: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
         processedDirectory: '/processed',
       },
-      {
-        getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-        consumeImageGrouping,
+      createDependencies({
         allocateNextListingId: vi.fn(async () => 'Single-000001'),
         moveGroupedImagesToProcessedListing,
-      }
+        createWatcherListing,
+      })
     );
 
     await vi.waitFor(() => {
@@ -227,8 +324,10 @@ describe('processIncomingImageBatch', () => {
     expect(callOrder).toEqual([
       'start:Single-000001',
       'finish:Single-000001',
+      'insert:Single-000001',
       'start:Single-000002',
       'finish:Single-000002',
+      'insert:Single-000002',
     ]);
     expect(result.processedListings.map((listing) => listing.listingId)).toEqual([
       'Single-000001',
@@ -245,14 +344,7 @@ describe('processIncomingImageBatch', () => {
           pending: [{ path: 'z.jpg' }],
         },
       },
-      {
-        getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-        consumeImageGrouping,
-        allocateNextListingId: vi.fn(async () => 'Single-000001'),
-        moveGroupedImagesToProcessedListing: vi.fn(async (input: ProcessedImageMoveInput) =>
-          createMoveResult(input)
-        ),
-      }
+      createDependencies()
     );
 
     expect(result.processedListings).toHaveLength(1);
@@ -274,14 +366,7 @@ describe('processIncomingImageBatch', () => {
         processedDirectory: '/processed',
         groupingState,
       },
-      {
-        getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-        consumeImageGrouping,
-        allocateNextListingId: vi.fn(async () => 'Single-000001'),
-        moveGroupedImagesToProcessedListing: vi.fn(async (input: ProcessedImageMoveInput) =>
-          createMoveResult(input)
-        ),
-      }
+      createDependencies()
     );
 
     expect(groupingState).toEqual({
@@ -297,14 +382,7 @@ describe('processIncomingImageBatch', () => {
         incoming: ['a.jpg', 'skip.gif', 'b.png'],
         processedDirectory: '/processed',
       },
-      {
-        getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-        consumeImageGrouping,
-        allocateNextListingId: vi.fn(async () => 'Single-000001'),
-        moveGroupedImagesToProcessedListing: vi.fn(async (input: ProcessedImageMoveInput) =>
-          createMoveResult(input)
-        ),
-      }
+      createDependencies()
     );
 
     expect(result.processedListings[0].images.map((image) => image.sourcePath)).toEqual([
@@ -324,14 +402,12 @@ describe('processIncomingImageBatch', () => {
           incoming: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
           processedDirectory: '/processed',
         },
-        {
-          getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-          consumeImageGrouping,
+        createDependencies({
           allocateNextListingId: vi.fn(async () => {
             throw new Error('listing allocation failed');
           }),
           moveGroupedImagesToProcessedListing,
-        }
+        })
       )
     ).rejects.toThrow('listing allocation failed');
 
@@ -353,26 +429,34 @@ describe('processIncomingImageBatch', () => {
           incoming: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
           processedDirectory: '/processed',
         },
-        {
-          getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-          consumeImageGrouping,
+        createDependencies({
           allocateNextListingId: vi.fn(async () => 'Single-000001'),
           moveGroupedImagesToProcessedListing,
-        }
+        })
       )
     ).rejects.toThrow('processed move failed');
 
     expect(moveGroupedImagesToProcessedListing).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps earlier group side effects intact when a later group move fails', async () => {
+  it('keeps earlier group side effects intact when a later group insert fails', async () => {
     const { incomingDirectory, processedRoot } = await createTempLayout();
     const first = writeSourceFile(incomingDirectory, 'one.jpg');
     const second = writeSourceFile(incomingDirectory, 'two.jpg');
     const third = writeSourceFile(incomingDirectory, 'three.jpg');
     const fourth = writeSourceFile(incomingDirectory, 'four.jpg');
+    const createWatcherListing = vi
+      .fn(async (input) => {
+        if (input.listingId === 'Single-000002') {
+          throw new Error('db offline');
+        }
 
-    mkdirSync(path.join(processedRoot, 'Single-000002'));
+        return createListingRow(createMoveResult({
+          listingId: input.listingId,
+          processedDirectory: processedRoot,
+          images: input.images.map((image) => ({ path: image.processedPath })),
+        }), input.captureMode);
+      });
 
     await expect(
       processIncomingImageBatch(
@@ -387,14 +471,12 @@ describe('processIncomingImageBatch', () => {
           listingIdRepository: {
             getLatestByPrefix: vi.fn(async () => null),
           },
+          watcherListingRepository: {
+            createWatcherListing,
+          },
         })
       )
-    ).rejects.toThrow(
-      `Processed listing directory already exists and cannot be reused: ${path.join(
-        processedRoot,
-        'Single-000002'
-      )}.`
-    );
+    ).rejects.toThrow('db offline');
 
     await expect(
       fsPromises.readFile(
@@ -412,6 +494,9 @@ describe('processIncomingImageBatch', () => {
     await expect(fsPromises.access(second)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fsPromises.readFile(third, 'utf-8')).resolves.toBe('three.jpg');
     await expect(fsPromises.readFile(fourth, 'utf-8')).resolves.toBe('four.jpg');
+    await expect(
+      fsPromises.access(path.join(processedRoot, 'Single-000002'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('returns updated grouping state for mixed complete and incomplete input', async () => {
@@ -423,14 +508,7 @@ describe('processIncomingImageBatch', () => {
           pending: [{ path: 'z.jpg' }],
         },
       },
-      {
-        getActiveWatcherCaptureMode: vi.fn(async () => 'single_2_image'),
-        consumeImageGrouping,
-        allocateNextListingId: vi.fn(async () => 'Single-000001'),
-        moveGroupedImagesToProcessedListing: vi.fn(async (input: ProcessedImageMoveInput) =>
-          createMoveResult(input)
-        ),
-      }
+      createDependencies()
     );
 
     expect(result.groupingState).toEqual({
@@ -460,6 +538,15 @@ describe('processIncomingImageBatch', () => {
     const dependencies = createProcessIncomingImageBatchDependencies({
       appSettingsRepository,
       listingIdRepository,
+      watcherListingRepository: {
+        createWatcherListing: vi.fn(async (input) =>
+          createListingRow(createMoveResult({
+            listingId: input.listingId,
+            processedDirectory: '/processed',
+            images: input.images.map((image) => ({ path: image.processedPath })),
+          }), input.captureMode)
+        ),
+      },
       fileSystem,
     });
 
@@ -486,5 +573,117 @@ describe('processIncomingImageBatch', () => {
       '/incoming/b.png',
       '/processed/Single-000001/Single-000001_02.png'
     );
+  });
+
+  it('retries unique collisions with fresh listing_id and fresh processed folder', async () => {
+    const { incomingDirectory, processedRoot } = await createTempLayout();
+    const first = writeSourceFile(incomingDirectory, 'one.jpg');
+    const second = writeSourceFile(incomingDirectory, 'two.jpg');
+    const createWatcherListing = vi
+      .fn()
+      .mockRejectedValueOnce({
+        code: '23505',
+        message: 'duplicate key value violates unique constraint "listings_listing_id_key"',
+      })
+      .mockImplementationOnce(async (input) =>
+        createListingRow(createMoveResult({
+          listingId: input.listingId,
+          processedDirectory: processedRoot,
+          images: input.images.map((image) => ({ path: image.processedPath })),
+        }), input.captureMode)
+      );
+
+    const result = await processIncomingImageBatch(
+      {
+        incoming: [first, second],
+        processedDirectory: processedRoot,
+      },
+      createProcessIncomingImageBatchDependencies({
+        appSettingsRepository: {
+          get: vi.fn(async () => ({ capture_mode: 'single_2_image' } as never)),
+        },
+        listingIdRepository: {
+          getLatestByPrefix: vi.fn(async () => null),
+        },
+        watcherListingRepository: {
+          createWatcherListing,
+        },
+      })
+    );
+
+    expect(createWatcherListing).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ listingId: 'Single-000001' })
+    );
+    expect(createWatcherListing).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ listingId: 'Single-000002' })
+    );
+    expect(result.processedListings[0].listingId).toBe('Single-000002');
+    await expect(
+      fsPromises.access(path.join(processedRoot, 'Single-000001'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      fsPromises.readFile(
+        path.join(processedRoot, 'Single-000002', 'Single-000002_01.jpg'),
+        'utf-8'
+      )
+    ).resolves.toBe('one.jpg');
+  });
+
+  it('fails loudly at retry cap after repeated listing_id collisions', async () => {
+    const collisionError = {
+      code: '23505',
+      message: 'duplicate key value violates unique constraint "listings_listing_id_key"',
+    };
+
+    await expect(
+      processIncomingImageBatch(
+        {
+          incoming: ['a.jpg', 'b.jpg'],
+          processedDirectory: '/processed',
+        },
+        createDependencies({
+          createWatcherListing: vi.fn(async () => {
+            throw collisionError;
+          }),
+          isWatcherListingCollision: vi.fn((error) => error === collisionError),
+        })
+      )
+    ).rejects.toThrow(`Watcher listing insert hit retry cap (${WATCHER_LISTING_INSERT_MAX_ATTEMPTS})`);
+  });
+
+  it('rolls back processed folder before bubbling non-unique insert errors', async () => {
+    const { incomingDirectory, processedRoot } = await createTempLayout();
+    const first = writeSourceFile(incomingDirectory, 'one.jpg');
+    const second = writeSourceFile(incomingDirectory, 'two.jpg');
+
+    await expect(
+      processIncomingImageBatch(
+        {
+          incoming: [first, second],
+          processedDirectory: processedRoot,
+        },
+        createProcessIncomingImageBatchDependencies({
+          appSettingsRepository: {
+            get: vi.fn(async () => ({ capture_mode: 'single_2_image' } as never)),
+          },
+          listingIdRepository: {
+            getLatestByPrefix: vi.fn(async () => null),
+          },
+          watcherListingRepository: {
+            createWatcherListing: vi.fn(async () => {
+              throw new Error('db offline');
+            }),
+          },
+        })
+      )
+    ).rejects.toThrow('db offline');
+
+    await expect(fsPromises.readFile(first, 'utf-8')).resolves.toBe('one.jpg');
+    await expect(fsPromises.readFile(second, 'utf-8')).resolves.toBe('two.jpg');
+    await expect(
+      fsPromises.access(path.join(processedRoot, 'Single-000001'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
