@@ -73,25 +73,25 @@ export class TradingApi {
           : undefined;
       const priceValue =
         typeof currentPrice === 'object' && currentPrice !== null
-          ? Number(currentPrice['#text'] || 0)
-          : Number(currentPrice || 0);
+          ? Number(currentPrice['#text'] ?? 0)
+          : Number(currentPrice ?? 0);
 
       return {
         itemId: stringValue(item.ItemID),
         title: stringValue(item.Title),
         sku: stringValue(item.SKU),
-        quantity: Number(item.Quantity || 0),
-        quantityAvailable: Number(item.QuantityAvailable || 0),
+        quantity: Number(item.Quantity ?? 0),
+        quantityAvailable: Number(item.QuantityAvailable ?? 0),
         currentPrice: priceValue,
-        watchCount: Number(item.WatchCount || 0),
+        watchCount: Number(item.WatchCount ?? 0),
         listingType: stringValue(item.ListingType),
       };
     });
 
     return {
       listings,
-      total: Number(pagination?.TotalNumberOfEntries || 0),
-      totalPages: Number(pagination?.TotalNumberOfPages || 0),
+      total: Number(pagination?.TotalNumberOfEntries ?? 0),
+      totalPages: Number(pagination?.TotalNumberOfPages ?? 0),
     };
   }
 
@@ -107,7 +107,7 @@ export class TradingApi {
     });
 
     const items = asRecordArray(result.Item);
-    return items?.[0] || result;
+    return items?.[0] ?? result;
   }
 
   /**

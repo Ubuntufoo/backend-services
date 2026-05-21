@@ -187,6 +187,7 @@ const getTrafficReportInputSchema = z.object({
 /**
  * Convert Zod schemas to JSON Schema format for MCP tools
  */
+/* eslint-disable-next-line @typescript-eslint/explicit-function-return-type */
 export function getAnalyticsJsonSchemas() {
   return {
     // Customer Service Metrics

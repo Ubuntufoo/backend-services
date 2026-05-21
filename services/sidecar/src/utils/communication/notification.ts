@@ -26,7 +26,7 @@ const continuationTokenSchema = z
   .optional();
 
 // Reusable schema for object data parameters
-const _objectDataSchema = (name: string, description: string) =>
+const _objectDataSchema = (name: string, description: string): z.ZodRecord<z.ZodString, z.ZodUnknown> =>
   z.record(z.unknown(), {
     message: `${name} is required`,
     required_error: `${name.toLowerCase().replace(/\s+/g, '_')} is required`,

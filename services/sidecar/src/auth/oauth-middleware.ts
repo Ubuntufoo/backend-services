@@ -38,7 +38,7 @@ export interface BearerAuthMiddlewareConfig {
  * Create Bearer token authentication middleware
  */
 export function createBearerAuthMiddleware(config: BearerAuthMiddlewareConfig) {
-  const realm = config.realm || 'mcp';
+  const realm = config.realm ?? 'mcp';
 
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -97,6 +97,7 @@ function sendUnauthorized(
   resourceMetadataUrl: string,
   challenge: {
     error?: string;
+    /* eslint-disable-next-line @typescript-eslint/naming-convention -- RFC 6750 field name */
     error_description?: string;
     scope?: string;
   }
@@ -118,8 +119,8 @@ function sendUnauthorized(
 
   res.setHeader('WWW-Authenticate', authenticateValue);
   res.status(401).json({
-    error: challenge.error || 'unauthorized',
-    error_description: challenge.error_description || 'Authorization required',
+    error: challenge.error ?? 'unauthorized',
+    error_description: challenge.error_description ?? 'Authorization required',
   });
 }
 

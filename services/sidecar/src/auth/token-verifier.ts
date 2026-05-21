@@ -12,6 +12,27 @@ import type {
   OAuthServerMetadata,
 } from './oauth-types.js';
 
+interface OAuthErrorResponse {
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- OAuth error field name */
+  error_description?: string;
+}
+
+const formatAudience = (audience: string | string[] | undefined): string => {
+  if (Array.isArray(audience)) {
+    return audience.join(', ');
+  }
+
+  return audience ?? 'unknown';
+};
+
+const getAxiosErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError<OAuthErrorResponse>(error)) {
+    return error.response?.data?.error_description ?? error.message;
+  }
+
+  return error instanceof Error ? error.message : String(error);
+};
+
 /**
  * OAuth issuer and audience settings used to validate MCP access tokens.
  */
@@ -145,7 +166,7 @@ export class TokenVerifier {
       // Validate audience
       if (!this.validateAudience(data.aud)) {
         throw new Error(
-          `Invalid audience. Expected: ${this.config.expectedAudience}, Got: ${data.aud}`
+          `Invalid audience. Expected: ${this.config.expectedAudience}, Got: ${formatAudience(data.aud)}`
         );
       }
 
@@ -164,7 +185,7 @@ export class TokenVerifier {
 
       return {
         token,
-        clientId: data.client_id || 'unknown',
+        clientId: data.client_id ?? 'unknown',
         scopes,
         expiresAt: data.exp,
         audience: data.aud,
@@ -172,9 +193,7 @@ export class TokenVerifier {
       };
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        throw new Error(
-          `Token introspection failed: ${error.response?.data?.error_description || error.message}`
-        );
+        throw new Error(`Token introspection failed: ${getAxiosErrorMessage(error)}`);
       }
       throw error;
     }
@@ -207,7 +226,7 @@ export class TokenVerifier {
         typeof payload.scope === 'string'
           ? payload.scope.split(' ')
           : Array.isArray(payload.scope)
-            ? payload.scope
+            ? payload.scope.filter((scope): scope is string => typeof scope === 'string')
             : [];
 
       // Validate required scopes

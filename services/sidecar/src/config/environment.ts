@@ -69,9 +69,18 @@ export function isEbayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 
 // Type for scope JSON structure
 interface ScopeDefinition {
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- scope docs use PascalCase keys */
   Scope: string;
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- scope docs use PascalCase keys */
   Description: string;
 }
+
+const scopeDefinitionSchema = z.array(
+  z.object({
+    Scope: z.string().optional(),
+    Description: z.string().optional(),
+  })
+);
 
 /**
  * Load and parse production scopes from JSON file
@@ -80,7 +89,7 @@ function getProductionScopes(): string[] {
   try {
     const scopesPath = join(repoRoot, 'docs/auth/production_scopes.json');
     const scopesData = readFileSync(scopesPath, 'utf-8');
-    const scopes: ScopeDefinition[] = JSON.parse(scopesData);
+    const scopes = scopeDefinitionSchema.parse(JSON.parse(scopesData) as unknown) as ScopeDefinition[];
 
     // Filter out empty objects and extract unique scope strings
     const uniqueScopes = new Set<string>();
@@ -104,7 +113,7 @@ function getSandboxScopes(): string[] {
   try {
     const scopesPath = join(repoRoot, 'docs/auth/sandbox_scopes.json');
     const scopesData = readFileSync(scopesPath, 'utf-8');
-    const scopes: ScopeDefinition[] = JSON.parse(scopesData);
+    const scopes = scopeDefinitionSchema.parse(JSON.parse(scopesData) as unknown) as ScopeDefinition[];
 
     // Filter out empty objects and extract unique scope strings
     const uniqueScopes = new Set<string>();
@@ -348,7 +357,7 @@ export function getAuthUrl(
 
   const authBase = env === 'production' ? 'https://auth.ebay.com' : 'https://auth.sandbox.ebay.com';
 
-  const scopeList = scopes?.join('%20') || scope.join('%20');
+  const scopeList = scopes?.join('%20') ?? scope.join('%20');
 
   const authorizeParams = new URLSearchParams({
     client_id: clientId,

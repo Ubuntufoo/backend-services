@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * Reusable schema builder for required string ID parameters.
  */
-export function idSchema(name: string, description: string) {
+export function idSchema(name: string, description: string): z.ZodString {
   const normalized = name.toLowerCase().replace(/\s+/g, '_');
 
   return z.string({

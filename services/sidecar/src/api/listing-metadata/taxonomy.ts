@@ -12,7 +12,7 @@ export class TaxonomyApi {
   /**
    * Get the default category tree ID for a marketplace
    */
-  async getDefaultCategoryTreeId(marketplaceId: string) {
+  async getDefaultCategoryTreeId(marketplaceId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/get_default_category_tree_id`, {
       marketplace_id: marketplaceId,
     });
@@ -21,14 +21,14 @@ export class TaxonomyApi {
   /**
    * Get category tree
    */
-  async getCategoryTree(categoryTreeId: string) {
+  async getCategoryTree(categoryTreeId: string): Promise<unknown> {
     return await this.client.get(`${this.basePath}/category_tree/${categoryTreeId}`);
   }
 
   /**
    * Get category subtree
    */
-  async getCategorySubtree(categoryTreeId: string, categoryId: string) {
+  async getCategorySubtree(categoryTreeId: string, categoryId: string): Promise<unknown> {
     return await this.client.get(
       `${this.basePath}/category_tree/${categoryTreeId}/get_category_subtree`,
       { category_id: categoryId }
@@ -38,7 +38,7 @@ export class TaxonomyApi {
   /**
    * Get category suggestions
    */
-  async getCategorySuggestions(categoryTreeId: string, query: string) {
+  async getCategorySuggestions(categoryTreeId: string, query: string): Promise<unknown> {
     return await this.client.get(
       `${this.basePath}/category_tree/${categoryTreeId}/get_category_suggestions`,
       { q: query }
@@ -48,7 +48,10 @@ export class TaxonomyApi {
   /**
    * Get item aspects for category
    */
-  async getItemAspectsForCategory(categoryTreeId: string, categoryId: string) {
+  async getItemAspectsForCategory(
+    categoryTreeId: string,
+    categoryId: string
+  ): Promise<unknown> {
     return await this.client.get(
       `${this.basePath}/category_tree/${categoryTreeId}/get_item_aspects_for_category`,
       { category_id: categoryId }
@@ -58,7 +61,10 @@ export class TaxonomyApi {
   /**
    * Get compatibility properties
    */
-  async getCompatibilityProperties(categoryTreeId: string, categoryId: string) {
+  async getCompatibilityProperties(
+    categoryTreeId: string,
+    categoryId: string
+  ): Promise<unknown> {
     return await this.client.get(
       `${this.basePath}/category_tree/${categoryTreeId}/get_compatibility_properties`,
       { category_id: categoryId }
@@ -72,7 +78,7 @@ export class TaxonomyApi {
     categoryTreeId: string,
     categoryId: string,
     compatibilityProperty: string
-  ) {
+  ): Promise<unknown> {
     return await this.client.get(
       `${this.basePath}/category_tree/${categoryTreeId}/get_compatibility_property_values`,
       {

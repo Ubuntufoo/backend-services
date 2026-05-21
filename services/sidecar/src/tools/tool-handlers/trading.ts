@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for legacy Trading API listing, order, feedback, and dispute tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const tradingHandlers: ToolHandlerMap = {
   ebay_get_active_listings: async (api, args) => {
     return await api.trading.getActiveListings(

@@ -125,7 +125,7 @@ export class EbaySellerApi {
   /**
    * Get token information for debugging
    */
-  getTokenInfo() {
+  getTokenInfo(): ReturnType<EbayApiClient['getTokenInfo']> {
     return this.client.getTokenInfo();
   }
 }

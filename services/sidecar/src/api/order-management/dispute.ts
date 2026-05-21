@@ -12,6 +12,21 @@ type AddEvidencePaymentDisputeResponse = components['schemas']['AddEvidencePayme
 type UpdateEvidencePaymentDisputeRequest =
   components['schemas']['UpdateEvidencePaymentDisputeRequest'];
 
+interface PaymentDisputeSummaryParams extends Record<string, unknown> {
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- eBay query parameter name */
+  order_id?: string;
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- eBay query parameter name */
+  buyer_username?: string;
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- eBay query parameter name */
+  open_date_from?: string;
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- eBay query parameter name */
+  open_date_to?: string;
+  /* eslint-disable-next-line @typescript-eslint/naming-convention -- eBay query parameter name */
+  payment_dispute_status?: string;
+  limit?: number;
+  offset?: number;
+}
+
 /**
  * Dispute API - Manage payment disputes
  * Based on: docs/sell-apps/order-management/sell_fulfillment_v1_oas3.json
@@ -60,15 +75,9 @@ export class DisputeApi {
   /**
    * Search for payment disputes
    */
-  async getPaymentDisputeSummaries(params?: {
-    order_id?: string;
-    buyer_username?: string;
-    open_date_from?: string;
-    open_date_to?: string;
-    payment_dispute_status?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<DisputeSummaryResponse> {
+  async getPaymentDisputeSummaries(
+    params?: PaymentDisputeSummaryParams
+  ): Promise<DisputeSummaryResponse> {
     return await this.client.get<DisputeSummaryResponse>(
       `${this.basePath}/payment_dispute_summary`,
       params

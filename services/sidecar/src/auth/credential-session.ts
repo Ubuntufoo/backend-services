@@ -42,7 +42,9 @@ export class DotEnvCredentialStore implements CredentialStore {
     try {
       const envPath = this.getEnvPath();
       const existingEnv = existsSync(envPath) ? dotenv.parse(readFileSync(envPath, 'utf-8')) : {};
-      const safeEnvContent = stringify({ ...existingEnv, ...updates });
+      // `dotenv-stringify` ships loose typings; runtime output is a string env blob.
+      /* eslint-disable-next-line @typescript-eslint/no-unsafe-call */
+      const safeEnvContent = String(stringify({ ...existingEnv, ...updates }));
 
       writeFileSync(envPath, safeEnvContent, 'utf-8');
     } catch (_error) {
@@ -173,6 +175,7 @@ export function createStoredUserTokensFromResponse(
   });
 }
 
+/* eslint-disable-next-line @typescript-eslint/explicit-function-return-type */
 function tokenExpiry(expiry: number | null | undefined) {
   if (!expiry) {
     return 'Not available';
@@ -203,6 +206,7 @@ export interface CredentialDisplayInput {
 /**
  * Build redacted credential and token status data for auth diagnostics.
  */
+/* eslint-disable-next-line @typescript-eslint/explicit-function-return-type */
 export function buildCredentialDisplay(input: CredentialDisplayInput) {
   const { appAccessToken, appAccessTokenExpiry, authenticated, env, tokenInfo, userTokens } = input;
   const clientId = env.EBAY_CLIENT_ID ?? '';

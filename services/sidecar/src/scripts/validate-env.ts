@@ -45,5 +45,6 @@ try {
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
+  /* eslint-disable-next-line n/no-process-exit -- validation CLI should exit non-zero on failure */
   process.exit(1);
 }

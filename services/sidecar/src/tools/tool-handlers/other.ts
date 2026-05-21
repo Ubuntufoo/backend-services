@@ -1,6 +1,7 @@
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for miscellaneous eBay API tools. */
+/* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
 export const otherApiHandlers: ToolHandlerMap = {
   ebay_get_user: async (api, _args) => {
     return await api.identity.getUser();

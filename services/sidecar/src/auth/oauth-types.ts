@@ -2,6 +2,8 @@
  * OAuth 2.1 types for MCP server authorization
  */
 
+/* eslint-disable @typescript-eslint/naming-convention */
+
 /**
  * OAuth 2.0 Authorization Server Metadata (RFC 8414)
  */
@@ -69,3 +71,5 @@ export interface TokenIntrospectionResponse {
   iss?: string;
   jti?: string;
 }
+
+/* eslint-enable @typescript-eslint/naming-convention */

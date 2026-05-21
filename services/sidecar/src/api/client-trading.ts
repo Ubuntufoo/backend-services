@@ -7,6 +7,22 @@ import { isRecord } from '@/utils/type-guards.js';
 const COMPAT_LEVEL = '1451';
 const SITE_ID = '0';
 
+const getTradingErrorMessage = (error: unknown): string => {
+  if (!isRecord(error)) {
+    return 'Unknown Trading API error';
+  }
+
+  if (typeof error.ShortMessage === 'string') {
+    return error.ShortMessage;
+  }
+
+  if (typeof error.LongMessage === 'string') {
+    return error.LongMessage;
+  }
+
+  return 'Unknown Trading API error';
+};
+
 /**
  * XML-based client for eBay Trading API calls that are not covered by REST APIs.
  */
@@ -81,7 +97,7 @@ export class TradingApiClient {
 
     let response;
     try {
-      response = await axios.post(`${this.baseUrl}/ws/api.dll`, xmlBody, {
+      response = await axios.post<string>(`${this.baseUrl}/ws/api.dll`, xmlBody, {
         headers: {
           'X-EBAY-API-SITEID': SITE_ID,
           'X-EBAY-API-COMPATIBILITY-LEVEL': COMPAT_LEVEL,
@@ -98,7 +114,7 @@ export class TradingApiClient {
 
     let parsed: Record<string, unknown>;
     try {
-      const parsedValue = this.parser.parse(response.data);
+      const parsedValue: unknown = this.parser.parse(response.data);
       if (!isRecord(parsedValue)) {
         throw new Error('Trading API response must be an object');
       }
@@ -108,7 +124,7 @@ export class TradingApiClient {
         `Failed to parse Trading API ${callName} response: ${e instanceof Error ? e.message : String(e)}`
       );
     }
-    const resultValue = parsed[responseTag] || parsed;
+    const resultValue = parsed[responseTag] ?? parsed;
     if (!isRecord(resultValue)) {
       throw new Error(`Trading API ${callName} response payload is not an object`);
     }
@@ -123,11 +139,9 @@ export class TradingApiClient {
 
     // Check for eBay errors
     if (result.Ack === 'Failure' || result.Ack === 'PartialFailure') {
-      const errors = result.Errors;
-      const firstError = Array.isArray(errors) ? errors[0] : errors;
-      const message =
-        firstError?.ShortMessage || firstError?.LongMessage || 'Unknown Trading API error';
-      throw new Error(message);
+      const errors: unknown = result.Errors;
+      const firstError: unknown = Array.isArray(errors) ? errors[0] : errors;
+      throw new Error(getTradingErrorMessage(firstError));
     }
 
     return result;

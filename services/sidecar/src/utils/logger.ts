@@ -18,7 +18,11 @@ if (!existsSync(LOG_DIR)) {
  * Log level from environment variable or default to 'info'
  * Levels: error, warn, info, http, verbose, debug, silly
  */
-const LOG_LEVEL = process.env.EBAY_LOG_LEVEL || 'info';
+const LOG_LEVEL = process.env.EBAY_LOG_LEVEL ?? 'info';
+
+const stringifyLogValue = (value: unknown): string => {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+};
 
 /**
  * Whether to enable file logging (disabled in production MCP mode by default)
@@ -34,7 +38,7 @@ const consoleFormat = winston.format.combine(
   winston.format.printf(({ level, message, timestamp, stack, ...meta }) => {
     const metaStr = Object.keys(meta).length ? `\n${JSON.stringify(meta, null, 2)}` : '';
     const stackStr = typeof stack === 'string' ? `\n${stack}` : '';
-    return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}${stackStr}`;
+    return `[${stringifyLogValue(timestamp)}] [${stringifyLogValue(level).toUpperCase()}] ${stringifyLogValue(message)}${metaStr}${stackStr}`;
   })
 );
 
@@ -198,7 +202,7 @@ export function logErrorResponse(
   url: string,
   errorData?: unknown
 ): void {
-  apiLogger.error(`Error Response: ${status || 'N/A'} ${statusText || 'No response'}`, {
+  apiLogger.error(`Error Response: ${status ?? 'N/A'} ${statusText ?? 'No response'}`, {
     url,
     error: errorData ? truncateData(errorData) : undefined,
   });
