@@ -147,7 +147,7 @@ Accepted JSON body:
 {
   "listingId": "optional-client-supplied-id",
   "mode": "manual",
-  "captureMode": "single_1_image",
+  "captureMode": "single_2_image",
   "categoryId": "optional-category-id",
   "conditionId": "optional-condition-id",
   "conditionNotes": "optional condition notes",

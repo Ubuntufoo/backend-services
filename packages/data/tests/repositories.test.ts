@@ -108,7 +108,7 @@ const orderRow: OrderRow = {
 };
 
 const appSettingsRow: AppSettingsRow = {
-  capture_mode: 'single_1_image',
+  capture_mode: 'single_2_image',
   default_fulfillment_policy_id: null,
   default_package_type: null,
   default_payment_policy_id: null,
@@ -463,7 +463,7 @@ describe('shared repositories', () => {
 
     const generatedClient = createUpdateClient('listings', listingRow, 'listing_id', 'LIST-001', (payload) => {
       expect(payload).toEqual({
-        capture_mode: 'single_1_image',
+        capture_mode: 'single_2_image',
         category_id: 'CATEGORY-1',
         condition_id: '3000',
         condition_notes: 'Minor wear',
@@ -485,7 +485,7 @@ describe('shared repositories', () => {
     await expect(
       saveGeneratedListingFields(generatedClient, {
         listingId: 'LIST-001',
-        captureMode: 'single_1_image',
+        captureMode: 'single_2_image',
         categoryId: 'CATEGORY-1',
         conditionId: '3000',
         conditionNotes: 'Minor wear',
@@ -787,14 +787,14 @@ describe('shared repositories', () => {
   it('creates, fetches, and updates app settings', async () => {
     const createClient = createInsertClient('app_settings', appSettingsRow, (payload) => {
       expect(payload).toEqual({
-        capture_mode: 'single_1_image',
+        capture_mode: 'single_2_image',
         id: 'default',
       });
     });
 
     await expect(
       createAppSettings(createClient, {
-        capture_mode: 'single_1_image',
+        capture_mode: 'single_2_image',
         id: 'default',
       })
     ).resolves.toEqual(appSettingsRow);
