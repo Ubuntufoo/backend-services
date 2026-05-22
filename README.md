@@ -12,7 +12,7 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 | --- | --- | --- |
 | `sidecar` | Implemented | Canonical MCP/eBay server package with tests and local setup support. |
 | `watcher-service` | Implemented | Local filesystem watcher runtime for incoming image batches and listing-row creation; later image/R2/job steps still pending. |
-| `image-service` | Planned boundary | Keep image transforms local until they need isolated runtime scaling. |
+| `image-service` | Implemented | Local-only image processing package for post-watcher copies and EXIF stripping. |
 | `r2-service` | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service. |
 | `gemini-service` | Planned boundary | Prefer in-process orchestration with request guards before extraction. |
 | `ebay-service` | Planned boundary | Extract only if eBay workflows outgrow the sidecar package boundary. |
@@ -27,6 +27,7 @@ backend-services/
     env/                  # Shared environment contracts
     types/                # Shared workflow/domain types
   services/
+    image-service/        # Local image processing runtime
     sidecar/              # Active package
     watcher-service/      # Local filesystem watcher runtime
   docs/                   # Shared reference material
@@ -55,6 +56,7 @@ pnpm validate:env
 
 These commands target the canonical `services/sidecar` package through the workspace configuration.
 Shared packages participate in the workspace build and test graph.
+For image processing, run `pnpm --filter @ebay-inventory/image-service test`.
 
 ## Sidecar
 
@@ -92,7 +94,7 @@ For a local-only setup with cloud Supabase integration:
 ## Guardrails
 
 - The repo-level layout check fails if a duplicate root runtime tree or placeholder service package manifests reappear.
-- Only `services/sidecar` participates in active CI validation.
+- Workspace validation covers `services/sidecar`, `services/watcher-service`, `services/image-service`, and shared packages.
 - Planned services should be documented first, then promoted into workspace packages when they have real behavior and tests.
 
 ## Related Docs

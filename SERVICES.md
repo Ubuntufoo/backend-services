@@ -6,6 +6,7 @@ This repository uses a phased monorepo model.
 
 | Directory | Status | Purpose |
 | --- | --- | --- |
+| `services/image-service` | Active | Local-only image processing for watcher-managed listing assets. |
 | `services/sidecar` | Active | MCP server and canonical eBay integration runtime. |
 
 ## Scaffolded Packages
@@ -26,7 +27,6 @@ This repository uses a phased monorepo model.
 
 | Boundary | Status | Planned responsibility |
 | --- | --- | --- |
-| `image-service` | Planned module | Image normalization, EXIF stripping, derivatives, and metadata extraction. |
 | `r2-service` | Planned module | Cloudflare R2 uploads, proxying, and signed URL issuance. |
 | `gemini-service` | Planned module | AI enrichment, validation, caching, and rate limiting around Gemini requests. |
 | `ebay-service` | Planned module | Shared eBay-domain orchestration that may be extracted from the sidecar later. |
@@ -58,7 +58,7 @@ For a local-only, single-user workflow with cloud Supabase integration, prefer:
 - one shared Supabase data layer instead of per-service client wrappers
 - hosted Supabase services
 - Supabase functions, cron, or app-triggered jobs before introducing `job-runner`
-- direct module boundaries inside the sidecar before extracting watcher, image, R2, Gemini, or eBay-specific processes
+- direct module boundaries inside the sidecar before extracting R2, Gemini, or eBay-specific processes
 - stateless image, R2, Gemini, and eBay service modules unless direct DB access becomes necessary later
 
 ## Shared Infrastructure
