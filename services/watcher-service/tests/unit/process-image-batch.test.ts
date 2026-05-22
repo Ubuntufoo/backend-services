@@ -11,6 +11,7 @@ import {
   createProcessIncomingImageBatchDependencies,
   processIncomingImageBatch,
   WATCHER_LISTING_INSERT_MAX_ATTEMPTS,
+  WatcherBatchProcessingError,
   type ProcessedImageMoveFileSystem,
   type ProcessedImageMoveInput,
   type ProcessedImageMoveResult,
@@ -102,6 +103,7 @@ function createDependencies(overrides: Partial<Parameters<typeof processIncoming
     allocateNextListingId: vi.fn(async () => 'Single-000001'),
     createWatcherListing,
     isWatcherListingCollision: vi.fn(() => false),
+    isProcessedListingCollision: vi.fn(() => false),
     moveGroupedImagesToProcessedListing,
     rollbackProcessedListingMove: vi.fn(async () => undefined),
     ...overrides,
@@ -414,17 +416,17 @@ describe('processIncomingImageBatch', () => {
     expect(moveGroupedImagesToProcessedListing).not.toHaveBeenCalled();
   });
 
-  it('bubbles move failures and leaves later groups untouched', async () => {
+  it('exposes partial progress when a later group move fails', async () => {
     const moveGroupedImagesToProcessedListing = vi.fn(async (input: ProcessedImageMoveInput) => {
-      if (input.listingId === 'Single-000001') {
+      if (input.listingId === 'Single-000002') {
         throw new Error('processed move failed');
       }
 
       return createMoveResult(input);
     });
 
-    await expect(
-      processIncomingImageBatch(
+    try {
+      await processIncomingImageBatch(
         {
           incoming: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
           processedDirectory: '/processed',
@@ -433,13 +435,22 @@ describe('processIncomingImageBatch', () => {
           allocateNextListingId: vi.fn(async () => 'Single-000001'),
           moveGroupedImagesToProcessedListing,
         })
-      )
-    ).rejects.toThrow('processed move failed');
+      );
+      throw new Error('expected processIncomingImageBatch to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WatcherBatchProcessingError);
+      expect((error as WatcherBatchProcessingError).message).toBe('processed move failed');
+      expect((error as WatcherBatchProcessingError).processedListings.map((listing) => listing.listingId)).toEqual([
+        'Single-000001',
+      ]);
+      expect((error as WatcherBatchProcessingError).groupingState).toEqual({ pending: [] });
+      expect((error as WatcherBatchProcessingError).retryInputs).toEqual(['c.jpg', 'd.jpg']);
+    }
 
-    expect(moveGroupedImagesToProcessedListing).toHaveBeenCalledTimes(1);
+    expect(moveGroupedImagesToProcessedListing).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps earlier group side effects intact when a later group insert fails', async () => {
+  it('keeps earlier group side effects intact and exposes retry inputs when a later group insert fails', async () => {
     const { incomingDirectory, processedRoot } = await createTempLayout();
     const first = writeSourceFile(incomingDirectory, 'one.jpg');
     const second = writeSourceFile(incomingDirectory, 'two.jpg');
@@ -458,8 +469,10 @@ describe('processIncomingImageBatch', () => {
         }), input.captureMode);
       });
 
-    await expect(
-      processIncomingImageBatch(
+    let batchError: WatcherBatchProcessingError | null = null;
+
+    try {
+      await processIncomingImageBatch(
         {
           incoming: [first, second, third, fourth],
           processedDirectory: processedRoot,
@@ -475,8 +488,19 @@ describe('processIncomingImageBatch', () => {
             createWatcherListing,
           },
         })
-      )
-    ).rejects.toThrow('db offline');
+      );
+      throw new Error('expected processIncomingImageBatch to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WatcherBatchProcessingError);
+      batchError = error as WatcherBatchProcessingError;
+    }
+
+    expect(batchError?.processedListings.map((listing) => listing.listingId)).toEqual([
+      'Single-000001',
+    ]);
+    expect(batchError?.groupingState).toEqual({ pending: [] });
+    expect(batchError?.retryInputs).toEqual([third, fourth]);
+    expect(batchError?.cause).toBeInstanceOf(Error);
 
     await expect(
       fsPromises.readFile(
@@ -497,6 +521,60 @@ describe('processIncomingImageBatch', () => {
     await expect(
       fsPromises.access(path.join(processedRoot, 'Single-000002'))
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retries processed directory collisions with a fresh listing_id', async () => {
+    const moveGroupedImagesToProcessedListing = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('processed dir exists'))
+      .mockResolvedValueOnce(
+        createMoveResult({
+          listingId: 'Single-000002',
+          processedDirectory: '/processed',
+          images: [{ path: 'a.jpg' }, { path: 'b.jpg' }],
+        })
+      );
+
+    const result = await processIncomingImageBatch(
+      {
+        incoming: ['a.jpg', 'b.jpg'],
+        processedDirectory: '/processed',
+      },
+      createDependencies({
+        allocateNextListingId: vi.fn(async () => 'Single-000001'),
+        moveGroupedImagesToProcessedListing,
+        isProcessedListingCollision: vi.fn((error) => (error as Error).message === 'processed dir exists'),
+      })
+    );
+
+    expect(moveGroupedImagesToProcessedListing).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ listingId: 'Single-000001' })
+    );
+    expect(moveGroupedImagesToProcessedListing).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ listingId: 'Single-000002' })
+    );
+    expect(result.processedListings[0].listingId).toBe('Single-000002');
+  });
+
+  it('applies the retry cap to repeated processed directory collisions', async () => {
+    const collisionError = new Error('processed dir exists');
+
+    await expect(
+      processIncomingImageBatch(
+        {
+          incoming: ['a.jpg', 'b.jpg'],
+          processedDirectory: '/processed',
+        },
+        createDependencies({
+          moveGroupedImagesToProcessedListing: vi.fn(async () => {
+            throw collisionError;
+          }),
+          isProcessedListingCollision: vi.fn((error) => error === collisionError),
+        })
+      )
+    ).rejects.toThrow(`Watcher listing insert hit retry cap (${WATCHER_LISTING_INSERT_MAX_ATTEMPTS})`);
   });
 
   it('returns updated grouping state for mixed complete and incomplete input', async () => {

@@ -6,6 +6,7 @@ import { createEmptyWatcherGroupingState, type WatcherGroupingState } from './im
 import {
   createProcessIncomingImageBatchDependencies,
   processIncomingImageBatch,
+  WatcherBatchProcessingError,
   type ProcessIncomingImageBatchDependencies,
 } from './process-image-batch.js';
 
@@ -70,6 +71,10 @@ function cloneWatcherGroupingState(state: WatcherGroupingState): WatcherGrouping
   return {
     pending: state.pending.map((image) => ({ path: image.path })),
   };
+}
+
+function cloneWatcherInputs(inputs: readonly string[]): string[] {
+  return [...inputs];
 }
 
 function toSerializableFields(fields?: Record<string, unknown>): Record<string, unknown> {
@@ -161,6 +166,7 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
     }
 
     state.isProcessing = true;
+    let shouldResumeDraining = true;
     activeDrainPromise = (async () => {
       try {
         while (!state.isClosed && state.pendingQueue.length > 0) {
@@ -185,19 +191,34 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               processedListingCount: result.processedListings.length,
             });
           } catch (error) {
+            if (error instanceof WatcherBatchProcessingError) {
+              state.groupingState = cloneWatcherGroupingState(error.groupingState);
+              state.pendingQueue.unshift(...cloneWatcherInputs(error.retryInputs));
+              shouldResumeDraining = false;
+            }
+
             logger.error('batch_failed', {
               error: error instanceof Error ? error.message : String(error),
               fileCount: snapshot.length,
+              partialProcessedListingCount:
+                error instanceof WatcherBatchProcessingError ? error.processedListings.length : 0,
               pendingQueueSize: state.pendingQueue.length,
+              pendingGroupSize: state.groupingState.pending.length,
+              retainedRetryInputCount:
+                error instanceof WatcherBatchProcessingError ? error.retryInputs.length : 0,
               stack: error instanceof Error ? error.stack : undefined,
             });
+
+            if (error instanceof WatcherBatchProcessingError) {
+              break;
+            }
           }
         }
       } finally {
         state.isProcessing = false;
         activeDrainPromise = null;
 
-        if (!state.isClosed && state.pendingQueue.length > 0) {
+        if (!state.isClosed && shouldResumeDraining && state.pendingQueue.length > 0) {
           void drainQueue();
         }
       }

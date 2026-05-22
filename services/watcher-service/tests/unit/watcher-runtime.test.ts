@@ -2,7 +2,12 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { consumeImageGrouping, createEmptyWatcherGroupingState, startWatcherRuntime } from '../../src/index.js';
+import {
+  consumeImageGrouping,
+  createEmptyWatcherGroupingState,
+  startWatcherRuntime,
+  WatcherBatchProcessingError,
+} from '../../src/index.js';
 
 class FakeWatcher {
   private addListeners: Array<(pathValue: string) => void> = [];
@@ -264,12 +269,27 @@ describe('watcher runtime', () => {
     await runtime.close();
   });
 
-  it('survives batch failures without requeueing the failed snapshot', async () => {
+  it('commits partial batch progress and requeues retry inputs without replaying successes', async () => {
     const fakeWatcher = new FakeWatcher();
     const logger = createLogger();
     const processIncomingImageBatch = vi
       .fn()
-      .mockRejectedValueOnce(new Error('boom'))
+      .mockRejectedValueOnce(
+        new WatcherBatchProcessingError('boom', {
+          cause: new Error('boom'),
+          groupingState: createEmptyWatcherGroupingState(),
+          processedListings: [
+            {
+              captureMode: 'single_2_image',
+              images: [],
+              listing: null as never,
+              listingId: 'Single-000001',
+              processedDirectory: '/watcher/processed/Single-000001',
+            },
+          ],
+          retryInputs: ['/watcher/incoming/two.jpg', '/watcher/incoming/three.jpg'],
+        })
+      )
       .mockResolvedValueOnce({
         groupingState: createEmptyWatcherGroupingState(),
         processedListings: [],
@@ -290,17 +310,22 @@ describe('watcher runtime', () => {
 
     fakeWatcher.emitAdd('/watcher/incoming/one.jpg');
     await flushMicrotasks();
-    await flushMicrotasks();
     expect(processIncomingImageBatch).toHaveBeenCalledTimes(1);
     expect(runtime.state.groupingState).toEqual({ pending: [] });
+    expect(runtime.state.pendingQueue).toEqual([
+      '/watcher/incoming/two.jpg',
+      '/watcher/incoming/three.jpg',
+    ]);
     expect(logger.error).toHaveBeenCalledWith(
       'batch_failed',
       expect.objectContaining({
         error: 'boom',
+        partialProcessedListingCount: 1,
+        retainedRetryInputCount: 2,
       })
     );
 
-    fakeWatcher.emitAdd('/watcher/incoming/two.jpg');
+    fakeWatcher.emitAdd('/watcher/incoming/four.jpg');
     await flushMicrotasks();
     await flushMicrotasks();
     await runtime.close();
@@ -308,7 +333,11 @@ describe('watcher runtime', () => {
     expect(processIncomingImageBatch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        incoming: ['/watcher/incoming/two.jpg'],
+        incoming: [
+          '/watcher/incoming/two.jpg',
+          '/watcher/incoming/three.jpg',
+          '/watcher/incoming/four.jpg',
+        ],
       }),
       undefined
     );

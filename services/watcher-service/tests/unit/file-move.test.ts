@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   moveGroupedImagesToProcessedListing,
+  ProcessedListingDirectoryCollisionError,
   type ProcessedImageMoveFileSystem,
 } from '../../src/index.js';
 
@@ -127,12 +128,7 @@ describe('processed file move execution', () => {
         processedDirectory: processedRoot,
         images: [{ path: sourcePath }],
       })
-    ).rejects.toThrow(
-      `Processed listing directory already exists and cannot be reused: ${path.join(
-        processedRoot,
-        'Single-000123'
-      )}.`
-    );
+    ).rejects.toBeInstanceOf(ProcessedListingDirectoryCollisionError);
 
     await expect(fsPromises.readFile(sourcePath, 'utf-8')).resolves.toBe('one.jpg');
   });
@@ -259,12 +255,7 @@ describe('processed file move execution', () => {
         processedDirectory: processedRoot,
         images: [{ path: secondRunSource }],
       })
-    ).rejects.toThrow(
-      `Processed listing directory already exists and cannot be reused: ${path.join(
-        processedRoot,
-        'Single-000123'
-      )}.`
-    );
+    ).rejects.toBeInstanceOf(ProcessedListingDirectoryCollisionError);
 
     await expect(fsPromises.readFile(secondRunSource, 'utf-8')).resolves.toBe('two.jpg');
   });
