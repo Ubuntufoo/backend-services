@@ -12,12 +12,14 @@ import {
   createListing,
   createOrder,
   enqueueGenerateAiJob,
+  enqueueProcessImagesJob,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
   listListings,
+  listListingsByStatus,
   listJobsByListingId,
   saveListingArtifacts,
   saveListingImageMetadata,
@@ -265,6 +267,61 @@ function createActiveGenerateAiLookupClient(expectedRow: JobRow | null): Supabas
   } as unknown as SupabaseDataClient;
 }
 
+function createActiveProcessImagesLookupClient(expectedRow: JobRow | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('jobs');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('job_type');
+              expect(firstValue).toBe('process_images');
+
+              return {
+                is: vi.fn((secondColumn: string, secondValue: null) => {
+                  expect(secondColumn).toBe('listing_id');
+                  expect(secondValue).toBeNull();
+
+                  return {
+                    in: vi.fn((statusColumn: string, statuses: string[]) => {
+                      expect(statusColumn).toBe('status');
+                      expect(statuses).toEqual(['queued', 'running']);
+
+                      return {
+                        order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                          expect(orderColumn).toBe('created_at');
+                          expect(options).toEqual({ ascending: false });
+
+                          return {
+                            limit: vi.fn((value: number) => {
+                              expect(value).toBe(1);
+
+                              return {
+                                maybeSingle: vi.fn(async () => ({
+                                  data: expectedRow,
+                                  error: null,
+                                })),
+                              };
+                            }),
+                          };
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 function createListAllClient<TTable extends string, TRow>(
   table: TTable,
   expectedRows: TRow[]
@@ -289,6 +346,51 @@ function createListAllClient<TTable extends string, TRow>(
                   return {
                     data: expectedRows,
                     error: null,
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createListByStatusClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRows: TRow[],
+  status: string,
+  options: { ascending: boolean; from: number; to: number }
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('status');
+              expect(value).toBe(status);
+
+              return {
+                order: vi.fn((orderColumn: string, orderOptions: { ascending: boolean }) => {
+                  expect(orderColumn).toBe('created_at');
+                  expect(orderOptions).toEqual({ ascending: options.ascending });
+
+                  return {
+                    range: vi.fn(async (from: number, to: number) => {
+                      expect(from).toBe(options.from);
+                      expect(to).toBe(options.to);
+
+                      return {
+                        data: expectedRows,
+                        error: null,
+                      };
+                    }),
                   };
                 }),
               };
@@ -361,6 +463,20 @@ describe('shared repositories', () => {
 
     const listClient = createListAllClient('listings', [listingRow]);
     await expect(listListings(listClient)).resolves.toEqual([listingRow]);
+
+    const listByStatusClient = createListByStatusClient(
+      'listings',
+      [listingRow],
+      'record_created',
+      { ascending: true, from: 25, to: 49 }
+    );
+    await expect(
+      listListingsByStatus(listByStatusClient, 'record_created', {
+        limit: 25,
+        offset: 25,
+        orderByCreatedAt: 'asc',
+      })
+    ).resolves.toEqual([listingRow]);
   });
 
   it('updates listings and persists stateless worker outputs', async () => {
@@ -584,6 +700,63 @@ describe('shared repositories', () => {
     await expect(enqueueGenerateAiJob(createClient, 'LIST-001')).resolves.toEqual({
       alreadyQueued: false,
       job: generateAiJobRow,
+    });
+  });
+
+  it('enqueues global process_images jobs and returns the active batch on duplicate conflicts', async () => {
+    const processImagesJobRow: JobRow = {
+      ...jobRow,
+      id: 'job-process-images-row-id',
+      listing_id: null,
+      job_type: 'process_images',
+    };
+    const createClient = createInsertClient('jobs', processImagesJobRow, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'process_images',
+        listing_id: null,
+        status: 'queued',
+      });
+    });
+
+    await expect(enqueueProcessImagesJob(createClient)).resolves.toEqual({
+      alreadyQueued: false,
+      job: processImagesJobRow,
+    });
+
+    const lookupClient = createActiveProcessImagesLookupClient(processImagesJobRow);
+    const duplicateClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'process_images',
+              listing_id: null,
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => ({
+                  data: null,
+                  error: {
+                    code: '23505',
+                    message:
+                      'duplicate key value violates unique constraint "jobs_process_images_active_batch_idx"',
+                  },
+                })),
+              })),
+            };
+          }),
+          select: lookupClient.from('jobs').select,
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(enqueueProcessImagesJob(duplicateClient)).resolves.toEqual({
+      alreadyQueued: true,
+      job: processImagesJobRow,
     });
   });
 

@@ -1,4 +1,9 @@
-import { createSupabaseServiceClient, type ListingRow, type SupabaseDataClient } from '@ebay-inventory/data';
+import {
+  createSupabaseServiceClient,
+  enqueueProcessImagesJob,
+  type ListingRow,
+  type SupabaseDataClient,
+} from '@ebay-inventory/data';
 import { LISTING_IDLE_SUB_STATUS, type CaptureMode } from '@ebay-inventory/types';
 
 export interface WatcherListingImageMetadata {
@@ -34,6 +39,10 @@ export class WatcherListingRepositoryError extends Error {
 
 export interface WatcherListingRepository {
   createWatcherListing(input: CreateWatcherListingInput): Promise<ListingRow>;
+}
+
+export interface CreateWatcherListingRepositoryOptions {
+  enqueueProcessImages?: typeof enqueueProcessImagesJob;
 }
 
 function getListingType(captureMode: CaptureMode): 'single' | 'lot' {
@@ -117,12 +126,49 @@ async function insertWatcherListing(
   return result.data;
 }
 
+async function deleteWatcherListing(
+  client: SupabaseDataClient,
+  listingId: string
+): Promise<void> {
+  const result = await client.from('listings').delete().eq('listing_id', listingId);
+
+  if (result.error) {
+    throw asWatcherListingRepositoryError(result.error);
+  }
+}
+
 export function createWatcherListingRepository(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  options: CreateWatcherListingRepositoryOptions = {}
 ): WatcherListingRepository {
   const client = createSupabaseServiceClient(env);
+  const enqueueProcessImages = options.enqueueProcessImages ?? enqueueProcessImagesJob;
 
   return {
-    createWatcherListing: async (input) => await insertWatcherListing(client, input),
+    createWatcherListing: async (input) => {
+      const listing = await insertWatcherListing(client, input);
+
+      try {
+        await enqueueProcessImages(client);
+      } catch (error) {
+        try {
+          await deleteWatcherListing(client, input.listingId);
+        } catch (cleanupError) {
+          throw new WatcherListingRepositoryError(
+            `Watcher listing "${input.listingId}" was created but process_images enqueue failed: ${getErrorMessage(
+              error
+            )}. Cleanup failed: ${getErrorMessage(cleanupError)}`
+          );
+        }
+
+        throw new WatcherListingRepositoryError(
+          `Watcher listing "${input.listingId}" was rolled back because process_images enqueue failed: ${getErrorMessage(
+            error
+          )}`
+        );
+      }
+
+      return listing;
+    },
   };
 }

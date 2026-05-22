@@ -1,0 +1,47 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { createR2ImageUploader } from '@/jobs/r2-image-uploader.js';
+
+describe('createR2ImageUploader', () => {
+  it('uses deterministic asset object keys for watcher asset prep uploads', async () => {
+    const readFile = vi.fn(async () => Buffer.from('image-bytes'));
+    const uploadSingleImage = vi.fn(
+      async (_input: unknown, options?: { objectKey?: string }) => ({
+      objectKey: options?.objectKey ?? 'missing',
+      publicUrl: `https://cdn.example.com/${options?.objectKey ?? 'missing'}`,
+      })
+    );
+    const uploader = createR2ImageUploader({
+      readFile,
+      uploadSingleImage,
+    });
+
+    const result = await uploader.uploadListingImages({
+      listingId: 'LIST-001',
+      images: [
+        {
+          filename: 'LIST-001_01.JPG',
+          localPath: '/processed/LIST-001/.image-service-output/run-001/LIST-001_01.JPG',
+        },
+      ],
+    });
+
+    expect(uploadSingleImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingId: 'LIST-001',
+        filename: 'LIST-001_01.JPG',
+        contentType: 'image/jpeg',
+      }),
+      {
+        objectKey: 'listings/list-001/assets/list-001_01.jpg',
+      }
+    );
+    expect(result).toEqual([
+      {
+        filename: 'LIST-001_01.JPG',
+        objectKey: 'listings/list-001/assets/list-001_01.jpg',
+        publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
+      },
+    ]);
+  });
+});

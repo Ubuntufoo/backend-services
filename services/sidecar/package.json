@@ -7,7 +7,7 @@
   "types": "build/index.d.ts",
   "private": true,
   "scripts": {
-    "build:deps": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build && pnpm --filter @ebay-inventory/data build",
+    "build:deps": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build && pnpm --filter @ebay-inventory/data build && pnpm --filter @ebay-inventory/image-service build",
     "build": "pnpm run build:deps && tsc --build && tsc-alias",
     "start": "node build/index.js",
     "dev": "pnpm run build:deps && tsx src/server-http.ts",
@@ -39,6 +39,7 @@
     "@google/genai": "^2.4.0",
     "@ebay-inventory/data": "workspace:*",
     "@ebay-inventory/env": "workspace:*",
+    "@ebay-inventory/image-service": "workspace:*",
     "@ebay-inventory/types": "workspace:*",
     "@modelcontextprotocol/sdk": "1.27.1",
     "@supabase/supabase-js": "2.78.0",

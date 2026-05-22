@@ -89,6 +89,9 @@ importers:
       '@ebay-inventory/env':
         specifier: workspace:*
         version: link:../../packages/env
+      '@ebay-inventory/image-service':
+        specifier: workspace:*
+        version: link:../image-service
       '@ebay-inventory/types':
         specifier: workspace:*
         version: link:../../packages/types
