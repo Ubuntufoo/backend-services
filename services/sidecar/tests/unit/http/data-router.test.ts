@@ -78,6 +78,7 @@ function createDataAccess(): SidecarDataAccess {
       })),
       getByListingId: vi.fn(async () => listingRow),
       list: vi.fn(async () => [listingRow]),
+      listByStatus: vi.fn(async () => [listingRow]),
       saveImageMetadata: vi.fn(async (_input) => ({
         ...listingRow,
       })),
@@ -93,10 +94,13 @@ function createDataAccess(): SidecarDataAccess {
       })),
     },
     jobs: {
+      claimQueued: vi.fn(),
       create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
+      enqueueProcessImages: vi.fn(),
       getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
+      listQueued: vi.fn(),
       listByListingId: vi.fn(),
       update: vi.fn(),
     },

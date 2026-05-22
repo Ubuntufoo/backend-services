@@ -31,6 +31,10 @@ export interface EnqueueProcessImagesJobResult {
   job: JobRow;
 }
 
+export interface ListQueuedJobsOptions {
+  limit?: number;
+}
+
 function isSupabaseErrorWithCode(value: unknown): value is SupabaseErrorWithCode {
   return typeof value === 'object' && value !== null && 'message' in value;
 }
@@ -190,6 +194,45 @@ export async function listJobsByListingId(
   }
 
   return result.data ?? [];
+}
+
+export async function listQueuedJobs(
+  client: SupabaseDataClient,
+  options: ListQueuedJobsOptions = {}
+): Promise<JobRow[]> {
+  const limit = options.limit ?? 1;
+  const result = (await client
+    .from('jobs')
+    .select('*')
+    .eq('status', 'queued')
+    .order('created_at', { ascending: true })
+    .limit(limit)) as MultiResult<JobRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
+}
+
+export async function claimQueuedJob(
+  client: SupabaseDataClient,
+  jobId: string
+): Promise<JobRow | null> {
+  const result = (await client
+    .from('jobs')
+    .update({
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      status: 'running',
+    })
+    .eq('id', jobId)
+    .eq('status', 'queued')
+    .select()
+    .maybeSingle()) as SingleResult<JobRow>;
+
+  return requireOptionalResult(result);
 }
 
 export async function updateJob(

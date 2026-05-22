@@ -7,6 +7,7 @@ import type {
   SupabaseDataClient,
 } from '../src/index.js';
 import {
+  claimQueuedJob,
   createAppSettings,
   createJob,
   createListing,
@@ -18,6 +19,7 @@ import {
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
+  listQueuedJobs,
   listListings,
   listListingsByStatus,
   listJobsByListingId,
@@ -438,6 +440,87 @@ function createUpdateClient<TTable extends string, TRow>(
   } as unknown as SupabaseDataClient;
 }
 
+function createQueuedJobsListClient(expectedRows: JobRow[], expectedLimit: number): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('jobs');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('status');
+              expect(value).toBe('queued');
+
+              return {
+                order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                  expect(orderColumn).toBe('created_at');
+                  expect(options).toEqual({ ascending: true });
+
+                  return {
+                    limit: vi.fn(async (value: number) => {
+                      expect(value).toBe(expectedLimit);
+
+                      return {
+                        data: expectedRows,
+                        error: null,
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createClaimQueuedJobClient(expectedRow: JobRow | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('jobs');
+
+      return {
+        update: vi.fn((payload: unknown) => {
+          expect(payload).toEqual({
+            last_error: null,
+            last_error_at: null,
+            last_error_code: null,
+            status: 'running',
+          });
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('id');
+              expect(firstValue).toBe('job-row-id');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('status');
+                  expect(secondValue).toBe('queued');
+
+                  return {
+                    select: vi.fn(() => ({
+                      maybeSingle: vi.fn(async () => ({
+                        data: expectedRow,
+                        error: null,
+                      })),
+                    })),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 describe('shared repositories', () => {
   it('creates and fetches listings', async () => {
     const createClient = createInsertClient('listings', listingRow, (payload) => {
@@ -671,6 +754,9 @@ describe('shared repositories', () => {
     const listClient = createListClient('jobs', [jobRow], 'listing_id', 'LIST-001');
     await expect(listJobsByListingId(listClient, 'LIST-001')).resolves.toEqual([jobRow]);
 
+    const queuedListClient = createQueuedJobsListClient([jobRow], 2);
+    await expect(listQueuedJobs(queuedListClient, { limit: 2 })).resolves.toEqual([jobRow]);
+
     const updateClient = createUpdateClient('jobs', jobRow, 'id', 'job-row-id', (payload) => {
       expect(payload).toEqual({
         status: 'running',
@@ -678,6 +764,21 @@ describe('shared repositories', () => {
     });
 
     await expect(updateJob(updateClient, 'job-row-id', { status: 'running' })).resolves.toEqual(jobRow);
+
+    const claimClient = createClaimQueuedJobClient({
+      ...jobRow,
+      status: 'running',
+    });
+    await expect(claimQueuedJob(claimClient, 'job-row-id')).resolves.toEqual({
+      ...jobRow,
+      status: 'running',
+    });
+  });
+
+  it('returns null when queued claim loses race', async () => {
+    const claimClient = createClaimQueuedJobClient(null);
+
+    await expect(claimQueuedJob(claimClient, 'job-row-id')).resolves.toBeNull();
   });
 
   it('looks up the newest active generate_ai job by listing id', async () => {

@@ -39,6 +39,7 @@ cp env.example .env
 
 `pnpm dev` starts the HTTP sidecar from `src/server-http.ts`.
 Use `pnpm dev:stdio` only when you explicitly want the stdio MCP server from `src/index.ts`.
+The HTTP sidecar also starts the background job-runner loop by default; set `SIDECAR_JOB_RUNNER_ENABLED=false` to disable polling for tests or manual debugging.
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
 and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.
