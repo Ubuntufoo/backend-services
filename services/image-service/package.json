@@ -1,0 +1,29 @@
+{
+  "name": "@ebay-inventory/image-service",
+  "version": "0.0.0",
+  "description": "Local image processing for watcher-managed listing assets.",
+  "type": "module",
+  "private": true,
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
+    "test": "pnpm run typecheck && vitest run",
+    "check": "pnpm run typecheck && pnpm run test"
+  },
+  "dependencies": {
+    "sharp": "^0.34.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}
