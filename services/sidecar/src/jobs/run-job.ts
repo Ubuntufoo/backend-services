@@ -11,6 +11,7 @@ const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const JOB_STATUS_RUNNING = 'running';
 const JOB_STATUS_COMPLETED = 'completed';
 const JOB_STATUS_FAILED = 'failed';
+const JOB_ERROR_CODE_NOT_RUNNABLE = 'job_not_runnable';
 const LISTING_ERROR_CODE_GENERATE_AI_FAILED = 'generate_ai_failed';
 const LISTING_ERROR_CODE_MISSING_IMAGE_URLS = 'generate_ai_missing_image_urls';
 const JOB_ERROR_CODE_PROCESS_IMAGES_FAILED = 'process_images_failed';
@@ -185,6 +186,32 @@ async function markJobRunning(dataAccess: SidecarDataAccess, jobId: string): Pro
     last_error_code: null,
     status: JOB_STATUS_RUNNING,
   });
+}
+
+async function ensureJobRunning(
+  dataAccess: SidecarDataAccess,
+  job: JobRow
+): Promise<JobRow> {
+  if (job.status === JOB_STATUS_RUNNING) {
+    return job;
+  }
+
+  if (job.status === 'queued') {
+    await markJobRunning(dataAccess, job.id);
+
+    return {
+      ...job,
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      status: JOB_STATUS_RUNNING,
+    };
+  }
+
+  throw new SidecarJobError(
+    JOB_ERROR_CODE_NOT_RUNNABLE,
+    `Job "${job.id}" has status "${job.status}" and cannot be run.`
+  );
 }
 
 async function markJobFailed(
@@ -435,17 +462,17 @@ export async function runSidecarJob(
     throw new SidecarJobError('job_not_found', `Job "${jobId}" was not found.`);
   }
 
-  await markJobRunning(dataAccess, job.id);
+  const runnableJob = await ensureJobRunning(dataAccess, job);
 
-  switch (job.job_type) {
+  switch (runnableJob.job_type) {
     case GENERATE_AI_JOB_TYPE:
-      return await runGenerateAiJob(job, {
+      return await runGenerateAiJob(runnableJob, {
         dataAccess,
         generateListingDraft: runGenerateDraft,
         now,
       });
     case PROCESS_IMAGES_JOB_TYPE:
-      return await runProcessImagesJob(job, {
+      return await runProcessImagesJob(runnableJob, {
         dataAccess,
         now,
         prepareRecordCreatedListings: runPrepareRecordCreatedListings,
@@ -454,9 +481,9 @@ export async function runSidecarJob(
       const errorAt = asIsoTimestamp(now);
       const failedJob = await markJobFailed(
         dataAccess,
-        job.id,
+        runnableJob.id,
         JOB_ERROR_CODE_UNSUPPORTED_JOB_TYPE,
-        `Job "${job.id}" has unsupported type "${job.job_type}".`,
+        `Job "${runnableJob.id}" has unsupported type "${runnableJob.job_type}".`,
         errorAt
       );
 

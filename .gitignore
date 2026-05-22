@@ -102,4 +102,5 @@ GEMINI.md
 Taskfile.yml
 bun.lock
 
-
+# Watcher runtime folders
+/services/watcher-service/watcher/

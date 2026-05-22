@@ -1,4 +1,5 @@
 import {
+  claimQueuedJob,
   DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   createJob,
@@ -12,6 +13,7 @@ import {
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
+  listQueuedJobs,
   listJobsByListingId,
   listListings,
   listListingsByStatus,
@@ -29,6 +31,7 @@ import {
   type JobInsert,
   type JobRow,
   type JobUpdate,
+  type ListQueuedJobsOptions,
   type ListListingsByStatusOptions,
   type ListingInsert,
   type ListingImageMetadataUpdate,
@@ -47,11 +50,13 @@ export interface SidecarDataAccess {
     update(changes: AppSettingsUpdate, id?: string): Promise<AppSettingsRow>;
   };
   jobs: {
+    claimQueued(jobId: string): Promise<JobRow | null>;
     create(input: JobInsert): Promise<JobRow>;
     enqueueGenerateAi(listingId: string): Promise<EnqueueGenerateAiJobResult>;
     enqueueProcessImages(): Promise<EnqueueProcessImagesJobResult>;
     getActiveGenerateAiByListingId(listingId: string): Promise<JobRow | null>;
     getById(jobId: string): Promise<JobRow | null>;
+    listQueued(options?: ListQueuedJobsOptions): Promise<JobRow[]>;
     listByListingId(listingId: string): Promise<JobRow[]>;
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
@@ -90,12 +95,14 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
     },
     jobs: {
+      claimQueued: async (jobId) => await claimQueuedJob(client, jobId),
       create: async (input) => await createJob(client, input),
       enqueueGenerateAi: async (listingId) => await enqueueGenerateAiJob(client, listingId),
       enqueueProcessImages: async () => await enqueueProcessImagesJob(client),
       getActiveGenerateAiByListingId: async (listingId) =>
         await getActiveGenerateAiJobByListingId(client, listingId),
       getById: async (jobId) => await getJobById(client, jobId),
+      listQueued: async (options) => await listQueuedJobs(client, options),
       listByListingId: async (listingId) => await listJobsByListingId(client, listingId),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
     },

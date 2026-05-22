@@ -20,7 +20,9 @@ const enqueueGenerateAiJobMock = vi.fn();
 const enqueueProcessImagesJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
+const listQueuedJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
+const claimQueuedJobMock = vi.fn();
 const updateJobMock = vi.fn();
 const createOrderMock = vi.fn();
 const getOrderByOrderIdMock = vi.fn();
@@ -30,6 +32,7 @@ const updateAppSettingsMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
+  claimQueuedJob: claimQueuedJobMock,
   createAppSettings: createAppSettingsMock,
   createJob: createJobMock,
   createListing: createListingMock,
@@ -42,6 +45,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getJobById: getJobByIdMock,
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
+  listQueuedJobs: listQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
@@ -134,10 +138,12 @@ describe('sidecar data access', () => {
       listing_id: 'LIST-001',
       status: 'queued',
     });
+    await dataAccess.jobs.claimQueued('job-row-id');
     await dataAccess.jobs.enqueueGenerateAi('LIST-001');
     await dataAccess.jobs.enqueueProcessImages();
     await dataAccess.jobs.getActiveGenerateAiByListingId('LIST-001');
     await dataAccess.jobs.getById('job-row-id');
+    await dataAccess.jobs.listQueued({ limit: 1 });
     await dataAccess.jobs.listByListingId('LIST-001');
     await dataAccess.jobs.update('job-row-id', { status: 'running' });
 
@@ -156,10 +162,12 @@ describe('sidecar data access', () => {
         status: 'queued',
       })
     );
+    expect(claimQueuedJobMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(enqueueGenerateAiJobMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(enqueueProcessImagesJobMock).toHaveBeenCalledWith(client);
     expect(getActiveGenerateAiJobByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getJobByIdMock).toHaveBeenCalledWith(client, 'job-row-id');
+    expect(listQueuedJobsMock).toHaveBeenCalledWith(client, { limit: 1 });
     expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });
 

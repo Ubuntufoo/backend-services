@@ -55,11 +55,13 @@ function createDataAccess(): SidecarDataAccess {
       create: async () => listingRow,
       getByListingId: async () => listingRow,
       list: async () => [listingRow],
+      listByStatus: async () => [listingRow],
       saveImageMetadata: async () => listingRow,
       update: async () => listingRow,
       updateWorkflowState: async () => listingRow,
     },
     jobs: {
+      claimQueued: async () => null,
       create: async () => {
         throw new Error('not implemented');
       },
@@ -78,8 +80,24 @@ function createDataAccess(): SidecarDataAccess {
           updated_at: '2026-05-17T00:00:00.000Z',
         },
       }),
+      enqueueProcessImages: async () => ({
+        alreadyQueued: false,
+        job: {
+          created_at: '2026-05-17T00:00:00.000Z',
+          id: 'job-process-images-row-id',
+          job_type: 'process_images',
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          listing_id: null,
+          next_run_at: null,
+          status: 'queued',
+          updated_at: '2026-05-17T00:00:00.000Z',
+        },
+      }),
       getActiveGenerateAiByListingId: async () => null,
       getById: async () => null,
+      listQueued: async () => [],
       listByListingId: async () => [],
       update: async () => {
         throw new Error('not implemented');

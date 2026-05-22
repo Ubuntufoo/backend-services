@@ -30,6 +30,11 @@ const queuedProcessImagesJob: JobRow = {
   updated_at: '2026-05-20T12:00:00.000Z',
 };
 
+const runningProcessImagesJob: JobRow = {
+  ...queuedProcessImagesJob,
+  status: 'running',
+};
+
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: null,
@@ -149,6 +154,7 @@ function createDataAccess({
       update: appSettingsUpdate,
     },
     jobs: {
+      claimQueued: vi.fn(async () => job),
       create: jobsCreate,
       enqueueGenerateAi: vi.fn(async () => ({
         alreadyQueued: false,
@@ -160,6 +166,7 @@ function createDataAccess({
       })),
       getActiveGenerateAiByListingId: vi.fn(async () => queuedGenerateAiJob),
       getById: jobsGetById,
+      listQueued: vi.fn(async () => []),
       listByListingId: jobsListByListingId,
       update: jobsUpdate,
     },
@@ -407,6 +414,33 @@ describe('runSidecarJob', () => {
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('process_images_failed');
     expect(result.job.last_error).toContain('Supabase unavailable');
+  });
+
+  it('runs already-claimed jobs without re-marking them running', async () => {
+    const dataAccess = createDataAccess({
+      job: runningProcessImagesJob,
+    });
+    const prepareRecordCreatedListingsMock = vi.fn(async () => ({
+      exhaustedCandidates: true,
+      failed: [],
+      processed: [],
+      skipped: [],
+    }));
+
+    const result = await runSidecarJob('job-process-images', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareRecordCreatedListings: prepareRecordCreatedListingsMock,
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(dataAccess.jobs.update).toHaveBeenCalledTimes(1);
+    expect(dataAccess.jobs.update).toHaveBeenCalledWith('job-process-images', {
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      status: 'completed',
+    });
   });
 
   it('fails unsupported job types without touching listing workflow', async () => {

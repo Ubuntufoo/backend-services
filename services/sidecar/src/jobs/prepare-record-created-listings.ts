@@ -352,11 +352,11 @@ async function collectRecordCreatedCandidates(
   dataAccess: SidecarDataAccess,
   batchSize: number
 ): Promise<{
-  attemptedCandidates: Array<EligibleListingCandidate | FailedListingCandidate>;
+  attemptedCandidates: (EligibleListingCandidate | FailedListingCandidate)[];
   exhaustedCandidates: boolean;
   skipped: PrepareRecordCreatedListingsSkipped[];
 }> {
-  const attemptedCandidates: Array<EligibleListingCandidate | FailedListingCandidate> = [];
+  const attemptedCandidates: (EligibleListingCandidate | FailedListingCandidate)[] = [];
   const skipped: PrepareRecordCreatedListingsSkipped[] = [];
   const pageSize = batchSize;
   let exhaustedCandidates = false;
