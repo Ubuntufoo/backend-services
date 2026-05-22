@@ -11,7 +11,7 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 | Service | Status | Notes |
 | --- | --- | --- |
 | `sidecar` | Implemented | Canonical MCP/eBay server package with tests and local setup support. |
-| `watcher-service` | Scaffolded | Config-only package for watcher path conventions and supported asset types; runtime behavior still pending. |
+| `watcher-service` | Implemented | Local filesystem watcher runtime for incoming image batches and listing-row creation; later image/R2/job steps still pending. |
 | `image-service` | Planned boundary | Keep image transforms local until they need isolated runtime scaling. |
 | `r2-service` | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service. |
 | `gemini-service` | Planned boundary | Prefer in-process orchestration with request guards before extraction. |
@@ -28,7 +28,7 @@ backend-services/
     types/                # Shared workflow/domain types
   services/
     sidecar/              # Active package
-    watcher-service/      # Config scaffold for the future watcher runtime
+    watcher-service/      # Local filesystem watcher runtime
   docs/                   # Shared reference material
   scripts/                # Repo-level guardrails
 ```
@@ -75,6 +75,7 @@ pnpm dev:sidecar:stdio
 
 `pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
 Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
+For the watcher runtime, run `pnpm --filter @ebay-inventory/watcher-service dev`.
 
 ## Local-Only Defaults
 
