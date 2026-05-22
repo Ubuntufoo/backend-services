@@ -205,13 +205,15 @@ describe('prepareRecordCreatedListings', () => {
       uploadListingImages: vi.fn(async () => [
         {
           filename: 'LIST-001_01.jpg',
-          objectKey: 'listings/list-001/assets/list-001_01.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
+          objectKey: 'listings/list-001/list-001_01.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
         },
         {
           filename: 'LIST-001_02.jpg',
-          objectKey: 'listings/list-001/assets/list-001_02.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_02.jpg',
+          objectKey: 'listings/list-001/list-001_02.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
         },
       ]),
     };
@@ -232,12 +234,12 @@ describe('prepareRecordCreatedListings', () => {
       'LIST-001',
       expect.objectContaining({
         image_urls: [
-          'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
-          'https://cdn.example.com/listings/list-001/assets/list-001_02.jpg',
+          'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
+          'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
         ],
         r2_object_keys: [
-          'listings/list-001/assets/list-001_01.jpg',
-          'listings/list-001/assets/list-001_02.jpg',
+          'listings/list-001/list-001_01.jpg',
+          'listings/list-001/list-001_02.jpg',
         ],
         status: 'assets_ready',
         sub_status: 'ready_to_generate',
@@ -252,13 +254,15 @@ describe('prepareRecordCreatedListings', () => {
       uploadListingImages: vi.fn(async () => [
         {
           filename: 'LIST-001_02.jpg',
-          objectKey: 'listings/list-001/assets/list-001_02.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_02.jpg',
+          objectKey: 'listings/list-001/list-001_02.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
         },
         {
           filename: 'LIST-001_01.jpg',
-          objectKey: 'listings/list-001/assets/list-001_01.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
+          objectKey: 'listings/list-001/list-001_01.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
         },
       ]),
     };
@@ -273,12 +277,12 @@ describe('prepareRecordCreatedListings', () => {
       'LIST-001',
       expect.objectContaining({
         image_urls: [
-          'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
-          'https://cdn.example.com/listings/list-001/assets/list-001_02.jpg',
+          'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
+          'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
         ],
         r2_object_keys: [
-          'listings/list-001/assets/list-001_01.jpg',
-          'listings/list-001/assets/list-001_02.jpg',
+          'listings/list-001/list-001_01.jpg',
+          'listings/list-001/list-001_02.jpg',
         ],
       })
     );
@@ -302,13 +306,15 @@ describe('prepareRecordCreatedListings', () => {
       uploadListingImages: vi.fn(async () => [
         {
           filename: 'LIST-001_01.jpg',
-          objectKey: 'listings/list-001/assets/list-001_01.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
+          objectKey: 'listings/list-001/list-001_01.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
         },
         {
           filename: 'LIST-001_02.jpg',
-          objectKey: 'listings/list-001/assets/list-001_02.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_02.jpg',
+          objectKey: 'listings/list-001/list-001_02.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
         },
       ]),
     };
@@ -351,7 +357,7 @@ describe('prepareRecordCreatedListings', () => {
   it('writes listing failures for watcher-state conflicts before processing', async () => {
     const conflictedListing = createListingRow({
       image_urls: ['/processed/LIST-001/LIST-001_01.jpg'],
-      r2_object_keys: ['listings/list-001/assets/list-001_01.jpg'],
+      r2_object_keys: ['listings/list-001/list-001_01.jpg'],
     });
     const { dataAccess, listingStates } = createDataAccess([conflictedListing]);
     const imageProcessor = vi.fn(async () => createProcessedImagesResult());
@@ -421,13 +427,15 @@ describe('prepareRecordCreatedListings', () => {
       uploadListingImages: vi.fn(async () => [
         {
           filename: 'LIST-001_01.jpg',
-          objectKey: 'listings/list-001/assets/list-001_01.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_01.jpg',
+          objectKey: 'listings/list-001/list-001_01.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
         },
         {
           filename: 'LIST-001_02.jpg',
-          objectKey: 'listings/list-001/assets/list-001_02.jpg',
-          publicUrl: 'https://cdn.example.com/listings/list-001/assets/list-001_02.jpg',
+          objectKey: 'listings/list-001/list-001_02.jpg',
+          publicUrl:
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
         },
       ]),
     };
@@ -497,8 +505,8 @@ describe('prepareRecordCreatedListings', () => {
       uploadListingImages: vi.fn(async (input) =>
         input.images.map((image) => ({
           filename: image.filename,
-          objectKey: `listings/${input.listingId.toLowerCase()}/assets/${image.filename.toLowerCase()}`,
-          publicUrl: `https://cdn.example.com/listings/${input.listingId.toLowerCase()}/assets/${image.filename.toLowerCase()}`,
+          objectKey: `listings/${input.listingId.toLowerCase()}/${image.filename.toLowerCase()}`,
+          publicUrl: `https://images.murphyfamilyhobby.dev/listings/${input.listingId.toLowerCase()}/${image.filename.toLowerCase()}`,
         }))
       ),
     };
