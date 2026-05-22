@@ -8,6 +8,7 @@ import type {
 
 const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
 const listListingsMock = vi.fn();
+const listListingsByStatusMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
 const createListingMock = vi.fn();
 const updateListingMock = vi.fn();
@@ -16,6 +17,7 @@ const saveListingImageMetadataMock = vi.fn();
 const getAppSettingsMock = vi.fn();
 const createJobMock = vi.fn();
 const enqueueGenerateAiJobMock = vi.fn();
+const enqueueProcessImagesJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
@@ -34,6 +36,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createOrder: createOrderMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
   enqueueGenerateAiJob: enqueueGenerateAiJobMock,
+  enqueueProcessImagesJob: enqueueProcessImagesJobMock,
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
@@ -41,6 +44,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getOrderByOrderId: getOrderByOrderIdMock,
   listJobsByListingId: listJobsByListingIdMock,
   listListings: listListingsMock,
+  listListingsByStatus: listListingsByStatusMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
   updateAppSettings: updateAppSettingsMock,
   updateJob: updateJobMock,
@@ -66,11 +70,21 @@ describe('sidecar data access', () => {
     const dataAccess = createSidecarDataAccess(env);
 
     await dataAccess.listings.list();
+    await dataAccess.listings.listByStatus('record_created', {
+      limit: 25,
+      offset: 0,
+      orderByCreatedAt: 'asc',
+    });
     await dataAccess.listings.getByListingId('LIST-001');
 
     expect(createSupabaseServiceClientMock).toHaveBeenCalledWith(env);
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
     expect(listListingsMock).toHaveBeenCalledWith(client);
+    expect(listListingsByStatusMock).toHaveBeenCalledWith(client, 'record_created', {
+      limit: 25,
+      offset: 0,
+      orderByCreatedAt: 'asc',
+    });
     expect(getListingByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
   });
 
@@ -121,6 +135,7 @@ describe('sidecar data access', () => {
       status: 'queued',
     });
     await dataAccess.jobs.enqueueGenerateAi('LIST-001');
+    await dataAccess.jobs.enqueueProcessImages();
     await dataAccess.jobs.getActiveGenerateAiByListingId('LIST-001');
     await dataAccess.jobs.getById('job-row-id');
     await dataAccess.jobs.listByListingId('LIST-001');
@@ -142,6 +157,7 @@ describe('sidecar data access', () => {
       })
     );
     expect(enqueueGenerateAiJobMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(enqueueProcessImagesJobMock).toHaveBeenCalledWith(client);
     expect(getActiveGenerateAiJobByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getJobByIdMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');

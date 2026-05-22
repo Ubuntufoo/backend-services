@@ -141,6 +141,36 @@ describe('shared R2 image upload service', () => {
     });
   });
 
+  it('honors an explicit objectKey override and keeps public URLs stable for deterministic callers', async () => {
+    sendMock.mockResolvedValue({ ETag: '"etag-value"' });
+
+    const { uploadImage } = await import('../src/index.js');
+
+    const result = await uploadImage(
+      {
+        listingId: 'listing-123',
+        filename: 'front.png',
+        contentType: 'image/png',
+        body: Buffer.from('image-bytes'),
+      },
+      {
+        env: r2Env,
+        objectKey: 'listings/listing-123/assets/front.png',
+      }
+    );
+
+    expect(putObjectCommandMock).toHaveBeenCalledWith({
+      Body: Buffer.from('image-bytes'),
+      Bucket: 'listing-images',
+      ContentType: 'image/png',
+      Key: 'listings/listing-123/assets/front.png',
+    });
+    expect(result).toEqual({
+      objectKey: 'listings/listing-123/assets/front.png',
+      publicUrl: 'https://images.example.com/listings/listing-123/assets/front.png',
+    });
+  });
+
   it('rejects empty upload bodies before attempting to send an object', async () => {
     const { uploadImage } = await import('../src/index.js');
 

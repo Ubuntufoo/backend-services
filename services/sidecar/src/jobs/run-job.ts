@@ -1,13 +1,19 @@
 import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import { aspectValueSchema, generateListingDraft, type GenerateListingDraftInput } from '@/gemini/index.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import {
+  prepareRecordCreatedListings,
+  type PrepareRecordCreatedListingsResult,
+} from './prepare-record-created-listings.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
+const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const JOB_STATUS_RUNNING = 'running';
 const JOB_STATUS_COMPLETED = 'completed';
 const JOB_STATUS_FAILED = 'failed';
 const LISTING_ERROR_CODE_GENERATE_AI_FAILED = 'generate_ai_failed';
 const LISTING_ERROR_CODE_MISSING_IMAGE_URLS = 'generate_ai_missing_image_urls';
+const JOB_ERROR_CODE_PROCESS_IMAGES_FAILED = 'process_images_failed';
 const JOB_ERROR_CODE_UNSUPPORTED_JOB_TYPE = 'unsupported_job_type';
 const JOB_ERROR_CODE_MISSING_LISTING_ID = 'generate_ai_missing_listing_id';
 const JOB_ERROR_CODE_LISTING_NOT_FOUND = 'generate_ai_listing_not_found';
@@ -19,14 +25,26 @@ const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
 type GenerateListingDraftFn = (
   input: GenerateListingDraftInput
 ) => ReturnType<typeof generateListingDraft>;
+type PrepareRecordCreatedListingsFn = (
+  options?: Parameters<typeof prepareRecordCreatedListings>[0]
+) => Promise<PrepareRecordCreatedListingsResult>;
 
 export interface RunSidecarJobOptions {
   dataAccess?: SidecarDataAccess;
   generateListingDraft?: GenerateListingDraftFn;
   now?: () => Date;
+  prepareRecordCreatedListings?: PrepareRecordCreatedListingsFn;
+}
+
+export interface AssetPrepSummary {
+  exhaustedCandidates: boolean;
+  failedCount: number;
+  processedCount: number;
+  skippedCount: number;
 }
 
 export interface RunSidecarJobResult {
+  assetPrepSummary?: AssetPrepSummary;
   job: JobRow;
   listing: ListingRow | null;
 }
@@ -184,6 +202,18 @@ async function markJobFailed(
   });
 }
 
+async function markJobCompleted(
+  dataAccess: SidecarDataAccess,
+  jobId: string
+): Promise<JobRow> {
+  return await dataAccess.jobs.update(jobId, {
+    last_error: null,
+    last_error_at: null,
+    last_error_code: null,
+    status: JOB_STATUS_COMPLETED,
+  });
+}
+
 async function getListingSafely(
   dataAccess: SidecarDataAccess,
   listingId: string
@@ -308,12 +338,7 @@ async function runGenerateAiJob(
       listingId,
       buildGeneratedListingReviewUpdate(draft)
     );
-    const completedJob = await options.dataAccess.jobs.update(job.id, {
-      last_error: null,
-      last_error_at: null,
-      last_error_code: null,
-      status: JOB_STATUS_COMPLETED,
-    });
+    const completedJob = await markJobCompleted(options.dataAccess, job.id);
 
     return {
       job: completedJob,
@@ -349,12 +374,60 @@ async function runGenerateAiJob(
   }
 }
 
+function buildAssetPrepSummary(
+  result: PrepareRecordCreatedListingsResult
+): AssetPrepSummary {
+  return {
+    exhaustedCandidates: result.exhaustedCandidates,
+    failedCount: result.failed.length,
+    processedCount: result.processed.length,
+    skippedCount: result.skipped.length,
+  };
+}
+
+async function runProcessImagesJob(
+  job: JobRow,
+  options: Required<Pick<RunSidecarJobOptions, 'dataAccess' | 'now' | 'prepareRecordCreatedListings'>>
+): Promise<RunSidecarJobResult> {
+  const errorAt = asIsoTimestamp(options.now);
+
+  try {
+    const result = await options.prepareRecordCreatedListings({
+      dataAccess: options.dataAccess,
+      now: options.now,
+    });
+    const completedJob = await markJobCompleted(options.dataAccess, job.id);
+
+    return {
+      assetPrepSummary: buildAssetPrepSummary(result),
+      job: completedJob,
+      listing: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const failedJob = await markJobFailed(
+      options.dataAccess,
+      job.id,
+      JOB_ERROR_CODE_PROCESS_IMAGES_FAILED,
+      message,
+      errorAt
+    );
+
+    return {
+      job: failedJob,
+      listing: null,
+    };
+  }
+}
+
 export async function runSidecarJob(
   jobId: string,
   options: RunSidecarJobOptions = {}
 ): Promise<RunSidecarJobResult> {
   const dataAccess = options.dataAccess ?? getSidecarDataAccess();
   const runGenerateDraft = options.generateListingDraft ?? generateListingDraft;
+  const runPrepareRecordCreatedListings =
+    options.prepareRecordCreatedListings ?? prepareRecordCreatedListings;
   const now = options.now ?? (() => new Date());
   const job = await dataAccess.jobs.getById(jobId);
 
@@ -370,6 +443,12 @@ export async function runSidecarJob(
         dataAccess,
         generateListingDraft: runGenerateDraft,
         now,
+      });
+    case PROCESS_IMAGES_JOB_TYPE:
+      return await runProcessImagesJob(job, {
+        dataAccess,
+        now,
+        prepareRecordCreatedListings: runPrepareRecordCreatedListings,
       });
     default: {
       const errorAt = asIsoTimestamp(now);

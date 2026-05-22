@@ -29,6 +29,7 @@ interface UploadImageOptions {
   client?: Pick<S3Client, 'send'>;
   config?: R2ImageStorageConfig;
   env?: NodeJS.ProcessEnv;
+  objectKey?: string;
   objectId?: string;
 }
 
@@ -141,7 +142,9 @@ export async function uploadImage(
 
   const config = options.config ?? loadR2ImageStorageConfig(options.env);
   const client = options.client ?? createR2ImageStorageClientFromConfig(config);
-  const objectKey = buildR2ImageObjectKey(input, options.objectId);
+  const objectKey = options.objectKey ?? buildR2ImageObjectKey(input, options.objectId);
+
+  assertNonEmpty('objectKey', objectKey);
 
   await client.send(
     new PutObjectCommand({

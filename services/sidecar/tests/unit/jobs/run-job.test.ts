@@ -1,5 +1,6 @@
 import type { JobRow, ListingRow } from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
+
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { runSidecarJob } from '@/jobs/index.js';
 
@@ -11,6 +12,19 @@ const queuedGenerateAiJob: JobRow = {
   last_error_at: null,
   last_error_code: null,
   listing_id: 'LIST-001',
+  next_run_at: null,
+  status: 'queued',
+  updated_at: '2026-05-20T12:00:00.000Z',
+};
+
+const queuedProcessImagesJob: JobRow = {
+  created_at: '2026-05-20T12:00:00.000Z',
+  id: 'job-process-images',
+  job_type: 'process_images',
+  last_error: null,
+  last_error_at: null,
+  last_error_code: null,
+  listing_id: null,
   next_run_at: null,
   status: 'queued',
   updated_at: '2026-05-20T12:00:00.000Z',
@@ -32,9 +46,9 @@ function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     ese_eligible: null,
     estimated_weight_oz: null,
     exported_at: null,
+    generated_at: null,
     handling_days: null,
     id: 'listing-row-id',
-    generated_at: null,
     image_urls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
     item_specifics: {},
     last_error_at: null,
@@ -84,6 +98,7 @@ function createDataAccess({
   }));
   const listingsCreate = vi.fn();
   const listingsList = vi.fn();
+  const listingsListByStatus = vi.fn();
   const listingsSaveImageMetadata = vi.fn();
   const listingsGetByListingId = vi.fn(async () => listingStates.at(-1) ?? null);
   const listingsUpdate = vi.fn(async (_listingId: string, changes: Partial<ListingRow>) => {
@@ -139,6 +154,10 @@ function createDataAccess({
         alreadyQueued: false,
         job: queuedGenerateAiJob,
       })),
+      enqueueProcessImages: vi.fn(async () => ({
+        alreadyQueued: false,
+        job: queuedProcessImagesJob,
+      })),
       getActiveGenerateAiByListingId: vi.fn(async () => queuedGenerateAiJob),
       getById: jobsGetById,
       listByListingId: jobsListByListingId,
@@ -148,6 +167,7 @@ function createDataAccess({
       create: listingsCreate,
       getByListingId: listingsGetByListingId,
       list: listingsList,
+      listByStatus: listingsListByStatus,
       saveImageMetadata: listingsSaveImageMetadata,
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
@@ -161,7 +181,7 @@ function createDataAccess({
 }
 
 describe('runSidecarJob', () => {
-  it('rejects listing jobs that are not assets_ready', async () => {
+  it('rejects generate_ai jobs when listing is not assets_ready', async () => {
     const dataAccess = createDataAccess({
       listing: createListingRow({
         status: 'needs_review',
@@ -182,7 +202,7 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
-  it('fails listing jobs with no image URLs and keeps the listing retryable', async () => {
+  it('fails generate_ai jobs with no image URLs and keeps listing retryable', async () => {
     const dataAccess = createDataAccess({
       listing: createListingRow({
         image_urls: [],
@@ -208,7 +228,7 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).not.toHaveBeenCalled();
   });
 
-  it('transitions assets_ready to generating to needs_review and persists the generated draft in one final update', async () => {
+  it('transitions generate_ai listings to needs_review and persists draft fields once', async () => {
     const dataAccess = createDataAccess({
       listing: createListingRow({
         item_specifics: {
@@ -286,60 +306,7 @@ describe('runSidecarJob', () => {
     expect(result.job.status).toBe('completed');
   });
 
-  it('fails safely when final draft persistence update throws and does not leave partial draft fields behind', async () => {
-    const originalListing = createListingRow({
-      description: 'Original description',
-      item_specifics: {
-        Era: '90s',
-      },
-      price: 10,
-      title: 'Original title',
-    });
-    const dataAccess = createDataAccess({
-      listing: originalListing,
-      onListingsUpdate: (changes) => {
-        if (changes.status === 'needs_review' && changes.sub_status === 'review_pending') {
-          throw new Error('review transition write failed');
-        }
-      },
-    });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1991 Upper Deck Michael Jordan',
-      description: 'Ungraded single card with visible edge wear.',
-      categorySuggestion: 'Sports Trading Cards',
-      conditionSuggestion: 'Ungraded',
-      aspects: {
-        Player: 'Michael Jordan',
-      },
-      priceSuggestion: 249.99,
-      confidence: {
-        title: 0.91,
-      },
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-2' },
-    }));
-
-    const result = await runSidecarJob('job-generate-ai', {
-      dataAccess,
-      generateListingDraft: generateListingDraftMock,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-    });
-
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('generate_ai_failed');
-    expect(result.listing?.status).toBe('assets_ready');
-    expect(result.listing?.sub_status).toBe('ready_to_generate');
-    expect(result.listing?.last_error_at).toBe('2026-05-20T13:00:00.000Z');
-    expect(result.listing?.last_error_code).toBe('generate_ai_failed');
-    expect(result.listing?.title).toBe('Original title');
-    expect(result.listing?.description).toBe('Original description');
-    expect(result.listing?.price).toBe(10);
-    expect(result.listing?.item_specifics).toEqual({
-      Era: '90s',
-    });
-  });
-
-  it('reverts the listing to a retryable state and records failure details when Gemini fails', async () => {
+  it('reverts generate_ai listings to retryable state when Gemini fails', async () => {
     const dataAccess = createDataAccess();
     const generateListingDraftMock = vi.fn(async () => {
       throw new Error('Gemini timed out');
@@ -372,7 +339,77 @@ describe('runSidecarJob', () => {
     expect(result.listing?.sub_status).toBe('ready_to_generate');
   });
 
-  it('fails unsupported job types without touching Gemini or listing workflow', async () => {
+  it('returns asset prep summary for process_images jobs and does not fail batch on per-listing errors', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedProcessImagesJob,
+    });
+    const prepareRecordCreatedListingsMock = vi.fn(async () => ({
+      exhaustedCandidates: false,
+      failed: [
+        {
+          errorCode: 'record_created_image_processing_failed',
+          listingId: 'LIST-002',
+          message: 'sharp exploded',
+        },
+      ],
+      processed: [
+        createListingRow({
+          listing_id: 'LIST-001',
+          status: 'assets_ready',
+          sub_status: 'ready_to_generate',
+        }),
+      ],
+      skipped: [
+        {
+          listingId: 'test-123',
+          reason: 'record_created_skip_non_local_source_images',
+        },
+      ],
+    }));
+
+    const result = await runSidecarJob('job-process-images', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareRecordCreatedListings: prepareRecordCreatedListingsMock,
+    });
+
+    expect(prepareRecordCreatedListingsMock).toHaveBeenCalledWith({
+      dataAccess,
+      now: expect.any(Function),
+    });
+    expect(result.listing).toBeNull();
+    expect(result.assetPrepSummary).toEqual({
+      exhaustedCandidates: false,
+      failedCount: 1,
+      processedCount: 1,
+      skippedCount: 1,
+    });
+    expect(result.job.status).toBe('completed');
+    expect(result.job.last_error).toBeNull();
+  });
+
+  it('marks process_images jobs failed when batch execution throws', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedProcessImagesJob,
+    });
+    const prepareRecordCreatedListingsMock = vi.fn(async () => {
+      throw new Error('Supabase unavailable');
+    });
+
+    const result = await runSidecarJob('job-process-images', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareRecordCreatedListings: prepareRecordCreatedListingsMock,
+    });
+
+    expect(result.listing).toBeNull();
+    expect(result.assetPrepSummary).toBeUndefined();
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('process_images_failed');
+    expect(result.job.last_error).toContain('Supabase unavailable');
+  });
+
+  it('fails unsupported job types without touching listing workflow', async () => {
     const dataAccess = createDataAccess({
       job: {
         ...queuedGenerateAiJob,

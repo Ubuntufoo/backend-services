@@ -23,6 +23,12 @@ export interface ListingImageMetadataUpdate {
   r2ObjectKeys: string[];
 }
 
+export interface ListListingsByStatusOptions {
+  limit: number;
+  offset: number;
+  orderByCreatedAt?: 'asc' | 'desc';
+}
+
 export interface GeneratedListingFieldsUpdate {
   captureMode?: ListingUpdate['capture_mode'];
   categoryId?: ListingUpdate['category_id'];
@@ -117,6 +123,27 @@ export async function listListings(client: SupabaseDataClient): Promise<ListingR
     .select('*')
     .order('updated_at', { ascending: false })
     .limit(100)) as MultiResult<ListingRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
+}
+
+export async function listListingsByStatus(
+  client: SupabaseDataClient,
+  status: ListingRow['status'],
+  options: ListListingsByStatusOptions
+): Promise<ListingRow[]> {
+  const result = (await client
+    .from('listings')
+    .select('*')
+    .eq('status', status)
+    .order('created_at', {
+      ascending: options.orderByCreatedAt !== 'desc',
+    })
+    .range(options.offset, options.offset + options.limit - 1)) as MultiResult<ListingRow>;
 
   if (result.error) {
     throw new Error(result.error.message);

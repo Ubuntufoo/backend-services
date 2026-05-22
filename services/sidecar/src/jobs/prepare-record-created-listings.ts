@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 
 import type { ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import {
@@ -21,19 +21,47 @@ const ASSETS_READY_STATUS = 'assets_ready';
 const READY_TO_GENERATE_SUB_STATUS = 'ready_to_generate';
 const DEFAULT_IMAGE_PROCESSING_MODE: ProcessListingImagesInput['processingMode'] = 'strip_exif';
 const IMAGE_SERVICE_OUTPUT_DIRECTORY_NAME = '.image-service-output';
+const DEFAULT_BATCH_SIZE = 25;
 
-const LISTING_ERROR_CODE_MISSING_SOURCE_IMAGES = 'record_created_missing_source_images';
 const LISTING_ERROR_CODE_ASSET_STATE_CONFLICT = 'record_created_asset_state_conflict';
 const LISTING_ERROR_CODE_INVALID_SOURCE_IMAGES = 'record_created_invalid_source_images';
 const LISTING_ERROR_CODE_IMAGE_PROCESSING_FAILED = 'record_created_image_processing_failed';
 const LISTING_ERROR_CODE_R2_UPLOAD_FAILED = 'record_created_r2_upload_failed';
 const LISTING_ERROR_CODE_ASSET_PERSISTENCE_FAILED = 'record_created_asset_persistence_failed';
 
+const LISTING_SKIP_REASON_MISSING_SOURCE_IMAGES = 'record_created_skip_missing_source_images';
+const LISTING_SKIP_REASON_NON_LOCAL_SOURCE_IMAGES = 'record_created_skip_non_local_source_images';
+const LISTING_SKIP_REASON_NON_WATCHER_SOURCE_IMAGES = 'record_created_skip_non_watcher_source_images';
+
 type ProcessListingImagesFn = (
   input: ProcessListingImagesInput
 ) => Promise<ProcessListingImagesResult>;
 
+interface EligibleListingCandidate {
+  kind: 'eligible';
+  listing: ListingRow;
+  sourceImagePaths: string[];
+}
+
+interface FailedListingCandidate {
+  kind: 'failed';
+  listing: ListingRow;
+  error: ListingAssetPreparationError;
+}
+
+interface SkippedListingCandidate {
+  kind: 'skipped';
+  listingId: string;
+  reason: string;
+}
+
+type ListingAssetCandidate =
+  | EligibleListingCandidate
+  | FailedListingCandidate
+  | SkippedListingCandidate;
+
 export interface PrepareRecordCreatedListingsOptions {
+  batchSize?: number;
   createRunId?: () => string;
   dataAccess?: SidecarDataAccess;
   imageProcessor?: ProcessListingImagesFn;
@@ -47,9 +75,16 @@ export interface PrepareRecordCreatedListingsFailure {
   message: string;
 }
 
+export interface PrepareRecordCreatedListingsSkipped {
+  listingId: string;
+  reason: string;
+}
+
 export interface PrepareRecordCreatedListingsResult {
+  exhaustedCandidates: boolean;
   failed: PrepareRecordCreatedListingsFailure[];
   processed: ListingRow[];
+  skipped: PrepareRecordCreatedListingsSkipped[];
 }
 
 class ListingAssetPreparationError extends Error {
@@ -86,60 +121,124 @@ function isRemoteAssetPath(pathValue: string): boolean {
   }
 }
 
-function getSourceImagePaths(listing: ListingRow): string[] {
-  const sourceImagePaths = asTrimmedStringArray(listing.image_urls);
-  const existingObjectKeys = asTrimmedStringArray(listing.r2_object_keys);
-
-  if (sourceImagePaths.length === 0) {
-    throw new ListingAssetPreparationError(
-      LISTING_ERROR_CODE_MISSING_SOURCE_IMAGES,
-      `Listing "${listing.listing_id}" does not have watcher-managed local image paths.`
-    );
-  }
-
-  if (
-    existingObjectKeys.length > 0 ||
-    sourceImagePaths.some((pathValue) => isRemoteAssetPath(pathValue))
-  ) {
-    throw new ListingAssetPreparationError(
-      LISTING_ERROR_CODE_ASSET_STATE_CONFLICT,
-      `Listing "${listing.listing_id}" already has persisted asset metadata and cannot be reprocessed safely.`
-    );
-  }
-
-  if (sourceImagePaths.some((pathValue) => !isAbsolute(pathValue))) {
-    throw new ListingAssetPreparationError(
-      LISTING_ERROR_CODE_INVALID_SOURCE_IMAGES,
-      `Listing "${listing.listing_id}" has non-absolute local image paths.`
-    );
-  }
-
-  if (new Set(sourceImagePaths).size !== sourceImagePaths.length) {
-    throw new ListingAssetPreparationError(
-      LISTING_ERROR_CODE_INVALID_SOURCE_IMAGES,
-      `Listing "${listing.listing_id}" has duplicate local image paths.`
-    );
-  }
-
-  return sourceImagePaths;
-}
-
-function getProcessedOutputDirectory(
-  listingId: string,
-  sourceImagePaths: readonly string[],
-  createRunId: () => string
-): string {
+function hasWatcherManagedPathShape(listingId: string, sourceImagePaths: readonly string[]): boolean {
   const sourceDirectories = new Set(sourceImagePaths.map((pathValue) => dirname(pathValue)));
 
   if (sourceDirectories.size !== 1) {
-    throw new ListingAssetPreparationError(
-      LISTING_ERROR_CODE_INVALID_SOURCE_IMAGES,
-      `Listing "${listingId}" image paths must share one watcher-processed directory.`
-    );
+    return false;
   }
 
   const [sourceDirectory] = [...sourceDirectories];
-  return resolve(sourceDirectory, IMAGE_SERVICE_OUTPUT_DIRECTORY_NAME, createRunId());
+
+  if (basename(sourceDirectory) !== listingId) {
+    return false;
+  }
+
+  return sourceImagePaths.every((pathValue) => basename(pathValue).startsWith(`${listingId}_`));
+}
+
+function classifyListingForAssetPreparation(listing: ListingRow): ListingAssetCandidate {
+  const sourceImagePaths = asTrimmedStringArray(listing.image_urls);
+  const existingObjectKeys = asTrimmedStringArray(listing.r2_object_keys);
+
+  if (existingObjectKeys.length > 0) {
+    return {
+      kind: 'failed',
+      listing,
+      error: new ListingAssetPreparationError(
+        LISTING_ERROR_CODE_ASSET_STATE_CONFLICT,
+        `Listing "${listing.listing_id}" already has persisted asset metadata and cannot be reprocessed safely.`
+      ),
+    };
+  }
+
+  if (sourceImagePaths.length === 0) {
+    return {
+      kind: 'skipped',
+      listingId: listing.listing_id,
+      reason: LISTING_SKIP_REASON_MISSING_SOURCE_IMAGES,
+    };
+  }
+
+  const remotePathCount = sourceImagePaths.filter((pathValue) => isRemoteAssetPath(pathValue)).length;
+
+  if (remotePathCount === sourceImagePaths.length) {
+    return {
+      kind: 'skipped',
+      listingId: listing.listing_id,
+      reason: LISTING_SKIP_REASON_NON_LOCAL_SOURCE_IMAGES,
+    };
+  }
+
+  if (remotePathCount > 0) {
+    return {
+      kind: 'failed',
+      listing,
+      error: new ListingAssetPreparationError(
+        LISTING_ERROR_CODE_ASSET_STATE_CONFLICT,
+        `Listing "${listing.listing_id}" mixes local source images with remote asset paths.`
+      ),
+    };
+  }
+
+  if (sourceImagePaths.some((pathValue) => !isAbsolute(pathValue))) {
+    return {
+      kind: 'skipped',
+      listingId: listing.listing_id,
+      reason: LISTING_SKIP_REASON_NON_LOCAL_SOURCE_IMAGES,
+    };
+  }
+
+  if (new Set(sourceImagePaths).size !== sourceImagePaths.length) {
+    return {
+      kind: 'failed',
+      listing,
+      error: new ListingAssetPreparationError(
+        LISTING_ERROR_CODE_INVALID_SOURCE_IMAGES,
+        `Listing "${listing.listing_id}" has duplicate local image paths.`
+      ),
+    };
+  }
+
+  const sourceDirectories = new Set(sourceImagePaths.map((pathValue) => dirname(pathValue)));
+
+  if (sourceDirectories.size !== 1) {
+    return {
+      kind: 'failed',
+      listing,
+      error: new ListingAssetPreparationError(
+        LISTING_ERROR_CODE_INVALID_SOURCE_IMAGES,
+        `Listing "${listing.listing_id}" image paths must share one watcher-processed directory.`
+      ),
+    };
+  }
+
+  if (!hasWatcherManagedPathShape(listing.listing_id, sourceImagePaths)) {
+    return {
+      kind: 'skipped',
+      listingId: listing.listing_id,
+      reason: LISTING_SKIP_REASON_NON_WATCHER_SOURCE_IMAGES,
+    };
+  }
+
+  return {
+    kind: 'eligible',
+    listing,
+    sourceImagePaths,
+  };
+}
+
+function getProcessedOutputDirectory(
+  sourceImagePaths: readonly string[],
+  createRunId: () => string
+): string {
+  const [firstSourceImagePath] = sourceImagePaths;
+
+  if (!firstSourceImagePath) {
+    throw new Error('sourceImagePaths must include at least one path.');
+  }
+
+  return resolve(dirname(firstSourceImagePath), IMAGE_SERVICE_OUTPUT_DIRECTORY_NAME, createRunId());
 }
 
 function buildSuccessUpdate(uploadedImages: readonly R2UploadedListingImage[]): ListingUpdate {
@@ -221,6 +320,18 @@ function getOrderedUploadedImages(
   });
 }
 
+function getBatchSize(batchSize: number | undefined): number {
+  if (batchSize === undefined) {
+    return DEFAULT_BATCH_SIZE;
+  }
+
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new Error(`batchSize must be a positive integer. Received: ${String(batchSize)}.`);
+  }
+
+  return batchSize;
+}
+
 async function persistFailure(
   dataAccess: SidecarDataAccess,
   listing: ListingRow,
@@ -237,8 +348,72 @@ async function persistFailure(
   }
 }
 
+async function collectRecordCreatedCandidates(
+  dataAccess: SidecarDataAccess,
+  batchSize: number
+): Promise<{
+  attemptedCandidates: Array<EligibleListingCandidate | FailedListingCandidate>;
+  exhaustedCandidates: boolean;
+  skipped: PrepareRecordCreatedListingsSkipped[];
+}> {
+  const attemptedCandidates: Array<EligibleListingCandidate | FailedListingCandidate> = [];
+  const skipped: PrepareRecordCreatedListingsSkipped[] = [];
+  const pageSize = batchSize;
+  let exhaustedCandidates = false;
+  let offset = 0;
+
+  while (attemptedCandidates.length < batchSize) {
+    const listings = await dataAccess.listings.listByStatus(RECORD_CREATED_STATUS, {
+      limit: pageSize,
+      offset,
+      orderByCreatedAt: 'asc',
+    });
+
+    if (listings.length === 0) {
+      exhaustedCandidates = true;
+      break;
+    }
+
+    offset += listings.length;
+
+    for (const listing of listings) {
+      const candidate = classifyListingForAssetPreparation(listing);
+
+      if (candidate.kind === 'skipped') {
+        skipped.push({
+          listingId: candidate.listingId,
+          reason: candidate.reason,
+        });
+        continue;
+      }
+
+      attemptedCandidates.push(candidate);
+
+      if (attemptedCandidates.length === batchSize) {
+        break;
+      }
+    }
+
+    if (attemptedCandidates.length === batchSize) {
+      break;
+    }
+
+    if (listings.length < pageSize) {
+      exhaustedCandidates = true;
+      break;
+    }
+  }
+
+  return {
+    attemptedCandidates,
+    exhaustedCandidates,
+    skipped,
+  };
+}
+
 async function prepareListingAssets(
   listing: ListingRow,
+  sourceImagePaths: readonly string[],
   options: Required<
     Pick<
       PrepareRecordCreatedListingsOptions,
@@ -246,12 +421,7 @@ async function prepareListingAssets(
     >
   >
 ): Promise<ListingRow> {
-  const sourceImagePaths = getSourceImagePaths(listing);
-  const outputDirectory = getProcessedOutputDirectory(
-    listing.listing_id,
-    sourceImagePaths,
-    options.createRunId
-  );
+  const outputDirectory = getProcessedOutputDirectory(sourceImagePaths, options.createRunId);
 
   let processedImages: ProcessListingImagesResult;
 
@@ -316,15 +486,30 @@ export async function prepareRecordCreatedListings(
   const imageUploader = options.imageUploader ?? createR2ImageUploader();
   const now = options.now ?? (() => new Date());
   const createRunId = options.createRunId ?? (() => randomUUID());
-  const listings = await dataAccess.listings.list();
-  const eligibleListings = listings.filter((listing) => listing.status === RECORD_CREATED_STATUS);
+  const batchSize = getBatchSize(options.batchSize);
   const processed: ListingRow[] = [];
   const failed: PrepareRecordCreatedListingsFailure[] = [];
+  const {
+    attemptedCandidates,
+    exhaustedCandidates,
+    skipped,
+  } = await collectRecordCreatedCandidates(dataAccess, batchSize);
 
-  for (const listing of eligibleListings) {
+  for (const candidate of attemptedCandidates) {
+    if (candidate.kind === 'failed') {
+      const errorAt = asIsoTimestamp(now);
+      await persistFailure(dataAccess, candidate.listing, candidate.error, errorAt);
+      failed.push({
+        errorCode: candidate.error.code,
+        listingId: candidate.listing.listing_id,
+        message: candidate.error.message,
+      });
+      continue;
+    }
+
     try {
       processed.push(
-        await prepareListingAssets(listing, {
+        await prepareListingAssets(candidate.listing, candidate.sourceImagePaths, {
           createRunId,
           dataAccess,
           imageProcessor,
@@ -335,21 +520,23 @@ export async function prepareRecordCreatedListings(
       const assetPreparationError = toListingAssetPreparationError(
         error,
         LISTING_ERROR_CODE_ASSET_PERSISTENCE_FAILED,
-        listing.listing_id
+        candidate.listing.listing_id
       );
       const errorAt = asIsoTimestamp(now);
-      await persistFailure(dataAccess, listing, assetPreparationError, errorAt);
+      await persistFailure(dataAccess, candidate.listing, assetPreparationError, errorAt);
 
       failed.push({
         errorCode: assetPreparationError.code,
-        listingId: listing.listing_id,
+        listingId: candidate.listing.listing_id,
         message: assetPreparationError.message,
       });
     }
   }
 
   return {
+    exhaustedCandidates,
     failed,
     processed,
+    skipped,
   };
 }

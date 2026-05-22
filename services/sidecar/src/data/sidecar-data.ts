@@ -5,6 +5,7 @@ import {
   createListing,
   createOrder,
   enqueueGenerateAiJob,
+  enqueueProcessImagesJob,
   createSupabaseServiceClient,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
@@ -13,6 +14,7 @@ import {
   getOrderByOrderId,
   listJobsByListingId,
   listListings,
+  listListingsByStatus,
   saveListingImageMetadata,
   updateAppSettings,
   updateJob,
@@ -23,9 +25,11 @@ import {
   type AppSettingsRow,
   type AppSettingsUpdate,
   type EnqueueGenerateAiJobResult,
+  type EnqueueProcessImagesJobResult,
   type JobInsert,
   type JobRow,
   type JobUpdate,
+  type ListListingsByStatusOptions,
   type ListingInsert,
   type ListingImageMetadataUpdate,
   type ListingRow,
@@ -45,6 +49,7 @@ export interface SidecarDataAccess {
   jobs: {
     create(input: JobInsert): Promise<JobRow>;
     enqueueGenerateAi(listingId: string): Promise<EnqueueGenerateAiJobResult>;
+    enqueueProcessImages(): Promise<EnqueueProcessImagesJobResult>;
     getActiveGenerateAiByListingId(listingId: string): Promise<JobRow | null>;
     getById(jobId: string): Promise<JobRow | null>;
     listByListingId(listingId: string): Promise<JobRow[]>;
@@ -54,6 +59,10 @@ export interface SidecarDataAccess {
     create(input: ListingInsert): Promise<ListingRow>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
     list(): Promise<ListingRow[]>;
+    listByStatus(
+      status: ListingRow['status'],
+      options: ListListingsByStatusOptions
+    ): Promise<ListingRow[]>;
     saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow | null>;
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
@@ -75,6 +84,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       create: async (input) => await createListing(client, input),
       getByListingId: async (listingId) => await getListingByListingId(client, listingId),
       list: async () => await listListings(client),
+      listByStatus: async (status, options) => await listListingsByStatus(client, status, options),
       saveImageMetadata: async (input) => await saveListingImageMetadata(client, input),
       update: async (listingId, changes) => await updateListing(client, listingId, changes),
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
@@ -82,6 +92,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     jobs: {
       create: async (input) => await createJob(client, input),
       enqueueGenerateAi: async (listingId) => await enqueueGenerateAiJob(client, listingId),
+      enqueueProcessImages: async () => await enqueueProcessImagesJob(client),
       getActiveGenerateAiByListingId: async (listingId) =>
         await getActiveGenerateAiJobByListingId(client, listingId),
       getById: async (jobId) => await getJobById(client, jobId),
