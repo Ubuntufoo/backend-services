@@ -41,6 +41,7 @@ export interface ImageServiceFileSystem {
   copyFile: typeof fs.copyFile;
   lstat: typeof fs.lstat;
   mkdir: typeof fs.mkdir;
+  realpath: typeof fs.realpath;
   rename: typeof fs.rename;
   stat: typeof fs.stat;
   unlink: typeof fs.unlink;
@@ -53,6 +54,7 @@ export interface ProcessListingImagesDependencies {
 
 interface PreparedListingImage {
   sourcePath: string;
+  canonicalSourcePath: string;
   outputPath: string;
   filename: string;
   normalizedExtension: ImageServiceSupportedExtension;
@@ -63,6 +65,7 @@ const DEFAULT_IMAGE_SERVICE_FILE_SYSTEM: ImageServiceFileSystem = {
   copyFile: fs.copyFile.bind(fs),
   lstat: fs.lstat.bind(fs),
   mkdir: fs.mkdir.bind(fs),
+  realpath: fs.realpath.bind(fs),
   rename: fs.rename.bind(fs),
   stat: fs.stat.bind(fs),
   unlink: fs.unlink.bind(fs),
@@ -171,6 +174,22 @@ async function ensureOutputDirectory(
   }
 }
 
+async function resolveCanonicalExistingPath(
+  pathValue: string,
+  listingId: string,
+  context: string,
+  fileSystem: Pick<ImageServiceFileSystem, 'realpath'>
+): Promise<string> {
+  try {
+    return await fileSystem.realpath(pathValue);
+  } catch (error) {
+    throw createListingImageError(
+      listingId,
+      `${context} could not be canonicalized: ${pathValue}. ${getErrorMessage(error)}`
+    );
+  }
+}
+
 function createTempOutputPath(outputDirectory: string, filename: string, extension: string): string {
   return resolve(outputDirectory, `.${filename}.${randomUUID()}${extension}`);
 }
@@ -192,7 +211,7 @@ async function cleanupFilePaths(
 
 function prepareListingImages(
   input: ProcessListingImagesInput,
-  fileSystem: Pick<ImageServiceFileSystem, 'access' | 'lstat' | 'mkdir'>
+  fileSystem: Pick<ImageServiceFileSystem, 'access' | 'lstat' | 'mkdir' | 'realpath'>
 ): Promise<{ outputDirectory: string; preparedImages: PreparedListingImage[] }> {
   return (async () => {
     const listingId = input.listingId.trim();
@@ -207,6 +226,7 @@ function prepareListingImages(
 
     const outputDirectory = resolveImageServicePath(input.outputDirectory);
     const seenSourcePaths = new Set<string>();
+    const seenCanonicalSourcePaths = new Set<string>();
     const seenOutputPaths = new Set<string>();
     const preparedImages: PreparedListingImage[] = [];
 
@@ -227,14 +247,23 @@ function prepareListingImages(
 
       seenSourcePaths.add(sourcePath);
 
-      if (dirname(sourcePath) === outputDirectory) {
+      await assertReadableFile(sourcePath, listingId, fileSystem);
+
+      const canonicalSourcePath = await resolveCanonicalExistingPath(
+        sourcePath,
+        listingId,
+        'Source image path',
+        fileSystem
+      );
+
+      if (seenCanonicalSourcePaths.has(canonicalSourcePath)) {
         throw createListingImageError(
           listingId,
-          `Output directory must differ from source parent directory: ${outputDirectory}.`
+          `Duplicate source image path after canonicalization: ${canonicalSourcePath}.`
         );
       }
 
-      await assertReadableFile(sourcePath, listingId, fileSystem);
+      seenCanonicalSourcePaths.add(canonicalSourcePath);
 
       const filename = basename(sourcePath);
       const outputPath = resolve(outputDirectory, filename);
@@ -250,6 +279,7 @@ function prepareListingImages(
 
       preparedImages.push({
         sourcePath,
+        canonicalSourcePath,
         outputPath,
         filename,
         normalizedExtension,
@@ -257,6 +287,22 @@ function prepareListingImages(
     }
 
     await ensureOutputDirectory(outputDirectory, listingId, fileSystem);
+
+    const canonicalOutputDirectory = await resolveCanonicalExistingPath(
+      outputDirectory,
+      listingId,
+      'Output directory',
+      fileSystem
+    );
+
+    for (const image of preparedImages) {
+      if (dirname(image.canonicalSourcePath) === canonicalOutputDirectory) {
+        throw createListingImageError(
+          listingId,
+          `Output directory must differ from source parent directory: ${outputDirectory}.`
+        );
+      }
+    }
 
     for (const image of preparedImages) {
       await assertPathDoesNotExist(

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -62,6 +62,7 @@ function createFileSystem(
     copyFile: fsPromises.copyFile.bind(fsPromises),
     lstat: fsPromises.lstat.bind(fsPromises),
     mkdir: fsPromises.mkdir.bind(fsPromises),
+    realpath: fsPromises.realpath.bind(fsPromises),
     rename: fsPromises.rename.bind(fsPromises),
     stat: fsPromises.stat.bind(fsPromises),
     unlink: fsPromises.unlink.bind(fsPromises),
@@ -320,6 +321,33 @@ describe('processListingImages', () => {
     ).rejects.toThrow(`Output directory must differ from source parent directory: ${sourceDirectory}.`);
 
     expect((await fsPromises.readdir(sourceDirectory)).every((entry) => !entry.startsWith('.'))).toBe(true);
+  });
+
+  it('rejects symlink-alias source directories that resolve to the output directory', async () => {
+    const { outputDirectory } = await createTempLayout();
+    const realSourceDirectory = path.join(tempDir as string, 'real-source');
+    const aliasedSourceDirectory = path.join(tempDir as string, 'source-alias');
+
+    await fsPromises.mkdir(realSourceDirectory);
+    symlinkSync(realSourceDirectory, aliasedSourceDirectory, 'dir');
+
+    const { pngPath } = await createFixtureImages(realSourceDirectory);
+    const aliasedSourcePath = path.join(aliasedSourceDirectory, path.basename(pngPath));
+
+    await expect(
+      processListingImages({
+        listingId: 'Single-000011',
+        inputImagePaths: [aliasedSourcePath],
+        outputDirectory: realSourceDirectory,
+        processingMode: 'passthrough',
+      })
+    ).rejects.toThrow(`Output directory must differ from source parent directory: ${realSourceDirectory}.`);
+
+    expect(await fsPromises.readdir(realSourceDirectory)).toEqual([
+      'Photo-One.JPG',
+      'second-image.png',
+      'third-image.webp',
+    ]);
   });
 
   it('cleans temp files and written outputs after mid-batch failure', async () => {
