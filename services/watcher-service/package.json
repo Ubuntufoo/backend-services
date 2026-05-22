@@ -1,11 +1,14 @@
 {
   "name": "@ebay-inventory/watcher-service",
   "version": "0.0.0",
-  "description": "Config and path conventions for the watcher-service boundary.",
+  "description": "Filesystem watcher runtime for incoming listing images.",
   "type": "module",
   "private": true,
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "bin": {
+    "watcher-service": "./build/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./build/index.d.ts",
@@ -13,18 +16,23 @@
     }
   },
   "scripts": {
-    "build:deps": "pnpm --filter @ebay-inventory/types build && pnpm --filter @ebay-inventory/data build",
+    "build:deps": "pnpm --filter @ebay-inventory/env build && pnpm --filter @ebay-inventory/types build && pnpm --filter @ebay-inventory/data build",
     "build": "pnpm run build:deps && tsc --build",
+    "dev": "pnpm run build:deps && tsx src/cli.ts",
+    "start": "node build/cli.js",
     "typecheck": "pnpm run build:deps && tsc --noEmit --pretty false -p tsconfig.json",
     "test": "pnpm run typecheck && vitest run",
     "check": "pnpm run typecheck && pnpm run test"
   },
   "dependencies": {
     "@ebay-inventory/data": "workspace:*",
+    "@ebay-inventory/env": "workspace:*",
+    "chokidar": "^3.6.0",
     "@ebay-inventory/types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.3",
     "vitest": "^4.0.8"
   }

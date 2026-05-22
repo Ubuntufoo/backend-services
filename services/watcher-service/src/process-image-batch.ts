@@ -8,6 +8,7 @@ import type {
 } from './data/index.js';
 import { createWatcherListingRepository, isWatcherListingIdUniqueViolation } from './data/index.js';
 import {
+  isProcessedListingDirectoryCollisionError,
   moveGroupedImagesToProcessedListing,
   type ProcessedImageMoveFileSystem,
   type ProcessedImageMoveRecord,
@@ -47,12 +48,37 @@ export interface ProcessIncomingImageBatchResult {
   groupingState: WatcherGroupingState;
 }
 
+export class WatcherBatchProcessingError extends Error {
+  cause?: unknown;
+  groupingState: WatcherGroupingState;
+  processedListings: ProcessedIncomingListing[];
+  retryInputs: string[];
+
+  constructor(
+    message: string,
+    options: {
+      cause: unknown;
+      groupingState: WatcherGroupingState;
+      processedListings: ProcessedIncomingListing[];
+      retryInputs: string[];
+    }
+  ) {
+    super(message);
+    this.name = 'WatcherBatchProcessingError';
+    this.cause = options.cause;
+    this.groupingState = cloneWatcherGroupingState(options.groupingState);
+    this.processedListings = [...options.processedListings];
+    this.retryInputs = [...options.retryInputs];
+  }
+}
+
 export interface ProcessIncomingImageBatchDependencies {
   getActiveWatcherCaptureMode(): Promise<WatcherCaptureMode>;
   consumeImageGrouping: typeof consumeImageGrouping;
   allocateNextListingId(captureMode: WatcherCaptureMode): Promise<string>;
   createWatcherListing(input: CreateWatcherListingInput): Promise<ListingRow>;
   isWatcherListingCollision(error: unknown): boolean;
+  isProcessedListingCollision(error: unknown): boolean;
   moveGroupedImagesToProcessedListing(
     input: ProcessedImageMoveInput
   ): Promise<ProcessedImageMoveResult>;
@@ -72,6 +98,10 @@ function cloneWatcherGroupingState(state: WatcherGroupingState): WatcherGrouping
   return {
     pending: state.pending.map((image) => ({ path: image.path })),
   };
+}
+
+function cloneWatcherGroupingInputs(inputs: readonly WatcherGroupingInput[]): string[] {
+  return inputs.map((input) => (typeof input === 'string' ? input : input.path));
 }
 
 function createBatchListingIdAllocator(
@@ -107,6 +137,7 @@ export function createProcessIncomingImageBatchDependencies(
     createWatcherListing: async (listingInput) =>
       await watcherListingRepository.createWatcherListing(listingInput),
     isWatcherListingCollision: isWatcherListingIdUniqueViolation,
+    isProcessedListingCollision: isProcessedListingDirectoryCollisionError,
     moveGroupedImagesToProcessedListing: async (moveInput) =>
       await moveGroupedImagesToProcessedListing(moveInput, input.fileSystem),
     rollbackProcessedListingMove: async (moveResult) =>
@@ -126,11 +157,27 @@ async function persistCompletedGroup(
 ): Promise<ProcessedIncomingListing> {
   for (let attempt = 1; attempt <= WATCHER_LISTING_INSERT_MAX_ATTEMPTS; attempt += 1) {
     const listingId = await allocateListingId(group.captureMode);
-    const processedMoveResult = await dependencies.moveGroupedImagesToProcessedListing({
-      listingId,
-      processedDirectory,
-      images: group.images,
-    });
+    let processedMoveResult: ProcessedImageMoveResult;
+
+    try {
+      processedMoveResult = await dependencies.moveGroupedImagesToProcessedListing({
+        listingId,
+        processedDirectory,
+        images: group.images,
+      });
+    } catch (error) {
+      if (!dependencies.isProcessedListingCollision(error)) {
+        throw error;
+      }
+
+      if (attempt === WATCHER_LISTING_INSERT_MAX_ATTEMPTS) {
+        throw new Error(
+          `Watcher listing insert hit retry cap (${WATCHER_LISTING_INSERT_MAX_ATTEMPTS}) after listing_id collision. Last listing_id: ${listingId}.`
+        );
+      }
+
+      continue;
+    }
 
     try {
       const listing = await dependencies.createWatcherListing({
@@ -187,20 +234,34 @@ export async function processIncomingImageBatch(
   );
   const allocateListingId = createBatchListingIdAllocator(dependencies);
   const processedListings: ProcessedIncomingListing[] = [];
+  const groupingState = cloneWatcherGroupingState(groupingResult.state);
 
-  for (const group of groupingResult.completedGroups) {
-    processedListings.push(
-      await persistCompletedGroup(
-        group,
-        input.processedDirectory,
-        allocateListingId,
-        dependencies
-      )
-    );
+  for (const [index, group] of groupingResult.completedGroups.entries()) {
+    try {
+      processedListings.push(
+        await persistCompletedGroup(
+          group,
+          input.processedDirectory,
+          allocateListingId,
+          dependencies
+        )
+      );
+    } catch (error) {
+      throw new WatcherBatchProcessingError(getErrorMessage(error), {
+        cause: error,
+        groupingState,
+        processedListings,
+        retryInputs: cloneWatcherGroupingInputs(
+          groupingResult.completedGroups
+            .slice(index)
+            .flatMap((completedGroup) => completedGroup.images)
+        ),
+      });
+    }
   }
 
   return {
     processedListings,
-    groupingState: groupingResult.state,
+    groupingState,
   };
 }

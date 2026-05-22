@@ -16,6 +16,16 @@ export interface ProcessedImageMoveResult {
   images: ProcessedImageMoveRecord[];
 }
 
+export class ProcessedListingDirectoryCollisionError extends Error {
+  processedDirectory: string;
+
+  constructor(processedDirectory: string) {
+    super(`Processed listing directory already exists and cannot be reused: ${processedDirectory}.`);
+    this.name = 'ProcessedListingDirectoryCollisionError';
+    this.processedDirectory = processedDirectory;
+  }
+}
+
 export interface ProcessedImageMoveFileSystem {
   copyFile: typeof fs.copyFile;
   lstat: typeof fs.lstat;
@@ -74,6 +84,12 @@ async function assertPathDoesNotExist(
   }
 
   throw new Error(`${context}: ${pathValue}.`);
+}
+
+export function isProcessedListingDirectoryCollisionError(
+  error: unknown
+): error is ProcessedListingDirectoryCollisionError {
+  return error instanceof ProcessedListingDirectoryCollisionError;
 }
 
 async function moveFile(
@@ -162,11 +178,22 @@ export async function moveGroupedImagesToProcessedListing(
   const images = buildProcessedImageMovePlan(input);
   const processedDirectory = buildProcessedListingDirectory(input.processedDirectory, input.listingId);
 
-  await assertPathDoesNotExist(
-    processedDirectory,
-    'Processed listing directory already exists and cannot be reused',
-    fileSystem
-  );
+  try {
+    await assertPathDoesNotExist(
+      processedDirectory,
+      'Processed listing directory already exists and cannot be reused',
+      fileSystem
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === `Processed listing directory already exists and cannot be reused: ${processedDirectory}.`
+    ) {
+      throw new ProcessedListingDirectoryCollisionError(processedDirectory);
+    }
+
+    throw error;
+  }
 
   await fileSystem.mkdir(processedDirectory);
 
