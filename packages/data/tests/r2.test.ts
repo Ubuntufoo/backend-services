@@ -55,7 +55,12 @@ describe('shared R2 image upload service', () => {
   it('builds public image URLs on the custom domain', async () => {
     const { buildPublicImageUrl } = await import('../src/index.js');
 
-    expect(buildPublicImageUrl('listings/listing-123/front image.jpg')).toBe(
+    expect(
+      buildPublicImageUrl(
+        'https://images.murphyfamilyhobby.dev/',
+        'listings/listing-123/front image.jpg'
+      )
+    ).toBe(
       'https://images.murphyfamilyhobby.dev/listings/listing-123/front%20image.jpg'
     );
   });
@@ -98,12 +103,12 @@ describe('shared R2 image upload service', () => {
       CacheControl: 'public, max-age=31536000, immutable',
       Bucket: 'listing-images',
       ContentType: 'image/jpeg',
-      Key: 'listings/listing-123/front-image.jpg',
+      Key: 'listings/listing-123/front-image-2c8648d103e3.jpg',
     });
     expect(result).toEqual({
-      objectKey: 'listings/listing-123/front-image.jpg',
+      objectKey: 'listings/listing-123/front-image-2c8648d103e3.jpg',
       publicUrl:
-        'https://images.murphyfamilyhobby.dev/listings/listing-123/front-image.jpg',
+        'https://images.example.com/listings/listing-123/front-image-2c8648d103e3.jpg',
     });
   });
 
@@ -145,7 +150,7 @@ describe('shared R2 image upload service', () => {
       CacheControl: 'public, max-age=31536000, immutable',
       Bucket: 'config-bucket',
       ContentType: 'image/png',
-      Key: 'listings/listing-123/front.png',
+      Key: 'listings/listing-123/front-2c8648d103e3.png',
     });
   });
 
@@ -176,7 +181,7 @@ describe('shared R2 image upload service', () => {
     });
     expect(result).toEqual({
       objectKey: 'listings/listing-123/front.png',
-      publicUrl: 'https://images.murphyfamilyhobby.dev/listings/listing-123/front.png',
+      publicUrl: 'https://images.example.com/listings/listing-123/front.png',
     });
   });
 

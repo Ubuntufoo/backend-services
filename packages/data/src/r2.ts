@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { loadR2Env } from '@ebay-inventory/env';
@@ -32,8 +33,6 @@ interface UploadImageOptions {
 }
 
 const R2_REGION = 'auto' as const;
-const PUBLIC_IMAGE_BASE_URL = 'https://images.murphyfamilyhobby.dev';
-
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -114,16 +113,17 @@ function createR2ImageStorageClientFromConfig(config: R2ImageStorageConfig): S3C
 }
 
 export function buildR2ImageObjectKey(
-  input: Pick<UploadImageInput, 'filename' | 'listingId'>
+  input: Pick<UploadImageInput, 'filename' | 'listingId' | 'body'>
 ): string {
   const listingSegment = sanitizePathSegment(input.listingId, 'listing');
   const { baseName, extension } = getSanitizedFilenameParts(input.filename);
+  const contentHash = createHash('sha256').update(input.body).digest('hex').slice(0, 12);
 
-  return `listings/${listingSegment}/${baseName}${extension}`;
+  return `listings/${listingSegment}/${baseName}-${contentHash}${extension}`;
 }
 
-export function buildPublicImageUrl(objectKey: string): string {
-  return `${PUBLIC_IMAGE_BASE_URL}/${encodeObjectKeyForPublicUrl(objectKey)}`;
+export function buildPublicImageUrl(publicBaseUrl: string, objectKey: string): string {
+  return `${trimTrailingSlash(publicBaseUrl)}/${encodeObjectKeyForPublicUrl(objectKey)}`;
 }
 
 export async function uploadImage(
@@ -156,6 +156,6 @@ export async function uploadImage(
 
   return {
     objectKey,
-    publicUrl: buildPublicImageUrl(objectKey),
+    publicUrl: buildPublicImageUrl(config.publicBaseUrl, objectKey),
   };
 }
