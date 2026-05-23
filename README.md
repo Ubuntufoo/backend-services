@@ -58,6 +58,21 @@ These commands target the canonical `services/sidecar` package through the works
 Shared packages participate in the workspace build and test graph.
 For image processing, run `pnpm --filter @ebay-inventory/image-service test`.
 
+## Runtime Commands
+
+Use this table as the current local start/run reference. Update it as new services become executable.
+
+| Runtime | Location | Dev / Init | Production / Alternate | Notes |
+| --- | --- | --- | --- | --- |
+| Sidecar HTTP | `backend-services` | `pnpm dev` or `pnpm dev:sidecar` | `pnpm --filter sidecar start` | Canonical backend runtime for local app integration. |
+| Sidecar MCP stdio | `backend-services` | `pnpm dev:sidecar:stdio` | `pnpm --filter sidecar start` | Use stdio only for MCP clients. |
+| Sidecar setup wizard | `backend-services` | `pnpm setup` | `pnpm --filter sidecar run setup` | Writes credentials and tokens to `.env.local`. |
+| Sidecar env validation | `backend-services` | `pnpm validate:env` | `pnpm --filter sidecar validate:env` | Validates shared env contract. |
+| Sidecar eBay OAuth validation | `backend-services` | `pnpm validate:ebay-oauth` | `pnpm --filter sidecar ebay:validate-oauth` | Prefers `EBAY_REFRESH_TOKEN`, falls back to `EBAY_USER_REFRESH_TOKEN`. |
+| Watcher service | `backend-services` | `pnpm --filter @ebay-inventory/watcher-service dev` | `pnpm --filter @ebay-inventory/watcher-service start` | Watches incoming filesystem assets. |
+| Image service | `backend-services` | `pnpm --filter @ebay-inventory/image-service test` | `pnpm --filter @ebay-inventory/image-service build` | Library package today, no standalone dev server yet. |
+| UI app | `../ebay-ui-app` | `cd ../ebay-ui-app && pnpm dev` | `cd ../ebay-ui-app && pnpm build && pnpm start` | Companion Next.js UI repo, outside this workspace. |
+
 ## Sidecar
 
 End-user setup, local development, and MCP-specific usage now live in [services/sidecar/README.md](services/sidecar/README.md).
@@ -68,6 +83,7 @@ Useful root-level convenience commands:
 pnpm dev
 pnpm setup
 pnpm validate:env
+pnpm validate:ebay-oauth
 pnpm diagnose
 pnpm sync
 pnpm update:api-status
@@ -78,6 +94,15 @@ pnpm dev:sidecar:stdio
 `pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
 Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
 For the watcher runtime, run `pnpm --filter @ebay-inventory/watcher-service dev`.
+
+## eBay OAuth Notes
+
+- `pnpm setup` writes machine-local credentials and user tokens to `backend-services/.env.local`.
+- `EBAY_REFRESH_TOKEN` is the preferred variable for the new OAuth validator.
+- `EBAY_USER_REFRESH_TOKEN` is still supported for compatibility with the older setup/auth flow.
+- Quote refresh tokens in env files because they contain `#`.
+- Do not paste the callback URL `code=...` value into `EBAY_REFRESH_TOKEN`.
+- Do not paste the eBay API Explorer `Authorization: Bearer ...` access token into `EBAY_REFRESH_TOKEN`.
 
 ## Local-Only Defaults
 

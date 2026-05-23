@@ -11,6 +11,7 @@ pnpm dev
 pnpm setup
 pnpm diagnose
 pnpm sync
+pnpm ebay:validate-oauth
 pnpm test
 pnpm test:coverage
 ```
@@ -23,6 +24,7 @@ pnpm dev:stdio
 pnpm setup
 pnpm diagnose
 pnpm sync
+pnpm ebay:validate-oauth
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -43,8 +45,19 @@ The HTTP sidecar also starts the background job-runner loop by default; set `SID
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
 and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.
+The setup wizard writes credentials and user tokens to `backend-services/.env.local`.
 For DB-only local development, set `EBAY_ENABLED=false` and `OAUTH_ENABLED=false`; in that mode, eBay developer credentials are not required.
 Use `pnpm validate:env` from the repo root to verify the shared Supabase data-layer and eBay configuration before starting schema work.
+Use `pnpm --filter sidecar ebay:validate-oauth` to confirm sandbox or production eBay credentials can exchange `EBAY_REFRESH_TOKEN` for a short-lived access token without printing the token value.
+
+## OAuth Token Notes
+
+- `EBAY_REFRESH_TOKEN` is the preferred variable for the narrow OAuth validator.
+- `EBAY_USER_REFRESH_TOKEN` remains supported for compatibility with the existing setup wizard and sidecar auth flow.
+- Refresh tokens should be quoted in `.env` or `.env.local` because eBay token values contain `#`.
+- The callback redirect URL `code=...` value is an authorization code, not a refresh token.
+- The eBay API Explorer `Authorization: Bearer ...` token is an access token, not a refresh token.
+- `pnpm setup` at the repo root proxies to `pnpm --filter sidecar run setup`, and that wizard stores resulting credentials in `.env.local`.
 
 ## Local-Only Operation
 
