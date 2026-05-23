@@ -33,24 +33,6 @@ const IMAGE_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
   '.webp': 'image/webp',
 };
 
-function sanitizePathSegment(value: string, fallback: string): string {
-  const sanitized = value
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-._]+|[-._]+$/g, '')
-    .toLowerCase();
-
-  return sanitized || fallback;
-}
-
-function buildDeterministicAssetPrepObjectKey(listingId: string, filename: string): string {
-  const listingSegment = sanitizePathSegment(listingId, 'listing');
-  const filenameSegment = sanitizePathSegment(filename, 'image');
-
-  return `listings/${listingSegment}/assets/${filenameSegment}`;
-}
-
 function getContentType(filename: string): string {
   const extension = extname(filename).toLowerCase();
   const contentType = IMAGE_CONTENT_TYPE_BY_EXTENSION[extension];
@@ -80,9 +62,6 @@ export function createR2ImageUploader(
             filename: image.filename,
             contentType: getContentType(image.filename),
             body,
-          },
-          {
-            objectKey: buildDeterministicAssetPrepObjectKey(input.listingId, image.filename),
           }
         );
 

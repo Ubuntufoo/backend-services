@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { loadR2Env } from '@ebay-inventory/env';
@@ -30,11 +30,9 @@ interface UploadImageOptions {
   config?: R2ImageStorageConfig;
   env?: NodeJS.ProcessEnv;
   objectKey?: string;
-  objectId?: string;
 }
 
 const R2_REGION = 'auto' as const;
-
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -115,16 +113,16 @@ function createR2ImageStorageClientFromConfig(config: R2ImageStorageConfig): S3C
 }
 
 export function buildR2ImageObjectKey(
-  input: Pick<UploadImageInput, 'filename' | 'listingId'>,
-  objectId: string = randomUUID()
+  input: Pick<UploadImageInput, 'filename' | 'listingId' | 'body'>
 ): string {
   const listingSegment = sanitizePathSegment(input.listingId, 'listing');
   const { baseName, extension } = getSanitizedFilenameParts(input.filename);
+  const contentHash = createHash('sha256').update(input.body).digest('hex').slice(0, 12);
 
-  return `listings/${listingSegment}/${objectId}-${baseName}${extension}`;
+  return `listings/${listingSegment}/${baseName}-${contentHash}${extension}`;
 }
 
-export function buildR2PublicUrl(publicBaseUrl: string, objectKey: string): string {
+export function buildPublicImageUrl(publicBaseUrl: string, objectKey: string): string {
   return `${trimTrailingSlash(publicBaseUrl)}/${encodeObjectKeyForPublicUrl(objectKey)}`;
 }
 
@@ -142,7 +140,7 @@ export async function uploadImage(
 
   const config = options.config ?? loadR2ImageStorageConfig(options.env);
   const client = options.client ?? createR2ImageStorageClientFromConfig(config);
-  const objectKey = options.objectKey ?? buildR2ImageObjectKey(input, options.objectId);
+  const objectKey = options.objectKey ?? buildR2ImageObjectKey(input);
 
   assertNonEmpty('objectKey', objectKey);
 
@@ -151,12 +149,13 @@ export async function uploadImage(
       Bucket: config.bucketName,
       Key: objectKey,
       Body: input.body,
+      CacheControl: 'public, max-age=31536000, immutable',
       ContentType: input.contentType,
     })
   );
 
   return {
     objectKey,
-    publicUrl: buildR2PublicUrl(config.publicBaseUrl, objectKey),
+    publicUrl: buildPublicImageUrl(config.publicBaseUrl, objectKey),
   };
 }
