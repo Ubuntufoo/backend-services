@@ -6,6 +6,7 @@ export const LISTING_STATUSES = [
   'generating',
   'needs_review',
   'approved_for_export',
+  'exported',
   'listed',
   'sold',
 ] as const;
@@ -46,6 +47,7 @@ export const LISTING_WORKFLOW_STATE_MAP = {
   generating: ['ai_call_in_progress', LISTING_IDLE_SUB_STATUS],
   needs_review: ['review_pending', LISTING_IDLE_SUB_STATUS],
   approved_for_export: ['publish_queued', 'publishing_to_ebay', LISTING_IDLE_SUB_STATUS],
+  exported: [LISTING_IDLE_SUB_STATUS],
   listed: ['active_live', LISTING_IDLE_SUB_STATUS],
   sold: ['awaiting_packaging', 'shipped', LISTING_IDLE_SUB_STATUS],
 } as const satisfies Record<ListingStatus, readonly ListingSubStatus[]>;

@@ -21,6 +21,7 @@ describe('listing workflow types', () => {
       'generating',
       'needs_review',
       'approved_for_export',
+      'exported',
       'listed',
       'sold',
     ]);
@@ -49,6 +50,7 @@ describe('listing workflow types', () => {
       'shipped',
       'idle',
     ]);
+    expect(getAllowedListingSubStatuses('exported')).toEqual(['idle']);
   });
 
   it('validates known statuses and sub-statuses', () => {
@@ -71,6 +73,7 @@ describe('listing workflow types', () => {
       ['needs_review', 'review_pending'],
       ['approved_for_export', 'publish_queued'],
       ['approved_for_export', 'publishing_to_ebay'],
+      ['exported', 'idle'],
       ['listed', 'active_live'],
       ['sold', 'awaiting_packaging'],
       ['sold', 'shipped'],
