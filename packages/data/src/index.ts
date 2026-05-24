@@ -23,7 +23,7 @@ export type {
 } from './database.js';
 export {
   buildR2ImageObjectKey,
-  buildPublicImageUrl,
+  buildR2PublicUrl,
   createR2ImageStorageClient,
   loadR2ImageStorageConfig,
   uploadImage,

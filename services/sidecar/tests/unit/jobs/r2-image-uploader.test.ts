@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createR2ImageUploader } from '@/jobs/r2-image-uploader.js';
 
 describe('createR2ImageUploader', () => {
-  it('uses deterministic asset object keys for watcher asset prep uploads', async () => {
+  it('uploads watcher assets through the shared R2 uploader contract', async () => {
     const readFile = vi.fn(async () => Buffer.from('image-bytes'));
     const uploadSingleImage = vi.fn(async (_input: unknown) => ({
       objectKey: 'listings/list-001/list-001_01.jpg',
