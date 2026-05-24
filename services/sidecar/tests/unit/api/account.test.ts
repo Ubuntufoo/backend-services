@@ -730,7 +730,9 @@ describe('AccountApi', () => {
 
       const result = await accountApi.getOptedInPrograms();
 
-      expect(mockClient.get).toHaveBeenCalledWith('/sell/account/v1/program');
+      expect(mockClient.get).toHaveBeenCalledWith(
+        '/sell/account/v1/program/get_opted_in_programs'
+      );
       expect(result).toEqual(mockPrograms);
     });
   });

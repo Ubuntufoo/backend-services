@@ -405,7 +405,7 @@ export class AccountApi {
    * Get opted-in programs
    */
   async getOptedInPrograms(): Promise<Programs> {
-    return await this.client.get<Programs>(`${this.basePath}/program`);
+    return await this.client.get<Programs>(`${this.basePath}/program/get_opted_in_programs`);
   }
 
   /**

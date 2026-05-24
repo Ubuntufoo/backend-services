@@ -30,6 +30,7 @@ describe('EbayOAuthClient', () => {
     cleanupMocks();
 
     // Clear environment variables to prevent automatic token loading
+    delete process.env.EBAY_REFRESH_TOKEN;
     delete process.env.EBAY_USER_REFRESH_TOKEN;
     delete process.env.EBAY_USER_ACCESS_TOKEN;
     delete process.env.EBAY_APP_ACCESS_TOKEN;
@@ -72,6 +73,28 @@ describe('EbayOAuthClient', () => {
       });
 
       // Mock the app access token endpoint (called after user token refresh)
+      mockOAuthTokenEndpoint('sandbox', {
+        access_token: 'app_access_token',
+        token_type: 'Bearer',
+        expires_in: 7200,
+      });
+
+      await oauthClient.initialize();
+
+      expect(oauthClient.hasUserTokens()).toBe(true);
+    });
+
+    it('should load user tokens from environment if EBAY_REFRESH_TOKEN is set', async () => {
+      process.env.EBAY_REFRESH_TOKEN = 'preferred_refresh_token';
+
+      mockOAuthTokenEndpoint('sandbox', {
+        access_token: 'refreshed_access_token',
+        token_type: 'Bearer',
+        expires_in: 7200,
+        refresh_token: 'preferred_refresh_token',
+        refresh_token_expires_in: 47304000,
+      });
+
       mockOAuthTokenEndpoint('sandbox', {
         access_token: 'app_access_token',
         token_type: 'Bearer',
@@ -361,6 +384,7 @@ describe('EbayOAuthClient', () => {
     afterEach(() => {
       rmSync(tempDir, { recursive: true, force: true });
       writeFileSyncMock.mockClear();
+      delete process.env.EBAY_REFRESH_TOKEN;
       delete process.env.EBAY_USER_REFRESH_TOKEN;
       delete process.env.EBAY_USER_ACCESS_TOKEN;
     });

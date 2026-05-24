@@ -8,15 +8,15 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 
 ## Current Status
 
-| Service | Status | Notes |
-| --- | --- | --- |
-| `sidecar` | Implemented | Canonical MCP/eBay server package with tests and local setup support. |
-| `watcher-service` | Implemented | Local filesystem watcher runtime for incoming image batches and listing-row creation; later image/R2/job steps still pending. |
-| `image-service` | Implemented | Local-only image processing package for post-watcher copies and EXIF stripping. |
-| `r2-service` | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service. |
-| `gemini-service` | Planned boundary | Prefer in-process orchestration with request guards before extraction. |
-| `ebay-service` | Planned boundary | Extract only if eBay workflows outgrow the sidecar package boundary. |
-| `job-runner` | Planned boundary | Prefer app- or Supabase-driven background work before adding a worker process. |
+| Service           | Status           | Notes                                                                                                                         |
+| ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `sidecar`         | Implemented      | Canonical MCP/eBay server package with tests and local setup support.                                                         |
+| `watcher-service` | Implemented      | Local filesystem watcher runtime for incoming image batches and listing-row creation; later image/R2/job steps still pending. |
+| `image-service`   | Implemented      | Local-only image processing package for post-watcher copies and EXIF stripping.                                               |
+| `r2-service`      | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service.                                                    |
+| `gemini-service`  | Planned boundary | Prefer in-process orchestration with request guards before extraction.                                                        |
+| `ebay-service`    | Planned boundary | Extract only if eBay workflows outgrow the sidecar package boundary.                                                          |
+| `job-runner`      | Planned boundary | Prefer app- or Supabase-driven background work before adding a worker process.                                                |
 
 ## Canonical Layout
 
@@ -82,6 +82,9 @@ Useful root-level convenience commands:
 ```bash
 pnpm dev
 pnpm setup
+pnpm ebay:diagnose-sandbox
+pnpm ebay:opt-in-selling-policies
+pnpm ebay:setup-sandbox
 pnpm validate:env
 pnpm validate:ebay-oauth
 pnpm diagnose
@@ -93,6 +96,9 @@ pnpm dev:sidecar:stdio
 
 `pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
 Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
+Use `pnpm ebay:diagnose-sandbox` for read-only sandbox seller-program diagnostics and `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`.
+Use `pnpm ebay:setup-sandbox` to bootstrap sandbox business policies and default inventory location into `app_settings`.
+If eBay sandbox seller account is not eligible for Business Policy, keep bootstrap command for future accounts but manually seed `public.app_settings.default_payment_policy_id`, `default_fulfillment_policy_id`, `default_return_policy_id`, and `merchant_location_key`, then continue downstream work with mocked/injected IDs.
 For the watcher runtime, run `pnpm --filter @ebay-inventory/watcher-service dev`.
 
 ## eBay OAuth Notes

@@ -45,7 +45,7 @@ function redactValue(input: string, value: string | undefined): string {
   return input.split(value).join('[REDACTED]');
 }
 
-function sanitizeMessage(message: string, sensitiveValues: Array<string | undefined>): string {
+function sanitizeMessage(message: string, sensitiveValues: (string | undefined)[]): string {
   let sanitized = message;
 
   for (const value of sensitiveValues) {
@@ -56,13 +56,18 @@ function sanitizeMessage(message: string, sensitiveValues: Array<string | undefi
 }
 
 async function extractSafeErrorMessage(
-  response: Response,
+  response: {
+    ok: boolean;
+    status: number;
+    statusText: string;
+    text(): Promise<string>;
+  },
   config: EbayOAuthValidationConfig
 ): Promise<string> {
   const responseText = await response.text();
   const fallbackMessage = response.statusText || 'Request failed';
   let message = fallbackMessage;
-  let responseSecrets: Array<string | undefined> = [];
+  let responseSecrets: (string | undefined)[] = [];
 
   if (responseText.trim().length > 0) {
     try {

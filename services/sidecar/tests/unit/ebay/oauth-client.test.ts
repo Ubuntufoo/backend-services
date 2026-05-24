@@ -5,6 +5,14 @@ import {
 } from '@/ebay/oauth-client.js';
 import type { EbayOAuthValidationConfig } from '@/ebay/config.js';
 
+interface MockResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+}
+
 function createConfig(): EbayOAuthValidationConfig {
   return {
     environment: 'sandbox',
@@ -18,7 +26,7 @@ function createConfig(): EbayOAuthValidationConfig {
   };
 }
 
-function createJsonResponse(body: unknown, status = 200, statusText = 'OK'): Response {
+function createJsonResponse(body: unknown, status = 200, statusText = 'OK'): MockResponse {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -29,7 +37,7 @@ function createJsonResponse(body: unknown, status = 200, statusText = 'OK'): Res
     async text(): Promise<string> {
       return JSON.stringify(body);
     },
-  } as Response;
+  };
 }
 
 describe('exchangeRefreshTokenForAccessToken', () => {

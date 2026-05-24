@@ -18,6 +18,11 @@ https://auth.ebay.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&response_type=co
 - `https://api.ebay.com/oauth/api_scope/sell.account`
 - `https://api.ebay.com/oauth/api_scope/sell.account.readonly`
 
+**For sandbox bootstrap:**
+- `https://api.ebay.com/oauth/api_scope`
+- `https://api.ebay.com/oauth/api_scope/sell.account`
+- `https://api.ebay.com/oauth/api_scope/sell.inventory`
+
 **For order fulfillment:**
 - `https://api.ebay.com/oauth/api_scope/sell.fulfillment`
 - `https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly`
@@ -163,6 +168,25 @@ Clears all stored tokens (requires re-authentication).
 - Verify `.env` file contains `EBAY_USER_REFRESH_TOKEN`
 - Check file permissions on `.env`
 - Ensure MCP server has write access to project directory
+
+### `ebay:setup-sandbox` warns about missing scopes after refresh
+- eBay refresh responses may omit `scope` metadata even when refresh succeeds
+- Current setup flow warns and continues into live Account API / Inventory API checks
+- If later calls fail with `401`, `403`, or `insufficient_scope`, re-authorize sandbox seller with:
+  - `https://api.ebay.com/oauth/api_scope`
+  - `https://api.ebay.com/oauth/api_scope/sell.account`
+  - `https://api.ebay.com/oauth/api_scope/sell.inventory`
+
+### `User is not eligible for Business Policy`
+- Some sandbox seller accounts cannot use Account API business-policy endpoints
+- This blocks live bootstrap even with valid OAuth
+- Keep bootstrap command for future sandbox sellers
+- For current development, manually seed canonical `public.app_settings` values:
+  - `default_payment_policy_id`
+  - `default_fulfillment_policy_id`
+  - `default_return_policy_id`
+  - `merchant_location_key`
+- Continue later eBay tasks with mocked/injected policy IDs and location key until usable sandbox seller account exists
 
 ## Advanced Usage
 

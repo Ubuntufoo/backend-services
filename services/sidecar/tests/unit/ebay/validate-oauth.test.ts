@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { validateEbayOAuth } from '@/ebay/validate-oauth.js';
 import type { EbayOAuthValidationConfig } from '@/ebay/config.js';
 
+interface MockResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+}
+
 function createConfig(): EbayOAuthValidationConfig {
   return {
     environment: 'sandbox',
@@ -15,7 +23,7 @@ function createConfig(): EbayOAuthValidationConfig {
   };
 }
 
-function createJsonResponse(body: unknown): Response {
+function createJsonResponse(body: unknown): MockResponse {
   return {
     ok: true,
     status: 200,
@@ -26,7 +34,7 @@ function createJsonResponse(body: unknown): Response {
     async text(): Promise<string> {
       return JSON.stringify(body);
     },
-  } as Response;
+  };
 }
 
 describe('validateEbayOAuth', () => {

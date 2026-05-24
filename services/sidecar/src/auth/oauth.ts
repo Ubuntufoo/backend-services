@@ -51,7 +51,10 @@ export class EbayOAuthClient {
    * If EBAY_USER_REFRESH_TOKEN exists, automatically refresh to get a valid access token
    */
   async initialize(): Promise<void> {
-    const envRefreshToken = process.env.EBAY_USER_REFRESH_TOKEN;
+    const envRefreshToken =
+      process.env.EBAY_REFRESH_TOKEN ??
+      process.env.EBAY_USER_REFRESH_TOKEN ??
+      this.config.refreshToken;
     const envAccessToken = process.env.EBAY_USER_ACCESS_TOKEN;
     const envAppToken = process.env.EBAY_APP_ACCESS_TOKEN ?? '';
     const locale = this.config?.locale ?? LocaleEnum.en_US;
@@ -168,9 +171,12 @@ export class EbayOAuthClient {
     });
 
     // Update .env.local with new tokens
+    const refreshTokenKey = process.env.EBAY_REFRESH_TOKEN
+      ? 'EBAY_REFRESH_TOKEN'
+      : 'EBAY_USER_REFRESH_TOKEN';
     this.credentialStore.write({
       EBAY_USER_ACCESS_TOKEN: accessToken,
-      EBAY_USER_REFRESH_TOKEN: refreshToken,
+      [refreshTokenKey]: refreshToken,
     });
   }
 
@@ -264,9 +270,12 @@ export class EbayOAuthClient {
       });
 
       // Persist tokens to .env.local so they survive process restarts.
+      const refreshTokenKey = process.env.EBAY_REFRESH_TOKEN
+        ? 'EBAY_REFRESH_TOKEN'
+        : 'EBAY_USER_REFRESH_TOKEN';
       this.credentialStore.write({
         EBAY_USER_ACCESS_TOKEN: tokenData.access_token,
-        EBAY_USER_REFRESH_TOKEN: tokenData.refresh_token,
+        [refreshTokenKey]: tokenData.refresh_token,
       });
 
       return tokenData;
@@ -327,8 +336,13 @@ export class EbayOAuthClient {
       };
 
       // Reconcile .env.local with the authoritative in-memory refresh token.
-      if (this.userTokens.userRefreshToken !== process.env.EBAY_USER_REFRESH_TOKEN) {
-        envUpdates.EBAY_USER_REFRESH_TOKEN = this.userTokens.userRefreshToken;
+      const currentRefreshToken =
+        process.env.EBAY_REFRESH_TOKEN ?? process.env.EBAY_USER_REFRESH_TOKEN;
+      if (this.userTokens.userRefreshToken !== currentRefreshToken) {
+        const refreshTokenKey = process.env.EBAY_REFRESH_TOKEN
+          ? 'EBAY_REFRESH_TOKEN'
+          : 'EBAY_USER_REFRESH_TOKEN';
+        envUpdates[refreshTokenKey] = this.userTokens.userRefreshToken;
       }
 
       // Write updates to .env.local
