@@ -33,6 +33,7 @@ interface UploadImageOptions {
 }
 
 const R2_REGION = 'auto' as const;
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }

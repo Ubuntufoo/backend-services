@@ -117,7 +117,7 @@ describe('shared R2 image upload service', () => {
 
     const { uploadImage } = await import('../src/index.js');
 
-    await uploadImage(
+    const result = await uploadImage(
       {
         listingId: 'listing-123',
         filename: 'front.png',
@@ -151,6 +151,11 @@ describe('shared R2 image upload service', () => {
       Bucket: 'config-bucket',
       ContentType: 'image/png',
       Key: 'listings/listing-123/front-2c8648d103e3.png',
+    });
+    expect(result).toEqual({
+      objectKey: 'listings/listing-123/front-2c8648d103e3.png',
+      publicUrl:
+        'https://images.example.com/listings/listing-123/front-2c8648d103e3.png',
     });
   });
 
