@@ -53,11 +53,16 @@ describe('shared R2 image upload service', () => {
   });
 
   it('builds public image URLs on the custom domain', async () => {
-    const { buildR2PublicUrl } = await import('../src/index.js');
+    const { buildPublicImageUrl } = await import('../src/index.js');
 
     expect(
-      buildR2PublicUrl('https://images.murphyfamilyhobby.dev', 'listings/listing-123/front image.jpg')
-    ).toBe('https://images.murphyfamilyhobby.dev/listings/listing-123/front%20image.jpg');
+      buildPublicImageUrl(
+        'https://images.murphyfamilyhobby.dev/',
+        'listings/listing-123/front image.jpg'
+      )
+    ).toBe(
+      'https://images.murphyfamilyhobby.dev/listings/listing-123/front%20image.jpg'
+    );
   });
 
   it('creates an R2 S3 client with the expected endpoint, credentials, and region', async () => {
@@ -89,21 +94,21 @@ describe('shared R2 image upload service', () => {
       },
       {
         env: r2Env,
-        objectId: 'fixed-object-id',
       }
     );
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(putObjectCommandMock).toHaveBeenCalledWith({
       Body: Buffer.from('image-bytes'),
+      CacheControl: 'public, max-age=31536000, immutable',
       Bucket: 'listing-images',
       ContentType: 'image/jpeg',
-      Key: 'listings/listing-123/fixed-object-id-front-image.jpg',
+      Key: 'listings/listing-123/front-image-2c8648d103e3.jpg',
     });
     expect(result).toEqual({
-      objectKey: 'listings/listing-123/fixed-object-id-front-image.jpg',
+      objectKey: 'listings/listing-123/front-image-2c8648d103e3.jpg',
       publicUrl:
-        'https://images.example.com/listings/listing-123/fixed-object-id-front-image.jpg',
+        'https://images.example.com/listings/listing-123/front-image-2c8648d103e3.jpg',
     });
   });
 
@@ -129,7 +134,6 @@ describe('shared R2 image upload service', () => {
           region: 'auto',
           s3Endpoint: 'https://config-endpoint.example.com',
         },
-        objectId: 'fixed-object-id',
       }
     );
 
@@ -143,14 +147,15 @@ describe('shared R2 image upload service', () => {
     });
     expect(putObjectCommandMock).toHaveBeenCalledWith({
       Body: Buffer.from('image-bytes'),
+      CacheControl: 'public, max-age=31536000, immutable',
       Bucket: 'config-bucket',
       ContentType: 'image/png',
-      Key: 'listings/listing-123/fixed-object-id-front.png',
+      Key: 'listings/listing-123/front-2c8648d103e3.png',
     });
     expect(result).toEqual({
-      objectKey: 'listings/listing-123/fixed-object-id-front.png',
+      objectKey: 'listings/listing-123/front-2c8648d103e3.png',
       publicUrl:
-        'https://images.example.com/listings/listing-123/fixed-object-id-front.png',
+        'https://images.example.com/listings/listing-123/front-2c8648d103e3.png',
     });
   });
 
@@ -168,19 +173,20 @@ describe('shared R2 image upload service', () => {
       },
       {
         env: r2Env,
-        objectKey: 'listings/listing-123/assets/front.png',
+        objectKey: 'listings/listing-123/front.png',
       }
     );
 
     expect(putObjectCommandMock).toHaveBeenCalledWith({
       Body: Buffer.from('image-bytes'),
+      CacheControl: 'public, max-age=31536000, immutable',
       Bucket: 'listing-images',
       ContentType: 'image/png',
-      Key: 'listings/listing-123/assets/front.png',
+      Key: 'listings/listing-123/front.png',
     });
     expect(result).toEqual({
-      objectKey: 'listings/listing-123/assets/front.png',
-      publicUrl: 'https://images.example.com/listings/listing-123/assets/front.png',
+      objectKey: 'listings/listing-123/front.png',
+      publicUrl: 'https://images.example.com/listings/listing-123/front.png',
     });
   });
 
