@@ -82,6 +82,7 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
 describe('publish mappers', () => {
   it('builds a stable publish sku from stored sku or listing id', () => {
     expect(buildPublishSku(createListing({ sku: 'SKU-001' }))).toBe('SKU-001');
+    expect(buildPublishSku(createListing({ sku: '   ' }))).toBe('LIST-001');
     expect(buildPublishSku(createListing({ sku: null }))).toBe('LIST-001');
   });
 

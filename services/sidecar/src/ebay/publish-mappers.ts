@@ -75,7 +75,9 @@ function buildPackageWeightAndSize(
 }
 
 export function buildPublishSku(listing: Pick<ListingRow, 'listing_id' | 'sku'>): string {
-  return listing.sku?.trim() ?? listing.listing_id;
+  const sku = listing.sku?.trim();
+
+  return sku && sku.length > 0 ? sku : listing.listing_id;
 }
 
 export function getMarketplaceCurrency(marketplaceId: string): string {
