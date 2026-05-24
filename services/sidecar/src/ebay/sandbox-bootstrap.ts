@@ -696,6 +696,10 @@ async function persistPolicyBootstrapSettings(
   appSettings: AppSettingsAccess,
   appSettingsId: string,
   marketplaceId: string,
+  result: Pick<
+    SandboxBootstrapResult,
+    'fulfillmentPolicyId' | 'paymentPolicyId' | 'returnPolicyId'
+  >
 ): Promise<void> {
   await appSettings.update(
     {
@@ -751,7 +755,12 @@ export async function runSandboxBootstrap({
   await persistPolicyBootstrapSettings(
     dataAccess.appSettings,
     appSettingsId,
-    resolvedMarketplaceId
+    resolvedMarketplaceId,
+    {
+      fulfillmentPolicyId: policyResult.fulfillmentPolicyId,
+      paymentPolicyId: policyResult.paymentPolicyId,
+      returnPolicyId: policyResult.returnPolicyId,
+    }
   );
   const locationResult = await ensureDefaultInventoryLocation(api, initialAppSettings, logger);
 
@@ -773,7 +782,7 @@ export async function runSandboxBootstrap({
   await persistInventoryLocationBootstrapSettings(
     dataAccess.appSettings,
     appSettingsId,
-    result.merchantLocationKey
+    locationResult.merchantLocationKey
   );
 
   return result;

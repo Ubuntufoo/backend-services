@@ -104,13 +104,20 @@ describe('sandbox bootstrap', () => {
     expect(result.paymentPolicyId).toBe('PAYMENT-1');
     expect(result.returnPolicyId).toBe('RETURN-1');
     expect(result.merchantLocationKey).toBe('stored-location');
-    expect(dataAccess.appSettings.update).toHaveBeenCalledWith(
+    expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         default_fulfillment_policy_id: 'FULFILLMENT-1',
         default_payment_policy_id: 'PAYMENT-1',
         default_return_policy_id: 'RETURN-1',
-        merchant_location_key: 'stored-location',
       }),
+      'default'
+    );
+    expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
+      2,
+      {
+        merchant_location_key: 'stored-location',
+      },
       'default'
     );
   });
@@ -148,6 +155,22 @@ describe('sandbox bootstrap', () => {
       return: true,
     });
     expect(result.warnings).toEqual([]);
+    expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        default_fulfillment_policy_id: 'FULFILLMENT-NEW',
+        default_payment_policy_id: 'PAYMENT-NEW',
+        default_return_policy_id: 'RETURN-NEW',
+      }),
+      'default'
+    );
+    expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
+      2,
+      {
+        merchant_location_key: 'default-main-location',
+      },
+      'default'
+    );
   });
 
   it('falls back to first existing policy only with warning after create failure', async () => {
