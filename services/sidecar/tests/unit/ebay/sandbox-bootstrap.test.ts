@@ -1,0 +1,308 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SandboxBootstrapApi } from '@/ebay/sandbox-bootstrap.js';
+import {
+  ensureDefaultInventoryLocation,
+  ensureDefaultSellerPolicies,
+  runSandboxBootstrap,
+  validateSandboxOAuthAccess,
+} from '@/ebay/sandbox-bootstrap.js';
+import { setupLogger } from '@/utils/logger.js';
+
+const REQUIRED_SCOPE_STRING = [
+  'https://api.ebay.com/oauth/api_scope',
+  'https://api.ebay.com/oauth/api_scope/sell.account',
+  'https://api.ebay.com/oauth/api_scope/sell.inventory',
+].join(' ');
+
+function createApi(overrides: Partial<SandboxBootstrapApi> = {}): SandboxBootstrapApi {
+  const oauthClient = {
+    getAccessToken: vi.fn().mockResolvedValue('access-token'),
+    getUserTokens: vi.fn().mockReturnValue({
+      scope: REQUIRED_SCOPE_STRING,
+    }),
+  };
+
+  return {
+    account: {
+      createFulfillmentPolicy: vi.fn(),
+      createPaymentPolicy: vi.fn(),
+      createReturnPolicy: vi.fn(),
+      getFulfillmentPolicies: vi.fn(),
+      getPaymentPolicies: vi.fn(),
+      getReturnPolicies: vi.fn(),
+    },
+    getAuthClient: vi.fn(() => ({
+      getConfig: vi.fn(() => ({
+        environment: 'sandbox',
+        marketplaceId: 'EBAY_US',
+      })),
+      getOAuthClient: vi.fn(() => oauthClient),
+    })),
+    hasUserTokens: vi.fn(() => true),
+    inventory: {
+      createOrReplaceInventoryLocation: vi.fn(),
+      getInventoryLocations: vi.fn(),
+    },
+    ...overrides,
+  };
+}
+
+function createDataAccess(): {
+  appSettings: {
+    create: ReturnType<typeof vi.fn>;
+    get: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
+  };
+} {
+  return {
+    appSettings: {
+      create: vi.fn(),
+      get: vi.fn(),
+      update: vi.fn(),
+    },
+  };
+}
+
+describe('sandbox bootstrap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('persists stored policy ids and location key when they are still valid', async () => {
+    const api = createApi();
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get.mockResolvedValue({
+      default_fulfillment_policy_id: 'FULFILLMENT-1',
+      default_payment_policy_id: 'PAYMENT-1',
+      default_return_policy_id: 'RETURN-1',
+      ebay_marketplace_id: 'EBAY_US',
+      merchant_location_key: 'stored-location',
+    });
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({
+      paymentPolicies: [{ name: 'Other', paymentPolicyId: 'PAYMENT-1' }],
+    });
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({
+      fulfillmentPolicies: [{ fulfillmentPolicyId: 'FULFILLMENT-1', name: 'Other' }],
+    });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({
+      returnPolicies: [{ name: 'Other', returnPolicyId: 'RETURN-1' }],
+    });
+    api.inventory.getInventoryLocations = vi.fn().mockResolvedValue({
+      locations: [{ merchantLocationKey: 'stored-location', name: 'Stored Warehouse' }],
+    });
+    dataAccess.appSettings.update.mockResolvedValue({});
+
+    const result = await runSandboxBootstrap({ api, dataAccess });
+
+    expect(result.created).toEqual({
+      fulfillment: false,
+      location: false,
+      payment: false,
+      return: false,
+    });
+    expect(result.fulfillmentPolicyId).toBe('FULFILLMENT-1');
+    expect(result.paymentPolicyId).toBe('PAYMENT-1');
+    expect(result.returnPolicyId).toBe('RETURN-1');
+    expect(result.merchantLocationKey).toBe('stored-location');
+    expect(dataAccess.appSettings.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        default_fulfillment_policy_id: 'FULFILLMENT-1',
+        default_payment_policy_id: 'PAYMENT-1',
+        default_return_policy_id: 'RETURN-1',
+        merchant_location_key: 'stored-location',
+      }),
+      'default'
+    );
+  });
+
+  it('creates missing app settings row and bootstrap defaults when nothing exists', async () => {
+    const api = createApi();
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get.mockResolvedValue(null);
+    dataAccess.appSettings.create.mockResolvedValue({
+      ebay_marketplace_id: 'EBAY_US',
+      id: 'default',
+    });
+    dataAccess.appSettings.update.mockResolvedValue({});
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({ paymentPolicies: [] });
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({ fulfillmentPolicies: [] });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({ returnPolicies: [] });
+    api.account.createPaymentPolicy = vi.fn().mockResolvedValue({ paymentPolicyId: 'PAYMENT-NEW' });
+    api.account.createFulfillmentPolicy = vi
+      .fn()
+      .mockResolvedValue({ fulfillmentPolicyId: 'FULFILLMENT-NEW' });
+    api.account.createReturnPolicy = vi.fn().mockResolvedValue({ returnPolicyId: 'RETURN-NEW' });
+    api.inventory.getInventoryLocations = vi.fn().mockResolvedValue({ locations: [] });
+    api.inventory.createOrReplaceInventoryLocation = vi.fn().mockResolvedValue(undefined);
+
+    const result = await runSandboxBootstrap({ api, dataAccess });
+
+    expect(dataAccess.appSettings.create).toHaveBeenCalledWith({
+      ebay_marketplace_id: 'EBAY_US',
+      id: 'default',
+    });
+    expect(result.created).toEqual({
+      fulfillment: true,
+      location: true,
+      payment: true,
+      return: true,
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('falls back to first existing policy only with warning after create failure', async () => {
+    const api = createApi();
+    api.account.getPaymentPolicies = vi
+      .fn()
+      .mockResolvedValueOnce({ paymentPolicies: [] })
+      .mockResolvedValueOnce({
+        paymentPolicies: [{ name: 'Fallback Payment', paymentPolicyId: 'PAYMENT-FALLBACK' }],
+      });
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({
+      fulfillmentPolicies: [
+        { fulfillmentPolicyId: 'FULFILLMENT-1', name: 'Sandbox Default Fulfillment Policy' },
+      ],
+    });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({
+      returnPolicies: [{ name: 'Sandbox Default Return Policy', returnPolicyId: 'RETURN-1' }],
+    });
+    api.account.createPaymentPolicy = vi
+      .fn()
+      .mockRejectedValue(new Error('sandbox create blocked'));
+
+    const result = await ensureDefaultSellerPolicies(
+      api,
+      {
+        default_fulfillment_policy_id: null,
+        default_payment_policy_id: null,
+        default_return_policy_id: null,
+      },
+      'EBAY_US'
+    );
+
+    expect(result.paymentPolicyId).toBe('PAYMENT-FALLBACK');
+    expect(result.created.payment).toBe(false);
+    expect(result.warnings[0]).toContain('Fell back to existing payment policy');
+  });
+
+  it('fails inventory bootstrap when create fails and no safe fallback exists', async () => {
+    const api = createApi();
+    api.inventory.getInventoryLocations = vi
+      .fn()
+      .mockResolvedValueOnce({ locations: [] })
+      .mockResolvedValueOnce({ locations: [] });
+    api.inventory.createOrReplaceInventoryLocation = vi
+      .fn()
+      .mockRejectedValue(new Error('location create blocked'));
+
+    await expect(
+      ensureDefaultInventoryLocation(api, { merchant_location_key: null })
+    ).rejects.toThrow('Failed to create default inventory location');
+  });
+
+  it('rejects missing required scopes', async () => {
+    const api = createApi();
+    const oauthClient = api.getAuthClient().getOAuthClient();
+    vi.mocked(oauthClient.getUserTokens).mockReturnValue({
+      scope:
+        'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory',
+    });
+
+    await expect(validateSandboxOAuthAccess(api)).rejects.toThrow('Missing required scopes');
+  });
+
+  it('passes when refresh succeeds and scopes are returned', async () => {
+    const api = createApi();
+
+    await expect(validateSandboxOAuthAccess(api)).resolves.toEqual({
+      tokenScopes: REQUIRED_SCOPE_STRING.split(' '),
+    });
+  });
+
+  it('warns and continues when refresh succeeds but scope metadata is omitted', async () => {
+    const api = createApi();
+    const oauthClient = api.getAuthClient().getOAuthClient();
+    vi.mocked(oauthClient.getUserTokens).mockReturnValue({});
+    const warnSpy = vi.spyOn(setupLogger, 'warn').mockImplementation(() => {});
+
+    await expect(validateSandboxOAuthAccess(api)).resolves.toEqual({ tokenScopes: [] });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Token refresh succeeded but eBay did not return scope metadata')
+    );
+  });
+
+  it('fails when refresh token validation fails', async () => {
+    const api = createApi({
+      hasUserTokens: vi.fn(() => false),
+    });
+
+    await expect(validateSandboxOAuthAccess(api)).rejects.toThrow(
+      'Refresh token could not be loaded or refreshed'
+    );
+  });
+
+  it('fails with actionable message when policy API returns insufficient scope', async () => {
+    const api = createApi();
+    const oauthClient = api.getAuthClient().getOAuthClient();
+    vi.mocked(oauthClient.getUserTokens).mockReturnValue({});
+    api.account.getPaymentPolicies = vi
+      .fn()
+      .mockRejectedValue(new Error('eBay API Error: insufficient_scope'));
+
+    await expect(
+      ensureDefaultSellerPolicies(
+        api,
+        {
+          default_fulfillment_policy_id: null,
+          default_payment_policy_id: null,
+          default_return_policy_id: null,
+        },
+        'EBAY_US'
+      )
+    ).rejects.toThrow(
+      'Re-authorize sandbox user with scopes: api_scope, sell.account, sell.inventory'
+    );
+  });
+
+  it('surfaces business policy eligibility failures clearly', async () => {
+    const api = createApi();
+    api.account.getPaymentPolicies = vi
+      .fn()
+      .mockRejectedValue(new Error('eBay API Error: User is not eligible for Business Policy.'));
+
+    await expect(
+      ensureDefaultSellerPolicies(
+        api,
+        {
+          default_fulfillment_policy_id: null,
+          default_payment_policy_id: null,
+          default_return_policy_id: null,
+        },
+        'EBAY_US'
+      )
+    ).rejects.toThrow(
+      'Sandbox account limitation. eBay seller not eligible for Business Policy'
+    );
+  });
+
+  it('rejects non-sandbox environment', async () => {
+    const api = createApi({
+      getAuthClient: vi.fn(() => ({
+        getConfig: vi.fn(() => ({
+          environment: 'production',
+          marketplaceId: 'EBAY_US',
+        })),
+        getOAuthClient: vi.fn(() => ({
+          getAccessToken: vi.fn().mockResolvedValue('access-token'),
+          getUserTokens: vi.fn().mockReturnValue({
+            scope: REQUIRED_SCOPE_STRING,
+          }),
+        })),
+      })),
+    });
+
+    await expect(validateSandboxOAuthAccess(api)).rejects.toThrow(
+      'Sandbox bootstrap only runs against EBAY_ENVIRONMENT=sandbox'
+    );
+  });
+});

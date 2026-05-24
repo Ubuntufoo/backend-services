@@ -89,7 +89,9 @@ function getProductionScopes(): string[] {
   try {
     const scopesPath = join(repoRoot, 'docs/auth/production_scopes.json');
     const scopesData = readFileSync(scopesPath, 'utf-8');
-    const scopes = scopeDefinitionSchema.parse(JSON.parse(scopesData) as unknown) as ScopeDefinition[];
+    const scopes = scopeDefinitionSchema.parse(
+      JSON.parse(scopesData) as unknown
+    ) as ScopeDefinition[];
 
     // Filter out empty objects and extract unique scope strings
     const uniqueScopes = new Set<string>();
@@ -113,7 +115,9 @@ function getSandboxScopes(): string[] {
   try {
     const scopesPath = join(repoRoot, 'docs/auth/sandbox_scopes.json');
     const scopesData = readFileSync(scopesPath, 'utf-8');
-    const scopes = scopeDefinitionSchema.parse(JSON.parse(scopesData) as unknown) as ScopeDefinition[];
+    const scopes = scopeDefinitionSchema.parse(
+      JSON.parse(scopesData) as unknown
+    ) as ScopeDefinition[];
 
     // Filter out empty objects and extract unique scope strings
     const uniqueScopes = new Set<string>();
@@ -251,7 +255,7 @@ export function getEbayConfig(): EbayConfig {
   const clientSecret = process.env.EBAY_CLIENT_SECRET ?? '';
   const environment = process.env.EBAY_ENVIRONMENT === 'production' ? 'production' : 'sandbox';
   const accessToken = process.env.EBAY_USER_ACCESS_TOKEN ?? '';
-  const refreshToken = process.env.EBAY_USER_REFRESH_TOKEN ?? '';
+  const refreshToken = process.env.EBAY_REFRESH_TOKEN ?? process.env.EBAY_USER_REFRESH_TOKEN ?? '';
   const appAccessToken = process.env.EBAY_APP_ACCESS_TOKEN ?? '';
   const marketplaceId = (process.env.EBAY_MARKETPLACE_ID ?? '').trim() || 'EBAY_US';
   const contentLanguage = (process.env.EBAY_CONTENT_LANGUAGE ?? '').trim() || 'en-US';
