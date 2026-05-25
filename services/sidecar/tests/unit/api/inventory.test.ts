@@ -148,7 +148,10 @@ describe('InventoryApi', () => {
 
       await api.createOrReplaceInventoryItem('SKU-001', inventoryItem);
 
-      expect(client.put).toHaveBeenCalledWith('/sell/inventory/v1/inventory_item/SKU-001', inventoryItem);
+      expect(client.put).toHaveBeenCalledWith(
+        '/sell/inventory/v1/inventory_item/SKU-001',
+        inventoryItem
+      );
     });
 
     it('should reject blank SKU before client call', async () => {
