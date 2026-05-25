@@ -390,7 +390,7 @@ describe('publishListing', () => {
       publishOfferResult: {},
     });
 
-    await publishListing('LIST-001', dependencies);
+    const result = await publishListing('LIST-001', dependencies);
 
     expect(dependencies.listingUpdates).toEqual([
       {
@@ -410,6 +410,7 @@ describe('publishListing', () => {
         },
       },
     ]);
+    expect(result.ebayListingId).toBe('EBAY-EXISTING');
   });
 
   it('raises not found errors when listing is missing', async () => {

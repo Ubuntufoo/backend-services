@@ -299,7 +299,7 @@ export async function publishListing(
     );
 
     return {
-      ebayListingId: publishOfferResponse.listingId ?? null,
+      ebayListingId: publishOfferResponse.listingId ?? listing.ebay_listing_id ?? null,
       exportedAt,
       listingId,
       offerId,
