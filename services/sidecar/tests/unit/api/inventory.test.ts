@@ -388,13 +388,30 @@ describe('InventoryApi', () => {
       const mockResponse = { listingId: 'LISTING123' };
       vi.mocked(client.post).mockResolvedValue(mockResponse);
 
-      await api.publishOffer('OFFER123');
+      const result = await api.publishOffer('OFFER123');
 
       expect(client.post).toHaveBeenCalledWith('/sell/inventory/v1/offer/OFFER123/publish');
+      expect(result).toEqual(mockResponse);
     });
 
-    it('should throw error when offerId is missing', async () => {
-      await expect(api.publishOffer('')).rejects.toThrow('offerId is required');
+    it('should reject blank offerId before client call', async () => {
+      await expect(api.publishOffer('')).rejects.toThrow('offerId is required and must be a string');
+      expect(client.post).not.toHaveBeenCalled();
+    });
+
+    it('should reject undefined offerId before client call', async () => {
+      await expect(api.publishOffer(undefined as any)).rejects.toThrow(
+        'offerId is required and must be a string'
+      );
+      expect(client.post).not.toHaveBeenCalled();
+    });
+
+    it('should wrap client failures with publish-offer context', async () => {
+      vi.mocked(client.post).mockRejectedValue(new Error('Sandbox publish failed'));
+
+      await expect(api.publishOffer('OFFER123')).rejects.toThrow(
+        'Failed to publish offer: Sandbox publish failed'
+      );
     });
   });
 
