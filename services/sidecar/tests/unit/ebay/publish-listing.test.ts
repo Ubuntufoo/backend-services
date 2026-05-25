@@ -215,6 +215,7 @@ describe('publishListing', () => {
         listingId: 'LIST-001',
         changes: {
           ebay_listing_id: 'EBAY-001',
+          ebay_listing_url: 'https://www.ebay.com/itm/EBAY-001',
           ebay_offer_id: 'OFFER-001',
           exported_at: '2026-05-24T15:30:00.000Z',
           sku: 'LIST-001',
@@ -377,6 +378,39 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-EXISTING');
     expect(result.reusedExistingOffer).toBe(true);
     expect(result.offerId).toBe('OFFER-EXISTING');
+  });
+
+  it('does not overwrite existing listing identifiers when publish response omits them', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        ebay_listing_id: 'EBAY-EXISTING',
+        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+        ebay_offer_id: 'OFFER-EXISTING',
+      }),
+      publishOfferResult: {},
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.listingUpdates).toEqual([
+      {
+        listingId: 'LIST-001',
+        changes: {
+          sku: 'LIST-001',
+        },
+      },
+      {
+        listingId: 'LIST-001',
+        changes: {
+          ebay_offer_id: 'OFFER-EXISTING',
+          exported_at: '2026-05-24T15:30:00.000Z',
+          sku: 'LIST-001',
+          status: 'exported',
+          sub_status: 'idle',
+        },
+      },
+    ]);
+    expect(result.ebayListingId).toBe('EBAY-EXISTING');
   });
 
   it('raises not found errors when listing is missing', async () => {

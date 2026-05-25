@@ -1,4 +1,4 @@
-import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import type { AppSettingsRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import { EbaySellerApi } from '@/api/index.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
 import { getEbayConfig } from '@/config/environment.js';
@@ -32,6 +32,101 @@ export interface PublishListingResult {
   reusedExistingOffer: boolean;
   sku: string;
   status: 'exported';
+}
+
+function getNonEmptyString(value: string | null | undefined): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function getMarketplaceListingBaseUrl(
+  marketplaceId: AppSettingsRow['ebay_marketplace_id']
+): string | undefined {
+  switch (marketplaceId) {
+    case 'EBAY_AT':
+      return 'https://www.ebay.at';
+    case 'EBAY_AU':
+      return 'https://www.ebay.com.au';
+    case 'EBAY_BE':
+      return 'https://www.ebay.be';
+    case 'EBAY_CA':
+      return 'https://www.ebay.ca';
+    case 'EBAY_CH':
+      return 'https://www.ebay.ch';
+    case 'EBAY_DE':
+      return 'https://www.ebay.de';
+    case 'EBAY_ES':
+      return 'https://www.ebay.es';
+    case 'EBAY_FR':
+      return 'https://www.ebay.fr';
+    case 'EBAY_GB':
+      return 'https://www.ebay.co.uk';
+    case 'EBAY_HK':
+      return 'https://www.ebay.com.hk';
+    case 'EBAY_IE':
+      return 'https://www.ebay.ie';
+    case 'EBAY_IT':
+      return 'https://www.ebay.it';
+    case 'EBAY_MY':
+      return 'https://www.ebay.com.my';
+    case 'EBAY_NL':
+      return 'https://www.ebay.nl';
+    case 'EBAY_PH':
+      return 'https://www.ebay.ph';
+    case 'EBAY_PL':
+      return 'https://www.ebay.pl';
+    case 'EBAY_SG':
+      return 'https://www.ebay.com.sg';
+    case 'EBAY_TW':
+      return 'https://www.ebay.com.tw';
+    case 'EBAY_US':
+      return 'https://www.ebay.com';
+    case 'EBAY_VN':
+      return 'https://www.ebay.vn';
+    default:
+      return undefined;
+  }
+}
+
+function buildEbayListingUrl(
+  marketplaceId: AppSettingsRow['ebay_marketplace_id'],
+  listingId: string | null | undefined
+): string | undefined {
+  const normalizedListingId = getNonEmptyString(listingId);
+  const baseUrl = getMarketplaceListingBaseUrl(marketplaceId);
+
+  if (!baseUrl || !normalizedListingId) {
+    return undefined;
+  }
+
+  return `${baseUrl}/itm/${normalizedListingId}`;
+}
+
+function buildPublishedListingUpdate(input: {
+  appSettings: AppSettingsRow;
+  ebayListingId: string | null | undefined;
+  ebayOfferId: string;
+  exportedAt: string;
+  sku: string;
+}): ListingUpdate {
+  const ebayListingId = getNonEmptyString(input.ebayListingId);
+  const ebayListingUrl = buildEbayListingUrl(input.appSettings.ebay_marketplace_id, ebayListingId);
+  const changes: ListingUpdate = {
+    ebay_offer_id: input.ebayOfferId,
+    exported_at: input.exportedAt,
+    sku: input.sku,
+    status: 'exported',
+    sub_status: 'idle',
+  };
+
+  if (ebayListingId) {
+    changes.ebay_listing_id = ebayListingId;
+  }
+
+  if (ebayListingUrl) {
+    changes.ebay_listing_url = ebayListingUrl;
+  }
+
+  return changes;
 }
 
 async function createDefaultDependencies(): Promise<PublishListingDependencies> {
@@ -192,17 +287,19 @@ export async function publishListing(
     const publishOfferResponse = await resolvedDependencies.inventoryApi.publishOffer(offerId);
     const exportedAt = resolvedDependencies.now().toISOString();
 
-    await resolvedDependencies.dataAccess.listings.update(listingId, {
-      ebay_listing_id: publishOfferResponse.listingId ?? null,
-      ebay_offer_id: offerId,
-      exported_at: exportedAt,
-      sku,
-      status: 'exported',
-      sub_status: 'idle',
-    });
+    await resolvedDependencies.dataAccess.listings.update(
+      listingId,
+      buildPublishedListingUpdate({
+        appSettings,
+        ebayListingId: publishOfferResponse.listingId,
+        ebayOfferId: offerId,
+        exportedAt,
+        sku,
+      })
+    );
 
     return {
-      ebayListingId: publishOfferResponse.listingId ?? null,
+      ebayListingId: publishOfferResponse.listingId ?? listing.ebay_listing_id ?? null,
       exportedAt,
       listingId,
       offerId,
