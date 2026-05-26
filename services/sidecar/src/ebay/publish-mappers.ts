@@ -20,6 +20,7 @@ const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
   '2750': Condition.LIKE_NEW,
   '4000': Condition.USED_VERY_GOOD,
 };
+const INTERNAL_ITEM_SPECIFIC_KEYS = new Set(['CategorySuggestion', 'ConditionSuggestion']);
 
 function normalizeAspectValue(value: Json): string[] | null {
   if (typeof value === 'string' && value.trim().length > 0) {
@@ -47,6 +48,10 @@ function normalizeItemSpecifics(
   const aspects: Record<string, string[]> = {};
 
   for (const [key, value] of Object.entries(itemSpecifics)) {
+    if (INTERNAL_ITEM_SPECIFIC_KEYS.has(key)) {
+      continue;
+    }
+
     const normalized = normalizeAspectValue(value as Json);
 
     if (normalized && key.trim().length > 0) {
