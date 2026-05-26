@@ -1,4 +1,5 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
+import { Condition } from '@/types/ebay-enums.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 
 type InventoryItem = components['schemas']['InventoryItem'];
@@ -13,6 +14,11 @@ const MARKETPLACE_CURRENCY_MAP: Record<string, string> = {
   EBAY_GB: 'GBP',
   EBAY_IT: 'EUR',
   EBAY_US: 'USD',
+};
+
+const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
+  '2750': Condition.LIKE_NEW,
+  '4000': Condition.USED_VERY_GOOD,
 };
 
 function normalizeAspectValue(value: Json): string[] | null {
@@ -84,6 +90,24 @@ export function getMarketplaceCurrency(marketplaceId: string): string {
   return MARKETPLACE_CURRENCY_MAP[marketplaceId] ?? 'USD';
 }
 
+export function mapListingConditionIdToInventoryCondition(
+  conditionId: string | number | null | undefined
+): Condition {
+  const normalizedConditionId =
+    typeof conditionId === 'number'
+      ? String(conditionId)
+      : typeof conditionId === 'string'
+        ? conditionId.trim()
+        : '';
+  const inventoryCondition = INVENTORY_CONDITION_BY_LISTING_CONDITION_ID[normalizedConditionId];
+
+  if (!inventoryCondition) {
+    throw new Error(`Unsupported listing condition_id "${normalizedConditionId}".`);
+  }
+
+  return inventoryCondition;
+}
+
 export function mapListingToInventoryItemPayload(
   listing: ListingRow,
   appSettings: AppSettingsRow
@@ -96,7 +120,7 @@ export function mapListingToInventoryItemPayload(
         quantity: 1,
       },
     },
-    condition: listing.condition_id ?? undefined,
+    condition: mapListingConditionIdToInventoryCondition(listing.condition_id ?? undefined),
     conditionDescription: listing.condition_notes ?? undefined,
     packageWeightAndSize: buildPackageWeightAndSize(listing, appSettings),
     product: {

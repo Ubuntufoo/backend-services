@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import {
   buildPublishSku,
+  mapListingConditionIdToInventoryCondition,
   mapListingToInventoryItemPayload,
   mapListingToOfferPayload,
 } from '@/ebay/publish-mappers.js';
@@ -11,7 +12,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
     capture_mode: null,
     category_id: '1234',
-    condition_id: '3000',
+    condition_id: '4000',
     condition_notes: 'Minor wear on corners.',
     created_at: '2026-05-24T10:00:00.000Z',
     description: 'Detailed listing description.',
@@ -86,6 +87,19 @@ describe('publish mappers', () => {
     expect(buildPublishSku(createListing({ sku: null }))).toBe('LIST-001');
   });
 
+  it('maps supported listing condition ids to inventory api condition enums', () => {
+    expect(mapListingConditionIdToInventoryCondition('4000')).toBe('USED_VERY_GOOD');
+    expect(mapListingConditionIdToInventoryCondition('2750')).toBe('LIKE_NEW');
+    expect(mapListingConditionIdToInventoryCondition(4000)).toBe('USED_VERY_GOOD');
+    expect(mapListingConditionIdToInventoryCondition(2750)).toBe('LIKE_NEW');
+  });
+
+  it('rejects unsupported listing condition ids', () => {
+    expect(() => mapListingConditionIdToInventoryCondition('3000')).toThrow(
+      'Unsupported listing condition_id "3000".'
+    );
+  });
+
   it('maps listing data to an inventory item payload', () => {
     const payload = mapListingToInventoryItemPayload(createListing(), createAppSettings());
 
@@ -95,7 +109,7 @@ describe('publish mappers', () => {
           quantity: 1,
         },
       },
-      condition: '3000',
+      condition: 'USED_VERY_GOOD',
       conditionDescription: 'Minor wear on corners.',
       packageWeightAndSize: {
         packageType: 'LETTER',
