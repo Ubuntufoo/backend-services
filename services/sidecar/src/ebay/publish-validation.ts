@@ -1,4 +1,5 @@
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 
 export type PublishListingErrorCode =
   | 'APP_SETTINGS_NOT_FOUND'
@@ -129,6 +130,14 @@ export function validatePublishListingReadiness(
 
   if (!hasText(listing.condition_id)) {
     issues.push(`Listing "${listingLabel}" is missing condition_id.`);
+  } else {
+    try {
+      mapListingConditionIdToInventoryCondition(listing.condition_id);
+    } catch {
+      issues.push(
+        `Listing "${listingLabel}" has unsupported condition_id "${listing.condition_id.trim()}" for Inventory API mapping.`
+      );
+    }
   }
 
   issues.push(...getImageUrlIssues(listing));

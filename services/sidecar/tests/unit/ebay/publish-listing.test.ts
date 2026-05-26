@@ -12,7 +12,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
     capture_mode: null,
     category_id: '1234',
-    condition_id: '3000',
+    condition_id: '4000',
     condition_notes: 'Minor wear.',
     created_at: '2026-05-24T10:00:00.000Z',
     description: 'Detailed listing description.',
@@ -281,6 +281,28 @@ describe('publishListing', () => {
           'Listing "LIST-001" must include at least one image URL for publish.',
           'Listing "LIST-001" contains blank image_urls entries.',
           'Listing "LIST-001" is missing a valid price.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported condition ids before any inventory api calls', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        condition_id: '3000',
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'Listing "LIST-001" has unsupported condition_id "3000" for Inventory API mapping.',
         ],
         listingId: 'LIST-001',
         stage: 'validate',

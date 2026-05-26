@@ -11,7 +11,7 @@ function createListingForOfferPayload() {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
     capture_mode: null,
     category_id: '1234',
-    condition_id: '3000',
+    condition_id: '4000',
     condition_notes: 'Minor wear on corners.',
     created_at: '2026-05-24T10:00:00.000Z',
     description: 'Detailed listing description.',
@@ -76,7 +76,7 @@ function createListingForInventoryPayload() {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
     capture_mode: null,
     category_id: '1234',
-    condition_id: '3000',
+    condition_id: '4000',
     condition_notes: 'Minor wear on corners.',
     created_at: '2026-05-24T10:00:00.000Z',
     description: 'Detailed listing description.',
@@ -220,6 +220,7 @@ describe('InventoryApi', () => {
         '/sell/inventory/v1/inventory_item/SKU-001',
         inventoryItem
       );
+      expect(inventoryItem.condition).toBe('USED_VERY_GOOD');
     });
 
     it('should reject blank SKU before client call', async () => {
