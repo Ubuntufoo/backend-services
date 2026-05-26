@@ -341,6 +341,28 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
+  it('rejects unsupported condition ids before any inventory api calls', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        condition_id: '3000',
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'Listing "LIST-001" has unsupported condition_id "3000" for Inventory API mapping.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
   it('rejects listings with blank fallback sku source', async () => {
     const dependencies = createDependencies({
       listing: createListing({
