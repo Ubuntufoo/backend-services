@@ -178,7 +178,7 @@ async function runApprovedListingPublishesOnce(
 
     if (!claimedListing) {
       publishSkippedCount += 1;
-      logger.info('Skipped already-claimed publish listing.', {
+      logger.info('Skipped publish listing claim (already claimed or no longer queued).', {
         listingId: listing.listing_id,
       });
       continue;
