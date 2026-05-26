@@ -1,5 +1,4 @@
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
-import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 
 export type PublishListingErrorCode =
   | 'APP_SETTINGS_NOT_FOUND'
@@ -69,12 +68,12 @@ function isPlaceholderMarketplaceId(value: string | null | undefined): boolean {
   return normalized ? isMockPlaceholder(normalized) || !/^EBAY_[A-Z_]+$/.test(normalized) : false;
 }
 
-function hasPlaceholderPolicySettings(appSettings: AppSettingsRow): boolean {
+function hasNonRealPolicySettings(appSettings: AppSettingsRow): boolean {
   return [
     appSettings.default_payment_policy_id,
     appSettings.default_fulfillment_policy_id,
     appSettings.default_return_policy_id,
-  ].some((value) => isMockPlaceholder(value));
+  ].some((value) => !hasText(value) || isMockPlaceholder(value));
 }
 
 function isPlaceholderMerchantLocationKey(appSettings: AppSettingsRow): boolean {
@@ -87,7 +86,7 @@ function isPlaceholderMerchantLocationKey(appSettings: AppSettingsRow): boolean 
     return true;
   }
 
-  return normalized === 'default-main-location' && hasPlaceholderPolicySettings(appSettings);
+  return normalized === 'default-main-location' && hasNonRealPolicySettings(appSettings);
 }
 
 function getListingLabel(listing: Pick<ListingRow, 'listing_id'>): string {
@@ -189,14 +188,6 @@ export function validatePublishListingReadiness(
 
   if (!hasText(listing.condition_id)) {
     issues.push(`Listing "${listingLabel}" is missing condition_id.`);
-  } else {
-    try {
-      mapListingConditionIdToInventoryCondition(listing.condition_id);
-    } catch {
-      issues.push(
-        `Listing "${listingLabel}" has unsupported condition_id "${listing.condition_id.trim()}" for Inventory API mapping.`
-      );
-    }
   }
 
   issues.push(...getImageUrlIssues(listing));

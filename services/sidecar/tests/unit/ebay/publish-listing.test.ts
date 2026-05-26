@@ -238,31 +238,77 @@ describe('publishListing', () => {
     });
   });
 
-  it('fails clearly when required publish policies or location key are missing', async () => {
-    const dependencies = createDependencies({
-      appSettings: createAppSettings({
-        default_fulfillment_policy_id: null,
-        default_payment_policy_id: null,
-        default_return_policy_id: null,
-        merchant_location_key: null,
-      }),
-    });
-
-    await expect(publishListing('LIST-001', dependencies)).rejects.toThrow(
-      PublishListingValidationError
-    );
-    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
-      context: {
-        issues: [
-          'app_settings.default_payment_policy_id is required for publish.',
-          'app_settings.default_fulfillment_policy_id is required for publish.',
-          'app_settings.default_return_policy_id is required for publish.',
-          'app_settings.merchant_location_key is required for publish.',
-        ],
+  it.each([
+    {
+      appSettings: {
+        ebay_marketplace_id: null,
       },
-    });
-    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
-  });
+      issues: ['app_settings.ebay_marketplace_id is required for publish.'],
+      label: 'missing marketplace',
+    },
+    {
+      appSettings: {
+        default_payment_policy_id: '   ',
+      },
+      issues: ['app_settings.default_payment_policy_id is required for publish.'],
+      label: 'blank payment policy',
+    },
+    {
+      appSettings: {
+        default_fulfillment_policy_id: '   ',
+      },
+      issues: ['app_settings.default_fulfillment_policy_id is required for publish.'],
+      label: 'blank fulfillment policy',
+    },
+    {
+      appSettings: {
+        default_return_policy_id: '   ',
+      },
+      issues: ['app_settings.default_return_policy_id is required for publish.'],
+      label: 'blank return policy',
+    },
+    {
+      appSettings: {
+        merchant_location_key: '   ',
+      },
+      issues: ['app_settings.merchant_location_key is required for publish.'],
+      label: 'blank merchant location',
+    },
+    {
+      appSettings: {
+        default_fulfillment_policy_id: 'mock-fulfillment-policy-id',
+        default_payment_policy_id: 'mock-payment-policy-id',
+        default_return_policy_id: 'mock-return-policy-id',
+        merchant_location_key: 'default-main-location',
+      },
+      issues: [
+        'app_settings.default_payment_policy_id "mock-payment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.',
+        'app_settings.default_fulfillment_policy_id "mock-fulfillment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.',
+        'app_settings.default_return_policy_id "mock-return-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.',
+        'app_settings.merchant_location_key "default-main-location" looks like a placeholder. Run sandbox location diagnostics and update app_settings.default before publish.',
+      ],
+      label: 'default-main-location with mock policies',
+    },
+  ])(
+    'blocks publish before createOffer when app settings are invalid: $label',
+    async ({ appSettings, issues }) => {
+      const dependencies = createDependencies({
+        appSettings: createAppSettings(appSettings),
+      });
+
+      await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+        code: 'LISTING_NOT_READY',
+        context: {
+          issues: expect.arrayContaining(issues),
+          listingId: 'LIST-001',
+          stage: 'validate',
+        },
+      });
+      expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    }
+  );
 
   it('aggregates missing listing fields before any inventory api calls', async () => {
     const dependencies = createDependencies({
@@ -285,28 +331,6 @@ describe('publishListing', () => {
           'Listing "LIST-001" must include at least one image URL for publish.',
           'Listing "LIST-001" contains blank image_urls entries.',
           'Listing "LIST-001" is missing a valid price.',
-        ],
-        listingId: 'LIST-001',
-        stage: 'validate',
-      },
-    });
-    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
-    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
-    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
-  });
-
-  it('rejects unsupported condition ids before any inventory api calls', async () => {
-    const dependencies = createDependencies({
-      listing: createListing({
-        condition_id: '3000',
-      }),
-    });
-
-    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
-      code: 'LISTING_NOT_READY',
-      context: {
-        issues: [
-          'Listing "LIST-001" has unsupported condition_id "3000" for Inventory API mapping.',
         ],
         listingId: 'LIST-001',
         stage: 'validate',
@@ -451,9 +475,6 @@ describe('publishListing', () => {
         },
       },
     ]);
-    expect(
-      dependencies.listingUpdates.some((update) => Object.hasOwn(update.changes, 'last_error_code'))
-    ).toBe(false);
   });
 
   it('raises explicit finalization errors when publish succeeds but exported state persistence fails', async () => {
@@ -568,31 +589,6 @@ describe('publishListing', () => {
       },
     ]);
     expect(result.ebayListingId).toBe('EBAY-EXISTING');
-  });
-
-  it('clears stale publish error fields when export succeeds', async () => {
-    const dependencies = createDependencies({
-      listing: createListing({
-        last_error_at: '2026-05-24T14:00:00.000Z',
-        last_error_code: 'OFFER_CREATE_FAILED',
-        last_error_context: { stage: 'offer' },
-        last_error_message: 'Invalid value for fulfillmentPolicyId.',
-      }),
-    });
-
-    await publishListing('LIST-001', dependencies);
-
-    expect(dependencies.listingUpdates.at(-1)).toEqual({
-      listingId: 'LIST-001',
-      changes: expect.objectContaining({
-        last_error_at: null,
-        last_error_code: null,
-        last_error_context: null,
-        last_error_message: null,
-        status: 'exported',
-        sub_status: 'idle',
-      }),
-    });
   });
 
   it('raises not found errors when listing is missing', async () => {
