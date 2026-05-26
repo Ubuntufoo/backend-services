@@ -10,7 +10,7 @@ export type PublishListingErrorCode =
   | 'OFFER_PUBLISH_FAILED';
 
 export interface PublishListingErrorContext {
-  listingId?: string;
+  listingId?: string | null;
   issues?: string[];
   stage?: 'finalize' | 'load' | 'validate' | 'inventory_item' | 'offer' | 'publish';
 }
@@ -35,7 +35,7 @@ export class PublishListingError extends Error {
 export class PublishListingValidationError extends PublishListingError {
   readonly issues: string[];
 
-  constructor(listingId: string, issues: string[]) {
+  constructor(listingId: string | null, issues: string[]) {
     super(
       'LISTING_NOT_READY',
       issues.join('; '),
@@ -140,6 +140,6 @@ export function validatePublishListingReadiness(
   issues.push(...getMissingAppSettingIssues(appSettings));
 
   if (issues.length > 0) {
-    throw new PublishListingValidationError(listingLabel, issues);
+    throw new PublishListingValidationError(listing.listing_id, issues);
   }
 }

@@ -302,7 +302,7 @@ describe('publishListing', () => {
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       context: {
         issues: ['Listing is missing listing_id required for publish SKU.'],
-        listingId: '[missing listing_id]',
+        listingId: '   ',
       },
     });
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
