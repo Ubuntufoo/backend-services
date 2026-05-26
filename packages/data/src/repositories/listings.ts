@@ -1,4 +1,5 @@
 import type { ListingInsert, ListingRow, ListingUpdate } from '../database.js';
+import type { Json } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
 import {
   type MultiResult,
@@ -29,6 +30,11 @@ export interface ListListingsByStatusOptions {
   orderByCreatedAt?: 'asc' | 'desc';
 }
 
+export interface ListApprovedForExportListingsOptions {
+  limit: number;
+  queuedOnly?: boolean;
+}
+
 export interface GeneratedListingFieldsUpdate {
   captureMode?: ListingUpdate['capture_mode'];
   categoryId?: ListingUpdate['category_id'];
@@ -56,6 +62,54 @@ export interface PublishedListingUpdate {
   ebayOfferId?: ListingUpdate['ebay_offer_id'];
   exportedAt?: ListingUpdate['exported_at'];
   listingId: string;
+}
+
+interface ErrorWithCode {
+  code?: unknown;
+  context?: {
+    stage?: unknown;
+  };
+  message?: unknown;
+  name?: unknown;
+}
+
+function isErrorWithCode(value: unknown): value is ErrorWithCode {
+  return typeof value === 'object' && value !== null;
+}
+
+function getOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function buildPublishFailureErrorContext(error: unknown): Json {
+  if (!isErrorWithCode(error)) {
+    return {};
+  }
+
+  const context = {
+    code: getOptionalString(error.code),
+    message: getOptionalString(error.message),
+    name: getOptionalString(error.name),
+    stage: getOptionalString(error.context?.stage),
+  };
+
+  return Object.fromEntries(
+    Object.entries(context).filter(([, value]) => value !== undefined)
+  ) satisfies Json;
+}
+
+function buildPublishFailureUpdate(errorAt: string, error: unknown): ListingUpdate {
+  const fallbackMessage = error instanceof Error ? error.message : String(error);
+  const errorCode = isErrorWithCode(error) ? getOptionalString(error.code) : undefined;
+
+  return {
+    last_error_at: errorAt,
+    last_error_code: errorCode ?? 'publish_failed',
+    last_error_context: buildPublishFailureErrorContext(error),
+    last_error_message: fallbackMessage,
+    status: 'approved_for_export',
+    sub_status: 'publish_queued',
+  };
 }
 
 function mapGeneratedListingFieldsUpdate(
@@ -152,6 +206,30 @@ export async function listListingsByStatus(
   return result.data ?? [];
 }
 
+export async function listApprovedForExportListings(
+  client: SupabaseDataClient,
+  options: ListApprovedForExportListingsOptions
+): Promise<ListingRow[]> {
+  let query = client
+    .from('listings')
+    .select('*')
+    .eq('status', 'approved_for_export');
+
+  if (options.queuedOnly) {
+    query = query.eq('sub_status', 'publish_queued');
+  }
+
+  const result = (await query
+    .order('created_at', { ascending: true })
+    .limit(options.limit)) as MultiResult<ListingRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
+}
+
 export async function updateListing(
   client: SupabaseDataClient,
   listingId: string,
@@ -165,6 +243,28 @@ export async function updateListing(
     .single()) as SingleResult<ListingRow>;
 
   return requireSingleResult(result, `Listing "${listingId}" was not updated.`);
+}
+
+export async function claimApprovedListingForPublish(
+  client: SupabaseDataClient,
+  listingId: string
+): Promise<ListingRow | null> {
+  const result = (await client
+    .from('listings')
+    .update({
+      last_error_at: null,
+      last_error_code: null,
+      last_error_context: {},
+      last_error_message: null,
+      sub_status: 'publishing_to_ebay',
+    })
+    .eq('listing_id', listingId)
+    .eq('status', 'approved_for_export')
+    .eq('sub_status', 'publish_queued')
+    .select()
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  return requireOptionalResult(result);
 }
 
 export async function saveListingArtifacts(
@@ -225,4 +325,13 @@ export async function savePublishedListing(
   const { listingId } = input;
 
   return await updateListing(client, listingId, mapPublishedListingUpdate(input));
+}
+
+export async function markListingPublishFailed(
+  client: SupabaseDataClient,
+  listingId: string,
+  errorAt: string,
+  error: unknown
+): Promise<ListingRow> {
+  return await updateListing(client, listingId, buildPublishFailureUpdate(errorAt, error));
 }

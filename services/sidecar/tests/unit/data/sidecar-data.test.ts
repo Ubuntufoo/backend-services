@@ -9,9 +9,12 @@ import type {
 const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
 const listListingsMock = vi.fn();
 const listListingsByStatusMock = vi.fn();
+const listApprovedForExportListingsMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
 const createListingMock = vi.fn();
 const updateListingMock = vi.fn();
+const claimApprovedListingForPublishMock = vi.fn();
+const markListingPublishFailedMock = vi.fn();
 const updateListingWorkflowStateMock = vi.fn();
 const saveListingImageMetadataMock = vi.fn();
 const getAppSettingsMock = vi.fn();
@@ -32,6 +35,7 @@ const updateAppSettingsMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
+  claimApprovedListingForPublish: claimApprovedListingForPublishMock,
   claimQueuedJob: claimQueuedJobMock,
   createAppSettings: createAppSettingsMock,
   createJob: createJobMock,
@@ -45,10 +49,12 @@ vi.mock('@ebay-inventory/data', () => ({
   getJobById: getJobByIdMock,
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
+  listApprovedForExportListings: listApprovedForExportListingsMock,
   listQueuedJobs: listQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
+  markListingPublishFailed: markListingPublishFailedMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
   updateAppSettings: updateAppSettingsMock,
   updateJob: updateJobMock,
@@ -79,6 +85,10 @@ describe('sidecar data access', () => {
       offset: 0,
       orderByCreatedAt: 'asc',
     });
+    await dataAccess.listings.listApprovedForExport({
+      limit: 5,
+      queuedOnly: true,
+    });
     await dataAccess.listings.getByListingId('LIST-001');
 
     expect(createSupabaseServiceClientMock).toHaveBeenCalledWith(env);
@@ -88,6 +98,10 @@ describe('sidecar data access', () => {
       limit: 25,
       offset: 0,
       orderByCreatedAt: 'asc',
+    });
+    expect(listApprovedForExportListingsMock).toHaveBeenCalledWith(client, {
+      limit: 5,
+      queuedOnly: true,
     });
     expect(getListingByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
   });
@@ -116,13 +130,22 @@ describe('sidecar data access', () => {
     } as ListingWorkflowTransitionInput;
 
     await dataAccess.listings.create(listingInsert);
+    await dataAccess.listings.claimApprovedForPublish('LIST-001');
     await dataAccess.listings.update('LIST-001', listingUpdate);
+    await dataAccess.listings.markPublishFailed('LIST-001', '2026-05-25T12:00:00.000Z', new Error('boom'));
     await dataAccess.listings.saveImageMetadata(imageMetadataUpdate);
     await dataAccess.listings.updateWorkflowState(workflowUpdate);
     await dataAccess.appSettings.get();
 
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
+    expect(claimApprovedListingForPublishMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(updateListingMock).toHaveBeenCalledWith(client, 'LIST-001', listingUpdate);
+    expect(markListingPublishFailedMock).toHaveBeenCalledWith(
+      client,
+      'LIST-001',
+      '2026-05-25T12:00:00.000Z',
+      expect.any(Error)
+    );
     expect(saveListingImageMetadataMock).toHaveBeenCalledWith(client, imageMetadataUpdate);
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);
     expect(getAppSettingsMock).toHaveBeenCalledWith(client, 'default');

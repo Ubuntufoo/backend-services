@@ -72,13 +72,16 @@ const appSettingsRow = {
 function createDataAccess(): SidecarDataAccess {
   return {
     listings: {
+      claimApprovedForPublish: vi.fn(async () => null),
       create: vi.fn(async (input: ListingInsert) => ({
         ...listingRow,
         ...input,
       })),
       getByListingId: vi.fn(async () => listingRow),
+      listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(async () => [listingRow]),
       listByStatus: vi.fn(async () => [listingRow]),
+      markPublishFailed: vi.fn(async () => listingRow),
       saveImageMetadata: vi.fn(async (_input) => ({
         ...listingRow,
       })),

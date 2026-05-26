@@ -52,10 +52,13 @@ const listingRow = {
 function createDataAccess(): SidecarDataAccess {
   return {
     listings: {
+      claimApprovedForPublish: async () => null,
       create: async () => listingRow,
       getByListingId: async () => listingRow,
+      listApprovedForExport: async () => [],
       list: async () => [listingRow],
       listByStatus: async () => [listingRow],
+      markPublishFailed: async () => listingRow,
       saveImageMetadata: async () => listingRow,
       update: async () => listingRow,
       updateWorkflowState: async () => listingRow,

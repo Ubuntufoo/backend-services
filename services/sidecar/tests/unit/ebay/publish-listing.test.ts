@@ -148,10 +148,13 @@ function createDependencies({
       update: vi.fn(),
     },
     listings: {
+      claimApprovedForPublish: vi.fn(),
       create: vi.fn(),
       getByListingId: listingsGetByListingId,
+      listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(),
       listByStatus: vi.fn(),
+      markPublishFailed: vi.fn(),
       saveImageMetadata: vi.fn(),
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
@@ -192,11 +195,7 @@ describe('publishListing', () => {
       })
     );
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-001');
-    expect(dependencies.dataAccess.listings.updateWorkflowState).toHaveBeenCalledWith({
-      listingId: 'LIST-001',
-      status: 'approved_for_export',
-      subStatus: 'publishing_to_ebay',
-    });
+    expect(dependencies.dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     expect(dependencies.listingUpdates).toEqual([
       {
         listingId: 'LIST-001',
@@ -275,7 +274,7 @@ describe('publishListing', () => {
     expect(dependencies.dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
-  it('wraps inventory item failures and requeues publish state', async () => {
+  it('wraps inventory item failures without requeueing publish state internally', async () => {
     const dependencies = createDependencies();
     dependencies.inventoryApi.createOrReplaceInventoryItem = vi.fn(async () => {
       throw new Error('inventory unavailable');
@@ -288,13 +287,7 @@ describe('publishListing', () => {
         stage: 'inventory_item',
       },
     } satisfies Partial<PublishListingError>);
-    expect(dependencies.listingUpdates.at(-1)).toEqual({
-      listingId: 'LIST-001',
-      changes: {
-        status: 'approved_for_export',
-        sub_status: 'publish_queued',
-      },
-    });
+    expect(dependencies.listingUpdates).toEqual([]);
   });
 
   it('wraps offer creation failures after persisting sku only', async () => {
@@ -315,13 +308,6 @@ describe('publishListing', () => {
         listingId: 'LIST-001',
         changes: {
           sku: 'LIST-001',
-        },
-      },
-      {
-        listingId: 'LIST-001',
-        changes: {
-          status: 'approved_for_export',
-          sub_status: 'publish_queued',
         },
       },
     ]);
@@ -354,11 +340,61 @@ describe('publishListing', () => {
           sku: 'LIST-001',
         },
       },
+    ]);
+  });
+
+  it('raises explicit finalization errors when publish succeeds but exported state persistence fails', async () => {
+    const dependencies = createDependencies();
+    dependencies.dataAccess.listings.update = vi.fn(
+      async (currentListingId: string, changes: Partial<ListingRow>) => {
+        dependencies.listingUpdates.push({
+          listingId: currentListingId,
+          changes,
+        });
+
+        if ('status' in changes && changes.status === 'exported') {
+          throw new Error('write failed');
+        }
+
+        return {
+          listing_id: currentListingId,
+          ...(dependencies.listingUpdates.length > 0 ? createListing() : {}),
+          ...changes,
+        } as ListingRow;
+      }
+    );
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'EXPORT_STATE_PERSIST_FAILED',
+      context: {
+        listingId: 'LIST-001',
+        stage: 'finalize',
+      },
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.listingUpdates).toEqual([
       {
         listingId: 'LIST-001',
         changes: {
-          status: 'approved_for_export',
-          sub_status: 'publish_queued',
+          sku: 'LIST-001',
+        },
+      },
+      {
+        listingId: 'LIST-001',
+        changes: {
+          ebay_offer_id: 'OFFER-001',
+          sku: 'LIST-001',
+        },
+      },
+      {
+        listingId: 'LIST-001',
+        changes: {
+          ebay_listing_id: 'EBAY-001',
+          ebay_listing_url: 'https://www.ebay.com/itm/EBAY-001',
+          ebay_offer_id: 'OFFER-001',
+          exported_at: '2026-05-24T15:30:00.000Z',
+          sku: 'LIST-001',
+          status: 'exported',
+          sub_status: 'idle',
         },
       },
     ]);

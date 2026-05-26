@@ -1,5 +1,11 @@
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  publishListing as publishApprovedListing,
+  type PublishListingDependencies,
+  type PublishListingResult,
+} from '@/ebay/publish-listing.js';
+import { PublishListingError } from '@/ebay/publish-validation.js';
+import {
   runSidecarJob,
   type RunSidecarJobOptions,
   type RunSidecarJobResult,
@@ -9,6 +15,10 @@ const DEFAULT_BATCH_SIZE = 1;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 type RunJobFn = (jobId: string, options?: RunSidecarJobOptions) => Promise<RunSidecarJobResult>;
+type PublishListingFn = (
+  listingId: string,
+  dependencies?: Partial<PublishListingDependencies>
+) => Promise<PublishListingResult>;
 
 export interface SidecarJobRunnerLogger {
   error(message: string, context?: Record<string, unknown>): void;
@@ -19,6 +29,7 @@ export interface RunQueuedSidecarJobsOnceOptions extends RunSidecarJobOptions {
   batchSize?: number;
   dataAccess?: SidecarDataAccess;
   logger?: SidecarJobRunnerLogger;
+  publishListing?: PublishListingFn;
   runJob?: RunJobFn;
 }
 
@@ -26,6 +37,11 @@ export interface RunQueuedSidecarJobsOnceResult {
   claimedCount: number;
   executedCount: number;
   failedCount: number;
+  publishClaimedCount: number;
+  publishExecutedCount: number;
+  publishFailedCount: number;
+  publishQueuedCount: number;
+  publishSkippedCount: number;
   queuedCount: number;
   skippedCount: number;
 }
@@ -69,6 +85,32 @@ function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function asErrorCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined;
+}
+
+function asErrorStage(error: unknown): string | undefined {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'context' in error &&
+    typeof error.context === 'object' &&
+    error.context !== null &&
+    'stage' in error.context &&
+    typeof error.context.stage === 'string'
+  ) {
+    return error.context.stage;
+  }
+
+  return undefined;
+}
+
+function isFinalizationError(error: unknown): error is PublishListingError {
+  return error instanceof PublishListingError && error.code === 'EXPORT_STATE_PERSIST_FAILED';
+}
+
 function getLogger(logger?: SidecarJobRunnerLogger): SidecarJobRunnerLogger {
   return logger ?? defaultLogger;
 }
@@ -84,6 +126,144 @@ function stopLoopState(state: ActiveLoopState): void {
   if (activeLoopState === state) {
     activeLoopState = null;
   }
+}
+
+async function markPublishInconsistency(
+  dataAccess: SidecarDataAccess,
+  listingId: string,
+  errorAt: string,
+  error: unknown
+): Promise<void> {
+  const context = Object.fromEntries(
+    Object.entries({
+      code: asErrorCode(error),
+      stage: asErrorStage(error),
+    }).filter(([, value]) => value !== undefined)
+  );
+
+  await dataAccess.listings.update(listingId, {
+    last_error_at: errorAt,
+    last_error_code: asErrorCode(error) ?? 'publish_inconsistent',
+    last_error_context: context,
+    last_error_message: asErrorMessage(error),
+  });
+}
+
+async function runApprovedListingPublishesOnce(
+  options: RunQueuedSidecarJobsOnceOptions,
+  logger: SidecarJobRunnerLogger
+): Promise<Pick<
+  RunQueuedSidecarJobsOnceResult,
+  | 'publishClaimedCount'
+  | 'publishExecutedCount'
+  | 'publishFailedCount'
+  | 'publishQueuedCount'
+  | 'publishSkippedCount'
+>> {
+  const dataAccess = options.dataAccess ?? getSidecarDataAccess();
+  const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
+  const publishListing = options.publishListing ?? publishApprovedListing;
+  const approvedListings = await dataAccess.listings.listApprovedForExport({
+    limit: batchSize,
+    queuedOnly: true,
+  });
+
+  let publishClaimedCount = 0;
+  let publishExecutedCount = 0;
+  let publishFailedCount = 0;
+  let publishSkippedCount = 0;
+
+  for (const listing of approvedListings) {
+    const claimedListing = await dataAccess.listings.claimApprovedForPublish(listing.listing_id);
+
+    if (!claimedListing) {
+      publishSkippedCount += 1;
+      logger.info('Skipped already-claimed publish listing.', {
+        listingId: listing.listing_id,
+      });
+      continue;
+    }
+
+    publishClaimedCount += 1;
+    logger.info('Starting listing publish.', {
+      listingId: claimedListing.listing_id,
+    });
+
+    try {
+      const result = await publishListing(claimedListing.listing_id, {
+        dataAccess,
+        now: options.now,
+      });
+
+      publishExecutedCount += 1;
+      logger.info('Finished listing publish.', {
+        listingId: claimedListing.listing_id,
+        status: result.status,
+      });
+    } catch (error) {
+      publishFailedCount += 1;
+
+      if (isFinalizationError(error)) {
+        logger.error('Listing publish finalized externally but failed local persistence.', {
+          error: asErrorMessage(error),
+          errorCode: error.code,
+          listingId: claimedListing.listing_id,
+          stage: error.context.stage,
+        });
+
+        try {
+          await markPublishInconsistency(
+            dataAccess,
+            claimedListing.listing_id,
+            (options.now ?? (() => new Date()))().toISOString(),
+            error
+          );
+        } catch (cleanupError) {
+          logger.error('Failed to persist listing publish inconsistency.', {
+            cleanupError: asErrorMessage(cleanupError),
+            error: asErrorMessage(error),
+            errorCode: error.code,
+            listingId: claimedListing.listing_id,
+            stage: error.context.stage,
+          });
+        }
+
+        continue;
+      }
+
+      try {
+        await dataAccess.listings.markPublishFailed(
+          claimedListing.listing_id,
+          (options.now ?? (() => new Date()))().toISOString(),
+          error
+        );
+      } catch (cleanupError) {
+        logger.error('Failed to persist listing publish failure.', {
+          cleanupError: asErrorMessage(cleanupError),
+          error: asErrorMessage(error),
+          errorCode: asErrorCode(error),
+          listingId: claimedListing.listing_id,
+          stage: asErrorStage(error),
+        });
+        continue;
+      }
+
+      logger.error('Listing publish failed.', {
+        error: asErrorMessage(error),
+        errorCode: asErrorCode(error),
+        listingId: claimedListing.listing_id,
+        stage: asErrorStage(error),
+      });
+    }
+  }
+
+  return {
+    publishClaimedCount,
+    publishExecutedCount,
+    publishFailedCount,
+    publishQueuedCount: approvedListings.length,
+    publishSkippedCount,
+  };
 }
 
 export async function runQueuedSidecarJobsOnce(
@@ -142,10 +322,17 @@ export async function runQueuedSidecarJobsOnce(
     }
   }
 
+  const publishResult = await runApprovedListingPublishesOnce(options, logger);
+
   return {
     claimedCount,
     executedCount,
     failedCount,
+    publishClaimedCount: publishResult.publishClaimedCount,
+    publishExecutedCount: publishResult.publishExecutedCount,
+    publishFailedCount: publishResult.publishFailedCount,
+    publishQueuedCount: publishResult.publishQueuedCount,
+    publishSkippedCount: publishResult.publishSkippedCount,
     queuedCount: queuedJobs.length,
     skippedCount,
   };

@@ -2,6 +2,7 @@ import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 
 export type PublishListingErrorCode =
   | 'APP_SETTINGS_NOT_FOUND'
+  | 'EXPORT_STATE_PERSIST_FAILED'
   | 'INVENTORY_ITEM_UPSERT_FAILED'
   | 'LISTING_NOT_FOUND'
   | 'LISTING_NOT_READY'
@@ -11,7 +12,7 @@ export type PublishListingErrorCode =
 export interface PublishListingErrorContext {
   listingId?: string;
   issues?: string[];
-  stage?: 'load' | 'validate' | 'inventory_item' | 'offer' | 'publish';
+  stage?: 'finalize' | 'load' | 'validate' | 'inventory_item' | 'offer' | 'publish';
 }
 
 export class PublishListingError extends Error {
