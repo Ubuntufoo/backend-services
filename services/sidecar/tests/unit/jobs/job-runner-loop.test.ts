@@ -2,7 +2,10 @@ import type { JobRow, ListingRow } from '@ebay-inventory/data';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
-import { PublishListingError } from '@/ebay/publish-validation.js';
+import {
+  PublishListingError,
+  PublishListingValidationError,
+} from '@/ebay/publish-validation.js';
 import {
   runQueuedSidecarJobsOnce,
   startSidecarJobRunnerLoop,
@@ -221,6 +224,25 @@ function createDataAccess(
                 ? error.code
                 : 'publish_failed',
             last_error_context: {
+              code:
+                typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+                  ? error.code
+                  : undefined,
+              issues:
+                typeof error === 'object' &&
+                error !== null &&
+                'context' in error &&
+                typeof error.context === 'object' &&
+                error.context !== null &&
+                'issues' in error.context &&
+                Array.isArray(error.context.issues)
+                  ? error.context.issues
+                  : undefined,
+              message: error instanceof Error ? error.message : String(error),
+              name:
+                error instanceof Error && typeof error.name === 'string' && error.name.length > 0
+                  ? error.name
+                  : undefined,
               stage:
                 typeof error === 'object' &&
                 error !== null &&
@@ -556,6 +578,53 @@ describe('job runner loop', () => {
       })
     );
     expect(publishListing).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats publish validation errors as normal publish failures', async () => {
+    const logger = createLogger();
+    const approvedListing = createListingRow({
+      listing_id: 'LIST-INVALID',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const { dataAccess, listingStates } = createDataAccess([], [approvedListing]);
+    const publishListing = vi.fn(async () => {
+      throw new PublishListingValidationError('LIST-INVALID', [
+        'Listing "LIST-INVALID" is missing title.',
+        'Listing "LIST-INVALID" is missing category_id.',
+      ]);
+    });
+
+    const result = await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+      publishListing,
+    });
+
+    expect(result.publishFailedCount).toBe(1);
+    expect(publishListing).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listings.markPublishFailed).toHaveBeenCalledWith(
+      'LIST-INVALID',
+      '2026-05-22T13:00:00.000Z',
+      expect.any(PublishListingValidationError)
+    );
+    expect(listingStates.get('LIST-INVALID')).toMatchObject({
+      last_error_code: 'LISTING_NOT_READY',
+      last_error_context: {
+        code: 'LISTING_NOT_READY',
+        issues: [
+          'Listing "LIST-INVALID" is missing title.',
+          'Listing "LIST-INVALID" is missing category_id.',
+        ],
+        name: 'PublishListingValidationError',
+        stage: 'validate',
+      },
+      last_error_message:
+        'Listing "LIST-INVALID" is missing title.; Listing "LIST-INVALID" is missing category_id.',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
   });
 
   it('catches crashed job executions and keeps loop work alive', async () => {

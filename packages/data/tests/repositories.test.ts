@@ -891,6 +891,7 @@ describe('shared repositories', () => {
         last_error_code: 'OFFER_PUBLISH_FAILED',
         last_error_context: {
           code: 'OFFER_PUBLISH_FAILED',
+          issues: ['Listing "LIST-001" is missing title.'],
           message: 'sandbox unavailable',
           name: 'PublishListingError',
           stage: 'publish',
@@ -907,6 +908,7 @@ describe('shared repositories', () => {
           last_error_code: 'OFFER_PUBLISH_FAILED',
           last_error_context: {
             code: 'OFFER_PUBLISH_FAILED',
+            issues: ['Listing "LIST-001" is missing title.'],
             message: 'sandbox unavailable',
             name: 'PublishListingError',
             stage: 'publish',
@@ -925,7 +927,10 @@ describe('shared repositories', () => {
         '2026-05-25T12:00:00.000Z',
         Object.assign(new Error('sandbox unavailable'), {
           code: 'OFFER_PUBLISH_FAILED',
-          context: { stage: 'publish' },
+          context: {
+            issues: ['Listing "LIST-001" is missing title.'],
+            stage: 'publish',
+          },
           name: 'PublishListingError',
         })
       )
@@ -935,6 +940,7 @@ describe('shared repositories', () => {
       last_error_code: 'OFFER_PUBLISH_FAILED',
       last_error_context: {
         code: 'OFFER_PUBLISH_FAILED',
+        issues: ['Listing "LIST-001" is missing title.'],
         message: 'sandbox unavailable',
         name: 'PublishListingError',
         stage: 'publish',
