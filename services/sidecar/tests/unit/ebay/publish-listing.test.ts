@@ -217,6 +217,10 @@ describe('publishListing', () => {
           ebay_listing_url: 'https://www.ebay.com/itm/EBAY-001',
           ebay_offer_id: 'OFFER-001',
           exported_at: '2026-05-24T15:30:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: null,
+          last_error_message: null,
           sku: 'LIST-001',
           status: 'exported',
           sub_status: 'idle',
@@ -447,6 +451,9 @@ describe('publishListing', () => {
         },
       },
     ]);
+    expect(
+      dependencies.listingUpdates.some((update) => Object.hasOwn(update.changes, 'last_error_code'))
+    ).toBe(false);
   });
 
   it('raises explicit finalization errors when publish succeeds but exported state persistence fails', async () => {
@@ -498,6 +505,10 @@ describe('publishListing', () => {
           ebay_listing_url: 'https://www.ebay.com/itm/EBAY-001',
           ebay_offer_id: 'OFFER-001',
           exported_at: '2026-05-24T15:30:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: null,
+          last_error_message: null,
           sku: 'LIST-001',
           status: 'exported',
           sub_status: 'idle',
@@ -546,6 +557,10 @@ describe('publishListing', () => {
         changes: {
           ebay_offer_id: 'OFFER-EXISTING',
           exported_at: '2026-05-24T15:30:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: null,
+          last_error_message: null,
           sku: 'LIST-001',
           status: 'exported',
           sub_status: 'idle',
@@ -553,6 +568,31 @@ describe('publishListing', () => {
       },
     ]);
     expect(result.ebayListingId).toBe('EBAY-EXISTING');
+  });
+
+  it('clears stale publish error fields when export succeeds', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        last_error_at: '2026-05-24T14:00:00.000Z',
+        last_error_code: 'OFFER_CREATE_FAILED',
+        last_error_context: { stage: 'offer' },
+        last_error_message: 'Invalid value for fulfillmentPolicyId.',
+      }),
+    });
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.listingUpdates.at(-1)).toEqual({
+      listingId: 'LIST-001',
+      changes: expect.objectContaining({
+        last_error_at: null,
+        last_error_code: null,
+        last_error_context: null,
+        last_error_message: null,
+        status: 'exported',
+        sub_status: 'idle',
+      }),
+    });
   });
 
   it('raises not found errors when listing is missing', async () => {

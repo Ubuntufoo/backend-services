@@ -61,6 +61,8 @@ export interface SandboxBootstrapApi {
   hasUserTokens(): boolean;
 }
 
+export { DEFAULT_LOCATION_KEY, POLICY_NAMES };
+
 interface SandboxAuthValidationApi {
   getAuthClient(): {
     getConfig(): {
@@ -290,6 +292,30 @@ function createDefaultInventoryLocationRequest(): InventoryLocationFull {
 
 function getLocationKey(location: InventoryLocationResponse): string | undefined {
   return location.merchantLocationKey;
+}
+
+async function getInventoryLocationByKey(
+  api: SandboxBootstrapApi,
+  merchantLocationKey: string
+): Promise<InventoryLocationResponse | null> {
+  const inventoryApi = api.inventory as SandboxBootstrapApi['inventory'] & {
+    getInventoryLocation?: (merchantLocationKey: string) => Promise<unknown>;
+  };
+
+  if (typeof inventoryApi.getInventoryLocation !== 'function') {
+    return null;
+  }
+
+  const location = (await inventoryApi.getInventoryLocation(
+    merchantLocationKey
+  )) as InventoryLocationFull & {
+    merchantLocationKey?: string;
+  };
+
+  return {
+    ...location,
+    merchantLocationKey,
+  };
 }
 
 async function ensureAppSettingsRow(
@@ -608,11 +634,15 @@ export async function ensureDefaultInventoryLocation(
   logger: ComponentLogger = setupLogger
 ): Promise<EnsureDefaultInventoryLocationResult> {
   const warnings: string[] = [];
-  let locations: InventoryLocationResponse[];
+  let locations: InventoryLocationResponse[] = [];
   try {
     locations = await listInventoryLocations(api);
   } catch (error) {
-    throw formatLocationBootstrapError(error);
+    const warning =
+      `Failed to list inventory locations before bootstrap. Continuing with direct lookup/create fallback. ` +
+      `Root cause: ${normalizeError(error)}`;
+    logger.warn(warning);
+    warnings.push(warning);
   }
 
   if (appSettings.merchant_location_key) {
@@ -626,6 +656,20 @@ export async function ensureDefaultInventoryLocation(
         warnings,
       };
     }
+
+    try {
+      const directStoredLocation = await getInventoryLocationByKey(
+        api,
+        appSettings.merchant_location_key
+      );
+      if (directStoredLocation) {
+        return {
+          created: { location: false },
+          merchantLocationKey: appSettings.merchant_location_key,
+          warnings,
+        };
+      }
+    } catch {}
   }
 
   const defaultLocation = locations.find(
@@ -653,6 +697,17 @@ export async function ensureDefaultInventoryLocation(
     try {
       locations = await listInventoryLocations(api);
     } catch (reloadError) {
+      try {
+        const directDefaultLocation = await getInventoryLocationByKey(api, DEFAULT_LOCATION_KEY);
+        if (directDefaultLocation) {
+          return {
+            created: { location: false },
+            merchantLocationKey: DEFAULT_LOCATION_KEY,
+            warnings,
+          };
+        }
+      } catch {}
+
       throw formatLocationBootstrapError(reloadError);
     }
 
