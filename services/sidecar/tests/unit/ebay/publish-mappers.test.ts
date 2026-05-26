@@ -130,6 +130,33 @@ describe('publish mappers', () => {
     });
   });
 
+  it('filters internal Gemini suggestion specifics from product aspects without mutating listing specifics', () => {
+    const listing = createListing({
+      item_specifics: {
+        Sport: 'Basketball',
+        Player: "Shaquille O'Neal",
+        Season: '1996',
+        'Card Manufacturer': 'Topps',
+        CategorySuggestion:
+          'Sports Mem, Cards & Fan Shop > Sports Trading Cards > Basketball Cards',
+        ConditionSuggestion: 'Ungraded',
+      },
+    });
+    const originalItemSpecifics = JSON.parse(JSON.stringify(listing.item_specifics));
+
+    const payload = mapListingToInventoryItemPayload(listing, createAppSettings());
+
+    expect(payload.product?.aspects).toEqual({
+      Sport: ['Basketball'],
+      Player: ["Shaquille O'Neal"],
+      Season: ['1996'],
+      'Card Manufacturer': ['Topps'],
+    });
+    expect(payload.product?.aspects).not.toHaveProperty('CategorySuggestion');
+    expect(payload.product?.aspects).not.toHaveProperty('ConditionSuggestion');
+    expect(listing.item_specifics).toEqual(originalItemSpecifics);
+  });
+
   it('maps listing data to an offer payload using stored policies and location key', () => {
     const payload = mapListingToOfferPayload(createListing(), createAppSettings(), 'SKU-001');
 
