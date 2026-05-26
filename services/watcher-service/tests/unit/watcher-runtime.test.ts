@@ -124,6 +124,59 @@ describe('watcher runtime', () => {
     );
   });
 
+  it('logs completed watcher groups and persisted listing rows', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [
+        {
+          captureMode: 'single_2_image' as const,
+          images: [
+            { processedPath: '/watcher/processed/Single-000001/Single-000001_01.jpg' },
+            { processedPath: '/watcher/processed/Single-000001/Single-000001_02.jpg' },
+          ],
+          listing: {
+            status: 'record_created',
+            sub_status: 'idle',
+          },
+          listingId: 'Single-000001',
+          processedDirectory: '/watcher/processed/Single-000001',
+        },
+      ],
+    }));
+
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger,
+      processIncomingImageBatch,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/one.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(logger.info).toHaveBeenCalledWith('watcher_group_completed', {
+      captureMode: 'single_2_image',
+      imageCount: 2,
+      listingId: 'Single-000001',
+      processedDirectory: '/watcher/processed/Single-000001',
+    });
+    expect(logger.info).toHaveBeenCalledWith('watcher_listing_persisted', {
+      imageCount: 2,
+      listingId: 'Single-000001',
+      status: 'record_created',
+      subStatus: 'idle',
+    });
+  });
+
   it('drains sequentially and prevents overlapping orchestration calls', async () => {
     const fakeWatcher = new FakeWatcher();
     const firstBatch = createDeferred<{ groupingState: { pending: never[] }; processedListings: never[] }>();

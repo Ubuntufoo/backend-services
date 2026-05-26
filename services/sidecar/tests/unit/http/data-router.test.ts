@@ -232,7 +232,7 @@ describe('data API router', () => {
 
     const response = await request(app).post('/api/listings').send({
       mode: 'test',
-      captureMode: 'single_1_image',
+      captureMode: 'single_legacy_image',
     });
 
     expect(response.status).toBe(400);

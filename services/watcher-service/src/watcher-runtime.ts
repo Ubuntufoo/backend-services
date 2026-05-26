@@ -184,6 +184,20 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
             );
 
             state.groupingState = cloneWatcherGroupingState(result.groupingState);
+            for (const processedListing of result.processedListings) {
+              logger.info('watcher_group_completed', {
+                captureMode: processedListing.captureMode,
+                imageCount: processedListing.images.length,
+                listingId: processedListing.listingId,
+                processedDirectory: processedListing.processedDirectory,
+              });
+              logger.info('watcher_listing_persisted', {
+                imageCount: processedListing.images.length,
+                listingId: processedListing.listingId,
+                status: processedListing.listing.status,
+                subStatus: processedListing.listing.sub_status,
+              });
+            }
             logger.info('batch_processed', {
               fileCount: snapshot.length,
               pendingGroupSize: state.groupingState.pending.length,

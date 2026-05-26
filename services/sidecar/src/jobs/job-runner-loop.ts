@@ -107,6 +107,22 @@ function asErrorStage(error: unknown): string | undefined {
   return undefined;
 }
 
+function asErrorIssues(error: unknown): string[] | undefined {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'context' in error &&
+    typeof error.context === 'object' &&
+    error.context !== null &&
+    'issues' in error.context &&
+    Array.isArray(error.context.issues)
+  ) {
+    return error.context.issues.filter((issue): issue is string => typeof issue === 'string');
+  }
+
+  return undefined;
+}
+
 function isFinalizationError(error: unknown): error is PublishListingError {
   return error instanceof PublishListingError && error.code === 'EXPORT_STATE_PERSIST_FAILED';
 }
@@ -187,6 +203,8 @@ async function runApprovedListingPublishesOnce(
     publishClaimedCount += 1;
     logger.info('Starting listing publish.', {
       listingId: claimedListing.listing_id,
+      status: claimedListing.status,
+      subStatus: claimedListing.sub_status,
     });
 
     try {
@@ -197,7 +215,11 @@ async function runApprovedListingPublishesOnce(
 
       publishExecutedCount += 1;
       logger.info('Finished listing publish.', {
+        ebayListingId: result.ebayListingId,
+        exportedAt: result.exportedAt,
         listingId: claimedListing.listing_id,
+        offerId: result.offerId,
+        sku: result.sku,
         status: result.status,
       });
     } catch (error) {
@@ -242,6 +264,7 @@ async function runApprovedListingPublishesOnce(
           cleanupError: asErrorMessage(cleanupError),
           error: asErrorMessage(error),
           errorCode: asErrorCode(error),
+          issues: asErrorIssues(error),
           listingId: claimedListing.listing_id,
           stage: asErrorStage(error),
         });
@@ -251,6 +274,7 @@ async function runApprovedListingPublishesOnce(
       logger.error('Listing publish failed.', {
         error: asErrorMessage(error),
         errorCode: asErrorCode(error),
+        issues: asErrorIssues(error),
         listingId: claimedListing.listing_id,
         stage: asErrorStage(error),
       });
@@ -293,10 +317,18 @@ export async function runQueuedSidecarJobsOnce(
     }
 
     claimedCount += 1;
-    logger.info('Starting sidecar job.', {
-      jobId: claimedJob.id,
-      jobType: claimedJob.job_type,
-    });
+    if (claimedJob.job_type === 'generate_ai') {
+      logger.info('Starting generate_ai job.', {
+        jobId: claimedJob.id,
+        jobType: claimedJob.job_type,
+        listingId: claimedJob.listing_id,
+      });
+    } else {
+      logger.info('Starting sidecar job.', {
+        jobId: claimedJob.id,
+        jobType: claimedJob.job_type,
+      });
+    }
 
     try {
       const result = await runJob(claimedJob.id, {
@@ -307,11 +339,34 @@ export async function runQueuedSidecarJobsOnce(
       });
 
       executedCount += 1;
-      logger.info('Finished sidecar job.', {
-        jobId: claimedJob.id,
-        jobType: claimedJob.job_type,
-        status: result.job.status,
-      });
+      if (claimedJob.job_type === 'generate_ai') {
+        logger.info('Finished generate_ai job.', {
+          jobId: claimedJob.id,
+          jobType: claimedJob.job_type,
+          listingId: claimedJob.listing_id,
+          status: result.job.status,
+          listingStatus: result.listing?.status,
+          listingSubStatus: result.listing?.sub_status,
+        });
+      } else {
+        logger.info('Finished sidecar job.', {
+          jobId: claimedJob.id,
+          jobType: claimedJob.job_type,
+          status: result.job.status,
+        });
+      }
+
+      if (claimedJob.job_type === 'process_images' && result.processedListings) {
+        for (const listing of result.processedListings) {
+          logger.info('Listing moved to assets_ready.', {
+            imageUrlCount: listing.image_urls.length,
+            listingId: listing.listing_id,
+            r2ObjectKeyCount: listing.r2_object_keys.length,
+            status: listing.status,
+            subStatus: listing.sub_status,
+          });
+        }
+      }
     } catch (error) {
       failedCount += 1;
       logger.error('Sidecar job crashed.', {
