@@ -59,6 +59,33 @@ For DB-only local development, set `EBAY_ENABLED=false` and `OAUTH_ENABLED=false
 Use `pnpm validate:env` from the repo root to verify the shared Supabase data-layer and eBay configuration before starting schema work.
 Use `pnpm --filter sidecar ebay:validate-oauth` to confirm sandbox or production eBay credentials can exchange `EBAY_REFRESH_TOKEN` for a short-lived access token without printing the token value.
 
+Example sandbox config diagnostic:
+
+```bash
+pnpm --filter sidecar ebay:diagnose-sandbox-config
+```
+
+```text
+eBay sandbox config diagnostic
+overall: FAIL
+environment: sandbox
+marketplace: EBAY_US
+
+[FAIL] payment policy ID
+  current: mock-payment-policy-id
+  expected: PAYMENT-REAL
+  note: default_payment_policy_id contains obvious placeholder value.
+  fix: Replace placeholder with real sandbox policy ID PAYMENT-REAL.
+
+[PASS] fulfillment policy ID
+  current: FULFILLMENT-REAL
+  note: Configured sandbox fulfillment policy ID exists for marketplace EBAY_US.
+
+suggested sql:
+update public.app_settings
+...
+```
+
 ## OAuth Token Notes
 
 - `EBAY_REFRESH_TOKEN` is the preferred variable for the narrow OAuth validator.

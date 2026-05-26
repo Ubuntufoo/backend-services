@@ -54,6 +54,26 @@ export interface SandboxLocationSummary {
   status: string | null;
 }
 
+export type SandboxConfigCheckStatus = 'pass' | 'fail';
+
+export type SandboxConfigCheckKey =
+  | 'app_settings.default'
+  | 'marketplace'
+  | 'paymentPolicyId'
+  | 'fulfillmentPolicyId'
+  | 'returnPolicyId'
+  | 'merchantLocationKey';
+
+export interface SandboxConfigCheck {
+  configuredValue: string | null;
+  expectedValue: string | null;
+  key: SandboxConfigCheckKey;
+  label: string;
+  message: string;
+  remediation: string[];
+  status: SandboxConfigCheckStatus;
+}
+
 export interface SandboxConfigDiagnosticResult {
   appSettings: {
     current: SafeAppSettings | null;
@@ -65,6 +85,7 @@ export interface SandboxConfigDiagnosticResult {
   oauthValidation: {
     ok: true;
   };
+  overallStatus: SandboxConfigCheckStatus;
   proposedValues: {
     default_fulfillment_policy_id: string | null;
     default_payment_policy_id: string | null;
@@ -72,6 +93,7 @@ export interface SandboxConfigDiagnosticResult {
     ebay_marketplace_id: string;
     merchant_location_key: string | null;
   };
+  checks: SandboxConfigCheck[];
   sellingPolicyManagementOptedIn: boolean | 'unknown';
   suggestedSql: string;
   summaries: {
@@ -91,8 +113,55 @@ function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function safeName(value: string | null | undefined): string | null {
+function normalizeText(value: string | null | undefined): string | null {
   return hasText(value) ? value.trim() : null;
+}
+
+function safeName(value: string | null | undefined): string | null {
+  return normalizeText(value);
+}
+
+function isObviousPlaceholder(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^mock[-_]/i.test(normalized) ||
+    /^example[-_]?/i.test(normalized) ||
+    /^test[-_]?/i.test(normalized) ||
+    /^placeholder$/i.test(normalized) ||
+    /^changeme$/i.test(normalized) ||
+    /^replace[-_]?me$/i.test(normalized) ||
+    /^todo$/i.test(normalized) ||
+    /^<[^>]+>$/.test(normalized)
+  );
+}
+
+function isMarketplaceIdFormat(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value);
+  return normalized ? /^EBAY_[A-Z_]+$/.test(normalized) : false;
+}
+
+function createCheck(input: {
+  configuredValue?: string | null;
+  expectedValue?: string | null;
+  key: SandboxConfigCheckKey;
+  label: string;
+  message: string;
+  remediation?: string[];
+  status: SandboxConfigCheckStatus;
+}): SandboxConfigCheck {
+  return {
+    configuredValue: input.configuredValue ?? null,
+    expectedValue: input.expectedValue ?? null,
+    key: input.key,
+    label: input.label,
+    message: input.message,
+    remediation: input.remediation ?? [],
+    status: input.status,
+  };
 }
 
 function summarizeCategoryTypes(
@@ -325,6 +394,316 @@ async function loadCurrentAppSettings(
   }
 }
 
+function validateAppSettingsRowCheck(
+  appSettingsState: SandboxConfigDiagnosticResult['appSettings']
+): SandboxConfigCheck {
+  if (appSettingsState.readError) {
+    return createCheck({
+      key: 'app_settings.default',
+      label: 'app_settings.default',
+      message: appSettingsState.readError,
+      remediation: [
+        'Verify Supabase connectivity and confirm app_settings.default row readable before publish.',
+      ],
+      status: 'fail',
+    });
+  }
+
+  if (!appSettingsState.current) {
+    return createCheck({
+      key: 'app_settings.default',
+      label: 'app_settings.default',
+      message: 'Required app_settings.default row missing.',
+      remediation: ['Seed app_settings.default, then rerun sandbox config diagnostic.'],
+      status: 'fail',
+    });
+  }
+
+  return createCheck({
+    configuredValue: appSettingsState.current.id,
+    expectedValue: appSettingsState.current.id,
+    key: 'app_settings.default',
+    label: 'app_settings.default',
+    message: 'Required app_settings.default row present and readable.',
+    status: 'pass',
+  });
+}
+
+function validateMarketplaceCheck(input: {
+  appSettingsState: SandboxConfigDiagnosticResult['appSettings'];
+  resolvedMarketplaceId: string;
+}): SandboxConfigCheck {
+  const configuredValue = normalizeText(input.appSettingsState.current?.ebay_marketplace_id);
+
+  if (!configuredValue) {
+    return createCheck({
+      expectedValue: input.resolvedMarketplaceId,
+      key: 'marketplace',
+      label: 'marketplace ID/site config',
+      message: 'app_settings.default.ebay_marketplace_id missing.',
+      remediation: [
+        `Set app_settings.default.ebay_marketplace_id to ${input.resolvedMarketplaceId}.`,
+      ],
+      status: 'fail',
+    });
+  }
+
+  if (!isMarketplaceIdFormat(configuredValue) || isObviousPlaceholder(configuredValue)) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.resolvedMarketplaceId,
+      key: 'marketplace',
+      label: 'marketplace ID/site config',
+      message: 'Configured marketplace ID invalid or placeholder.',
+      remediation: [
+        `Use real eBay marketplace ID like ${input.resolvedMarketplaceId} and keep sidecar/env config aligned.`,
+      ],
+      status: 'fail',
+    });
+  }
+
+  if (configuredValue !== input.resolvedMarketplaceId) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.resolvedMarketplaceId,
+      key: 'marketplace',
+      label: 'marketplace ID/site config',
+      message: 'app_settings.default.ebay_marketplace_id does not match active sidecar marketplace config.',
+      remediation: [
+        `Align app_settings.default.ebay_marketplace_id with sidecar marketplace ${input.resolvedMarketplaceId}.`,
+      ],
+      status: 'fail',
+    });
+  }
+
+  return createCheck({
+    configuredValue,
+    expectedValue: input.resolvedMarketplaceId,
+    key: 'marketplace',
+    label: 'marketplace ID/site config',
+    message: 'Stored marketplace matches active sandbox sidecar config.',
+    status: 'pass',
+  });
+}
+
+function validatePolicyCheck(input: {
+  configuredValue: string | null | undefined;
+  expectedValue: string | null;
+  fieldName:
+    | 'default_payment_policy_id'
+    | 'default_fulfillment_policy_id'
+    | 'default_return_policy_id';
+  key: Extract<
+    SandboxConfigCheckKey,
+    'paymentPolicyId' | 'fulfillmentPolicyId' | 'returnPolicyId'
+  >;
+  label: string;
+  marketplaceId: string;
+  policies: SandboxPolicySummary[];
+}): SandboxConfigCheck {
+  const configuredValue = normalizeText(input.configuredValue);
+  const matchedPolicy = configuredValue
+    ? input.policies.find((policy) => policy.id === configuredValue)
+    : undefined;
+
+  if (!configuredValue) {
+    return createCheck({
+      expectedValue: input.expectedValue,
+      key: input.key,
+      label: input.label,
+      message: `${input.fieldName} missing from app_settings.default.`,
+      remediation: input.expectedValue
+        ? [`Set ${input.fieldName} to ${input.expectedValue}.`]
+        : [
+            `Create/select a real sandbox ${input.label.toLowerCase()} for marketplace ${input.marketplaceId}, then persist ${input.fieldName}.`,
+          ],
+      status: 'fail',
+    });
+  }
+
+  if (isObviousPlaceholder(configuredValue)) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.expectedValue,
+      key: input.key,
+      label: input.label,
+      message: `${input.fieldName} contains obvious placeholder value.`,
+      remediation: input.expectedValue
+        ? [`Replace placeholder with real sandbox policy ID ${input.expectedValue}.`]
+        : [
+            `Replace placeholder with real sandbox ${input.label.toLowerCase()} ID after policy exists for ${input.marketplaceId}.`,
+          ],
+      status: 'fail',
+    });
+  }
+
+  if (!matchedPolicy) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.expectedValue,
+      key: input.key,
+      label: input.label,
+      message: `Configured ID not found in sandbox ${input.label.toLowerCase()} list.`,
+      remediation: input.expectedValue
+        ? [`Update ${input.fieldName} to discovered sandbox policy ID ${input.expectedValue}.`]
+        : [
+            `No matching sandbox ${input.label.toLowerCase()} found. Create/select one, then persist ${input.fieldName}.`,
+          ],
+      status: 'fail',
+    });
+  }
+
+  if (hasText(matchedPolicy.marketplaceId) && matchedPolicy.marketplaceId !== input.marketplaceId) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.expectedValue,
+      key: input.key,
+      label: input.label,
+      message: `Configured policy belongs to marketplace ${matchedPolicy.marketplaceId}, not ${input.marketplaceId}.`,
+      remediation: input.expectedValue
+        ? [`Use sandbox policy ${input.expectedValue} for marketplace ${input.marketplaceId}.`]
+        : [`Select policy scoped to marketplace ${input.marketplaceId}.`],
+      status: 'fail',
+    });
+  }
+
+  return createCheck({
+    configuredValue,
+    expectedValue: configuredValue,
+    key: input.key,
+    label: input.label,
+    message: `Configured sandbox ${input.label.toLowerCase()} exists for marketplace ${input.marketplaceId}.`,
+    status: 'pass',
+  });
+}
+
+function validateLocationCheck(input: {
+  configuredValue: string | null | undefined;
+  expectedValue: string | null;
+  locations: SandboxLocationSummary[];
+}): SandboxConfigCheck {
+  const configuredValue = normalizeText(input.configuredValue);
+  const matchedLocation = configuredValue
+    ? input.locations.find((location) => location.merchantLocationKey === configuredValue)
+    : undefined;
+
+  if (!configuredValue) {
+    return createCheck({
+      expectedValue: input.expectedValue,
+      key: 'merchantLocationKey',
+      label: 'merchant location key',
+      message: 'merchant_location_key missing from app_settings.default.',
+      remediation: input.expectedValue
+        ? [`Set merchant_location_key to ${input.expectedValue}.`]
+        : ['Create/select an enabled sandbox inventory location, then persist merchant_location_key.'],
+      status: 'fail',
+    });
+  }
+
+  if (isObviousPlaceholder(configuredValue)) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.expectedValue,
+      key: 'merchantLocationKey',
+      label: 'merchant location key',
+      message: 'merchant_location_key contains obvious placeholder value.',
+      remediation: input.expectedValue
+        ? [`Replace placeholder with real merchant location key ${input.expectedValue}.`]
+        : ['Replace placeholder with enabled sandbox inventory location key.'],
+      status: 'fail',
+    });
+  }
+
+  if (!matchedLocation) {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.expectedValue,
+      key: 'merchantLocationKey',
+      label: 'merchant location key',
+      message: 'Configured merchant_location_key not found in sandbox inventory locations.',
+      remediation: input.expectedValue
+        ? [`Update merchant_location_key to ${input.expectedValue}.`]
+        : ['Create/select an enabled sandbox inventory location, then update merchant_location_key.'],
+      status: 'fail',
+    });
+  }
+
+  if (hasText(matchedLocation.status) && matchedLocation.status !== 'ENABLED') {
+    return createCheck({
+      configuredValue,
+      expectedValue: input.expectedValue,
+      key: 'merchantLocationKey',
+      label: 'merchant location key',
+      message: `Configured merchant location status ${matchedLocation.status}; expected ENABLED.`,
+      remediation: ['Enable stored inventory location or point merchant_location_key at an ENABLED location.'],
+      status: 'fail',
+    });
+  }
+
+  return createCheck({
+    configuredValue,
+    expectedValue: configuredValue,
+    key: 'merchantLocationKey',
+    label: 'merchant location key',
+    message: 'Configured merchant location exists in sandbox inventory locations.',
+    status: 'pass',
+  });
+}
+
+function buildChecks(input: {
+  appSettingsState: SandboxConfigDiagnosticResult['appSettings'];
+  fulfillmentPolicies: SandboxPolicySummary[];
+  locations: SandboxLocationSummary[];
+  marketplaceId: string;
+  paymentPolicies: SandboxPolicySummary[];
+  proposedValues: SandboxConfigDiagnosticResult['proposedValues'];
+  returnPolicies: SandboxPolicySummary[];
+}): SandboxConfigCheck[] {
+  return [
+    validateAppSettingsRowCheck(input.appSettingsState),
+    validateMarketplaceCheck({
+      appSettingsState: input.appSettingsState,
+      resolvedMarketplaceId: input.marketplaceId,
+    }),
+    validatePolicyCheck({
+      configuredValue: input.appSettingsState.current?.default_payment_policy_id,
+      expectedValue: input.proposedValues.default_payment_policy_id,
+      fieldName: 'default_payment_policy_id',
+      key: 'paymentPolicyId',
+      label: 'payment policy ID',
+      marketplaceId: input.marketplaceId,
+      policies: input.paymentPolicies,
+    }),
+    validatePolicyCheck({
+      configuredValue: input.appSettingsState.current?.default_fulfillment_policy_id,
+      expectedValue: input.proposedValues.default_fulfillment_policy_id,
+      fieldName: 'default_fulfillment_policy_id',
+      key: 'fulfillmentPolicyId',
+      label: 'fulfillment policy ID',
+      marketplaceId: input.marketplaceId,
+      policies: input.fulfillmentPolicies,
+    }),
+    validatePolicyCheck({
+      configuredValue: input.appSettingsState.current?.default_return_policy_id,
+      expectedValue: input.proposedValues.default_return_policy_id,
+      fieldName: 'default_return_policy_id',
+      key: 'returnPolicyId',
+      label: 'return policy ID',
+      marketplaceId: input.marketplaceId,
+      policies: input.returnPolicies,
+    }),
+    validateLocationCheck({
+      configuredValue: input.appSettingsState.current?.merchant_location_key,
+      expectedValue: input.proposedValues.merchant_location_key,
+      locations: input.locations,
+    }),
+  ];
+}
+
+function dedupe(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
 async function listInventoryLocations(
   api: SandboxBootstrapApi
 ): Promise<InventoryLocationResponse[]> {
@@ -372,8 +751,8 @@ export async function getSandboxConfigDiagnostic({
 
   const resolvedMarketplaceId =
     marketplaceId ??
-    appSettingsState.current?.ebay_marketplace_id ??
     api.getAuthClient().getConfig().marketplaceId ??
+    appSettingsState.current?.ebay_marketplace_id ??
     'EBAY_US';
 
   const warnings = [...sellingPolicyDiagnostic.warnings];
@@ -448,6 +827,15 @@ export async function getSandboxConfigDiagnostic({
       appSettingsState.current?.merchant_location_key
     ),
   };
+  const checks = buildChecks({
+    appSettingsState,
+    fulfillmentPolicies,
+    locations,
+    marketplaceId: resolvedMarketplaceId,
+    paymentPolicies,
+    proposedValues,
+    returnPolicies,
+  });
 
   if (paymentPolicies.length === 0) {
     warnings.push(`No payment policies found for marketplace ${resolvedMarketplaceId}.`);
@@ -464,11 +852,13 @@ export async function getSandboxConfigDiagnostic({
 
   return {
     appSettings: appSettingsState,
+    checks,
     environment: api.getAuthClient().getConfig().environment,
     marketplaceId: resolvedMarketplaceId,
     oauthValidation: {
       ok: true,
     },
+    overallStatus: checks.every((check) => check.status === 'pass') ? 'pass' : 'fail',
     proposedValues,
     sellingPolicyManagementOptedIn:
       sellingPolicyDiagnostic.selling_policy_management_opted_in,
@@ -486,6 +876,48 @@ export async function getSandboxConfigDiagnostic({
       paymentPolicies,
       returnPolicies,
     },
-    warnings,
+    warnings: dedupe(warnings),
   };
+}
+
+export function formatSandboxConfigDiagnostic(result: SandboxConfigDiagnosticResult): string {
+  const lines: string[] = [
+    'eBay sandbox config diagnostic',
+    `overall: ${result.overallStatus.toUpperCase()}`,
+    `environment: ${result.environment ?? 'unknown'}`,
+    `marketplace: ${result.marketplaceId}`,
+    '',
+  ];
+
+  for (const check of result.checks) {
+    lines.push(`[${check.status === 'pass' ? 'PASS' : 'FAIL'}] ${check.label}`);
+    lines.push(`  current: ${check.configuredValue ?? '[missing]'}`);
+
+    if (check.expectedValue && check.expectedValue !== check.configuredValue) {
+      lines.push(`  expected: ${check.expectedValue}`);
+    }
+
+    lines.push(`  note: ${check.message}`);
+
+    for (const remediation of check.remediation) {
+      lines.push(`  fix: ${remediation}`);
+    }
+
+    lines.push('');
+  }
+
+  if (result.warnings.length > 0) {
+    lines.push('warnings:');
+    for (const warning of result.warnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push('');
+  }
+
+  if (result.overallStatus === 'fail') {
+    lines.push('suggested sql:');
+    lines.push(result.suggestedSql);
+  }
+
+  return lines.join('\n').trimEnd();
 }
