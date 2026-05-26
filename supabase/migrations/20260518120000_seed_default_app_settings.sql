@@ -18,7 +18,7 @@ insert into public.app_settings (
 )
 values (
   'default',
-  'single_1_image',
+  'single_2_image',
   500,
   25,
   2,

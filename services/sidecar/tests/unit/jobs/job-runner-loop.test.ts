@@ -311,7 +311,15 @@ describe('job runner loop', () => {
       prepareRecordCreatedListings: vi.fn(async () => ({
         exhaustedCandidates: true,
         failed: [],
-        processed: [],
+        processed: [
+          createListingRow({
+            image_urls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
+            listing_id: 'LIST-ASSETS-001',
+            r2_object_keys: ['listings/LIST-ASSETS-001/front.jpg', 'listings/LIST-ASSETS-001/back.jpg'],
+            status: 'assets_ready',
+            sub_status: 'ready_to_generate',
+          }),
+        ],
         skipped: [],
       })),
     });
@@ -329,6 +337,62 @@ describe('job runner loop', () => {
       skippedCount: 0,
     });
     expect(jobStates.get('job-process-images')?.status).toBe('completed');
+    expect(logger.info).toHaveBeenCalledWith(
+      'Listing moved to assets_ready.',
+      expect.objectContaining({
+        imageUrlCount: 2,
+        listingId: 'LIST-ASSETS-001',
+        r2ObjectKeyCount: 2,
+        status: 'assets_ready',
+        subStatus: 'ready_to_generate',
+      })
+    );
+  });
+
+  it('logs generate_ai job start and completion at listing transitions', async () => {
+    const logger = createLogger();
+    const generateAiJob = createJobRow({
+      id: 'job-generate-ai',
+      job_type: 'generate_ai',
+      listing_id: 'LIST-GEN-001',
+    });
+    const { dataAccess } = createDataAccess([generateAiJob]);
+
+    const result = await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      runJob: vi.fn(async () => ({
+        job: {
+          ...generateAiJob,
+          status: 'completed',
+        },
+        listing: createListingRow({
+          listing_id: 'LIST-GEN-001',
+          status: 'needs_review',
+          sub_status: 'review_pending',
+        }),
+      })),
+    });
+
+    expect(result.executedCount).toBe(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      'Starting generate_ai job.',
+      expect.objectContaining({
+        jobId: 'job-generate-ai',
+        jobType: 'generate_ai',
+        listingId: 'LIST-GEN-001',
+      })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'Finished generate_ai job.',
+      expect.objectContaining({
+        jobId: 'job-generate-ai',
+        jobType: 'generate_ai',
+        listingId: 'LIST-GEN-001',
+        status: 'needs_review',
+        subStatus: 'review_pending',
+      })
+    );
   });
 
   it('publishes approved queued listings after processing regular jobs', async () => {
@@ -384,6 +448,25 @@ describe('job runner loop', () => {
       expect.objectContaining({
         dataAccess,
         now: expect.any(Function),
+      })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'Starting listing publish.',
+      expect.objectContaining({
+        listingId: 'LIST-PUBLISH-001',
+        status: 'approved_for_export',
+        subStatus: 'publishing_to_ebay',
+      })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'Finished listing publish.',
+      expect.objectContaining({
+        ebayListingId: 'EBAY-001',
+        exportedAt: '2026-05-22T13:00:00.000Z',
+        listingId: 'LIST-PUBLISH-001',
+        offerId: 'OFFER-001',
+        sku: 'LIST-PUBLISH-001',
+        status: 'exported',
       })
     );
     expect(listingStates.get('LIST-PUBLISH-001')).toMatchObject({
@@ -532,6 +615,16 @@ describe('job runner loop', () => {
       status: 'approved_for_export',
       sub_status: 'publish_queued',
     });
+    expect(logger.error).toHaveBeenCalledWith(
+      'Listing publish failed.',
+      expect.objectContaining({
+        error: 'Sandbox unavailable',
+        errorCode: 'OFFER_PUBLISH_FAILED',
+        issues: undefined,
+        listingId: 'LIST-FAIL',
+        stage: 'publish',
+      })
+    );
   });
 
   it('logs finalization inconsistencies without requeueing duplicate-prone publishes', async () => {
@@ -625,6 +718,18 @@ describe('job runner loop', () => {
       status: 'approved_for_export',
       sub_status: 'publish_queued',
     });
+    expect(logger.error).toHaveBeenCalledWith(
+      'Listing publish failed.',
+      expect.objectContaining({
+        errorCode: 'LISTING_NOT_READY',
+        issues: [
+          'Listing "LIST-INVALID" is missing title.',
+          'Listing "LIST-INVALID" is missing category_id.',
+        ],
+        listingId: 'LIST-INVALID',
+        stage: 'validate',
+      })
+    );
   });
 
   it('catches crashed job executions and keeps loop work alive', async () => {

@@ -29,10 +29,10 @@ describe('watcher capture mode loading', () => {
     const { getActiveWatcherCaptureMode } = await import(
       '../../../src/config/capture-mode.js'
     );
-    const repository = createRepository('single_1_image');
+    const repository = createRepository('single_legacy_image');
 
     await expect(getActiveWatcherCaptureMode(repository)).rejects.toThrow(
-      'Unsupported watcher capture_mode "single_1_image".'
+      'Unsupported watcher capture_mode "single_legacy_image".'
     );
   });
 

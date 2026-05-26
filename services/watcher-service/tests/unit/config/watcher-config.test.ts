@@ -47,7 +47,7 @@ describe('watcher service config', () => {
 
     expect(config.supportedCaptureModes).toBe(CAPTURE_MODES);
     expect(config.supportedCaptureModes).toEqual(['single_2_image', 'lot_3_image']);
-    expect(isSupportedWatcherCaptureMode('single_1_image')).toBe(false);
+    expect(isSupportedWatcherCaptureMode('single_legacy_image')).toBe(false);
     expect(isSupportedWatcherCaptureMode('not_a_mode')).toBe(false);
   });
 

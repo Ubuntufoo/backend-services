@@ -48,6 +48,7 @@ export interface RunSidecarJobResult {
   assetPrepSummary?: AssetPrepSummary;
   job: JobRow;
   listing: ListingRow | null;
+  processedListings?: ListingRow[];
 }
 
 class SidecarJobError extends Error {
@@ -429,6 +430,7 @@ async function runProcessImagesJob(
       assetPrepSummary: buildAssetPrepSummary(result),
       job: completedJob,
       listing: null,
+      processedListings: result.processed,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
