@@ -6,7 +6,10 @@ import { EbaySellerApi } from '@/api/index.js';
 import { getEbayConfig } from '@/config/environment.js';
 import { loadRootEnvironment } from '@/config/env-paths.js';
 import { getSidecarDataAccess } from '@/data/sidecar-data.js';
-import { getSandboxConfigDiagnostic } from '@/ebay/sandbox-config-diagnostic.js';
+import {
+  formatSandboxConfigDiagnostic,
+  getSandboxConfigDiagnostic,
+} from '@/ebay/sandbox-config-diagnostic.js';
 
 loadRootEnvironment();
 
@@ -19,7 +22,11 @@ export async function runDiagnoseSandboxConfigCli(): Promise<void> {
     dataAccess: getSidecarDataAccess(),
   });
 
-  console.log(JSON.stringify(result, null, 2));
+  console.log(formatSandboxConfigDiagnostic(result));
+
+  if (result.overallStatus === 'fail') {
+    process.exitCode = 1;
+  }
 }
 
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
