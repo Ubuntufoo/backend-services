@@ -7,6 +7,7 @@ import type {
   SupabaseDataClient,
 } from '../src/index.js';
 import {
+  claimApprovedListingForPublish,
   claimQueuedJob,
   createAppSettings,
   createJob,
@@ -19,10 +20,12 @@ import {
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
+  listApprovedForExportListings,
   listQueuedJobs,
   listListings,
   listListingsByStatus,
   listJobsByListingId,
+  markListingPublishFailed,
   saveListingArtifacts,
   saveListingImageMetadata,
   saveGeneratedListingFields,
@@ -404,6 +407,57 @@ function createListByStatusClient<TTable extends string, TRow>(
   } as unknown as SupabaseDataClient;
 }
 
+function createApprovedForExportListClient(expectedRows: ListingRow[], queuedOnly: boolean): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listings');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('status');
+              expect(firstValue).toBe('approved_for_export');
+
+              const orderedQuery = {
+                order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                  expect(orderColumn).toBe('created_at');
+                  expect(options).toEqual({ ascending: true });
+
+                  return {
+                    limit: vi.fn(async (value: number) => {
+                      expect(value).toBe(5);
+
+                      return {
+                        data: expectedRows,
+                        error: null,
+                      };
+                    }),
+                  };
+                }),
+              };
+
+              if (!queuedOnly) {
+                return orderedQuery;
+              }
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('sub_status');
+                  expect(secondValue).toBe('publish_queued');
+                  return orderedQuery;
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 function createUpdateClient<TTable extends string, TRow>(
   table: TTable,
   expectedRow: TRow,
@@ -431,6 +485,56 @@ function createUpdateClient<TTable extends string, TRow>(
                     error: null,
                   })),
                 })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createClaimApprovedListingClient(expectedRow: ListingRow | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listings');
+
+      return {
+        update: vi.fn((payload: unknown) => {
+          expect(payload).toEqual({
+            last_error_at: null,
+            last_error_code: null,
+            last_error_context: {},
+            last_error_message: null,
+            sub_status: 'publishing_to_ebay',
+          });
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('listing_id');
+              expect(firstValue).toBe('LIST-001');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('status');
+                  expect(secondValue).toBe('approved_for_export');
+
+                  return {
+                    eq: vi.fn((thirdColumn: string, thirdValue: string) => {
+                      expect(thirdColumn).toBe('sub_status');
+                      expect(thirdValue).toBe('publish_queued');
+
+                      return {
+                        select: vi.fn(() => ({
+                          maybeSingle: vi.fn(async () => ({
+                            data: expectedRow,
+                            error: null,
+                          })),
+                        })),
+                      };
+                    }),
+                  };
+                }),
               };
             }),
           };
@@ -560,6 +664,51 @@ describe('shared repositories', () => {
         orderByCreatedAt: 'asc',
       })
     ).resolves.toEqual([listingRow]);
+
+    const approvedQueuedClient = createApprovedForExportListClient(
+      [
+        {
+          ...listingRow,
+          status: 'approved_for_export',
+          sub_status: 'publish_queued',
+        },
+      ],
+      true
+    );
+    await expect(
+      listApprovedForExportListings(approvedQueuedClient, {
+        limit: 5,
+        queuedOnly: true,
+      })
+    ).resolves.toEqual([
+      {
+        ...listingRow,
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      },
+    ]);
+
+    const approvedAnyClient = createApprovedForExportListClient(
+      [
+        {
+          ...listingRow,
+          status: 'approved_for_export',
+          sub_status: 'idle',
+        },
+      ],
+      false
+    );
+    await expect(
+      listApprovedForExportListings(approvedAnyClient, {
+        limit: 5,
+      })
+    ).resolves.toEqual([
+      {
+        ...listingRow,
+        status: 'approved_for_export',
+        sub_status: 'idle',
+      },
+    ]);
   });
 
   it('updates listings and persists stateless worker outputs', async () => {
@@ -717,6 +866,83 @@ describe('shared repositories', () => {
         exportedAt: '2026-05-17T01:00:00.000Z',
       })
     ).resolves.toEqual(listingRow);
+  });
+
+  it('claims approved publish listings conditionally and persists publish failures', async () => {
+    const claimedListing = {
+      ...listingRow,
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    } satisfies ListingRow;
+    const claimClient = createClaimApprovedListingClient(claimedListing);
+
+    await expect(claimApprovedListingForPublish(claimClient, 'LIST-001')).resolves.toEqual(
+      claimedListing
+    );
+
+    const staleClaimClient = createClaimApprovedListingClient(null);
+    await expect(claimApprovedListingForPublish(staleClaimClient, 'LIST-001')).resolves.toBeNull();
+
+    const markFailedClient = createUpdateClient(
+      'listings',
+      {
+        ...listingRow,
+        last_error_at: '2026-05-25T12:00:00.000Z',
+        last_error_code: 'OFFER_PUBLISH_FAILED',
+        last_error_context: {
+          code: 'OFFER_PUBLISH_FAILED',
+          message: 'sandbox unavailable',
+          name: 'PublishListingError',
+          stage: 'publish',
+        },
+        last_error_message: 'sandbox unavailable',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      } satisfies ListingRow,
+      'listing_id',
+      'LIST-001',
+      (payload) => {
+        expect(payload).toEqual({
+          last_error_at: '2026-05-25T12:00:00.000Z',
+          last_error_code: 'OFFER_PUBLISH_FAILED',
+          last_error_context: {
+            code: 'OFFER_PUBLISH_FAILED',
+            message: 'sandbox unavailable',
+            name: 'PublishListingError',
+            stage: 'publish',
+          },
+          last_error_message: 'sandbox unavailable',
+          status: 'approved_for_export',
+          sub_status: 'publish_queued',
+        });
+      }
+    );
+
+    await expect(
+      markListingPublishFailed(
+        markFailedClient,
+        'LIST-001',
+        '2026-05-25T12:00:00.000Z',
+        Object.assign(new Error('sandbox unavailable'), {
+          code: 'OFFER_PUBLISH_FAILED',
+          context: { stage: 'publish' },
+          name: 'PublishListingError',
+        })
+      )
+    ).resolves.toEqual({
+      ...listingRow,
+      last_error_at: '2026-05-25T12:00:00.000Z',
+      last_error_code: 'OFFER_PUBLISH_FAILED',
+      last_error_context: {
+        code: 'OFFER_PUBLISH_FAILED',
+        message: 'sandbox unavailable',
+        name: 'PublishListingError',
+        stage: 'publish',
+      },
+      last_error_message: 'sandbox unavailable',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
   });
 
   it('keeps falsey single-row data values intact', () => {

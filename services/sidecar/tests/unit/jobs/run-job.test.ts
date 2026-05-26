@@ -171,10 +171,13 @@ function createDataAccess({
       update: jobsUpdate,
     },
     listings: {
+      claimApprovedForPublish: vi.fn(),
       create: listingsCreate,
       getByListingId: listingsGetByListingId,
+      listApprovedForExport: vi.fn(async () => []),
       list: listingsList,
       listByStatus: listingsListByStatus,
+      markPublishFailed: vi.fn(),
       saveImageMetadata: listingsSaveImageMetadata,
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,

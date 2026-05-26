@@ -200,16 +200,6 @@ async function loadPublishContext(
   };
 }
 
-async function markPublishQueued(
-  listingId: string,
-  dataAccess: SidecarDataAccess
-): Promise<void> {
-  await dataAccess.listings.update(listingId, {
-    status: 'approved_for_export',
-    sub_status: 'publish_queued',
-  });
-}
-
 function wrapPublishStageError(
   code: PublishListingError['code'],
   stage: NonNullable<PublishListingError['context']['stage']>,
@@ -229,12 +219,6 @@ export async function publishListing(
 
   validatePublishListingReadiness(listing, appSettings);
 
-  await resolvedDependencies.dataAccess.listings.updateWorkflowState({
-    listingId,
-    status: 'approved_for_export',
-    subStatus: 'publishing_to_ebay',
-  });
-
   const sku = buildPublishSku(listing);
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings);
   const offerPayload = mapListingToOfferPayload(listing, appSettings, sku);
@@ -246,7 +230,6 @@ export async function publishListing(
       sku,
     });
   } catch (error) {
-    await markPublishQueued(listingId, resolvedDependencies.dataAccess);
     throw wrapPublishStageError(
       'INVENTORY_ITEM_UPSERT_FAILED',
       'inventory_item',
@@ -272,7 +255,6 @@ export async function publishListing(
         sku,
       });
     } catch (error) {
-      await markPublishQueued(listingId, resolvedDependencies.dataAccess);
       throw wrapPublishStageError(
         'OFFER_CREATE_FAILED',
         'offer',
@@ -287,16 +269,26 @@ export async function publishListing(
     const publishOfferResponse = await resolvedDependencies.inventoryApi.publishOffer(offerId);
     const exportedAt = resolvedDependencies.now().toISOString();
 
-    await resolvedDependencies.dataAccess.listings.update(
-      listingId,
-      buildPublishedListingUpdate({
-        appSettings,
-        ebayListingId: publishOfferResponse.listingId,
-        ebayOfferId: offerId,
-        exportedAt,
-        sku,
-      })
-    );
+    try {
+      await resolvedDependencies.dataAccess.listings.update(
+        listingId,
+        buildPublishedListingUpdate({
+          appSettings,
+          ebayListingId: publishOfferResponse.listingId,
+          ebayOfferId: offerId,
+          exportedAt,
+          sku,
+        })
+      );
+    } catch (error) {
+      throw wrapPublishStageError(
+        'EXPORT_STATE_PERSIST_FAILED',
+        'finalize',
+        listingId,
+        `Published offer for listing "${listingId}" but failed to persist exported state.`,
+        error
+      );
+    }
 
     return {
       ebayListingId: publishOfferResponse.listingId ?? listing.ebay_listing_id ?? null,
@@ -308,7 +300,10 @@ export async function publishListing(
       status: 'exported',
     };
   } catch (error) {
-    await markPublishQueued(listingId, resolvedDependencies.dataAccess);
+    if (error instanceof PublishListingError) {
+      throw error;
+    }
+
     throw wrapPublishStageError(
       'OFFER_PUBLISH_FAILED',
       'publish',

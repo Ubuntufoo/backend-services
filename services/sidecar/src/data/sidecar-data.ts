@@ -1,4 +1,5 @@
 import {
+  claimApprovedListingForPublish,
   claimQueuedJob,
   DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
@@ -13,10 +14,12 @@ import {
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
+  listApprovedForExportListings,
   listQueuedJobs,
   listJobsByListingId,
   listListings,
   listListingsByStatus,
+  markListingPublishFailed,
   saveListingImageMetadata,
   updateAppSettings,
   updateJob,
@@ -31,6 +34,7 @@ import {
   type JobInsert,
   type JobRow,
   type JobUpdate,
+  type ListApprovedForExportListingsOptions,
   type ListQueuedJobsOptions,
   type ListListingsByStatusOptions,
   type ListingInsert,
@@ -61,13 +65,16 @@ export interface SidecarDataAccess {
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
   listings: {
+    claimApprovedForPublish(listingId: string): Promise<ListingRow | null>;
     create(input: ListingInsert): Promise<ListingRow>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
+    listApprovedForExport(options: ListApprovedForExportListingsOptions): Promise<ListingRow[]>;
     list(): Promise<ListingRow[]>;
     listByStatus(
       status: ListingRow['status'],
       options: ListListingsByStatusOptions
     ): Promise<ListingRow[]>;
+    markPublishFailed(listingId: string, errorAt: string, error: unknown): Promise<ListingRow>;
     saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow | null>;
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
@@ -86,10 +93,16 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
 
   return {
     listings: {
+      claimApprovedForPublish: async (listingId) =>
+        await claimApprovedListingForPublish(client, listingId),
       create: async (input) => await createListing(client, input),
       getByListingId: async (listingId) => await getListingByListingId(client, listingId),
+      listApprovedForExport: async (options) =>
+        await listApprovedForExportListings(client, options),
       list: async () => await listListings(client),
       listByStatus: async (status, options) => await listListingsByStatus(client, status, options),
+      markPublishFailed: async (listingId, errorAt, error) =>
+        await markListingPublishFailed(client, listingId, errorAt, error),
       saveImageMetadata: async (input) => await saveListingImageMetadata(client, input),
       update: async (listingId, changes) => await updateListing(client, listingId, changes),
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
