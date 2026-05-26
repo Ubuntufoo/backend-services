@@ -322,7 +322,7 @@ export async function runQueuedSidecarJobsOnce(
     }
   }
 
-  const publishResult = await runApprovedListingPublishesOnce(options, logger);
+  const publishResult = await runApprovedListingPublishesOnce({ ...options, dataAccess }, logger);
 
   return {
     claimedCount,
