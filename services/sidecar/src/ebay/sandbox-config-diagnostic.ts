@@ -270,19 +270,31 @@ function buildSuggestedSql(input: {
   marketplaceId: string;
   merchantLocationKey: string | null;
 }): string {
-  const quote = (value: string | null, placeholder: string) =>
-    value ? `'${value}'` : `'${placeholder}'`;
+  const sqlString = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+  const sqlValueOrPlaceholder = (value: string | null, placeholder: string): string =>
+    sqlString(value ?? placeholder);
 
   return [
     'update public.app_settings',
     'set',
-    `  ebay_marketplace_id = '${input.marketplaceId}',`,
-    `  default_payment_policy_id = ${quote(input.defaultPaymentPolicyId, '<paymentPolicyId>')},`,
-    `  default_fulfillment_policy_id = ${quote(input.defaultFulfillmentPolicyId, '<fulfillmentPolicyId>')},`,
-    `  default_return_policy_id = ${quote(input.defaultReturnPolicyId, '<returnPolicyId>')},`,
-    `  merchant_location_key = ${quote(input.merchantLocationKey, '<merchantLocationKey>')}`,
-    `where id = '${input.appSettingsId}';`,
+    `  ebay_marketplace_id = ${sqlString(input.marketplaceId)},`,
+    `  default_payment_policy_id = ${sqlValueOrPlaceholder(input.defaultPaymentPolicyId, '<paymentPolicyId>')},`,
+    `  default_fulfillment_policy_id = ${sqlValueOrPlaceholder(input.defaultFulfillmentPolicyId, '<fulfillmentPolicyId>')},`,
+    `  default_return_policy_id = ${sqlValueOrPlaceholder(input.defaultReturnPolicyId, '<returnPolicyId>')},`,
+    `  merchant_location_key = ${sqlValueOrPlaceholder(input.merchantLocationKey, '<merchantLocationKey>')}`,
+    `where id = ${sqlString(input.appSettingsId)};`,
   ].join('\n');
+}
+
+function toSafeAppSettings(row: AppSettingsRow): SafeAppSettings {
+  return {
+    default_fulfillment_policy_id: row.default_fulfillment_policy_id,
+    default_payment_policy_id: row.default_payment_policy_id,
+    default_return_policy_id: row.default_return_policy_id,
+    ebay_marketplace_id: row.ebay_marketplace_id,
+    id: row.id,
+    merchant_location_key: row.merchant_location_key,
+  };
 }
 
 async function loadCurrentAppSettings(
@@ -300,7 +312,7 @@ async function loadCurrentAppSettings(
   try {
     const current = await dataAccess.appSettings.get(appSettingsId);
     return {
-      current,
+      current: current ? toSafeAppSettings(current) : null,
       issues: current ? getPublishAppSettingIssues(current) : ['app_settings.default row not found.'],
       readError: null,
     };

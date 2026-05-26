@@ -223,6 +223,34 @@ describe('sandbox bootstrap', () => {
     ).rejects.toThrow('Failed to create default inventory location');
   });
 
+  it('emits warning when direct default location lookup fails after list reload failure', async () => {
+    const api = createApi({
+      inventory: {
+        createOrReplaceInventoryLocation: vi.fn().mockRejectedValue(new Error('create failed')),
+        getInventoryLocation: vi.fn().mockRejectedValue(new Error('lookup failed')),
+        getInventoryLocations: vi
+          .fn()
+          .mockResolvedValueOnce({ locations: [] })
+          .mockRejectedValueOnce(new Error('reload failed')),
+      } as unknown as SandboxBootstrapApi['inventory'],
+    });
+    const warn = vi.fn();
+
+    await expect(
+      ensureDefaultInventoryLocation(
+        api,
+        { merchant_location_key: null },
+        { warn } as unknown as typeof setupLogger
+      )
+    ).rejects.toThrow('Failed to ensure inventory location bootstrap. Root cause: reload failed');
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Failed direct inventory location lookup for default key "default-main-location" after list reload failed. Root cause: lookup failed'
+      )
+    );
+  });
+
   it('rejects missing required scopes', async () => {
     const api = createApi();
     const oauthClient = api.getAuthClient().getOAuthClient();

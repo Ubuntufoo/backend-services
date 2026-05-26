@@ -108,12 +108,16 @@ describe('sandbox config diagnostic', () => {
         appSettings: {
           create: vi.fn(),
           get: vi.fn().mockResolvedValue({
+            capture_mode: 'single_2_image',
             default_fulfillment_policy_id: 'mock-fulfillment-policy-id',
             default_payment_policy_id: 'mock-payment-policy-id',
             default_return_policy_id: 'mock-return-policy-id',
             ebay_marketplace_id: null,
+            incoming_folder_path: '/tmp/incoming',
             id: 'default',
             merchant_location_key: 'default-main-location',
+            processed_folder_path: '/tmp/processed',
+            updated_at: '2026-05-26T00:00:00.000Z',
           }),
           update: vi.fn(),
         },
@@ -138,6 +142,16 @@ describe('sandbox config diagnostic', () => {
       ebay_marketplace_id: 'EBAY_US',
       merchant_location_key: 'default-main-location',
     });
+    expect(result.appSettings.current).toEqual({
+      default_fulfillment_policy_id: 'mock-fulfillment-policy-id',
+      default_payment_policy_id: 'mock-payment-policy-id',
+      default_return_policy_id: 'mock-return-policy-id',
+      ebay_marketplace_id: null,
+      id: 'default',
+      merchant_location_key: 'default-main-location',
+    });
+    expect(result.appSettings.current).not.toHaveProperty('incoming_folder_path');
+    expect(result.appSettings.current).not.toHaveProperty('capture_mode');
     expect(result.summaries.fulfillmentPolicies).toEqual([
       {
         categoryTypes: ['ALL_EXCLUDING_MOTORS_VEHICLES'],
@@ -187,5 +201,77 @@ describe('sandbox config diagnostic', () => {
       ])
     );
     expect(result.suggestedSql).toContain("'<paymentPolicyId>'");
+  });
+
+  it('escapes single quotes in suggested SQL values', async () => {
+    validateSandboxOAuthAccessMock.mockResolvedValue({ tokenScopes: [] });
+    getSandboxSellingPolicyManagementDiagnosticMock.mockResolvedValue({
+      selling_policy_management_opted_in: true,
+      warnings: [],
+    });
+
+    const api = createApi();
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({
+      fulfillmentPolicies: [
+        {
+          fulfillmentPolicyId: "F'ULFILLMENT",
+          marketplaceId: 'EBAY_US',
+          name: "Seller's Fulfillment",
+        },
+      ],
+    });
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({
+      paymentPolicies: [
+        {
+          immediatePay: true,
+          marketplaceId: 'EBAY_US',
+          name: "Seller's Payment",
+          paymentPolicyId: "P'AYMENT",
+        },
+      ],
+    });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({
+      returnPolicies: [
+        {
+          marketplaceId: 'EBAY_US',
+          name: "Seller's Return",
+          returnPolicyId: "R'ETURN",
+        },
+      ],
+    });
+    api.inventory.getInventoryLocations = vi.fn().mockResolvedValue({
+      locations: [
+        {
+          merchantLocationKey: "loca'tion",
+          merchantLocationStatus: 'ENABLED',
+          name: "Seller's Warehouse",
+        },
+      ],
+    });
+
+    const result = await getSandboxConfigDiagnostic({
+      api,
+      appSettingsId: "defa'ult",
+      dataAccess: {
+        appSettings: {
+          create: vi.fn(),
+          get: vi.fn().mockResolvedValue({
+            default_fulfillment_policy_id: null,
+            default_payment_policy_id: null,
+            default_return_policy_id: null,
+            ebay_marketplace_id: 'EBAY_US',
+            id: "defa'ult",
+            merchant_location_key: "loca'tion",
+          }),
+          update: vi.fn(),
+        },
+      },
+    });
+
+    expect(result.suggestedSql).toContain("where id = 'defa''ult';");
+    expect(result.suggestedSql).toContain("default_payment_policy_id = 'P''AYMENT'");
+    expect(result.suggestedSql).toContain("default_fulfillment_policy_id = 'F''ULFILLMENT'");
+    expect(result.suggestedSql).toContain("default_return_policy_id = 'R''ETURN'");
+    expect(result.suggestedSql).toContain("merchant_location_key = 'loca''tion'");
   });
 });

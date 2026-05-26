@@ -669,7 +669,14 @@ export async function ensureDefaultInventoryLocation(
           warnings,
         };
       }
-    } catch {}
+    } catch (error) {
+      const warning =
+        `Failed direct inventory location lookup for configured merchant_location_key ` +
+        `"${appSettings.merchant_location_key}". Continuing fallback flow. ` +
+        `Root cause: ${normalizeError(error)}`;
+      logger.warn(warning);
+      warnings.push(warning);
+    }
   }
 
   const defaultLocation = locations.find(
@@ -706,7 +713,13 @@ export async function ensureDefaultInventoryLocation(
             warnings,
           };
         }
-      } catch {}
+      } catch (error) {
+        const warning =
+          `Failed direct inventory location lookup for default key "${DEFAULT_LOCATION_KEY}" ` +
+          `after list reload failed. Root cause: ${normalizeError(error)}`;
+        logger.warn(warning);
+        warnings.push(warning);
+      }
 
       throw formatLocationBootstrapError(reloadError);
     }

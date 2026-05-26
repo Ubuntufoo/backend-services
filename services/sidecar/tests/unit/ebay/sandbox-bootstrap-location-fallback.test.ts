@@ -45,6 +45,9 @@ describe('sandbox bootstrap inventory fallback', () => {
       merchantLocationKey: 'default-main-location',
       warnings: [
         expect.stringContaining('Failed to list inventory locations before bootstrap. Continuing with direct lookup/create fallback.'),
+        expect.stringContaining(
+          'Failed direct inventory location lookup for configured merchant_location_key "default-main-location". Continuing fallback flow.'
+        ),
       ],
     });
   });
