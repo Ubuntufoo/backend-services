@@ -344,8 +344,9 @@ export async function runQueuedSidecarJobsOnce(
           jobId: claimedJob.id,
           jobType: claimedJob.job_type,
           listingId: claimedJob.listing_id,
-          status: result.listing?.status,
-          subStatus: result.listing?.sub_status,
+          status: result.job.status,
+          listingStatus: result.listing?.status,
+          listingSubStatus: result.listing?.sub_status,
         });
       } else {
         logger.info('Finished sidecar job.', {

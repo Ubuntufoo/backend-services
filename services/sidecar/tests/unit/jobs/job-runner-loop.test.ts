@@ -389,8 +389,9 @@ describe('job runner loop', () => {
         jobId: 'job-generate-ai',
         jobType: 'generate_ai',
         listingId: 'LIST-GEN-001',
-        status: 'needs_review',
-        subStatus: 'review_pending',
+        status: 'completed',
+        listingStatus: 'needs_review',
+        listingSubStatus: 'review_pending',
       })
     );
   });
