@@ -55,6 +55,41 @@ function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function normalizeText(value: string | null | undefined): string | undefined {
+  return hasText(value) ? value.trim() : undefined;
+}
+
+function isMockPlaceholder(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value);
+  return normalized ? /^mock-/i.test(normalized) : false;
+}
+
+function isPlaceholderMarketplaceId(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value);
+  return normalized ? isMockPlaceholder(normalized) || !/^EBAY_[A-Z_]+$/.test(normalized) : false;
+}
+
+function hasPlaceholderPolicySettings(appSettings: AppSettingsRow): boolean {
+  return [
+    appSettings.default_payment_policy_id,
+    appSettings.default_fulfillment_policy_id,
+    appSettings.default_return_policy_id,
+  ].some((value) => isMockPlaceholder(value));
+}
+
+function isPlaceholderMerchantLocationKey(appSettings: AppSettingsRow): boolean {
+  const normalized = normalizeText(appSettings.merchant_location_key);
+  if (!normalized) {
+    return false;
+  }
+
+  if (isMockPlaceholder(normalized)) {
+    return true;
+  }
+
+  return normalized === 'default-main-location' && hasPlaceholderPolicySettings(appSettings);
+}
+
 function getListingLabel(listing: Pick<ListingRow, 'listing_id'>): string {
   return hasText(listing.listing_id) ? listing.listing_id.trim() : '[missing listing_id]';
 }
@@ -81,23 +116,47 @@ function getImageUrlIssues(listing: ListingRow): string[] {
   return issues;
 }
 
-function getMissingAppSettingIssues(appSettings: AppSettingsRow): string[] {
+export function getPublishAppSettingIssues(appSettings: AppSettingsRow): string[] {
   const issues: string[] = [];
+
+  if (!hasText(appSettings.ebay_marketplace_id)) {
+    issues.push('app_settings.ebay_marketplace_id is required for publish.');
+  } else if (isPlaceholderMarketplaceId(appSettings.ebay_marketplace_id)) {
+    issues.push(
+      `app_settings.ebay_marketplace_id "${appSettings.ebay_marketplace_id.trim()}" is not a valid publish marketplace.`
+    );
+  }
 
   if (!hasText(appSettings.default_payment_policy_id)) {
     issues.push('app_settings.default_payment_policy_id is required for publish.');
+  } else if (isMockPlaceholder(appSettings.default_payment_policy_id)) {
+    issues.push(
+      `app_settings.default_payment_policy_id "${appSettings.default_payment_policy_id.trim()}" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.`
+    );
   }
 
   if (!hasText(appSettings.default_fulfillment_policy_id)) {
     issues.push('app_settings.default_fulfillment_policy_id is required for publish.');
+  } else if (isMockPlaceholder(appSettings.default_fulfillment_policy_id)) {
+    issues.push(
+      `app_settings.default_fulfillment_policy_id "${appSettings.default_fulfillment_policy_id.trim()}" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.`
+    );
   }
 
   if (!hasText(appSettings.default_return_policy_id)) {
     issues.push('app_settings.default_return_policy_id is required for publish.');
+  } else if (isMockPlaceholder(appSettings.default_return_policy_id)) {
+    issues.push(
+      `app_settings.default_return_policy_id "${appSettings.default_return_policy_id.trim()}" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.`
+    );
   }
 
   if (!hasText(appSettings.merchant_location_key)) {
     issues.push('app_settings.merchant_location_key is required for publish.');
+  } else if (isPlaceholderMerchantLocationKey(appSettings)) {
+    issues.push(
+      `app_settings.merchant_location_key "${appSettings.merchant_location_key.trim()}" looks like a placeholder. Run sandbox location diagnostics and update app_settings.default before publish.`
+    );
   }
 
   return issues;
@@ -146,7 +205,7 @@ export function validatePublishListingReadiness(
     issues.push(`Listing "${listingLabel}" is missing a valid price.`);
   }
 
-  issues.push(...getMissingAppSettingIssues(appSettings));
+  issues.push(...getPublishAppSettingIssues(appSettings));
 
   if (issues.length > 0) {
     throw new PublishListingValidationError(listing.listing_id, issues);

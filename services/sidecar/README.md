@@ -10,6 +10,7 @@ From the repo root:
 pnpm dev
 pnpm setup
 pnpm ebay:diagnose-sandbox
+pnpm ebay:diagnose-sandbox-config
 pnpm ebay:opt-in-selling-policies
 pnpm ebay:setup-sandbox
 pnpm diagnose
@@ -26,6 +27,7 @@ pnpm dev
 pnpm dev:stdio
 pnpm setup
 pnpm ebay:diagnose-sandbox
+pnpm ebay:diagnose-sandbox-config
 pnpm ebay:opt-in-selling-policies
 pnpm ebay:setup-sandbox
 pnpm diagnose
@@ -48,7 +50,7 @@ cp env.example .env
 `pnpm dev` starts the HTTP sidecar from `src/server-http.ts`.
 Use `pnpm dev:stdio` only when you explicitly want the stdio MCP server from `src/index.ts`.
 The HTTP sidecar also starts the background job-runner loop by default; set `SIDECAR_JOB_RUNNER_ENABLED=false` to disable polling for tests or manual debugging.
-Use `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
+Use `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only policy/location/app_settings discovery, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
 and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.
@@ -77,6 +79,7 @@ Use `pnpm --filter sidecar ebay:validate-oauth` to confirm sandbox or production
 Behavior:
 
 - `ebay:diagnose-sandbox` is read-only and reports `selling_policy_management_opted_in` as `true`, `false`, or `unknown`
+- `ebay:diagnose-sandbox-config` is read-only and prints safe summaries for sandbox marketplace, policies, inventory locations, current `app_settings.default`, and suggested SQL
 - `ebay:opt-in-selling-policies` checks opted-in programs first, then requests `SELLING_POLICY_MANAGEMENT` only when needed
 - `ebay:opt-in-selling-policies` may return "already opted in" or "already requested"; eBay can take up to 24 hours to process opt-in
 - validates sandbox seller OAuth via refresh token

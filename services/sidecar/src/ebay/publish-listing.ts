@@ -113,6 +113,10 @@ function buildPublishedListingUpdate(input: {
   const changes: ListingUpdate = {
     ebay_offer_id: input.ebayOfferId,
     exported_at: input.exportedAt,
+    last_error_at: null,
+    last_error_code: null,
+    last_error_context: null,
+    last_error_message: null,
     sku: input.sku,
     status: 'exported',
     sub_status: 'idle',

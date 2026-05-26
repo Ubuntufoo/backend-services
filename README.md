@@ -83,6 +83,7 @@ Useful root-level convenience commands:
 pnpm dev
 pnpm setup
 pnpm ebay:diagnose-sandbox
+pnpm ebay:diagnose-sandbox-config
 pnpm ebay:opt-in-selling-policies
 pnpm ebay:setup-sandbox
 pnpm validate:env
@@ -96,7 +97,7 @@ pnpm dev:sidecar:stdio
 
 `pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
 Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
-Use `pnpm ebay:diagnose-sandbox` for read-only sandbox seller-program diagnostics and `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`.
+Use `pnpm ebay:diagnose-sandbox` for read-only sandbox seller-program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only business-policy/location discovery, and `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`.
 Use `pnpm ebay:setup-sandbox` to bootstrap sandbox business policies and default inventory location into `app_settings`.
 If eBay sandbox seller account is not eligible for Business Policy, keep bootstrap command for future accounts but manually seed `public.app_settings.default_payment_policy_id`, `default_fulfillment_policy_id`, `default_return_policy_id`, and `merchant_location_key`, then continue downstream work with mocked/injected IDs.
 For the watcher runtime, run `pnpm --filter @ebay-inventory/watcher-service dev`.
