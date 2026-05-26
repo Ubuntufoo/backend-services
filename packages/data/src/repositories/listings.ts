@@ -67,6 +67,7 @@ export interface PublishedListingUpdate {
 interface ErrorWithCode {
   code?: unknown;
   context?: {
+    issues?: unknown;
     stage?: unknown;
   };
   message?: unknown;
@@ -81,6 +82,16 @@ function getOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function getOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const entries = value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+
+  return entries.length > 0 ? entries : undefined;
+}
+
 function buildPublishFailureErrorContext(error: unknown): Json {
   if (!isErrorWithCode(error)) {
     return {};
@@ -88,6 +99,7 @@ function buildPublishFailureErrorContext(error: unknown): Json {
 
   const context = {
     code: getOptionalString(error.code),
+    issues: getOptionalStringArray(error.context?.issues),
     message: getOptionalString(error.message),
     name: getOptionalString(error.name),
     stage: getOptionalString(error.context?.stage),

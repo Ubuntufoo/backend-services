@@ -54,8 +54,30 @@ function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function hasImageUrls(imageUrls: ListingRow['image_urls']): boolean {
-  return Array.isArray(imageUrls) && imageUrls.some((imageUrl) => hasText(imageUrl));
+function getListingLabel(listing: Pick<ListingRow, 'listing_id'>): string {
+  return hasText(listing.listing_id) ? listing.listing_id.trim() : '[missing listing_id]';
+}
+
+function getImageUrlIssues(listing: ListingRow): string[] {
+  const listingLabel = getListingLabel(listing);
+  const imageUrls = listing.image_urls;
+
+  if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
+    return [`Listing "${listingLabel}" must include at least one image URL for publish.`];
+  }
+
+  const nonEmptyImageUrlCount = imageUrls.filter((imageUrl) => hasText(imageUrl)).length;
+  const issues: string[] = [];
+
+  if (nonEmptyImageUrlCount === 0) {
+    issues.push(`Listing "${listingLabel}" must include at least one image URL for publish.`);
+  }
+
+  if (imageUrls.some((imageUrl) => !hasText(imageUrl))) {
+    issues.push(`Listing "${listingLabel}" contains blank image_urls entries.`);
+  }
+
+  return issues;
 }
 
 function getMissingAppSettingIssues(appSettings: AppSettingsRow): string[] {
@@ -84,33 +106,40 @@ export function validatePublishListingReadiness(
   listing: ListingRow,
   appSettings: AppSettingsRow
 ): void {
+  const listingLabel = getListingLabel(listing);
   const issues: string[] = [];
 
   if (listing.status !== 'approved_for_export') {
     issues.push(
-      `Listing "${listing.listing_id}" must be in status "approved_for_export" before publish. Current status: "${listing.status}".`
+      `Listing "${listingLabel}" must be in status "approved_for_export" before publish. Current status: "${listing.status}".`
     );
   }
 
+  if (!hasText(listing.listing_id)) {
+    issues.push('Listing is missing listing_id required for publish SKU.');
+  }
+
   if (!hasText(listing.title)) {
-    issues.push(`Listing "${listing.listing_id}" is missing title.`);
+    issues.push(`Listing "${listingLabel}" is missing title.`);
   }
 
   if (!hasText(listing.category_id)) {
-    issues.push(`Listing "${listing.listing_id}" is missing category_id.`);
+    issues.push(`Listing "${listingLabel}" is missing category_id.`);
   }
 
-  if (!hasImageUrls(listing.image_urls)) {
-    issues.push(`Listing "${listing.listing_id}" is missing required image_urls.`);
+  if (!hasText(listing.condition_id)) {
+    issues.push(`Listing "${listingLabel}" is missing condition_id.`);
   }
+
+  issues.push(...getImageUrlIssues(listing));
 
   if (listing.price === null || !Number.isFinite(listing.price) || listing.price <= 0) {
-    issues.push(`Listing "${listing.listing_id}" is missing a valid price.`);
+    issues.push(`Listing "${listingLabel}" is missing a valid price.`);
   }
 
   issues.push(...getMissingAppSettingIssues(appSettings));
 
   if (issues.length > 0) {
-    throw new PublishListingValidationError(listing.listing_id, issues);
+    throw new PublishListingValidationError(listingLabel, issues);
   }
 }

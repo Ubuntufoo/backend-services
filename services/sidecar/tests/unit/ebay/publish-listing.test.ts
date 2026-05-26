@@ -260,6 +260,90 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
   });
 
+  it('aggregates missing listing fields before any inventory api calls', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '   ',
+        condition_id: '  ',
+        image_urls: ['   '],
+        price: 0,
+        title: '   ',
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'Listing "LIST-001" is missing title.',
+          'Listing "LIST-001" is missing category_id.',
+          'Listing "LIST-001" is missing condition_id.',
+          'Listing "LIST-001" must include at least one image URL for publish.',
+          'Listing "LIST-001" contains blank image_urls entries.',
+          'Listing "LIST-001" is missing a valid price.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
+  it('rejects listings with blank fallback sku source', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        listing_id: '   ',
+        sku: null,
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      context: {
+        issues: ['Listing is missing listing_id required for publish SKU.'],
+        listingId: '[missing listing_id]',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'null', price: null },
+    { label: 'zero', price: 0 },
+    { label: 'negative', price: -1 },
+    { label: 'infinite', price: Number.POSITIVE_INFINITY },
+    { label: 'nan', price: Number.NaN },
+  ])('rejects %s price values before publish', async ({ price }) => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        price,
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      context: {
+        issues: ['Listing "LIST-001" is missing a valid price.'],
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty image url arrays before publish', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        image_urls: [],
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      context: {
+        issues: ['Listing "LIST-001" must include at least one image URL for publish.'],
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+  });
+
   it('rejects listings outside approved_for_export status', async () => {
     const dependencies = createDependencies({
       listing: createListing({
