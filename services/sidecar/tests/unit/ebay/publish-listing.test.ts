@@ -314,7 +314,7 @@ describe('publishListing', () => {
     { label: 'negative', price: -1 },
     { label: 'infinite', price: Number.POSITIVE_INFINITY },
     { label: 'nan', price: Number.NaN },
-  ])('rejects %s price values before publish', async ({ price }) => {
+  ])('rejects $label price values before publish', async ({ price }) => {
     const dependencies = createDependencies({
       listing: createListing({
         price,
