@@ -82,6 +82,18 @@ describe('publish validation app settings checks', () => {
     );
   });
 
+  it('flags blank ebay marketplace before offer creation', () => {
+    expect(
+      getPublishAppSettingIssues(createAppSettings({ ebay_marketplace_id: '   ' }))
+    ).toContain('app_settings.ebay_marketplace_id is required for publish.');
+  });
+
+  it('flags blank payment policy id before offer creation', () => {
+    expect(
+      getPublishAppSettingIssues(createAppSettings({ default_payment_policy_id: '   ' }))
+    ).toContain('app_settings.default_payment_policy_id is required for publish.');
+  });
+
   it('flags placeholder fulfillment policy id before offer creation', () => {
     expect(
       getPublishAppSettingIssues(
@@ -92,6 +104,12 @@ describe('publish validation app settings checks', () => {
     ).toContain(
       'app_settings.default_fulfillment_policy_id "mock-fulfillment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.'
     );
+  });
+
+  it('flags blank fulfillment policy id before offer creation', () => {
+    expect(
+      getPublishAppSettingIssues(createAppSettings({ default_fulfillment_policy_id: '   ' }))
+    ).toContain('app_settings.default_fulfillment_policy_id is required for publish.');
   });
 
   it('flags placeholder payment policy id before offer creation', () => {
@@ -106,6 +124,12 @@ describe('publish validation app settings checks', () => {
     );
   });
 
+  it('flags blank return policy id before offer creation', () => {
+    expect(
+      getPublishAppSettingIssues(createAppSettings({ default_return_policy_id: '   ' }))
+    ).toContain('app_settings.default_return_policy_id is required for publish.');
+  });
+
   it('flags placeholder return policy id before offer creation', () => {
     expect(
       getPublishAppSettingIssues(
@@ -116,6 +140,12 @@ describe('publish validation app settings checks', () => {
     ).toContain(
       'app_settings.default_return_policy_id "mock-return-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.'
     );
+  });
+
+  it('flags blank merchant location key before offer creation', () => {
+    expect(
+      getPublishAppSettingIssues(createAppSettings({ merchant_location_key: '   ' }))
+    ).toContain('app_settings.merchant_location_key is required for publish.');
   });
 
   it('flags placeholder merchant location key before offer creation', () => {
