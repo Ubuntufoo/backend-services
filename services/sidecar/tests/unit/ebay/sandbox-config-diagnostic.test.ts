@@ -195,6 +195,41 @@ describe('sandbox config diagnostic', () => {
     );
   });
 
+  it('escapes single quotes in suggested SQL', async () => {
+    validateSandboxOAuthAccessMock.mockResolvedValue({ tokenScopes: [] });
+    getSandboxSellingPolicyManagementDiagnosticMock.mockResolvedValue({
+      selling_policy_management_opted_in: true,
+      warnings: [],
+    });
+
+    const api = createApi();
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({
+      paymentPolicies: [
+        {
+          categoryTypes: [{ name: 'ALL_EXCLUDING_MOTORS_VEHICLES' }],
+          immediatePay: true,
+          marketplaceId: 'EBAY_US',
+          name: "O'Reilly Payment",
+          paymentPolicyId: "O'Reilly",
+        },
+      ],
+    });
+
+    const result = await getSandboxConfigDiagnostic({
+      api,
+      dataAccess: createDataAccess({
+        default_fulfillment_policy_id: 'FULFILLMENT-REAL',
+        default_payment_policy_id: "O'Reilly",
+        default_return_policy_id: 'RETURN-REAL',
+        ebay_marketplace_id: 'EBAY_US',
+        id: 'default',
+        merchant_location_key: 'default-main-location',
+      }),
+    });
+
+    expect(result.suggestedSql).toContain("default_payment_policy_id = 'O''Reilly'");
+  });
+
   it('fails partial config with mismatched marketplace and unknown resources', async () => {
     validateSandboxOAuthAccessMock.mockResolvedValue({ tokenScopes: [] });
     getSandboxSellingPolicyManagementDiagnosticMock.mockResolvedValue({

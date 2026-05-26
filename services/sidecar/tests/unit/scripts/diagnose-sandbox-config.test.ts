@@ -35,13 +35,14 @@ vi.mock('@/api/index.js', () => ({
 }));
 
 describe('diagnose sandbox config script', () => {
-  const originalExitCode = process.exitCode;
+  let originalExitCode: number | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     initializeMock.mockResolvedValue(undefined);
     getSidecarDataAccessMock.mockReturnValue({ appSettings: {} });
     formatSandboxConfigDiagnosticMock.mockReturnValue('formatted diagnostic');
+    originalExitCode = process.exitCode;
     process.exitCode = undefined;
   });
 
