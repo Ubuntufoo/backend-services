@@ -55,6 +55,7 @@ export {
   getJobById,
   listDueQueuedJobs,
   listJobsByListingId,
+  listJobsByListingIds,
   listStaleRunningJobs,
   resetJobForManualRetry,
   requeueJob,

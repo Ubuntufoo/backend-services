@@ -111,6 +111,33 @@ function hasActiveWorkflowJob(
   );
 }
 
+async function loadJobsByListingIds(
+  dataAccess: SidecarDataAccess,
+  listingIds: string[]
+): Promise<Map<string, RunSidecarJobResult['job'][]>> {
+  if (listingIds.length === 0) {
+    return new Map();
+  }
+
+  const jobs = dataAccess.jobs.listByListingIds
+    ? await dataAccess.jobs.listByListingIds(listingIds)
+    : (await Promise.all(listingIds.map(async (listingId) => dataAccess.jobs.listByListingId(listingId)))).flat();
+
+  const groupedJobs = new Map<string, RunSidecarJobResult['job'][]>();
+
+  for (const job of jobs) {
+    if (!job.listing_id) {
+      continue;
+    }
+
+    const existingJobs = groupedJobs.get(job.listing_id) ?? [];
+    existingJobs.push(job);
+    groupedJobs.set(job.listing_id, existingJobs);
+  }
+
+  return groupedJobs;
+}
+
 function getLogger(logger?: SidecarJobRunnerLogger): SidecarJobRunnerLogger {
   return logger ?? defaultLogger;
 }
@@ -299,9 +326,13 @@ async function repairOrphanedGenerateAiListings(
     offset: 0,
     orderByCreatedAt: 'asc',
   });
+  const jobsByListingId = await loadJobsByListingIds(
+    dataAccess,
+    generatingListings.map((listing) => listing.listing_id)
+  );
 
   for (const listing of generatingListings) {
-    const jobs = await dataAccess.jobs.listByListingId(listing.listing_id);
+    const jobs = jobsByListingId.get(listing.listing_id) ?? [];
 
     if (hasActiveWorkflowJob(jobs, 'generate_ai')) {
       continue;
@@ -347,13 +378,17 @@ async function repairOrphanedPublishListings(
     limit,
     queuedOnly: false,
   });
+  const orphanPublishListingIds = approvedListings
+    .filter((listing) => listing.sub_status === 'publishing_to_ebay')
+    .map((listing) => listing.listing_id);
+  const jobsByListingId = await loadJobsByListingIds(dataAccess, orphanPublishListingIds);
 
   for (const listing of approvedListings) {
     if (listing.sub_status !== 'publishing_to_ebay') {
       continue;
     }
 
-    const jobs = await dataAccess.jobs.listByListingId(listing.listing_id);
+    const jobs = jobsByListingId.get(listing.listing_id) ?? [];
 
     if (hasActiveWorkflowJob(jobs, 'publish')) {
       continue;

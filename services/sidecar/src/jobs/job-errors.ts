@@ -10,6 +10,7 @@ export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
 
 export const JOB_ERROR_CODES = {
   DUPLICATE_ACTIVE_JOB: 'duplicate_active_job',
+  LISTING_NOT_FOUND: 'listing_not_found',
   PUBLISH_APP_SETTINGS_NOT_FOUND: 'publish_app_settings_not_found',
   PUBLISH_EXPORT_STATE_PERSIST_FAILED: 'publish_export_state_persist_failed',
   PUBLISH_INVENTORY_ITEM_UPSERT_FAILED: 'publish_inventory_item_upsert_failed',
@@ -101,6 +102,7 @@ function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCatego
   switch (code) {
     case JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB:
     case JOB_ERROR_CODES.GENERATE_AI_FAILED:
+    case JOB_ERROR_CODES.LISTING_NOT_FOUND:
     case JOB_ERROR_CODES.PUBLISH_FAILED:
     case JOB_ERROR_CODES.PUBLISH_OFFER_CREATE_FAILED:
     case JOB_ERROR_CODES.PUBLISH_OFFER_PUBLISH_FAILED:

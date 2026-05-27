@@ -326,6 +326,26 @@ export async function listJobsByListingId(
   return result.data ?? [];
 }
 
+export async function listJobsByListingIds(
+  client: SupabaseDataClient,
+  listingIds: string[]
+): Promise<JobRow[]> {
+  if (listingIds.length === 0) {
+    return [];
+  }
+
+  const result = (await client
+    .from('jobs')
+    .select('*')
+    .in('listing_id', listingIds)) as MultiResult<JobRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
+}
+
 export async function listDueQueuedJobs(
   client: SupabaseDataClient,
   now: string,

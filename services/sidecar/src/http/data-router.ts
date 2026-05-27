@@ -83,6 +83,14 @@ function sendManualRetryError(res: Response, error: unknown): void {
       return;
     }
 
+    if (error.code === JOB_ERROR_CODES.LISTING_NOT_FOUND) {
+      res.status(404).json({
+        error: 'not_found',
+        message: error.message,
+      });
+      return;
+    }
+
     if (error.code === JOB_ERROR_CODES.MANUAL_RETRY_NOT_ALLOWED) {
       res.status(409).json({
         error: error.code,

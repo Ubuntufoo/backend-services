@@ -28,6 +28,7 @@ import {
   listListings,
   listListingsByStatus,
   listJobsByListingId,
+  listJobsByListingIds,
   listStaleRunningJobs,
   prepareListingForGenerateAi,
   markListingPublishFailed,
@@ -210,7 +211,7 @@ function createListClient<TTable extends string, TRow>(
   table: TTable,
   expectedRows: TRow[],
   column: string,
-  value: string
+  value: string | string[]
 ): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
@@ -220,7 +221,16 @@ function createListClient<TTable extends string, TRow>(
         select: vi.fn(() => ({
           eq: vi.fn(async (actualColumn: string, actualValue: string) => {
             expect(actualColumn).toBe(column);
-            expect(actualValue).toBe(value);
+            expect(actualValue).toBe(Array.isArray(value) ? value[0] : value);
+
+            return {
+              data: expectedRows,
+              error: null,
+            };
+          }),
+          in: vi.fn(async (actualColumn: string, actualValues: string[]) => {
+            expect(actualColumn).toBe(column);
+            expect(actualValues).toEqual(Array.isArray(value) ? value : [value]);
 
             return {
               data: expectedRows,
@@ -1315,6 +1325,9 @@ describe('shared repositories', () => {
 
     const listClient = createListClient('jobs', [jobRow], 'listing_id', 'LIST-001');
     await expect(listJobsByListingId(listClient, 'LIST-001')).resolves.toEqual([jobRow]);
+
+    const listByIdsClient = createListClient('jobs', [jobRow], 'listing_id', 'LIST-001');
+    await expect(listJobsByListingIds(listByIdsClient, ['LIST-001'])).resolves.toEqual([jobRow]);
 
     const queuedListClient = createDueQueuedJobsListClient([jobRow], 2, '2026-05-25T13:00:00.000Z');
     await expect(

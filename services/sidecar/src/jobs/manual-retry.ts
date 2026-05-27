@@ -1,7 +1,6 @@
 import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
-  createDuplicateActiveJobError,
   createManualRetryNotAllowedError,
   isManualRetryAllowedStoredError,
   JOB_ERROR_CODES,
@@ -259,7 +258,7 @@ export async function retryListingWorkflow(
 
   if (!listing) {
     throw new SidecarJobError(
-      JOB_ERROR_CODES.JOB_NOT_FOUND,
+      JOB_ERROR_CODES.LISTING_NOT_FOUND,
       'terminal',
       `Listing "${options.listingId}" was not found.`
     );
@@ -270,7 +269,6 @@ export async function retryListingWorkflow(
   const activeJob = getActiveWorkflowJob(jobs, workflow);
 
   if (activeJob) {
-    createDuplicateActiveJobError(workflow, listing.listing_id, activeJob.id);
     return {
       alreadyQueued: true,
       workflow,
