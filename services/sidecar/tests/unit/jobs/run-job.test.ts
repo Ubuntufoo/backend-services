@@ -8,6 +8,9 @@ import { runSidecarJob } from '@/jobs/index.js';
 const queuedGenerateAiJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-generate-ai',
   job_type: 'generate_ai',
   last_error: null,
@@ -23,6 +26,9 @@ const queuedGenerateAiJob: JobRow = {
 const queuedProcessImagesJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-process-images',
   job_type: 'process_images',
   last_error: null,
@@ -43,6 +49,9 @@ const runningProcessImagesJob: JobRow = {
 const queuedPublishJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-publish',
   job_type: 'publish',
   last_error: null,
@@ -104,11 +113,13 @@ function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
+  geminiAttemptAuditError,
   onListingsUpdate,
   workflowStates = [],
 }: {
   job?: JobRow | null;
   listing?: ListingRow | null;
+  geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
 } = {}): SidecarDataAccess {
@@ -268,6 +279,22 @@ function createDataAccess({
           last_error_code: error.errorCode,
           next_run_at: nextRunAt,
           status: 'queued',
+        };
+
+        return { ...jobState };
+      }),
+      updateGeminiAttemptAudit: vi.fn(async (_jobId: string, audit) => {
+        if (!jobState) {
+          throw new Error('job missing');
+        }
+
+        if (geminiAttemptAuditError) {
+          throw geminiAttemptAuditError;
+        }
+
+        jobState = {
+          ...jobState,
+          ...audit,
         };
 
         return { ...jobState };
@@ -439,10 +466,51 @@ describe('runSidecarJob', () => {
         title: '1991 Upper Deck Michael Jordan',
       })
     );
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: null,
+          duration_ms: null,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'started',
+        },
+      ],
+      gemini_selected_model: null,
+    });
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(2, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: '2026-05-20T13:00:00.000Z',
+          duration_ms: 0,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'succeeded',
+        },
+      ],
+      gemini_selected_model: 'gemini-3.1-flash-lite',
+    });
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
     expect(result.job.status).toBe('completed');
+    expect(result.job.gemini_attempt_count).toBe(1);
+    expect(result.job.gemini_selected_model).toBe('gemini-3.1-flash-lite');
+    expect(result.job.gemini_attempts).toEqual([
+      expect.objectContaining({
+        attempt_order: 1,
+        model_name: 'gemini-3.1-flash-lite',
+        status: 'succeeded',
+      }),
+    ]);
   });
 
   it('resolves category and condition ids from Gemini suggestions only for trading card singles', async () => {
@@ -550,6 +618,107 @@ describe('runSidecarJob', () => {
     expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
     expect(result.listing?.status).toBe('assets_ready');
     expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: null,
+          duration_ms: null,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'started',
+        },
+      ],
+      gemini_selected_model: null,
+    });
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(2, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: '2026-05-20T13:00:00.000Z',
+          duration_ms: 0,
+          failure_code: 'generate_ai_failed',
+          failure_message: 'Gemini timed out',
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'failed',
+        },
+      ],
+      gemini_selected_model: null,
+    });
+    expect(result.job.gemini_attempt_count).toBe(1);
+    expect(result.job.gemini_selected_model).toBeNull();
+    expect(result.job.gemini_attempts).toEqual([
+      expect.objectContaining({
+        attempt_order: 1,
+        failure_code: 'generate_ai_failed',
+        failure_message: 'Gemini timed out',
+        model_name: 'gemini-3.1-flash-lite',
+        status: 'failed',
+      }),
+    ]);
+  });
+
+  it('keeps generate_ai success when Gemini audit persistence fails', async () => {
+    const dataAccess = createDataAccess({
+      geminiAttemptAuditError: new Error('audit write failed'),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+        Manufacturer: 'Upper Deck',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: ['Condition inferred from visible wear only.'],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(result.job.status).toBe('completed');
+    expect(result.job.last_error_code).toBeNull();
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+  });
+
+  it('preserves the Gemini failure when Gemini audit persistence fails', async () => {
+    const dataAccess = createDataAccess({
+      geminiAttemptAuditError: new Error('audit write failed'),
+    });
+    const generateListingDraftMock = vi.fn(async () => {
+      throw new Error('Gemini timed out');
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.job.last_error).toContain('Gemini timed out');
+    expect(result.job.last_error).not.toContain('audit write failed');
+    expect(result.listing?.last_error_code).toBe('generate_ai_failed');
   });
 
   it('returns asset prep summary for process_images jobs and does not fail batch on per-listing errors', async () => {

@@ -101,6 +101,9 @@ export type Database = {
         Row: {
           attempts: number;
           created_at: string;
+          gemini_attempt_count: number;
+          gemini_attempts: Json;
+          gemini_selected_model: string | null;
           id: string;
           job_type: string;
           last_error: string | null;
@@ -115,6 +118,9 @@ export type Database = {
         Insert: {
           attempts?: number;
           created_at?: string;
+          gemini_attempt_count?: number;
+          gemini_attempts?: Json;
+          gemini_selected_model?: string | null;
           id?: string;
           job_type: string;
           last_error?: string | null;
@@ -129,6 +135,9 @@ export type Database = {
         Update: {
           attempts?: number;
           created_at?: string;
+          gemini_attempt_count?: number;
+          gemini_attempts?: Json;
+          gemini_selected_model?: string | null;
           id?: string;
           job_type?: string;
           last_error?: string | null;

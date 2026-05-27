@@ -1,7 +1,14 @@
-import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
+import type {
+  GeminiJobAttemptAuditUpdate,
+  GeminiModelAttempt,
+  JobRow,
+  ListingRow,
+  ListingUpdate,
+} from '@ebay-inventory/data';
 import {
   aspectValueSchema,
   generateListingDraft,
+  getConfiguredGeminiModelName,
   resolveTradingCardListingIds,
   type GenerateListingDraftInput,
 } from '@/gemini/index.js';
@@ -208,6 +215,35 @@ function appendCleanupFailure(message: string, cleanupError: unknown): string {
   return `${message} Cleanup also failed: ${cleanupMessage}`;
 }
 
+function getDurationMs(startedAt: string, completedAt: string): number {
+  return Math.max(0, Date.parse(completedAt) - Date.parse(startedAt));
+}
+
+function summarizeGeminiAttemptFailureMessage(message: string): string {
+  const normalized = message.replace(/\s+/g, ' ').trim();
+
+  if (normalized.length <= 240) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 237)}...`;
+}
+
+async function persistGeminiAttemptAudit(
+  dataAccess: SidecarDataAccess,
+  jobId: string,
+  audit: GeminiJobAttemptAuditUpdate,
+  bestEffort = false
+): Promise<void> {
+  try {
+    await dataAccess.jobs.updateGeminiAttemptAudit(jobId, audit);
+  } catch (error) {
+    if (!bestEffort) {
+      throw error;
+    }
+  }
+}
+
 async function ensureJobRunning(
   dataAccess: SidecarDataAccess,
   job: JobRow,
@@ -345,8 +381,25 @@ async function runGenerateAiJob(
   }
 
   let generationStarted = false;
+  const modelName = getConfiguredGeminiModelName();
+  const startedAt = asIsoTimestamp(options.now);
+  const startedAttempt: GeminiModelAttempt = {
+    attempt_order: 1,
+    completed_at: null,
+    duration_ms: null,
+    failure_code: null,
+    failure_message: null,
+    model_name: modelName,
+    started_at: startedAt,
+    status: 'started',
+  };
 
   try {
+    await persistGeminiAttemptAudit(options.dataAccess, job.id, {
+      gemini_attempt_count: 1,
+      gemini_attempts: [startedAttempt],
+      gemini_selected_model: null,
+    }, true);
     await options.dataAccess.listings.updateWorkflowState({
       listingId,
       status: 'generating',
@@ -364,6 +417,19 @@ async function runGenerateAiJob(
       listingId,
       buildGeneratedListingReviewUpdate(listing, draft)
     );
+    const completedAt = asIsoTimestamp(options.now);
+    await persistGeminiAttemptAudit(options.dataAccess, job.id, {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          ...startedAttempt,
+          completed_at: completedAt,
+          duration_ms: getDurationMs(startedAt, completedAt),
+          status: 'succeeded',
+        },
+      ],
+      gemini_selected_model: modelName,
+    }, true);
     const completedJob = await options.dataAccess.jobs.complete(job.id);
 
     return {
@@ -372,6 +438,27 @@ async function runGenerateAiJob(
     };
   } catch (error) {
     let jobError = classifyJobError(job.job_type, error);
+    const completedAt = asIsoTimestamp(options.now);
+
+    await persistGeminiAttemptAudit(
+      options.dataAccess,
+      job.id,
+      {
+        gemini_attempt_count: 1,
+        gemini_attempts: [
+          {
+            ...startedAttempt,
+            completed_at: completedAt,
+            duration_ms: getDurationMs(startedAt, completedAt),
+            failure_code: jobError.code,
+            failure_message: summarizeGeminiAttemptFailureMessage(jobError.message),
+            status: 'failed',
+          },
+        ],
+        gemini_selected_model: null,
+      },
+      true
+    );
 
     if (generationStarted) {
       try {

@@ -1,5 +1,5 @@
 // cSpell:ignore Supabase
-import type { JobInsert, JobRow, JobUpdate } from '../database.js';
+import type { JobInsert, JobRow, JobUpdate, Json } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
 import {
   requireOptionalResult,
@@ -47,6 +47,25 @@ export interface JobErrorUpdateInput {
   errorAt: string;
   errorCode: string;
   errorMessage: string;
+}
+
+export type GeminiAttemptStatus = 'started' | 'succeeded' | 'failed' | 'skipped';
+
+export interface GeminiModelAttempt {
+  attempt_order: number;
+  completed_at: string | null;
+  duration_ms: number | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  model_name: string;
+  started_at: string;
+  status: GeminiAttemptStatus;
+}
+
+export interface GeminiJobAttemptAuditUpdate {
+  gemini_attempt_count?: number;
+  gemini_attempts: GeminiModelAttempt[];
+  gemini_selected_model?: string | null;
 }
 
 function isSupabaseErrorWithCode(value: unknown): value is SupabaseErrorWithCode {
@@ -275,6 +294,9 @@ export async function resetJobForManualRetry(
     .from('jobs')
     .update({
       attempts: 0,
+      gemini_attempt_count: 0,
+      gemini_attempts: [],
+      gemini_selected_model: null,
       last_error: null,
       last_error_at: null,
       last_error_code: null,
@@ -467,6 +489,18 @@ export async function completeJob(
     last_error_code: null,
     next_run_at: null,
     status: 'completed',
+  });
+}
+
+export async function setGeminiJobAttemptAudit(
+  client: SupabaseDataClient,
+  jobId: string,
+  input: GeminiJobAttemptAuditUpdate
+): Promise<JobRow> {
+  return await updateJob(client, jobId, {
+    gemini_attempt_count: input.gemini_attempt_count,
+    gemini_attempts: input.gemini_attempts as unknown as Json,
+    gemini_selected_model: input.gemini_selected_model,
   });
 }
 

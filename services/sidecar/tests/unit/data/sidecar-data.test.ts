@@ -32,6 +32,7 @@ const listStaleRunningJobsMock = vi.fn();
 const claimDueQueuedJobMock = vi.fn();
 const resetJobForManualRetryMock = vi.fn();
 const requeueJobMock = vi.fn();
+const setGeminiJobAttemptAuditMock = vi.fn();
 const updateJobMock = vi.fn();
 const createOrderMock = vi.fn();
 const getOrderByOrderIdMock = vi.fn();
@@ -68,6 +69,7 @@ vi.mock('@ebay-inventory/data', () => ({
   resetJobForManualRetry: resetJobForManualRetryMock,
   requeueJob: requeueJobMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
+  setGeminiJobAttemptAudit: setGeminiJobAttemptAuditMock,
   updateAppSettings: updateAppSettingsMock,
   updateJob: updateJobMock,
   updateListing: updateListingMock,
@@ -194,6 +196,22 @@ describe('sidecar data access', () => {
       errorCode: 'retry_exhausted',
       errorMessage: 'boom',
     }, '2026-05-25T13:01:00.000Z');
+    await dataAccess.jobs.updateGeminiAttemptAudit('job-row-id', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: '2026-05-25T13:00:02.000Z',
+          duration_ms: 2000,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-25T13:00:00.000Z',
+          status: 'succeeded',
+        },
+      ],
+      gemini_selected_model: 'gemini-3.1-flash-lite',
+    });
     await dataAccess.jobs.update('job-row-id', { status: 'running' });
 
     await dataAccess.orders.create({
@@ -249,6 +267,22 @@ describe('sidecar data access', () => {
       },
       '2026-05-25T13:01:00.000Z'
     );
+    expect(setGeminiJobAttemptAuditMock).toHaveBeenCalledWith(client, 'job-row-id', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: '2026-05-25T13:00:02.000Z',
+          duration_ms: 2000,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-25T13:00:00.000Z',
+          status: 'succeeded',
+        },
+      ],
+      gemini_selected_model: 'gemini-3.1-flash-lite',
+    });
     expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });
 
     expect(createOrderMock).toHaveBeenCalledWith(
