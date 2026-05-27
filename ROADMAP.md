@@ -86,7 +86,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7C | FE | Add queue/error panel | Shows `assets_ready`, `generating`, `needs_review`, `approved_for_export`, publish queue, and persisted errors | GPT-5.5 mini | Low-Medium | Operational visibility; not aesthetic QOL |
 | 8	 | BE |	Implement explicit SQL API Table Grants & Security Advisor Review	Audit all existing tables using the Supabase Security Advisor ahead of the Oct 30, 2026 enforcement deadline; update table-creation flows / DB migrations to explicitly grant PostgREST/API access to the public schema.
 | 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, `sale_price` | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
-| 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability |
+<!-- | 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability | -->
 | 8 | BE | Normalize image orientation during asset processing | R2 images display with correct orientation | GPT-5.5 mini | Low-Medium | Defer unless EXIF issue is confirmed |
 | 8 | FE | Show cleanup status lightly | Optional UI visibility | GPT-5.5 mini | Low | Deferred QOL visibility |
 | 8 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work | GPT-5.5 | Medium | Begin post-listing order workflow |

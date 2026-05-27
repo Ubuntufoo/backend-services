@@ -377,6 +377,8 @@ describe('runSidecarJob', () => {
     const generateListingDraftMock = vi.fn(async () => ({
       title: '1991 Upper Deck Michael Jordan',
       description: 'Ungraded single card with visible edge wear.',
+      category_id: '261328',
+      condition_id: '3000',
       categorySuggestion: 'Sports Trading Cards',
       conditionSuggestion: 'Ungraded',
       aspects: {
@@ -418,6 +420,8 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
+        category_id: '261328',
+        condition_id: '3000',
         description: 'Ungraded single card with visible edge wear.',
         item_specifics: {
           Player: 'Michael Jordan',
@@ -439,6 +443,43 @@ describe('runSidecarJob', () => {
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
     expect(result.job.status).toBe('completed');
+  });
+
+  it('persists canonical category and condition fields even when suggestion hints differ', async () => {
+    const dataAccess = createDataAccess();
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1990 Score Bo Jackson',
+      description: 'Single raw card.',
+      category_id: '212',
+      condition_id: '4000',
+      categorySuggestion: 'Sports Trading Cards Singles',
+      conditionSuggestion: 'Very Good',
+      aspects: {},
+      priceSuggestion: 19.99,
+      confidence: {},
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-2' },
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        category_id: '212',
+        condition_id: '4000',
+        item_specifics: {
+          CategorySuggestion: 'Sports Trading Cards Singles',
+          ConditionSuggestion: 'Very Good',
+        },
+        status: 'needs_review',
+        sub_status: 'review_pending',
+      })
+    );
   });
 
   it('requeues recoverable generate_ai failures with next_run_at', async () => {
@@ -663,6 +704,47 @@ describe('runSidecarJob', () => {
       status: 'approved_for_export',
       sub_status: 'idle',
     });
+  });
+
+  it('fails stale duplicate publish jobs without overwriting existing listing errors', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-20T12:55:00.000Z',
+      last_error_code: 'publish_listing_not_ready',
+      last_error_context: {
+        issues: ['Missing category_id.'],
+      },
+      last_error_message: 'Missing category_id.',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing,
+    });
+    const publishListingMock = vi.fn();
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('job_not_runnable');
+    expect(result.listing).toMatchObject({
+      last_error_at: '2026-05-20T12:55:00.000Z',
+      last_error_code: 'publish_listing_not_ready',
+      last_error_message: 'Missing category_id.',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+    expect(dataAccess.listings.update).not.toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        last_error_code: 'publish_listing_not_eligible',
+      })
+    );
+    expect(publishListingMock).not.toHaveBeenCalled();
   });
 
   it('fails exhausted recoverable publish retries with retry_exhausted', async () => {

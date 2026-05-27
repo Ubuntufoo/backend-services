@@ -47,6 +47,8 @@ export const generateListingDraftInputSchema = z.object({
 export const generatedListingDraftSchema = z.object({
   title: z.string(),
   description: z.string(),
+  category_id: z.string().nullable().optional(),
+  condition_id: z.string().nullable().optional(),
   categorySuggestion: z.string().nullable().optional(),
   conditionSuggestion: z.string().nullable().optional(),
   aspects: z.record(aspectValueSchema),

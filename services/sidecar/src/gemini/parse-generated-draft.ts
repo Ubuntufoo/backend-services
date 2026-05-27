@@ -71,6 +71,19 @@ function normalizeNullableString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+function normalizeCanonicalId(
+  snakeCaseValue: unknown,
+  camelCaseValue: unknown
+): string | null {
+  const snakeCase = normalizeNullableString(snakeCaseValue);
+
+  if (snakeCase !== null) {
+    return snakeCase;
+  }
+
+  return normalizeNullableString(camelCaseValue);
+}
+
 function normalizeAspects(value: unknown, warnings: string[]): Record<string, string | string[]> {
   if (!isRecord(value)) {
     return {};
@@ -162,6 +175,8 @@ export function parseGeneratedDraft(
   return generatedListingDraftSchema.parse({
     title: normalizeRequiredString(parsed.title, 'title', serviceWarnings),
     description: normalizeRequiredString(parsed.description, 'description', serviceWarnings),
+    category_id: normalizeCanonicalId(parsed.category_id, parsed.categoryId),
+    condition_id: normalizeCanonicalId(parsed.condition_id, parsed.conditionId),
     categorySuggestion: normalizeNullableString(parsed.categorySuggestion),
     conditionSuggestion: normalizeNullableString(parsed.conditionSuggestion),
     aspects: normalizeAspects(parsed.aspects, serviceWarnings),

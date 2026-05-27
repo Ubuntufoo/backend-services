@@ -3,6 +3,8 @@ import type { GenerateListingDraftInput } from './contracts.js';
 const OUTPUT_SCHEMA_DESCRIPTION = `{
   "title": "string",
   "description": "string",
+  "category_id": "string or null",
+  "condition_id": "string or null",
   "categorySuggestion": "string or null",
   "conditionSuggestion": "string or null",
   "aspects": {

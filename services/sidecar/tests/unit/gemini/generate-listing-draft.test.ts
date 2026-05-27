@@ -39,6 +39,8 @@ describe('generateListingDraft', () => {
       JSON.stringify({
         title: '1991 Upper Deck Michael Jordan',
         description: 'Classic base card with visible wear.',
+        category_id: '261328',
+        condition_id: '3000',
         categorySuggestion: 'Sports Trading Cards',
         conditionSuggestion: 'Ungraded',
         aspects: {
@@ -204,6 +206,8 @@ describe('generateListingDraft', () => {
     expect(result).toEqual({
       title: '1986 Fleer Michael Jordan RC',
       description: 'Visible front and back images suggest an ungraded single card.',
+      category_id: null,
+      condition_id: null,
       categorySuggestion: 'Sports Trading Cards',
       conditionSuggestion: 'Ungraded',
       aspects: {
@@ -222,6 +226,50 @@ describe('generateListingDraft', () => {
       warnings: ['Condition cannot be confirmed from photos alone.'],
       rawModelResponse: rawResponse,
     });
+  });
+
+  it('parses canonical category and condition IDs from snake_case fields', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: '1991 Stadium Club Michael Jordan',
+        description: 'Single card listing.',
+        category_id: '261328',
+        condition_id: '3000',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {},
+        warnings: [],
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-011A',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.category_id).toBe('261328');
+    expect(result.condition_id).toBe('3000');
+  });
+
+  it('falls back to camelCase category and condition IDs when present', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: '1992 Topps Derek Jeter',
+        description: 'Prospect card.',
+        categoryId: '261328',
+        conditionId: '4000',
+        aspects: {},
+        warnings: [],
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-011B',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.category_id).toBe('261328');
+    expect(result.condition_id).toBe('4000');
   });
 
   it('parses JSON wrapped in a json code fence', async () => {
@@ -286,6 +334,8 @@ describe('generateListingDraft', () => {
     expect(result).toEqual({
       title: 'Baseball card lot',
       description: 'Lot listing with multiple visible cards.',
+      category_id: null,
+      condition_id: null,
       categorySuggestion: null,
       conditionSuggestion: null,
       aspects: {

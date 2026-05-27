@@ -152,6 +152,8 @@ function buildGeneratedListingReviewUpdate(
   draft: Awaited<ReturnType<typeof generateListingDraft>>
 ): ListingUpdate {
   return {
+    category_id: draft.category_id,
+    condition_id: draft.condition_id,
     description: draft.description,
     item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,
@@ -506,6 +508,20 @@ async function runPublishJob(
     return {
       job: failedJob,
       listing: await getListingSafely(options.dataAccess, listingId),
+    };
+  }
+
+  if (listing.sub_status === 'idle') {
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.JOB_NOT_RUNNABLE,
+      'terminal',
+      `Publish job "${job.id}" is stale for listing "${listingId}" because the listing is already at approved_for_export/idle.`
+    );
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+
+    return {
+      job: failedJob,
+      listing,
     };
   }
 
