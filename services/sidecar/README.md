@@ -110,12 +110,15 @@ Behavior:
 - `ebay:opt-in-selling-policies` checks opted-in programs first, then requests `SELLING_POLICY_MANAGEMENT` only when needed
 - `ebay:opt-in-selling-policies` may return "already opted in" or "already requested"; eBay can take up to 24 hours to process opt-in
 - validates sandbox seller OAuth via refresh token
-- prefers stored policy IDs, then exact bootstrap-name matches
+- prefers active sidecar marketplace over stale `app_settings.default.ebay_marketplace_id`, then persists the active marketplace
+- ignores stored mock/placeholder policy IDs and merchant location keys
+- prefers stored policy IDs when they still resolve in the active marketplace, then exact bootstrap-name matches
 - creates named payment, fulfillment, and return defaults when missing
 - keeps default fulfillment domestic-only; no ESE in bootstrap policy
 - keeps default return policy conservative: returns accepted, 30-day window
 - prefers stored/default inventory location key, then creates `default-main-location`
 - only falls back to unrelated existing policy/location if creation fails, and prints warning
+- prints terminal-readable created/reused/persisted summary and keeps `ebay:diagnose-sandbox-config` read-only
 
 Notes:
 
@@ -138,6 +141,30 @@ Troubleshooting:
 - sandbox seller ineligible for Business Policy: manual-seed `app_settings` values and continue with mocked/injected IDs until a different sandbox seller account is available
 - sandbox create blocked: command may reuse first existing policy/location, with warning
 - persistence failure: verify Supabase service-role env vars and connectivity
+
+Example bootstrap output:
+
+```bash
+pnpm --filter sidecar ebay:setup-sandbox
+```
+
+```text
+eBay sandbox bootstrap
+marketplace: EBAY_US
+app_settings row: default
+
+payment policy ID: PAYMENT-REAL (reused)
+fulfillment policy ID: FULFILLMENT-REAL (created)
+return policy ID: RETURN-REAL (reused)
+merchant location key: default-main-location (created)
+
+persisted:
+- ebay_marketplace_id = EBAY_US
+- default_payment_policy_id = PAYMENT-REAL
+- default_fulfillment_policy_id = FULFILLMENT-REAL
+- default_return_policy_id = RETURN-REAL
+- merchant_location_key = default-main-location
+```
 
 ## Local-Only Operation
 

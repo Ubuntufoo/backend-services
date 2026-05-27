@@ -3,6 +3,7 @@ import type { SandboxBootstrapApi } from '@/ebay/sandbox-bootstrap.js';
 import {
   ensureDefaultInventoryLocation,
   ensureDefaultSellerPolicies,
+  formatSandboxBootstrapResult,
   runSandboxBootstrap,
   validateSandboxOAuthAccess,
 } from '@/ebay/sandbox-bootstrap.js';
@@ -104,6 +105,7 @@ describe('sandbox bootstrap', () => {
     expect(result.paymentPolicyId).toBe('PAYMENT-1');
     expect(result.returnPolicyId).toBe('RETURN-1');
     expect(result.merchantLocationKey).toBe('stored-location');
+    expect(result.persistedAppSettingsId).toBe('default');
     expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -154,6 +156,7 @@ describe('sandbox bootstrap', () => {
       payment: true,
       return: true,
     });
+    expect(result.persistedAppSettingsId).toBe('default');
     expect(result.warnings).toEqual([]);
     expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
       1,
@@ -206,6 +209,146 @@ describe('sandbox bootstrap', () => {
     expect(result.paymentPolicyId).toBe('PAYMENT-FALLBACK');
     expect(result.created.payment).toBe(false);
     expect(result.warnings[0]).toContain('Fell back to existing payment policy');
+  });
+
+  it('replaces placeholder stored policy ids and merchant location key with real sandbox values', async () => {
+    const api = createApi();
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get.mockResolvedValue({
+      default_fulfillment_policy_id: 'mock-fulfillment-policy-id',
+      default_payment_policy_id: 'mock-payment-policy-id',
+      default_return_policy_id: 'mock-return-policy-id',
+      ebay_marketplace_id: 'EBAY_US',
+      merchant_location_key: '<merchantLocationKey>',
+    });
+    dataAccess.appSettings.update.mockResolvedValue({});
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({
+      paymentPolicies: [{ name: 'Sandbox Default Payment Policy', paymentPolicyId: 'PAYMENT-REAL' }],
+    });
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({
+      fulfillmentPolicies: [
+        { fulfillmentPolicyId: 'FULFILLMENT-REAL', name: 'Sandbox Default Fulfillment Policy' },
+      ],
+    });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({
+      returnPolicies: [{ name: 'Sandbox Default Return Policy', returnPolicyId: 'RETURN-REAL' }],
+    });
+    api.inventory.getInventoryLocations = vi.fn().mockResolvedValue({
+      locations: [{ merchantLocationKey: 'real-location', name: 'Real Warehouse' }],
+    });
+    api.inventory.createOrReplaceInventoryLocation = vi.fn().mockResolvedValue(undefined);
+
+    const result = await runSandboxBootstrap({ api, dataAccess });
+
+    expect(result.paymentPolicyId).toBe('PAYMENT-REAL');
+    expect(result.fulfillmentPolicyId).toBe('FULFILLMENT-REAL');
+    expect(result.returnPolicyId).toBe('RETURN-REAL');
+    expect(result.merchantLocationKey).toBe('default-main-location');
+    expect(api.inventory.createOrReplaceInventoryLocation).toHaveBeenCalledWith(
+      'default-main-location',
+      expect.any(Object)
+    );
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        'Ignoring placeholder stored payment policy id "mock-payment-policy-id" during sandbox bootstrap.',
+        'Ignoring placeholder stored fulfillment policy id "mock-fulfillment-policy-id" during sandbox bootstrap.',
+        'Ignoring placeholder stored return policy id "mock-return-policy-id" during sandbox bootstrap.',
+        'Ignoring placeholder stored merchant_location_key "<merchantLocationKey>" during sandbox bootstrap.',
+      ])
+    );
+    expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
+      2,
+      { merchant_location_key: 'default-main-location' },
+      'default'
+    );
+  });
+
+  it('handles marketplace mismatch safely by persisting active sidecar marketplace', async () => {
+    const api = createApi();
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get.mockResolvedValue({
+      default_fulfillment_policy_id: 'FULFILLMENT-US',
+      default_payment_policy_id: 'PAYMENT-US',
+      default_return_policy_id: 'RETURN-US',
+      ebay_marketplace_id: 'EBAY_GB',
+      merchant_location_key: 'stored-location',
+    });
+    dataAccess.appSettings.update.mockResolvedValue({});
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({
+      paymentPolicies: [{ name: 'Sandbox Default Payment Policy', paymentPolicyId: 'PAYMENT-REAL' }],
+    });
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({
+      fulfillmentPolicies: [
+        { fulfillmentPolicyId: 'FULFILLMENT-REAL', name: 'Sandbox Default Fulfillment Policy' },
+      ],
+    });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({
+      returnPolicies: [{ name: 'Sandbox Default Return Policy', returnPolicyId: 'RETURN-REAL' }],
+    });
+    api.inventory.getInventoryLocations = vi.fn().mockResolvedValue({
+      locations: [{ merchantLocationKey: 'stored-location', name: 'Stored Warehouse' }],
+    });
+    const warn = vi.fn();
+
+    const result = await runSandboxBootstrap({
+      api,
+      dataAccess,
+      logger: { warn } as unknown as typeof setupLogger,
+    });
+
+    expect(api.account.getPaymentPolicies).toHaveBeenCalledWith('EBAY_US');
+    expect(result.marketplaceId).toBe('EBAY_US');
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        'Stored app_settings.default.ebay_marketplace_id "EBAY_GB" does not match active sidecar marketplace "EBAY_US". Bootstrap will persist "EBAY_US".',
+      ])
+    );
+    expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        ebay_marketplace_id: 'EBAY_US',
+      }),
+      'default'
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('does not match active sidecar marketplace "EBAY_US"')
+    );
+  });
+
+  it('does not invoke publish flow during sandbox bootstrap', async () => {
+    const api = createApi();
+    const dataAccess = createDataAccess();
+    const publishListing = vi.fn();
+    dataAccess.appSettings.get.mockResolvedValue({
+      default_fulfillment_policy_id: 'FULFILLMENT-1',
+      default_payment_policy_id: 'PAYMENT-1',
+      default_return_policy_id: 'RETURN-1',
+      ebay_marketplace_id: 'EBAY_US',
+      merchant_location_key: 'stored-location',
+    });
+    dataAccess.appSettings.update.mockResolvedValue({});
+    api.account.getPaymentPolicies = vi.fn().mockResolvedValue({
+      paymentPolicies: [{ name: 'Other', paymentPolicyId: 'PAYMENT-1' }],
+    });
+    api.account.getFulfillmentPolicies = vi.fn().mockResolvedValue({
+      fulfillmentPolicies: [{ fulfillmentPolicyId: 'FULFILLMENT-1', name: 'Other' }],
+    });
+    api.account.getReturnPolicies = vi.fn().mockResolvedValue({
+      returnPolicies: [{ name: 'Other', returnPolicyId: 'RETURN-1' }],
+    });
+    api.inventory.getInventoryLocations = vi.fn().mockResolvedValue({
+      locations: [{ merchantLocationKey: 'stored-location', name: 'Stored Warehouse' }],
+    });
+
+    await runSandboxBootstrap({
+      api: {
+        ...api,
+        publishListing,
+      } as unknown as SandboxBootstrapApi,
+      dataAccess,
+    });
+
+    expect(publishListing).not.toHaveBeenCalled();
   });
 
   it('fails inventory bootstrap when create fails and no safe fallback exists', async () => {
@@ -355,5 +498,29 @@ describe('sandbox bootstrap', () => {
     await expect(validateSandboxOAuthAccess(api)).rejects.toThrow(
       'Sandbox bootstrap only runs against EBAY_ENVIRONMENT=sandbox'
     );
+  });
+
+  it('formats bootstrap output with created and reused summaries', () => {
+    const output = formatSandboxBootstrapResult({
+      created: {
+        fulfillment: false,
+        location: true,
+        payment: false,
+        return: false,
+      },
+      fulfillmentPolicyId: 'FULFILLMENT-1',
+      marketplaceId: 'EBAY_US',
+      merchantLocationKey: 'default-main-location',
+      persistedAppSettingsId: 'default',
+      paymentPolicyId: 'PAYMENT-1',
+      returnPolicyId: 'RETURN-1',
+      warnings: ['warning-1'],
+    });
+
+    expect(output).toContain('payment policy ID: PAYMENT-1 (reused)');
+    expect(output).toContain('merchant location key: default-main-location (created)');
+    expect(output).toContain('app_settings row: default');
+    expect(output).toContain('- merchant_location_key = default-main-location');
+    expect(output).toContain('warnings:');
   });
 });
