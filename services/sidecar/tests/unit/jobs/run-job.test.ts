@@ -2,6 +2,7 @@ import type { JobRow, ListingRow } from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+import { PublishListingError } from '@/ebay/publish-validation.js';
 import { runSidecarJob } from '@/jobs/index.js';
 
 const queuedGenerateAiJob: JobRow = {
@@ -37,6 +38,21 @@ const queuedProcessImagesJob: JobRow = {
 const runningProcessImagesJob: JobRow = {
   ...queuedProcessImagesJob,
   status: 'running',
+};
+
+const queuedPublishJob: JobRow = {
+  attempts: 0,
+  created_at: '2026-05-20T12:00:00.000Z',
+  id: 'job-publish',
+  job_type: 'publish',
+  last_error: null,
+  last_error_at: null,
+  last_error_code: null,
+  listing_id: 'LIST-001',
+  max_attempts: 3,
+  next_run_at: null,
+  status: 'queued',
+  updated_at: '2026-05-20T12:00:00.000Z',
 };
 
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
@@ -206,6 +222,16 @@ function createDataAccess({
         alreadyQueued: false,
         job: queuedProcessImagesJob,
       })),
+      enqueuePublish: vi.fn(async () => ({
+        alreadyQueued: false,
+        job: {
+          ...queuedProcessImagesJob,
+          id: 'job-publish',
+          job_type: 'publish',
+          listing_id: 'LIST-001',
+          max_attempts: 3,
+        },
+      })),
       fail: vi.fn(async (_jobId: string, error) => {
         if (!jobState) {
           throw new Error('job missing');
@@ -246,7 +272,28 @@ function createDataAccess({
       update: jobsUpdate,
     },
     listings: {
-      claimApprovedForPublish: vi.fn(),
+      claimApprovedForPublish: vi.fn(async (listingId: string) => {
+        const current = listingStates.at(-1);
+        if (
+          !current ||
+          current.listing_id !== listingId ||
+          current.status !== 'approved_for_export' ||
+          current.sub_status !== 'publish_queued'
+        ) {
+          return null;
+        }
+
+        const nextState = {
+          ...current,
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: {},
+          last_error_message: null,
+          sub_status: 'publishing_to_ebay',
+        } as ListingRow;
+        listingStates.push(nextState);
+        return nextState;
+      }),
       create: listingsCreate,
       getByListingId: listingsGetByListingId,
       listApprovedForExport: vi.fn(async () => []),
@@ -500,6 +547,155 @@ describe('runSidecarJob', () => {
     expect(result.job.last_error_code).toBe('process_images_failed');
     expect(result.job.last_error).toContain('Supabase unavailable');
     expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
+  });
+
+  it('claims publish jobs, runs publish orchestration, and completes on success', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
+      await dependencies?.dataAccess?.listings.update(listingId, {
+        ebay_listing_id: 'EBAY-001',
+        exported_at: '2026-05-20T13:00:00.000Z',
+        last_error_at: null,
+        last_error_code: null,
+        last_error_context: null,
+        last_error_message: null,
+        status: 'exported',
+        sub_status: 'idle',
+      });
+
+      return {
+        ebayListingId: 'EBAY-001',
+        exportedAt: '2026-05-20T13:00:00.000Z',
+        listingId,
+        offerId: 'OFFER-001',
+        reusedExistingOffer: false,
+        sku: 'LIST-001',
+        status: 'exported' as const,
+      };
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(dataAccess.listings.claimApprovedForPublish).toHaveBeenCalledWith('LIST-001');
+    expect(publishListingMock).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        dataAccess,
+        now: expect.any(Function),
+      })
+    );
+    expect(result.job.status).toBe('completed');
+    expect(result.listing).toMatchObject({
+      ebay_listing_id: 'EBAY-001',
+      status: 'exported',
+      sub_status: 'idle',
+    });
+  });
+
+  it('requeues recoverable publish failures and restores listing to publish_queued', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingError('OFFER_PUBLISH_FAILED', 'Sandbox unavailable', {
+        listingId: 'LIST-001',
+        stage: 'publish',
+      });
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('OFFER_PUBLISH_FAILED');
+    expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
+    expect(result.listing).toMatchObject({
+      last_error_code: 'OFFER_PUBLISH_FAILED',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+  });
+
+  it('fails user-fixable publish errors and parks listing at approved_for_export/idle', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingError('LISTING_NOT_READY', 'Missing title.', {
+        listingId: 'LIST-001',
+        issues: ['Missing title.'],
+        stage: 'validate',
+      });
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('LISTING_NOT_READY');
+    expect(result.listing).toMatchObject({
+      last_error_code: 'LISTING_NOT_READY',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+  });
+
+  it('fails exhausted recoverable publish retries with retry_exhausted', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedPublishJob,
+        attempts: 3,
+        status: 'running',
+      },
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publishing_to_ebay',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingError('OFFER_PUBLISH_FAILED', 'Still unavailable', {
+        listingId: 'LIST-001',
+        stage: 'publish',
+      });
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('retry_exhausted');
+    expect(result.listing).toMatchObject({
+      last_error_code: 'retry_exhausted',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
   });
 
   it('runs already-claimed jobs without re-marking them running', async () => {

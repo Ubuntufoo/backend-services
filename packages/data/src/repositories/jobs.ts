@@ -9,10 +9,13 @@ import {
 } from './shared.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
+const PUBLISH_JOB_TYPE = 'publish';
 const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const GENERATE_AI_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
+const PUBLISH_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
 const PROCESS_IMAGES_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
 const ACTIVE_GENERATE_AI_JOB_UNIQUE_INDEX = 'jobs_generate_ai_active_listing_idx';
+const ACTIVE_PUBLISH_JOB_UNIQUE_INDEX = 'jobs_publish_active_listing_idx';
 const ACTIVE_PROCESS_IMAGES_JOB_UNIQUE_INDEX = 'jobs_process_images_active_batch_idx';
 const POSTGRES_UNIQUE_VIOLATION_CODE = '23505';
 
@@ -27,6 +30,11 @@ export interface EnqueueGenerateAiJobResult {
 }
 
 export interface EnqueueProcessImagesJobResult {
+  alreadyQueued: boolean;
+  job: JobRow;
+}
+
+export interface EnqueuePublishJobResult {
   alreadyQueued: boolean;
   job: JobRow;
 }
@@ -58,6 +66,14 @@ function isActiveProcessImagesConflict(error: unknown): error is SupabaseErrorWi
     isSupabaseErrorWithCode(error) &&
     error.code === POSTGRES_UNIQUE_VIOLATION_CODE &&
     error.message.includes(ACTIVE_PROCESS_IMAGES_JOB_UNIQUE_INDEX)
+  );
+}
+
+function isActivePublishConflict(error: unknown): error is SupabaseErrorWithCode {
+  return (
+    isSupabaseErrorWithCode(error) &&
+    error.code === POSTGRES_UNIQUE_VIOLATION_CODE &&
+    error.message.includes(ACTIVE_PUBLISH_JOB_UNIQUE_INDEX)
   );
 }
 
@@ -113,6 +129,60 @@ export async function enqueueGenerateAiJob(
 
   if (isActiveGenerateAiConflict(insertResult.error)) {
     const existingJob = await getActiveGenerateAiJobByListingId(client, listingId);
+
+    if (existingJob) {
+      return {
+        alreadyQueued: true,
+        job: existingJob,
+      };
+    }
+  }
+
+  throw new Error(insertResult.error.message);
+}
+
+async function getActivePublishJobByListingId(
+  client: SupabaseDataClient,
+  listingId: string
+): Promise<JobRow | null> {
+  const result = (await client
+    .from('jobs')
+    .select('*')
+    .eq('listing_id', listingId)
+    .eq('job_type', PUBLISH_JOB_TYPE)
+    .in('status', [...PUBLISH_ACTIVE_JOB_STATUSES])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()) as SingleResult<JobRow>;
+
+  return requireOptionalResult(result);
+}
+
+export async function enqueuePublishJob(
+  client: SupabaseDataClient,
+  listingId: string,
+  maxAttempts = 3
+): Promise<EnqueuePublishJobResult> {
+  const insertResult = (await client
+    .from('jobs')
+    .insert({
+      job_type: PUBLISH_JOB_TYPE,
+      listing_id: listingId,
+      max_attempts: maxAttempts,
+      status: 'queued',
+    })
+    .select()
+    .single()) as SingleResult<JobRow>;
+
+  if (!insertResult.error) {
+    return {
+      alreadyQueued: false,
+      job: requireSingleResult(insertResult, 'publish job was not created.'),
+    };
+  }
+
+  if (isActivePublishConflict(insertResult.error)) {
+    const existingJob = await getActivePublishJobByListingId(client, listingId);
 
     if (existingJob) {
       return {

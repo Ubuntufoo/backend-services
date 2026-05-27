@@ -21,6 +21,7 @@ const getAppSettingsMock = vi.fn();
 const createJobMock = vi.fn();
 const enqueueGenerateAiJobMock = vi.fn();
 const enqueueProcessImagesJobMock = vi.fn();
+const enqueuePublishJobMock = vi.fn();
 const failJobMock = vi.fn();
 const completeJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
@@ -49,6 +50,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createSupabaseServiceClient: createSupabaseServiceClientMock,
   enqueueGenerateAiJob: enqueueGenerateAiJobMock,
   enqueueProcessImagesJob: enqueueProcessImagesJobMock,
+  enqueuePublishJob: enqueuePublishJobMock,
   failJob: failJobMock,
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
@@ -173,6 +175,7 @@ describe('sidecar data access', () => {
     await dataAccess.jobs.complete('job-row-id');
     await dataAccess.jobs.enqueueGenerateAi('LIST-001');
     await dataAccess.jobs.enqueueProcessImages();
+    await dataAccess.jobs.enqueuePublish('LIST-001');
     await dataAccess.jobs.fail('job-row-id', {
       errorAt: '2026-05-25T13:00:00.000Z',
       errorCode: 'stale_worker',
@@ -213,6 +216,7 @@ describe('sidecar data access', () => {
     expect(completeJobMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(enqueueGenerateAiJobMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(enqueueProcessImagesJobMock).toHaveBeenCalledWith(client);
+    expect(enqueuePublishJobMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(failJobMock).toHaveBeenCalledWith(client, 'job-row-id', {
       errorAt: '2026-05-25T13:00:00.000Z',
       errorCode: 'stale_worker',

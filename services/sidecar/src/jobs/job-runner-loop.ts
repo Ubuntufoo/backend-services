@@ -1,11 +1,4 @@
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
-import type { Json } from '@ebay-inventory/data';
-import {
-  publishListing as publishApprovedListing,
-  type PublishListingDependencies,
-  type PublishListingResult,
-} from '@/ebay/publish-listing.js';
-import { PublishListingError } from '@/ebay/publish-validation.js';
 import {
   runSidecarJob,
   type RunSidecarJobOptions,
@@ -24,10 +17,6 @@ const DEFAULT_BATCH_SIZE = 1;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 type RunJobFn = (jobId: string, options?: RunSidecarJobOptions) => Promise<RunSidecarJobResult>;
-type PublishListingFn = (
-  listingId: string,
-  dependencies?: Partial<PublishListingDependencies>
-) => Promise<PublishListingResult>;
 
 export interface SidecarJobRunnerLogger {
   error(message: string, context?: Record<string, unknown>): void;
@@ -38,7 +27,6 @@ export interface RunQueuedSidecarJobsOnceOptions extends RunSidecarJobOptions {
   batchSize?: number;
   dataAccess?: SidecarDataAccess;
   logger?: SidecarJobRunnerLogger;
-  publishListing?: PublishListingFn;
   runJob?: RunJobFn;
 }
 
@@ -94,48 +82,6 @@ function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function asErrorCode(error: unknown): string | undefined {
-  return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
-    ? error.code
-    : undefined;
-}
-
-function asErrorStage(error: unknown): string | undefined {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'context' in error &&
-    typeof error.context === 'object' &&
-    error.context !== null &&
-    'stage' in error.context &&
-    typeof error.context.stage === 'string'
-  ) {
-    return error.context.stage;
-  }
-
-  return undefined;
-}
-
-function asErrorIssues(error: unknown): string[] | undefined {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'context' in error &&
-    typeof error.context === 'object' &&
-    error.context !== null &&
-    'issues' in error.context &&
-    Array.isArray(error.context.issues)
-  ) {
-    return error.context.issues.filter((issue): issue is string => typeof issue === 'string');
-  }
-
-  return undefined;
-}
-
-function isFinalizationError(error: unknown): error is PublishListingError {
-  return error instanceof PublishListingError && error.code === 'EXPORT_STATE_PERSIST_FAILED';
-}
-
 function asIsoTimestamp(now: () => Date): string {
   return now().toISOString();
 }
@@ -155,27 +101,6 @@ function stopLoopState(state: ActiveLoopState): void {
   if (activeLoopState === state) {
     activeLoopState = null;
   }
-}
-
-async function markPublishInconsistency(
-  dataAccess: SidecarDataAccess,
-  listingId: string,
-  errorAt: string,
-  error: unknown
-): Promise<void> {
-  const context = Object.fromEntries(
-    Object.entries({
-      code: asErrorCode(error),
-      stage: asErrorStage(error),
-    }).filter(([, value]) => value !== undefined)
-  ) as Json;
-
-  await dataAccess.listings.update(listingId, {
-    last_error_at: errorAt,
-    last_error_code: asErrorCode(error) ?? 'publish_inconsistent',
-    last_error_context: context,
-    last_error_message: asErrorMessage(error),
-  });
 }
 
 async function repairGenerateAiListing(
@@ -250,6 +175,70 @@ async function recoverStaleProcessImagesJob(
   await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
 }
 
+async function repairPublishListing(
+  dataAccess: SidecarDataAccess,
+  listingId: string,
+  error: SidecarJobError,
+  errorAt: string,
+  subStatus: 'idle' | 'publish_queued'
+): Promise<void> {
+  const listing = await dataAccess.listings.getByListingId(listingId);
+
+  if (!listing || listing.status !== 'approved_for_export') {
+    return;
+  }
+
+  await dataAccess.listings.update(listingId, {
+    last_error_at: errorAt,
+    last_error_code: error.code,
+    last_error_context: toListingErrorContext(error),
+    last_error_message: error.message,
+    status: 'approved_for_export',
+    sub_status: subStatus,
+  });
+}
+
+async function recoverStalePublishJob(
+  dataAccess: SidecarDataAccess,
+  job: RunSidecarJobResult['job'],
+  now: () => Date,
+  logger: SidecarJobRunnerLogger
+): Promise<void> {
+  const errorAt = asIsoTimestamp(now);
+  const listingId = job.listing_id;
+  const staleError = createStaleWorkerError(job);
+
+  if (listingId) {
+    try {
+      await repairPublishListing(
+        dataAccess,
+        listingId,
+        hasAttemptsRemaining(job) ? staleError : createRetryExhaustedError(job, staleError),
+        errorAt,
+        hasAttemptsRemaining(job) ? 'publish_queued' : 'idle'
+      );
+    } catch (error) {
+      logger.error('Failed to repair stale publish listing.', {
+        error: asErrorMessage(error),
+        jobId: job.id,
+        listingId,
+      });
+    }
+  }
+
+  if (hasAttemptsRemaining(job)) {
+    await dataAccess.jobs.requeue(
+      job.id,
+      toJobErrorUpdateInput(staleError, errorAt),
+      getNextRetryAt(job.attempts, now())
+    );
+    return;
+  }
+
+  const exhaustedError = createRetryExhaustedError(job, staleError);
+  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
+}
+
 async function recoverStaleRunningJobs(
   dataAccess: SidecarDataAccess,
   now: () => Date,
@@ -266,133 +255,34 @@ async function recoverStaleRunningJobs(
 
     if (job.job_type === 'process_images') {
       await recoverStaleProcessImagesJob(dataAccess, job, now);
+      continue;
+    }
+    if (job.job_type === 'publish') {
+      await recoverStalePublishJob(dataAccess, job, now, logger);
     }
   }
 }
 
-async function runApprovedListingPublishesOnce(
-  options: RunQueuedSidecarJobsOnceOptions,
+async function backfillQueuedPublishJobs(
+  dataAccess: SidecarDataAccess,
+  limit: number,
   logger: SidecarJobRunnerLogger
-): Promise<Pick<
-  RunQueuedSidecarJobsOnceResult,
-  | 'publishClaimedCount'
-  | 'publishExecutedCount'
-  | 'publishFailedCount'
-  | 'publishQueuedCount'
-  | 'publishSkippedCount'
->> {
-  const dataAccess = options.dataAccess ?? getSidecarDataAccess();
-  const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
-  const publishListing = options.publishListing ?? publishApprovedListing;
+): Promise<void> {
   const approvedListings = await dataAccess.listings.listApprovedForExport({
-    limit: batchSize,
+    limit,
     queuedOnly: true,
   });
 
-  let publishClaimedCount = 0;
-  let publishExecutedCount = 0;
-  let publishFailedCount = 0;
-  let publishSkippedCount = 0;
-
   for (const listing of approvedListings) {
-    const claimedListing = await dataAccess.listings.claimApprovedForPublish(listing.listing_id);
+    const enqueueResult = await dataAccess.jobs.enqueuePublish(listing.listing_id);
 
-    if (!claimedListing) {
-      publishSkippedCount += 1;
-      logger.info('Skipped publish listing claim (already claimed or no longer queued).', {
+    if (!enqueueResult.alreadyQueued) {
+      logger.info('Backfilled publish job.', {
+        jobId: enqueueResult.job.id,
         listingId: listing.listing_id,
-      });
-      continue;
-    }
-
-    publishClaimedCount += 1;
-    logger.info('Starting listing publish.', {
-      listingId: claimedListing.listing_id,
-      status: claimedListing.status,
-      subStatus: claimedListing.sub_status,
-    });
-
-    try {
-      const result = await publishListing(claimedListing.listing_id, {
-        dataAccess,
-        now: options.now,
-      });
-
-      publishExecutedCount += 1;
-      logger.info('Finished listing publish.', {
-        ebayListingId: result.ebayListingId,
-        exportedAt: result.exportedAt,
-        listingId: claimedListing.listing_id,
-        offerId: result.offerId,
-        sku: result.sku,
-        status: result.status,
-      });
-    } catch (error) {
-      publishFailedCount += 1;
-
-      if (isFinalizationError(error)) {
-        logger.error('Listing publish finalized externally but failed local persistence.', {
-          error: asErrorMessage(error),
-          errorCode: error.code,
-          listingId: claimedListing.listing_id,
-          stage: error.context.stage,
-        });
-
-        try {
-          await markPublishInconsistency(
-            dataAccess,
-            claimedListing.listing_id,
-            (options.now ?? (() => new Date()))().toISOString(),
-            error
-          );
-        } catch (cleanupError) {
-          logger.error('Failed to persist listing publish inconsistency.', {
-            cleanupError: asErrorMessage(cleanupError),
-            error: asErrorMessage(error),
-            errorCode: error.code,
-            listingId: claimedListing.listing_id,
-            stage: error.context.stage,
-          });
-        }
-
-        continue;
-      }
-
-      try {
-        await dataAccess.listings.markPublishFailed(
-          claimedListing.listing_id,
-          (options.now ?? (() => new Date()))().toISOString(),
-          error
-        );
-      } catch (cleanupError) {
-        logger.error('Failed to persist listing publish failure.', {
-          cleanupError: asErrorMessage(cleanupError),
-          error: asErrorMessage(error),
-          errorCode: asErrorCode(error),
-          issues: asErrorIssues(error),
-          listingId: claimedListing.listing_id,
-          stage: asErrorStage(error),
-        });
-        continue;
-      }
-
-      logger.error('Listing publish failed.', {
-        error: asErrorMessage(error),
-        errorCode: asErrorCode(error),
-        issues: asErrorIssues(error),
-        listingId: claimedListing.listing_id,
-        stage: asErrorStage(error),
       });
     }
   }
-
-  return {
-    publishClaimedCount,
-    publishExecutedCount,
-    publishFailedCount,
-    publishQueuedCount: approvedListings.length,
-    publishSkippedCount,
-  };
 }
 
 export async function runQueuedSidecarJobsOnce(
@@ -405,12 +295,18 @@ export async function runQueuedSidecarJobsOnce(
   const now = options.now ?? (() => new Date());
 
   await recoverStaleRunningJobs(dataAccess, now, logger);
+  await backfillQueuedPublishJobs(dataAccess, batchSize, logger);
 
   const queuedJobs = await dataAccess.jobs.listDueQueued(asIsoTimestamp(now), { limit: batchSize });
 
   let claimedCount = 0;
   let executedCount = 0;
   let failedCount = 0;
+  const publishQueuedCount = queuedJobs.filter((job) => job.job_type === 'publish').length;
+  let publishClaimedCount = 0;
+  let publishExecutedCount = 0;
+  let publishFailedCount = 0;
+  let publishSkippedCount = 0;
   let skippedCount = 0;
 
   for (const queuedJob of queuedJobs) {
@@ -418,6 +314,9 @@ export async function runQueuedSidecarJobsOnce(
 
     if (!claimedJob) {
       skippedCount += 1;
+      if (queuedJob.job_type === 'publish') {
+        publishSkippedCount += 1;
+      }
       logger.info('Skipped already-claimed sidecar job.', {
         jobId: queuedJob.id,
         jobType: queuedJob.job_type,
@@ -426,8 +325,18 @@ export async function runQueuedSidecarJobsOnce(
     }
 
     claimedCount += 1;
+    if (claimedJob.job_type === 'publish') {
+      publishClaimedCount += 1;
+    }
+
     if (claimedJob.job_type === 'generate_ai') {
       logger.info('Starting generate_ai job.', {
+        jobId: claimedJob.id,
+        jobType: claimedJob.job_type,
+        listingId: claimedJob.listing_id,
+      });
+    } else if (claimedJob.job_type === 'publish') {
+      logger.info('Starting publish job.', {
         jobId: claimedJob.id,
         jobType: claimedJob.job_type,
         listingId: claimedJob.listing_id,
@@ -444,12 +353,26 @@ export async function runQueuedSidecarJobsOnce(
         dataAccess,
         generateListingDraft: options.generateListingDraft,
         now: options.now,
+        publishListing: options.publishListing,
         prepareRecordCreatedListings: options.prepareRecordCreatedListings,
       });
 
       executedCount += 1;
+      if (claimedJob.job_type === 'publish') {
+        publishExecutedCount += 1;
+      }
+
       if (claimedJob.job_type === 'generate_ai') {
         logger.info('Finished generate_ai job.', {
+          jobId: claimedJob.id,
+          jobType: claimedJob.job_type,
+          listingId: claimedJob.listing_id,
+          status: result.job.status,
+          listingStatus: result.listing?.status,
+          listingSubStatus: result.listing?.sub_status,
+        });
+      } else if (claimedJob.job_type === 'publish') {
+        logger.info('Finished publish job.', {
           jobId: claimedJob.id,
           jobType: claimedJob.job_type,
           listingId: claimedJob.listing_id,
@@ -478,6 +401,9 @@ export async function runQueuedSidecarJobsOnce(
       }
     } catch (error) {
       failedCount += 1;
+      if (claimedJob.job_type === 'publish') {
+        publishFailedCount += 1;
+      }
       logger.error('Sidecar job crashed.', {
         error: asErrorMessage(error),
         jobId: claimedJob.id,
@@ -486,17 +412,15 @@ export async function runQueuedSidecarJobsOnce(
     }
   }
 
-  const publishResult = await runApprovedListingPublishesOnce({ ...options, dataAccess }, logger);
-
   return {
     claimedCount,
     executedCount,
     failedCount,
-    publishClaimedCount: publishResult.publishClaimedCount,
-    publishExecutedCount: publishResult.publishExecutedCount,
-    publishFailedCount: publishResult.publishFailedCount,
-    publishQueuedCount: publishResult.publishQueuedCount,
-    publishSkippedCount: publishResult.publishSkippedCount,
+    publishClaimedCount,
+    publishExecutedCount,
+    publishFailedCount,
+    publishQueuedCount,
+    publishSkippedCount,
     queuedCount: queuedJobs.length,
     skippedCount,
   };

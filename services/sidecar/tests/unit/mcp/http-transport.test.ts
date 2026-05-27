@@ -105,6 +105,23 @@ function createDataAccess(): SidecarDataAccess {
           updated_at: '2026-05-17T00:00:00.000Z',
         },
       }),
+      enqueuePublish: async () => ({
+        alreadyQueued: false,
+        job: {
+          created_at: '2026-05-17T00:00:00.000Z',
+          id: 'job-publish-row-id',
+          job_type: 'publish',
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          listing_id: 'LIST-001',
+          max_attempts: 3,
+          next_run_at: null,
+          attempts: 0,
+          status: 'queued',
+          updated_at: '2026-05-17T00:00:00.000Z',
+        },
+      }),
       fail: async () => {
         throw new Error('not implemented');
       },

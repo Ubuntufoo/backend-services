@@ -9,6 +9,7 @@ import {
   createOrder,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
+  enqueuePublishJob,
   failJob,
   createSupabaseServiceClient,
   getAppSettings,
@@ -36,6 +37,7 @@ import {
   type AppSettingsUpdate,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
+  type EnqueuePublishJobResult,
   type JobInsert,
   type JobErrorUpdateInput,
   type JobRow,
@@ -65,6 +67,7 @@ export interface SidecarDataAccess {
     create(input: JobInsert): Promise<JobRow>;
     enqueueGenerateAi(listingId: string): Promise<EnqueueGenerateAiJobResult>;
     enqueueProcessImages(): Promise<EnqueueProcessImagesJobResult>;
+    enqueuePublish(listingId: string): Promise<EnqueuePublishJobResult>;
     fail(jobId: string, error: JobErrorUpdateInput): Promise<JobRow>;
     getActiveGenerateAiByListingId(listingId: string): Promise<JobRow | null>;
     getById(jobId: string): Promise<JobRow | null>;
@@ -131,6 +134,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       create: async (input) => await createJob(client, input),
       enqueueGenerateAi: async (listingId) => await enqueueGenerateAiJob(client, listingId),
       enqueueProcessImages: async () => await enqueueProcessImagesJob(client),
+      enqueuePublish: async (listingId) => await enqueuePublishJob(client, listingId),
       fail: async (jobId, error) => await failJob(client, jobId, error),
       getActiveGenerateAiByListingId: async (listingId) =>
         await getActiveGenerateAiJobByListingId(client, listingId),
