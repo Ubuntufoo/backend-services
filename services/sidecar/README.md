@@ -172,6 +172,21 @@ This package is intended to run directly on your machine for local development a
 
 The default `app_settings` row is seeded in `supabase/migrations/20260518120000_seed_default_app_settings.sql`. Apply it through the normal Supabase migration flow for your local database if you are running one.
 
+## Supabase Realtime Troubleshooting
+
+Browser realtime for listings depends on both publication membership and RLS visibility.
+
+- `public.listings` must be included in the `supabase_realtime` publication.
+- `public.listings` must have a `SELECT` policy for the browser subscriber role.
+- The current local UI uses anon/public-key Supabase realtime unless a real authenticated session is added later, so both `anon` and `authenticated` need read access for the current setup.
+
+Manual checks:
+
+```sql
+select * from pg_policies where schemaname='public' and tablename='listings';
+select * from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='listings';
+```
+
 ## Scope
 
 The sidecar currently owns:
