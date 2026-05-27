@@ -76,7 +76,7 @@ export interface SidecarDataAccess {
       options: ListListingsByStatusOptions
     ): Promise<ListingRow[]>;
     markPublishFailed(listingId: string, errorAt: string, error: unknown): Promise<ListingRow>;
-    prepareForGenerateAi?(
+    prepareForGenerateAi(
       input: {
         expectedUpdatedAt?: string;
         listingId: string;

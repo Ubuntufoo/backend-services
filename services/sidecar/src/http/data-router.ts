@@ -296,7 +296,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      const preparedListing = await dataAccess.listings.prepareForGenerateAi?.({
+      const preparedListing = await dataAccess.listings.prepareForGenerateAi({
         expectedUpdatedAt: listing.updated_at,
         listingId: params.listingId,
         sellerHints: body.sellerHints,
