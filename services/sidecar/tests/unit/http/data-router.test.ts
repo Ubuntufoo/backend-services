@@ -103,6 +103,7 @@ function createDataAccess(): SidecarDataAccess {
       create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
       enqueueProcessImages: vi.fn(),
+      enqueuePublish: vi.fn(),
       fail: vi.fn(),
       getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
@@ -416,6 +417,7 @@ describe('data API router', () => {
       status: 'approved_for_export',
       subStatus: 'publish_queued',
     });
+    expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-001');
   });
 
   it('enqueues generate_ai from assets_ready and persists optional seller hints', async () => {

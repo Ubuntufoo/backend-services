@@ -49,6 +49,7 @@ export {
   createJob,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
+  enqueuePublishJob,
   failJob,
   getActiveGenerateAiJobByListingId,
   getJobById,
@@ -59,6 +60,7 @@ export {
   updateJob,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
+  type EnqueuePublishJobResult,
   type JobErrorUpdateInput,
   type ListDueQueuedJobsOptions,
 } from './repositories/jobs.js';

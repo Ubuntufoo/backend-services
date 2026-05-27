@@ -121,6 +121,7 @@ function createDataAccess(
       create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
       enqueueProcessImages: vi.fn(),
+      enqueuePublish: vi.fn(),
       fail: vi.fn(),
       getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),

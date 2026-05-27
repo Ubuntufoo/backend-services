@@ -2,6 +2,11 @@ import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import { aspectValueSchema, generateListingDraft, type GenerateListingDraftInput } from '@/gemini/index.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  publishListing as publishApprovedListing,
+  type PublishListingDependencies,
+  type PublishListingResult,
+} from '@/ebay/publish-listing.js';
+import {
   classifyJobError,
   createRetryExhaustedError,
   JOB_ERROR_CODES,
@@ -16,6 +21,7 @@ import {
 import { getNextRetryAt, hasAttemptsRemaining } from './retry-policy.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
+const PUBLISH_JOB_TYPE = 'publish';
 const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const JOB_STATUS_RUNNING = 'running';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
@@ -24,6 +30,10 @@ const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
 type GenerateListingDraftFn = (
   input: GenerateListingDraftInput
 ) => ReturnType<typeof generateListingDraft>;
+type PublishListingFn = (
+  listingId: string,
+  dependencies?: Partial<PublishListingDependencies>
+) => Promise<PublishListingResult>;
 type PrepareRecordCreatedListingsFn = (
   options?: Parameters<typeof prepareRecordCreatedListings>[0]
 ) => Promise<PrepareRecordCreatedListingsResult>;
@@ -32,6 +42,7 @@ export interface RunSidecarJobOptions {
   dataAccess?: SidecarDataAccess;
   generateListingDraft?: GenerateListingDraftFn;
   now?: () => Date;
+  publishListing?: PublishListingFn;
   prepareRecordCreatedListings?: PrepareRecordCreatedListingsFn;
 }
 
@@ -162,6 +173,21 @@ function buildGenerateAiFailureUpdate(error: SidecarJobError, errorAt: string): 
     last_error_message: error.message,
     status: 'assets_ready',
     sub_status: 'ready_to_generate',
+  };
+}
+
+function buildPublishFailureUpdate(
+  error: SidecarJobError,
+  errorAt: string,
+  subStatus: 'idle' | 'publish_queued'
+): ListingUpdate {
+  return {
+    last_error_at: errorAt,
+    last_error_code: error.code,
+    last_error_context: toListingErrorContext(error),
+    last_error_message: error.message,
+    status: 'approved_for_export',
+    sub_status: subStatus,
   };
 }
 
@@ -426,12 +452,168 @@ async function runProcessImagesJob(
   }
 }
 
+async function runPublishJob(
+  job: JobRow,
+  options: Required<Pick<RunSidecarJobOptions, 'dataAccess' | 'now' | 'publishListing'>>
+): Promise<RunSidecarJobResult> {
+  const listingId = asNonEmptyString(job.listing_id);
+  const errorAt = asIsoTimestamp(options.now);
+
+  if (!listingId) {
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.PUBLISH_MISSING_LISTING_ID,
+      'terminal',
+      `Job "${job.id}" is missing listing_id and cannot run publish.`
+    );
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+
+    return {
+      job: failedJob,
+      listing: null,
+    };
+  }
+
+  const listing = await options.dataAccess.listings.getByListingId(listingId);
+
+  if (!listing) {
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.PUBLISH_LISTING_NOT_FOUND,
+      'terminal',
+      `Listing "${listingId}" was not found for publish.`
+    );
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+
+    return {
+      job: failedJob,
+      listing: null,
+    };
+  }
+
+  if (listing.status !== 'approved_for_export') {
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.PUBLISH_LISTING_NOT_ELIGIBLE,
+      'user_fixable',
+      `Listing "${listingId}" is not eligible for publish from status "${listing.status}".`
+    );
+
+    await options.dataAccess.listings.update(
+      listingId,
+      buildPublishFailureUpdate(error, errorAt, 'idle')
+    );
+
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+
+    return {
+      job: failedJob,
+      listing: await getListingSafely(options.dataAccess, listingId),
+    };
+  }
+
+  if (listing.sub_status !== 'publish_queued' && listing.sub_status !== 'publishing_to_ebay') {
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.PUBLISH_LISTING_NOT_ELIGIBLE,
+      'user_fixable',
+      `Listing "${listingId}" is not eligible for publish from sub_status "${listing.sub_status}".`
+    );
+
+    await options.dataAccess.listings.update(
+      listingId,
+      buildPublishFailureUpdate(error, errorAt, 'idle')
+    );
+
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+
+    return {
+      job: failedJob,
+      listing: await getListingSafely(options.dataAccess, listingId),
+    };
+  }
+
+  if (listing.sub_status === 'publish_queued') {
+    const claimedListing = await options.dataAccess.listings.claimApprovedForPublish(listingId);
+
+    if (!claimedListing) {
+      const error = new SidecarJobError(
+        JOB_ERROR_CODES.PUBLISH_LISTING_NOT_ELIGIBLE,
+        'user_fixable',
+        `Listing "${listingId}" could not be claimed for publish.`
+      );
+      const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+
+      return {
+        job: failedJob,
+        listing: await getListingSafely(options.dataAccess, listingId),
+      };
+    }
+  }
+
+  try {
+    await options.publishListing(listingId, {
+      dataAccess: options.dataAccess,
+      now: options.now,
+    });
+    const completedJob = await options.dataAccess.jobs.complete(job.id);
+
+    return {
+      job: completedJob,
+      listing: await getListingSafely(options.dataAccess, listingId),
+    };
+  } catch (error) {
+    const classifiedError = classifyJobError(job.job_type, error);
+    const shouldRetry = classifiedError.category === 'recoverable' && hasAttemptsRemaining(job);
+    let finalError = shouldRetry
+      ? classifiedError
+      : classifiedError.category === 'recoverable'
+        ? createRetryExhaustedError(job, classifiedError)
+        : classifiedError;
+
+    try {
+      await options.dataAccess.listings.update(
+        listingId,
+        buildPublishFailureUpdate(finalError, errorAt, shouldRetry ? 'publish_queued' : 'idle')
+      );
+    } catch (cleanupError) {
+      finalError = new SidecarJobError(
+        finalError.code,
+        finalError.category,
+        appendCleanupFailure(finalError.message, cleanupError),
+        finalError.context,
+        { cause: finalError }
+      );
+    }
+
+    if (shouldRetry) {
+      const requeuedJob = await options.dataAccess.jobs.requeue(
+        job.id,
+        toJobErrorUpdateInput(finalError, errorAt),
+        getNextRetryAt(job.attempts, options.now())
+      );
+
+      return {
+        job: requeuedJob,
+        listing: await getListingSafely(options.dataAccess, listingId),
+      };
+    }
+
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(finalError, errorAt)
+    );
+
+    return {
+      job: failedJob,
+      listing: await getListingSafely(options.dataAccess, listingId),
+    };
+  }
+}
+
 export async function runSidecarJob(
   jobId: string,
   options: RunSidecarJobOptions = {}
 ): Promise<RunSidecarJobResult> {
   const dataAccess = options.dataAccess ?? getSidecarDataAccess();
   const runGenerateDraft = options.generateListingDraft ?? generateListingDraft;
+  const runPublishListing = options.publishListing ?? publishApprovedListing;
   const runPrepareRecordCreatedListings =
     options.prepareRecordCreatedListings ?? prepareRecordCreatedListings;
   const now = options.now ?? (() => new Date());
@@ -449,6 +631,12 @@ export async function runSidecarJob(
         dataAccess,
         generateListingDraft: runGenerateDraft,
         now,
+      });
+    case PUBLISH_JOB_TYPE:
+      return await runPublishJob(runnableJob, {
+        dataAccess,
+        now,
+        publishListing: runPublishListing,
       });
     case PROCESS_IMAGES_JOB_TYPE:
       return await runProcessImagesJob(runnableJob, {

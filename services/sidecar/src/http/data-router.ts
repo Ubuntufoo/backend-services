@@ -259,6 +259,11 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         status: body.status,
         subStatus: body.subStatus,
       });
+
+      if (listing.status === 'approved_for_export' && listing.sub_status === 'publish_queued') {
+        await getDataAccess().jobs.enqueuePublish(params.listingId);
+      }
+
       res.json(listing);
     } catch (error) {
       sendRouteError(res, error);

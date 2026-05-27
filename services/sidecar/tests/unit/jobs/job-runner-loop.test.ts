@@ -3,10 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
-  PublishListingError,
-  PublishListingValidationError,
-} from '@/ebay/publish-validation.js';
-import {
   runQueuedSidecarJobsOnce,
   startSidecarJobRunnerLoop,
   stopSidecarJobRunnerLoop,
@@ -152,6 +148,34 @@ function createDataAccess(
       create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
       enqueueProcessImages: vi.fn(),
+      enqueuePublish: vi.fn(async (listingId: string) => {
+        const existingJob = [...jobStates.values()].find(
+          (job) =>
+            job.job_type === 'publish' &&
+            job.listing_id === listingId &&
+            (job.status === 'queued' || job.status === 'running')
+        );
+
+        if (existingJob) {
+          return {
+            alreadyQueued: true,
+            job: { ...existingJob },
+          };
+        }
+
+        const next = createJobRow({
+          id: `job-publish-${listingId}`,
+          job_type: 'publish',
+          listing_id: listingId,
+          max_attempts: 3,
+        });
+        jobStates.set(next.id, next);
+
+        return {
+          alreadyQueued: false,
+          job: { ...next },
+        };
+      }),
       fail: vi.fn(async (jobId: string, error: { errorAt: string; errorCode: string; errorMessage: string }) => {
         const current = jobStates.get(jobId);
         if (!current) {
@@ -455,7 +479,7 @@ describe('job runner loop', () => {
     );
   });
 
-  it('publishes approved queued listings after processing regular jobs', async () => {
+  it('backfills missing publish jobs for approved queued listings and executes them through normal queueing', async () => {
     const logger = createLogger();
     const approvedListing = createListingRow({
       listing_id: 'LIST-PUBLISH-001',
@@ -463,24 +487,20 @@ describe('job runner loop', () => {
       sub_status: 'publish_queued',
     });
     const { dataAccess, listingStates } = createDataAccess([], [approvedListing]);
-    const publishListing = vi.fn(async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
-      await dependencies?.dataAccess?.listings.update(listingId, {
+    const runJob = vi.fn(async (jobId: string) => {
+      const job = await dataAccess.jobs.getById(jobId);
+      const listing = await dataAccess.listings.update('LIST-PUBLISH-001', {
         ebay_listing_id: 'EBAY-001',
-        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-001',
         ebay_offer_id: 'OFFER-001',
         exported_at: '2026-05-22T13:00:00.000Z',
         status: 'exported',
         sub_status: 'idle',
       });
+      const completedJob = await dataAccess.jobs.complete(jobId);
 
       return {
-        ebayListingId: 'EBAY-001',
-        exportedAt: '2026-05-22T13:00:00.000Z',
-        listingId,
-        offerId: 'OFFER-001',
-        reusedExistingOffer: false,
-        sku: 'LIST-PUBLISH-001',
-        status: 'exported' as const,
+        job: completedJob,
+        listing,
       };
     });
 
@@ -488,45 +508,46 @@ describe('job runner loop', () => {
       dataAccess,
       logger,
       now: () => new Date('2026-05-22T13:00:00.000Z'),
-      publishListing,
+      runJob,
     });
 
     expect(result).toEqual({
-      claimedCount: 0,
-      executedCount: 0,
+      claimedCount: 1,
+      executedCount: 1,
       failedCount: 0,
       publishClaimedCount: 1,
       publishExecutedCount: 1,
       publishFailedCount: 0,
       publishQueuedCount: 1,
       publishSkippedCount: 0,
-      queuedCount: 0,
+      queuedCount: 1,
       skippedCount: 0,
     });
-    expect(publishListing).toHaveBeenCalledWith(
-      'LIST-PUBLISH-001',
+    expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-PUBLISH-001');
+    expect(runJob).toHaveBeenCalledWith(
+      'job-publish-LIST-PUBLISH-001',
       expect.objectContaining({
         dataAccess,
         now: expect.any(Function),
       })
     );
     expect(logger.info).toHaveBeenCalledWith(
-      'Starting listing publish.',
+      'Starting publish job.',
       expect.objectContaining({
+        jobId: 'job-publish-LIST-PUBLISH-001',
+        jobType: 'publish',
         listingId: 'LIST-PUBLISH-001',
-        status: 'approved_for_export',
-        subStatus: 'publishing_to_ebay',
       })
     );
     expect(logger.info).toHaveBeenCalledWith(
-      'Finished listing publish.',
+      'Finished publish job.',
       expect.objectContaining({
-        ebayListingId: 'EBAY-001',
-        exportedAt: '2026-05-22T13:00:00.000Z',
+        jobId: 'job-publish-LIST-PUBLISH-001',
+        jobType: 'publish',
         listingId: 'LIST-PUBLISH-001',
-        offerId: 'OFFER-001',
-        sku: 'LIST-PUBLISH-001',
-        status: 'exported',
+        listingStatus: 'exported',
+        listingSubStatus: 'idle',
+        status: 'completed',
       })
     );
     expect(listingStates.get('LIST-PUBLISH-001')).toMatchObject({
@@ -551,17 +572,18 @@ describe('job runner loop', () => {
         sub_status: 'review_pending',
       }),
     ]);
-    const publishListing = vi.fn();
+    const runJob = vi.fn();
 
     const result = await runQueuedSidecarJobsOnce({
       dataAccess,
       logger,
-      publishListing,
+      runJob,
     });
 
     expect(result.publishQueuedCount).toBe(0);
     expect(result.publishExecutedCount).toBe(0);
-    expect(publishListing).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
+    expect(runJob).not.toHaveBeenCalled();
   });
 
   it('does nothing when no queued jobs exist', async () => {
@@ -616,180 +638,105 @@ describe('job runner loop', () => {
     expect(jobStates.get('job-process-images')?.status).toBe('queued');
   });
 
-  it('skips stale listing claims without publishing twice', async () => {
+  it('does not create duplicate active publish jobs during repeated backfill', async () => {
     const logger = createLogger();
     const approvedListing = createListingRow({
       listing_id: 'LIST-STALE',
       status: 'approved_for_export',
       sub_status: 'publish_queued',
     });
-    const { dataAccess, listingStates } = createDataAccess([], [approvedListing], {
-      claimApprovedForPublish: () => null,
+    const existingPublishJob = createJobRow({
+      id: 'job-publish-existing',
+      job_type: 'publish',
+      listing_id: 'LIST-STALE',
+      max_attempts: 3,
+      next_run_at: '2026-05-22T13:05:00.000Z',
     });
-    const publishListing = vi.fn();
+    const { dataAccess, jobStates } = createDataAccess([existingPublishJob], [approvedListing]);
+    const runJob = vi.fn();
 
     const result = await runQueuedSidecarJobsOnce({
       dataAccess,
       logger,
-      publishListing,
+      runJob,
     });
 
-    expect(result.publishQueuedCount).toBe(1);
-    expect(result.publishSkippedCount).toBe(1);
-    expect(result.publishClaimedCount).toBe(0);
-    expect(publishListing).not.toHaveBeenCalled();
-    expect(listingStates.get('LIST-STALE')?.sub_status).toBe('publish_queued');
+    expect(result.publishQueuedCount).toBe(0);
+    expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-STALE');
+    expect(jobStates.size).toBe(1);
   });
 
-  it('requeues failed listing publishes with error details', async () => {
+  it('requeues stale running publish jobs and repairs listing state when attempts remain', async () => {
     const logger = createLogger();
-    const approvedListing = createListingRow({
+    const staleListing = createListingRow({
       listing_id: 'LIST-FAIL',
-      status: 'approved_for_export',
-      sub_status: 'publish_queued',
-    });
-    const { dataAccess, listingStates } = createDataAccess([], [approvedListing]);
-    const publishListing = vi.fn(async () => {
-      throw new PublishListingError('OFFER_PUBLISH_FAILED', 'Sandbox unavailable', {
-        listingId: 'LIST-FAIL',
-        stage: 'publish',
-      });
-    });
-
-    const result = await runQueuedSidecarJobsOnce({
-      dataAccess,
-      logger,
-      now: () => new Date('2026-05-22T13:00:00.000Z'),
-      publishListing,
-    });
-
-    expect(result.publishFailedCount).toBe(1);
-    expect(dataAccess.listings.markPublishFailed).toHaveBeenCalledWith(
-      'LIST-FAIL',
-      '2026-05-22T13:00:00.000Z',
-      expect.any(PublishListingError)
-    );
-    expect(listingStates.get('LIST-FAIL')).toMatchObject({
-      last_error_code: 'OFFER_PUBLISH_FAILED',
-      last_error_message: 'Sandbox unavailable',
-      status: 'approved_for_export',
-      sub_status: 'publish_queued',
-    });
-    expect(logger.error).toHaveBeenCalledWith(
-      'Listing publish failed.',
-      expect.objectContaining({
-        error: 'Sandbox unavailable',
-        errorCode: 'OFFER_PUBLISH_FAILED',
-        issues: undefined,
-        listingId: 'LIST-FAIL',
-        stage: 'publish',
-      })
-    );
-  });
-
-  it('logs finalization inconsistencies without requeueing duplicate-prone publishes', async () => {
-    const logger = createLogger();
-    const approvedListing = createListingRow({
-      listing_id: 'LIST-INCONSISTENT',
-      status: 'approved_for_export',
-      sub_status: 'publish_queued',
-    });
-    const { dataAccess, listingStates } = createDataAccess([], [approvedListing]);
-    const publishListing = vi.fn(async () => {
-      throw new PublishListingError(
-        'EXPORT_STATE_PERSIST_FAILED',
-        'Published offer for listing "LIST-INCONSISTENT" but failed to persist exported state.',
-        {
-          listingId: 'LIST-INCONSISTENT',
-          stage: 'finalize',
-        }
-      );
-    });
-
-    const result = await runQueuedSidecarJobsOnce({
-      dataAccess,
-      logger,
-      now: () => new Date('2026-05-22T13:00:00.000Z'),
-      publishListing,
-    });
-
-    expect(result.publishFailedCount).toBe(1);
-    expect(dataAccess.listings.markPublishFailed).not.toHaveBeenCalled();
-    expect(listingStates.get('LIST-INCONSISTENT')).toMatchObject({
-      last_error_code: 'EXPORT_STATE_PERSIST_FAILED',
-      last_error_message:
-        'Published offer for listing "LIST-INCONSISTENT" but failed to persist exported state.',
       status: 'approved_for_export',
       sub_status: 'publishing_to_ebay',
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      'Listing publish finalized externally but failed local persistence.',
-      expect.objectContaining({
-        errorCode: 'EXPORT_STATE_PERSIST_FAILED',
-        listingId: 'LIST-INCONSISTENT',
-        stage: 'finalize',
-      })
-    );
-    expect(publishListing).toHaveBeenCalledTimes(1);
-  });
-
-  it('treats publish validation errors as normal publish failures', async () => {
-    const logger = createLogger();
-    const approvedListing = createListingRow({
-      listing_id: 'LIST-INVALID',
-      status: 'approved_for_export',
-      sub_status: 'publish_queued',
+    const staleJob = createJobRow({
+      id: 'job-publish-stale',
+      job_type: 'publish',
+      listing_id: 'LIST-FAIL',
+      max_attempts: 3,
+      status: 'running',
+      updated_at: '2026-05-22T11:00:00.000Z',
     });
-    const { dataAccess, listingStates } = createDataAccess([], [approvedListing]);
-    const publishListing = vi.fn(async () => {
-      throw new PublishListingValidationError('LIST-INVALID', [
-        'Listing "LIST-INVALID" is missing title.',
-        'Listing "LIST-INVALID" is missing category_id.',
-      ]);
-    });
+    const { dataAccess, jobStates, listingStates } = createDataAccess([staleJob], [staleListing]);
 
     const result = await runQueuedSidecarJobsOnce({
       dataAccess,
       logger,
       now: () => new Date('2026-05-22T13:00:00.000Z'),
-      publishListing,
     });
 
-    expect(result.publishFailedCount).toBe(1);
-    expect(publishListing).toHaveBeenCalledTimes(1);
-    expect(dataAccess.listings.markPublishFailed).toHaveBeenCalledWith(
-      'LIST-INVALID',
-      '2026-05-22T13:00:00.000Z',
-      expect.any(PublishListingValidationError)
-    );
-    expect(listingStates.get('LIST-INVALID')).toMatchObject({
-      last_error_code: 'LISTING_NOT_READY',
-      last_error_context: {
-        code: 'LISTING_NOT_READY',
-        issues: [
-          'Listing "LIST-INVALID" is missing title.',
-          'Listing "LIST-INVALID" is missing category_id.',
-        ],
-        name: 'PublishListingValidationError',
-        stage: 'validate',
-      },
-      last_error_message:
-        'Listing "LIST-INVALID" is missing title.; Listing "LIST-INVALID" is missing category_id.',
+    expect(result.publishQueuedCount).toBe(0);
+    expect(jobStates.get('job-publish-stale')).toMatchObject({
+      status: 'queued',
+      last_error_code: 'stale_worker',
+      next_run_at: '2026-05-22T13:01:00.000Z',
+    });
+    expect(listingStates.get('LIST-FAIL')).toMatchObject({
+      last_error_code: 'stale_worker',
       status: 'approved_for_export',
       sub_status: 'publish_queued',
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      'Listing publish failed.',
-      expect.objectContaining({
-        errorCode: 'LISTING_NOT_READY',
-        issues: [
-          'Listing "LIST-INVALID" is missing title.',
-          'Listing "LIST-INVALID" is missing category_id.',
-        ],
-        listingId: 'LIST-INVALID',
-        stage: 'validate',
-      })
-    );
+  });
+
+  it('fails exhausted stale publish jobs and parks listing at approved_for_export/idle', async () => {
+    const logger = createLogger();
+    const staleListing = createListingRow({
+      listing_id: 'LIST-INCONSISTENT',
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    });
+    const staleJob = createJobRow({
+      attempts: 3,
+      id: 'job-publish-exhausted',
+      job_type: 'publish',
+      listing_id: 'LIST-INCONSISTENT',
+      max_attempts: 3,
+      status: 'running',
+      updated_at: '2026-05-22T11:00:00.000Z',
+    });
+    const { dataAccess, jobStates, listingStates } = createDataAccess([staleJob], [staleListing]);
+
+    const result = await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+    });
+
+    expect(result.publishQueuedCount).toBe(0);
+    expect(jobStates.get('job-publish-exhausted')).toMatchObject({
+      status: 'failed',
+      last_error_code: 'retry_exhausted',
+    });
+    expect(listingStates.get('LIST-INCONSISTENT')).toMatchObject({
+      last_error_code: 'retry_exhausted',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+    expect(result.publishFailedCount).toBe(0);
   });
 
   it('catches crashed job executions and keeps loop work alive', async () => {
