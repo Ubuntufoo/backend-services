@@ -31,8 +31,14 @@ export interface EnqueueProcessImagesJobResult {
   job: JobRow;
 }
 
-export interface ListQueuedJobsOptions {
+export interface ListDueQueuedJobsOptions {
   limit?: number;
+}
+
+export interface JobErrorUpdateInput {
+  errorAt: string;
+  errorCode: string;
+  errorMessage: string;
 }
 
 function isSupabaseErrorWithCode(value: unknown): value is SupabaseErrorWithCode {
@@ -84,13 +90,15 @@ export async function getActiveGenerateAiJobByListingId(
 
 export async function enqueueGenerateAiJob(
   client: SupabaseDataClient,
-  listingId: string
+  listingId: string,
+  maxAttempts = 3
 ): Promise<EnqueueGenerateAiJobResult> {
   const insertResult = (await client
     .from('jobs')
     .insert({
       job_type: GENERATE_AI_JOB_TYPE,
       listing_id: listingId,
+      max_attempts: maxAttempts,
       status: 'queued',
     })
     .select()
@@ -134,13 +142,15 @@ async function getActiveProcessImagesJob(
 }
 
 export async function enqueueProcessImagesJob(
-  client: SupabaseDataClient
+  client: SupabaseDataClient,
+  maxAttempts = 2
 ): Promise<EnqueueProcessImagesJobResult> {
   const insertResult = (await client
     .from('jobs')
     .insert({
       job_type: PROCESS_IMAGES_JOB_TYPE,
       listing_id: null,
+      max_attempts: maxAttempts,
       status: 'queued',
     })
     .select()
@@ -196,15 +206,17 @@ export async function listJobsByListingId(
   return result.data ?? [];
 }
 
-export async function listQueuedJobs(
+export async function listDueQueuedJobs(
   client: SupabaseDataClient,
-  options: ListQueuedJobsOptions = {}
+  now: string,
+  options: ListDueQueuedJobsOptions = {}
 ): Promise<JobRow[]> {
   const limit = options.limit ?? 1;
   const result = (await client
     .from('jobs')
     .select('*')
     .eq('status', 'queued')
+    .or(`next_run_at.is.null,next_run_at.lte.${now}`)
     .order('created_at', { ascending: true })
     .limit(limit)) as MultiResult<JobRow>;
 
@@ -215,24 +227,106 @@ export async function listQueuedJobs(
   return result.data ?? [];
 }
 
-export async function claimQueuedJob(
+export async function claimDueQueuedJob(
   client: SupabaseDataClient,
-  jobId: string
+  jobId: string,
+  now: string
 ): Promise<JobRow | null> {
-  const result = (await client
+  const currentResult = (await client
+    .from('jobs')
+    .select('*')
+    .eq('id', jobId)
+    .eq('status', 'queued')
+    .or(`next_run_at.is.null,next_run_at.lte.${now}`)
+    .maybeSingle()) as SingleResult<JobRow>;
+
+  const current = requireOptionalResult(currentResult);
+
+  if (!current) {
+    return null;
+  }
+
+  let query = client
     .from('jobs')
     .update({
-      last_error: null,
-      last_error_at: null,
-      last_error_code: null,
+      attempts: current.attempts + 1,
+      next_run_at: null,
       status: 'running',
     })
     .eq('id', jobId)
     .eq('status', 'queued')
+    .eq('attempts', current.attempts);
+
+  query =
+    current.next_run_at === null
+      ? query.is('next_run_at', null)
+      : query.eq('next_run_at', current.next_run_at);
+
+  const result = (await query
     .select()
     .maybeSingle()) as SingleResult<JobRow>;
 
   return requireOptionalResult(result);
+}
+
+export async function listStaleRunningJobs(
+  client: SupabaseDataClient,
+  cutoff: string
+): Promise<JobRow[]> {
+  const result = (await client
+    .from('jobs')
+    .select('*')
+    .eq('status', 'running')
+    .lt('updated_at', cutoff)
+    .order('updated_at', { ascending: true })) as MultiResult<JobRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
+}
+
+export async function requeueJob(
+  client: SupabaseDataClient,
+  jobId: string,
+  error: JobErrorUpdateInput,
+  nextRunAt: string
+): Promise<JobRow> {
+  return await updateJob(client, jobId, {
+    last_error: error.errorMessage,
+    last_error_at: error.errorAt,
+    last_error_code: error.errorCode,
+    next_run_at: nextRunAt,
+    status: 'queued',
+  });
+}
+
+export async function failJob(
+  client: SupabaseDataClient,
+  jobId: string,
+  error: JobErrorUpdateInput
+): Promise<JobRow> {
+  return await updateJob(client, jobId, {
+    last_error: error.errorMessage,
+    last_error_at: error.errorAt,
+    last_error_code: error.errorCode,
+    next_run_at: null,
+    status: 'failed',
+  });
+}
+
+export async function completeJob(
+  client: SupabaseDataClient,
+  jobId: string
+): Promise<JobRow> {
+  return await updateJob(client, jobId, {
+    last_error: null,
+    last_error_at: null,
+    last_error_code: null,
+    next_run_at: null,
+    status: 'completed',
+  });
 }
 
 export async function updateJob(

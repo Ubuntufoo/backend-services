@@ -99,6 +99,7 @@ export type Database = {
       };
       jobs: {
         Row: {
+          attempts: number;
           created_at: string;
           id: string;
           job_type: string;
@@ -106,11 +107,13 @@ export type Database = {
           last_error_at: string | null;
           last_error_code: string | null;
           listing_id: string | null;
+          max_attempts: number;
           next_run_at: string | null;
           status: string;
           updated_at: string;
         };
         Insert: {
+          attempts?: number;
           created_at?: string;
           id?: string;
           job_type: string;
@@ -118,11 +121,13 @@ export type Database = {
           last_error_at?: string | null;
           last_error_code?: string | null;
           listing_id?: string | null;
+          max_attempts?: number;
           next_run_at?: string | null;
           status: string;
           updated_at?: string;
         };
         Update: {
+          attempts?: number;
           created_at?: string;
           id?: string;
           job_type?: string;
@@ -130,6 +135,7 @@ export type Database = {
           last_error_at?: string | null;
           last_error_code?: string | null;
           listing_id?: string | null;
+          max_attempts?: number;
           next_run_at?: string | null;
           status?: string;
           updated_at?: string;

@@ -21,11 +21,15 @@ const getAppSettingsMock = vi.fn();
 const createJobMock = vi.fn();
 const enqueueGenerateAiJobMock = vi.fn();
 const enqueueProcessImagesJobMock = vi.fn();
+const failJobMock = vi.fn();
+const completeJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
-const listQueuedJobsMock = vi.fn();
+const listDueQueuedJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
-const claimQueuedJobMock = vi.fn();
+const listStaleRunningJobsMock = vi.fn();
+const claimDueQueuedJobMock = vi.fn();
+const requeueJobMock = vi.fn();
 const updateJobMock = vi.fn();
 const createOrderMock = vi.fn();
 const getOrderByOrderIdMock = vi.fn();
@@ -36,7 +40,8 @@ const updateAppSettingsMock = vi.fn();
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
   claimApprovedListingForPublish: claimApprovedListingForPublishMock,
-  claimQueuedJob: claimQueuedJobMock,
+  claimDueQueuedJob: claimDueQueuedJobMock,
+  completeJob: completeJobMock,
   createAppSettings: createAppSettingsMock,
   createJob: createJobMock,
   createListing: createListingMock,
@@ -44,17 +49,20 @@ vi.mock('@ebay-inventory/data', () => ({
   createSupabaseServiceClient: createSupabaseServiceClientMock,
   enqueueGenerateAiJob: enqueueGenerateAiJobMock,
   enqueueProcessImagesJob: enqueueProcessImagesJobMock,
+  failJob: failJobMock,
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
-  listQueuedJobs: listQueuedJobsMock,
+  listDueQueuedJobs: listDueQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
+  listStaleRunningJobs: listStaleRunningJobsMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
   markListingPublishFailed: markListingPublishFailedMock,
+  requeueJob: requeueJobMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
   updateAppSettings: updateAppSettingsMock,
   updateJob: updateJobMock,
@@ -161,13 +169,25 @@ describe('sidecar data access', () => {
       listing_id: 'LIST-001',
       status: 'queued',
     });
-    await dataAccess.jobs.claimQueued('job-row-id');
+    await dataAccess.jobs.claimDueQueued('job-row-id', '2026-05-25T13:00:00.000Z');
+    await dataAccess.jobs.complete('job-row-id');
     await dataAccess.jobs.enqueueGenerateAi('LIST-001');
     await dataAccess.jobs.enqueueProcessImages();
+    await dataAccess.jobs.fail('job-row-id', {
+      errorAt: '2026-05-25T13:00:00.000Z',
+      errorCode: 'stale_worker',
+      errorMessage: 'boom',
+    });
     await dataAccess.jobs.getActiveGenerateAiByListingId('LIST-001');
     await dataAccess.jobs.getById('job-row-id');
-    await dataAccess.jobs.listQueued({ limit: 1 });
+    await dataAccess.jobs.listDueQueued('2026-05-25T13:00:00.000Z', { limit: 1 });
     await dataAccess.jobs.listByListingId('LIST-001');
+    await dataAccess.jobs.listStaleRunning('2026-05-25T12:00:00.000Z');
+    await dataAccess.jobs.requeue('job-row-id', {
+      errorAt: '2026-05-25T13:00:00.000Z',
+      errorCode: 'retry_exhausted',
+      errorMessage: 'boom',
+    }, '2026-05-25T13:01:00.000Z');
     await dataAccess.jobs.update('job-row-id', { status: 'running' });
 
     await dataAccess.orders.create({
@@ -185,13 +205,38 @@ describe('sidecar data access', () => {
         status: 'queued',
       })
     );
-    expect(claimQueuedJobMock).toHaveBeenCalledWith(client, 'job-row-id');
+    expect(claimDueQueuedJobMock).toHaveBeenCalledWith(
+      client,
+      'job-row-id',
+      '2026-05-25T13:00:00.000Z'
+    );
+    expect(completeJobMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(enqueueGenerateAiJobMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(enqueueProcessImagesJobMock).toHaveBeenCalledWith(client);
+    expect(failJobMock).toHaveBeenCalledWith(client, 'job-row-id', {
+      errorAt: '2026-05-25T13:00:00.000Z',
+      errorCode: 'stale_worker',
+      errorMessage: 'boom',
+    });
     expect(getActiveGenerateAiJobByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getJobByIdMock).toHaveBeenCalledWith(client, 'job-row-id');
-    expect(listQueuedJobsMock).toHaveBeenCalledWith(client, { limit: 1 });
+    expect(listDueQueuedJobsMock).toHaveBeenCalledWith(
+      client,
+      '2026-05-25T13:00:00.000Z',
+      { limit: 1 }
+    );
     expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(listStaleRunningJobsMock).toHaveBeenCalledWith(client, '2026-05-25T12:00:00.000Z');
+    expect(requeueJobMock).toHaveBeenCalledWith(
+      client,
+      'job-row-id',
+      {
+        errorAt: '2026-05-25T13:00:00.000Z',
+        errorCode: 'retry_exhausted',
+        errorMessage: 'boom',
+      },
+      '2026-05-25T13:01:00.000Z'
+    );
     expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });
 
     expect(createOrderMock).toHaveBeenCalledWith(

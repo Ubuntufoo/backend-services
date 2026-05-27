@@ -1,4 +1,5 @@
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import type { Json } from '@ebay-inventory/data';
 import {
   publishListing as publishApprovedListing,
   type PublishListingDependencies,
@@ -10,6 +11,14 @@ import {
   type RunSidecarJobOptions,
   type RunSidecarJobResult,
 } from './run-job.js';
+import {
+  createRetryExhaustedError,
+  createStaleWorkerError,
+  SidecarJobError,
+  toJobErrorUpdateInput,
+  toListingErrorContext,
+} from './job-errors.js';
+import { getNextRetryAt, getStaleLeaseMs, hasAttemptsRemaining } from './retry-policy.js';
 
 const DEFAULT_BATCH_SIZE = 1;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
@@ -127,6 +136,10 @@ function isFinalizationError(error: unknown): error is PublishListingError {
   return error instanceof PublishListingError && error.code === 'EXPORT_STATE_PERSIST_FAILED';
 }
 
+function asIsoTimestamp(now: () => Date): string {
+  return now().toISOString();
+}
+
 function getLogger(logger?: SidecarJobRunnerLogger): SidecarJobRunnerLogger {
   return logger ?? defaultLogger;
 }
@@ -155,7 +168,7 @@ async function markPublishInconsistency(
       code: asErrorCode(error),
       stage: asErrorStage(error),
     }).filter(([, value]) => value !== undefined)
-  );
+  ) as Json;
 
   await dataAccess.listings.update(listingId, {
     last_error_at: errorAt,
@@ -163,6 +176,98 @@ async function markPublishInconsistency(
     last_error_context: context,
     last_error_message: asErrorMessage(error),
   });
+}
+
+async function repairGenerateAiListing(
+  dataAccess: SidecarDataAccess,
+  listingId: string,
+  error: SidecarJobError,
+  errorAt: string
+): Promise<void> {
+  await dataAccess.listings.update(listingId, {
+    last_error_at: errorAt,
+    last_error_code: error.code,
+    last_error_context: toListingErrorContext(error),
+    last_error_message: error.message,
+    status: 'assets_ready',
+    sub_status: 'ready_to_generate',
+  });
+}
+
+async function recoverStaleGenerateAiJob(
+  dataAccess: SidecarDataAccess,
+  job: RunSidecarJobResult['job'],
+  now: () => Date,
+  logger: SidecarJobRunnerLogger
+): Promise<void> {
+  const errorAt = asIsoTimestamp(now);
+  const listingId = job.listing_id;
+  const staleError = createStaleWorkerError(job);
+
+  if (listingId) {
+    try {
+      await repairGenerateAiListing(dataAccess, listingId, staleError, errorAt);
+    } catch (error) {
+      logger.error('Failed to repair stale generate_ai listing.', {
+        error: asErrorMessage(error),
+        jobId: job.id,
+        listingId,
+      });
+    }
+  }
+
+  if (hasAttemptsRemaining(job)) {
+    await dataAccess.jobs.requeue(
+      job.id,
+      toJobErrorUpdateInput(staleError, errorAt),
+      getNextRetryAt(job.attempts, now())
+    );
+    return;
+  }
+
+  const exhaustedError = createRetryExhaustedError(job, staleError);
+  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
+}
+
+async function recoverStaleProcessImagesJob(
+  dataAccess: SidecarDataAccess,
+  job: RunSidecarJobResult['job'],
+  now: () => Date
+): Promise<void> {
+  const errorAt = asIsoTimestamp(now);
+  const staleError = createStaleWorkerError(job);
+
+  if (hasAttemptsRemaining(job)) {
+    await dataAccess.jobs.requeue(
+      job.id,
+      toJobErrorUpdateInput(staleError, errorAt),
+      getNextRetryAt(job.attempts, now())
+    );
+    return;
+  }
+
+  const exhaustedError = createRetryExhaustedError(job, staleError);
+  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
+}
+
+async function recoverStaleRunningJobs(
+  dataAccess: SidecarDataAccess,
+  now: () => Date,
+  logger: SidecarJobRunnerLogger
+): Promise<void> {
+  const cutoff = new Date(now().getTime() - getStaleLeaseMs()).toISOString();
+  const staleJobs = await dataAccess.jobs.listStaleRunning(cutoff);
+
+  for (const job of staleJobs) {
+    if (job.job_type === 'generate_ai') {
+      await recoverStaleGenerateAiJob(dataAccess, job, now, logger);
+      continue;
+    }
+
+    if (job.job_type === 'process_images') {
+      await recoverStaleProcessImagesJob(dataAccess, job, now);
+    }
+  }
 }
 
 async function runApprovedListingPublishesOnce(
@@ -297,7 +402,11 @@ export async function runQueuedSidecarJobsOnce(
   const logger = getLogger(options.logger);
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   const runJob = options.runJob ?? runSidecarJob;
-  const queuedJobs = await dataAccess.jobs.listQueued({ limit: batchSize });
+  const now = options.now ?? (() => new Date());
+
+  await recoverStaleRunningJobs(dataAccess, now, logger);
+
+  const queuedJobs = await dataAccess.jobs.listDueQueued(asIsoTimestamp(now), { limit: batchSize });
 
   let claimedCount = 0;
   let executedCount = 0;
@@ -305,7 +414,7 @@ export async function runQueuedSidecarJobsOnce(
   let skippedCount = 0;
 
   for (const queuedJob of queuedJobs) {
-    const claimedJob = await dataAccess.jobs.claimQueued(queuedJob.id);
+    const claimedJob = await dataAccess.jobs.claimDueQueued(queuedJob.id, asIsoTimestamp(now));
 
     if (!claimedJob) {
       skippedCount += 1;

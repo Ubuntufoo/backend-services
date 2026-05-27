@@ -64,7 +64,10 @@ function createDataAccess(): SidecarDataAccess {
       updateWorkflowState: async () => listingRow,
     },
     jobs: {
-      claimQueued: async () => null,
+      claimDueQueued: async () => null,
+      complete: async () => {
+        throw new Error('not implemented');
+      },
       create: async () => {
         throw new Error('not implemented');
       },
@@ -78,7 +81,9 @@ function createDataAccess(): SidecarDataAccess {
           last_error_at: null,
           last_error_code: null,
           listing_id: 'LIST-001',
+          max_attempts: 3,
           next_run_at: null,
+          attempts: 0,
           status: 'queued',
           updated_at: '2026-05-17T00:00:00.000Z',
         },
@@ -93,15 +98,24 @@ function createDataAccess(): SidecarDataAccess {
           last_error_at: null,
           last_error_code: null,
           listing_id: null,
+          max_attempts: 2,
           next_run_at: null,
+          attempts: 0,
           status: 'queued',
           updated_at: '2026-05-17T00:00:00.000Z',
         },
       }),
+      fail: async () => {
+        throw new Error('not implemented');
+      },
       getActiveGenerateAiByListingId: async () => null,
       getById: async () => null,
-      listQueued: async () => [],
+      listDueQueued: async () => [],
       listByListingId: async () => [],
+      listStaleRunning: async () => [],
+      requeue: async () => {
+        throw new Error('not implemented');
+      },
       update: async () => {
         throw new Error('not implemented');
       },
