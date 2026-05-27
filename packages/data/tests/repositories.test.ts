@@ -1517,6 +1517,79 @@ describe('shared repositories', () => {
     ).resolves.toBeNull();
   });
 
+  it('returns null when publish manual retry reset loses to an active job conflict', async () => {
+    const failedPublishJob: JobRow = {
+      ...publishJobRow,
+      attempts: 2,
+      last_error: 'publish failed',
+      last_error_at: '2026-05-25T12:00:00.000Z',
+      last_error_code: 'publish_offer_publish_failed',
+      status: 'failed',
+      updated_at: '2026-05-25T12:00:00.000Z',
+    };
+    const conflictClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('*');
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('id');
+                expect(firstValue).toBe('job-row-id');
+
+                return {
+                  maybeSingle: vi.fn(async () => ({
+                    data: failedPublishJob,
+                    error: null,
+                  })),
+                };
+              }),
+            };
+          }),
+          update: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              attempts: 0,
+              last_error: null,
+              last_error_at: null,
+              last_error_code: null,
+              next_run_at: null,
+              status: 'queued',
+              updated_at: '2026-05-25T13:00:00.000Z',
+            });
+
+            return {
+              eq: vi.fn(() => ({
+                eq: vi.fn(() => ({
+                  eq: vi.fn(() => ({
+                    eq: vi.fn(() => ({
+                      select: vi.fn(() => ({
+                        maybeSingle: vi.fn(async () => ({
+                          data: null,
+                          error: {
+                            code: '23505',
+                            message:
+                              'duplicate key value violates unique constraint "jobs_publish_active_listing_idx"',
+                          },
+                        })),
+                      })),
+                    })),
+                  })),
+                })),
+              })),
+            };
+          }),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(
+      resetJobForManualRetry(conflictClient, 'job-row-id', '2026-05-25T13:00:00.000Z')
+    ).resolves.toBeNull();
+  });
+
   it('looks up the newest active generate_ai job by listing id', async () => {
     const lookupClient = createActiveGenerateAiLookupClient(generateAiJobRow);
 
@@ -1591,6 +1664,84 @@ describe('shared repositories', () => {
     await expect(enqueuePublishJob(duplicateClient, 'LIST-001')).resolves.toEqual({
       alreadyQueued: true,
       job: publishJobRow,
+    });
+  });
+
+  it('makes concurrent publish enqueue idempotent under duplicate constraint race', async () => {
+    let createdJob: JobRow | null = null;
+
+    const concurrentClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'publish',
+              listing_id: 'LIST-001',
+              max_attempts: 3,
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => {
+                  if (!createdJob) {
+                    createdJob = {
+                      ...publishJobRow,
+                      id: 'job-publish-concurrent-create',
+                    };
+
+                    return {
+                      data: createdJob,
+                      error: null,
+                    };
+                  }
+
+                  return {
+                    data: null,
+                    error: {
+                      code: '23505',
+                      message:
+                        'duplicate key value violates unique constraint "jobs_publish_active_listing_idx"',
+                    },
+                  };
+                }),
+              })),
+            };
+          }),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                in: vi.fn(() => ({
+                  order: vi.fn(() => ({
+                    limit: vi.fn(() => ({
+                      maybeSingle: vi.fn(async () => ({
+                        data: createdJob,
+                        error: null,
+                      })),
+                    })),
+                  })),
+                })),
+              })),
+            })),
+          })),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    const [firstResult, secondResult] = await Promise.all([
+      enqueuePublishJob(concurrentClient, 'LIST-001'),
+      enqueuePublishJob(concurrentClient, 'LIST-001'),
+    ]);
+
+    expect(firstResult).toEqual({
+      alreadyQueued: false,
+      job: expect.objectContaining({ id: 'job-publish-concurrent-create' }),
+    });
+    expect(secondResult).toEqual({
+      alreadyQueued: true,
+      job: expect.objectContaining({ id: 'job-publish-concurrent-create' }),
     });
   });
 

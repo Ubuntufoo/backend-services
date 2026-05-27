@@ -249,6 +249,18 @@ async function getListingSafely(
   }
 }
 
+async function hasOtherPublishJobsForListing(
+  dataAccess: SidecarDataAccess,
+  listingId: string,
+  currentJobId: string
+): Promise<boolean> {
+  const jobs = await dataAccess.jobs.listByListingId(listingId);
+
+  return jobs.some(
+    (candidateJob) => candidateJob.job_type === PUBLISH_JOB_TYPE && candidateJob.id !== currentJobId
+  );
+}
+
 async function runGenerateAiJob(
   job: JobRow,
   options: Required<Pick<RunSidecarJobOptions, 'dataAccess' | 'generateListingDraft' | 'now'>>
@@ -517,6 +529,31 @@ async function runPublishJob(
       job: failedJob,
       listing: await getListingSafely(options.dataAccess, listingId),
     };
+  }
+
+  if (listing.sub_status === 'idle') {
+    const hasOtherPublishJobs = await hasOtherPublishJobsForListing(
+      options.dataAccess,
+      listingId,
+      job.id
+    );
+
+    if (hasOtherPublishJobs) {
+      const error = new SidecarJobError(
+        JOB_ERROR_CODES.JOB_NOT_RUNNABLE,
+        'terminal',
+        `Publish job "${job.id}" is stale for listing "${listingId}" because another publish job already resolved the listing to approved_for_export/idle.`
+      );
+      const failedJob = await options.dataAccess.jobs.fail(
+        job.id,
+        toJobErrorUpdateInput(error, errorAt)
+      );
+
+      return {
+        job: failedJob,
+        listing,
+      };
+    }
   }
 
   if (listing.sub_status !== 'publish_queued' && listing.sub_status !== 'publishing_to_ebay') {

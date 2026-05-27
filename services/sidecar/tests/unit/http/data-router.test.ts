@@ -870,6 +870,99 @@ describe('data API router', () => {
     expect(dataAccess.jobs.resetForManualRetry).not.toHaveBeenCalled();
   });
 
+  it('does not clear publish failure context when manual retry loses to an active publish job race', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      last_error_at: '2026-05-17T01:05:00.000Z',
+      last_error_code: 'publish_offer_publish_failed',
+      last_error_context: { category: 'recoverable' },
+      last_error_message: 'publish failed',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    }));
+    dataAccess.listings.update = vi.fn(async (_listingId, changes) => ({
+      ...listingRow,
+      last_error_at: '2026-05-17T01:05:00.000Z',
+      last_error_code: 'publish_offer_publish_failed',
+      last_error_context: { category: 'recoverable' },
+      last_error_message: 'publish failed',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+      ...changes,
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 2,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-publish-failed',
+        job_type: 'publish',
+        last_error: 'publish failed',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'publish_offer_publish_failed',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => null);
+    dataAccess.jobs.enqueuePublish = vi.fn(async () => ({
+      alreadyQueued: true,
+      job: {
+        attempts: 0,
+        created_at: '2026-05-17T02:00:00.000Z',
+        id: 'job-publish-active',
+        job_type: 'publish',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'queued',
+        updated_at: '2026-05-17T02:00:00.000Z',
+      },
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      alreadyQueued: true,
+      workflow: 'publish',
+      job: expect.objectContaining({
+        id: 'job-publish-active',
+        status: 'queued',
+      }),
+      listing: expect.objectContaining({
+        last_error_code: 'publish_offer_publish_failed',
+        status: 'approved_for_export',
+        sub_status: 'idle',
+      }),
+    });
+    expect(dataAccess.listings.update).toHaveBeenNthCalledWith(
+      1,
+      'LIST-001',
+      expect.objectContaining({
+        last_error_code: null,
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      })
+    );
+    expect(dataAccess.listings.update).toHaveBeenNthCalledWith(
+      2,
+      'LIST-001',
+      expect.objectContaining({
+        last_error_code: 'publish_offer_publish_failed',
+        status: 'approved_for_export',
+        sub_status: 'idle',
+      })
+    );
+  });
+
   it('rejects retry for exported, listed, and sold listings', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);

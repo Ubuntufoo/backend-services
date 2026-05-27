@@ -448,8 +448,18 @@ async function backfillQueuedPublishJobs(
     limit,
     queuedOnly: true,
   });
+  const jobsByListingId = await loadJobsByListingIds(
+    dataAccess,
+    approvedListings.map((listing) => listing.listing_id)
+  );
 
   for (const listing of approvedListings) {
+    const jobs = jobsByListingId.get(listing.listing_id) ?? [];
+
+    if (hasActiveWorkflowJob(jobs, 'publish')) {
+      continue;
+    }
+
     const enqueueResult = await dataAccess.jobs.enqueuePublish(listing.listing_id);
 
     if (!enqueueResult.alreadyQueued) {
