@@ -86,7 +86,7 @@ export const JOB_TYPES = [
   'process_images',
   'upload_r2',
   'generate_ai',
-  'publish_ebay',
+  'publish',
   'sync_orders',
   'cleanup_r2',
 ] as const;

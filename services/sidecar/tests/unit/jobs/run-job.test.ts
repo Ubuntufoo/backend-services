@@ -624,10 +624,10 @@ describe('runSidecarJob', () => {
     });
 
     expect(result.job.status).toBe('queued');
-    expect(result.job.last_error_code).toBe('OFFER_PUBLISH_FAILED');
+    expect(result.job.last_error_code).toBe('publish_offer_publish_failed');
     expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
     expect(result.listing).toMatchObject({
-      last_error_code: 'OFFER_PUBLISH_FAILED',
+      last_error_code: 'publish_offer_publish_failed',
       status: 'approved_for_export',
       sub_status: 'publish_queued',
     });
@@ -656,9 +656,9 @@ describe('runSidecarJob', () => {
     });
 
     expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('LISTING_NOT_READY');
+    expect(result.job.last_error_code).toBe('publish_listing_not_ready');
     expect(result.listing).toMatchObject({
-      last_error_code: 'LISTING_NOT_READY',
+      last_error_code: 'publish_listing_not_ready',
       status: 'approved_for_export',
       sub_status: 'idle',
     });

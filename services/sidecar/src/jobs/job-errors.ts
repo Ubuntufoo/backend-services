@@ -9,21 +9,21 @@ import { getJobMaxAttempts } from './retry-policy.js';
 export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
 
 export const JOB_ERROR_CODES = {
+  PUBLISH_APP_SETTINGS_NOT_FOUND: 'publish_app_settings_not_found',
+  PUBLISH_EXPORT_STATE_PERSIST_FAILED: 'publish_export_state_persist_failed',
+  PUBLISH_INVENTORY_ITEM_UPSERT_FAILED: 'publish_inventory_item_upsert_failed',
+  PUBLISH_LISTING_NOT_FOUND: 'publish_listing_not_found',
+  PUBLISH_LISTING_NOT_READY: 'publish_listing_not_ready',
+  PUBLISH_OFFER_CREATE_FAILED: 'publish_offer_create_failed',
+  PUBLISH_OFFER_PUBLISH_FAILED: 'publish_offer_publish_failed',
   GENERATE_AI_FAILED: 'generate_ai_failed',
   GENERATE_AI_LISTING_NOT_ELIGIBLE: 'generate_ai_listing_not_eligible',
   GENERATE_AI_LISTING_NOT_FOUND: 'generate_ai_listing_not_found',
   GENERATE_AI_MISSING_IMAGE_URLS: 'generate_ai_missing_image_urls',
   GENERATE_AI_MISSING_LISTING_ID: 'generate_ai_missing_listing_id',
-  APP_SETTINGS_NOT_FOUND: 'APP_SETTINGS_NOT_FOUND',
-  EXPORT_STATE_PERSIST_FAILED: 'EXPORT_STATE_PERSIST_FAILED',
-  INVENTORY_ITEM_UPSERT_FAILED: 'INVENTORY_ITEM_UPSERT_FAILED',
   JOB_NOT_FOUND: 'job_not_found',
   JOB_NOT_CLAIMABLE: 'job_not_claimable',
   JOB_NOT_RUNNABLE: 'job_not_runnable',
-  LISTING_NOT_FOUND: 'LISTING_NOT_FOUND',
-  LISTING_NOT_READY: 'LISTING_NOT_READY',
-  OFFER_CREATE_FAILED: 'OFFER_CREATE_FAILED',
-  OFFER_PUBLISH_FAILED: 'OFFER_PUBLISH_FAILED',
   PUBLISH_FAILED: 'publish_failed',
   PUBLISH_LISTING_NOT_ELIGIBLE: 'publish_listing_not_eligible',
   PUBLISH_MISSING_LISTING_ID: 'publish_missing_listing_id',
@@ -83,6 +83,27 @@ function getGeminiValidationIssues(error: GeminiDraftValidationError): string[] 
   );
 }
 
+function getPublishJobErrorCode(
+  code: PublishListingError['code']
+): JobErrorCode {
+  switch (code) {
+    case 'APP_SETTINGS_NOT_FOUND':
+      return JOB_ERROR_CODES.PUBLISH_APP_SETTINGS_NOT_FOUND;
+    case 'EXPORT_STATE_PERSIST_FAILED':
+      return JOB_ERROR_CODES.PUBLISH_EXPORT_STATE_PERSIST_FAILED;
+    case 'INVENTORY_ITEM_UPSERT_FAILED':
+      return JOB_ERROR_CODES.PUBLISH_INVENTORY_ITEM_UPSERT_FAILED;
+    case 'LISTING_NOT_FOUND':
+      return JOB_ERROR_CODES.PUBLISH_LISTING_NOT_FOUND;
+    case 'LISTING_NOT_READY':
+      return JOB_ERROR_CODES.PUBLISH_LISTING_NOT_READY;
+    case 'OFFER_CREATE_FAILED':
+      return JOB_ERROR_CODES.PUBLISH_OFFER_CREATE_FAILED;
+    case 'OFFER_PUBLISH_FAILED':
+      return JOB_ERROR_CODES.PUBLISH_OFFER_PUBLISH_FAILED;
+  }
+}
+
 export function classifyJobError(jobType: JobRow['job_type'], error: unknown): SidecarJobError {
   if (error instanceof SidecarJobError) {
     return error;
@@ -98,7 +119,7 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
             : 'recoverable';
 
       return new SidecarJobError(
-        error.code,
+        getPublishJobErrorCode(error.code),
         category,
         error.message,
         Object.fromEntries(
@@ -106,6 +127,7 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
             ...buildBaseContext(error),
             issues: error.context.issues,
             listingId: error.context.listingId,
+            publish_error_code: error.code,
             stage: error.context.stage,
           }).filter(([, value]) => value !== undefined)
         ) as JobErrorContext,

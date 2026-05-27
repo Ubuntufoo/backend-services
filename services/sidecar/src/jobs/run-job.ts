@@ -477,7 +477,7 @@ async function runPublishJob(
 
   if (!listing) {
     const error = new SidecarJobError(
-      JOB_ERROR_CODES.LISTING_NOT_FOUND,
+      JOB_ERROR_CODES.PUBLISH_LISTING_NOT_FOUND,
       'terminal',
       `Listing "${listingId}" was not found for publish.`
     );
