@@ -1,5 +1,10 @@
 import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
-import { aspectValueSchema, generateListingDraft, type GenerateListingDraftInput } from '@/gemini/index.js';
+import {
+  aspectValueSchema,
+  generateListingDraft,
+  resolveTradingCardListingIds,
+  type GenerateListingDraftInput,
+} from '@/gemini/index.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   publishListing as publishApprovedListing,
@@ -149,9 +154,14 @@ function buildGeneratedListingAspects(
 }
 
 function buildGeneratedListingReviewUpdate(
+  listing: ListingRow,
   draft: Awaited<ReturnType<typeof generateListingDraft>>
 ): ListingUpdate {
+  const resolvedIds = resolveTradingCardListingIds(listing, draft);
+
   return {
+    category_id: resolvedIds.category_id,
+    condition_id: resolvedIds.condition_id,
     description: draft.description,
     item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,
@@ -340,7 +350,7 @@ async function runGenerateAiJob(
 
     const reviewListing = await options.dataAccess.listings.update(
       listingId,
-      buildGeneratedListingReviewUpdate(draft)
+      buildGeneratedListingReviewUpdate(listing, draft)
     );
     const completedJob = await options.dataAccess.jobs.complete(job.id);
 
