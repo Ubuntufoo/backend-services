@@ -20,11 +20,13 @@ import {
   listApprovedForExportListings,
   listDueQueuedJobs,
   listJobsByListingId,
+  listJobsByListingIds,
   listStaleRunningJobs,
   listListings,
   listListingsByStatus,
   prepareListingForGenerateAi,
   markListingPublishFailed,
+  resetJobForManualRetry,
   requeueJob,
   saveListingImageMetadata,
   updateAppSettings,
@@ -73,7 +75,9 @@ export interface SidecarDataAccess {
     getById(jobId: string): Promise<JobRow | null>;
     listDueQueued(now: string, options?: ListDueQueuedJobsOptions): Promise<JobRow[]>;
     listByListingId(listingId: string): Promise<JobRow[]>;
+    listByListingIds?(listingIds: string[]): Promise<JobRow[]>;
     listStaleRunning(cutoff: string): Promise<JobRow[]>;
+    resetForManualRetry(jobId: string, now: string): Promise<JobRow | null>;
     requeue(jobId: string, error: JobErrorUpdateInput, nextRunAt: string): Promise<JobRow>;
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
@@ -88,13 +92,11 @@ export interface SidecarDataAccess {
       options: ListListingsByStatusOptions
     ): Promise<ListingRow[]>;
     markPublishFailed(listingId: string, errorAt: string, error: unknown): Promise<ListingRow>;
-    prepareForGenerateAi(
-      input: {
-        expectedUpdatedAt?: string;
-        listingId: string;
-        sellerHints?: ListingUpdate['seller_hints'];
-      }
-    ): Promise<ListingRow | null>;
+    prepareForGenerateAi(input: {
+      expectedUpdatedAt?: string;
+      listingId: string;
+      sellerHints?: ListingUpdate['seller_hints'];
+    }): Promise<ListingRow | null>;
     saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow | null>;
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
@@ -141,7 +143,9 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       getById: async (jobId) => await getJobById(client, jobId),
       listDueQueued: async (now, options) => await listDueQueuedJobs(client, now, options),
       listByListingId: async (listingId) => await listJobsByListingId(client, listingId),
+      listByListingIds: async (listingIds) => await listJobsByListingIds(client, listingIds),
       listStaleRunning: async (cutoff) => await listStaleRunningJobs(client, cutoff),
+      resetForManualRetry: async (jobId, now) => await resetJobForManualRetry(client, jobId, now),
       requeue: async (jobId, error, nextRunAt) => await requeueJob(client, jobId, error, nextRunAt),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
     },

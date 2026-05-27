@@ -206,13 +206,35 @@ function createDataAccess(
           .slice(0, limit)
           .map((job) => ({ ...job }))
       ),
-      listByListingId: vi.fn(async () => []),
+      listByListingId: vi.fn(async (listingId: string) =>
+        [...jobStates.values()]
+          .filter((job) => job.listing_id === listingId)
+          .map((job) => ({ ...job }))
+      ),
       listStaleRunning: vi.fn(async (cutoff: string) =>
         [...jobStates.values()]
           .filter((job) => job.status === 'running')
           .filter((job) => job.updated_at < cutoff)
           .map((job) => ({ ...job }))
       ),
+      resetForManualRetry: vi.fn(async (jobId: string) => {
+        const current = jobStates.get(jobId);
+        if (!current || current.status !== 'failed') {
+          return null;
+        }
+
+        const next = {
+          ...current,
+          attempts: 0,
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          next_run_at: null,
+          status: 'queued',
+        } as JobRow;
+        jobStates.set(jobId, next);
+        return { ...next };
+      }),
       requeue: vi.fn(async (jobId: string, error: { errorAt: string; errorCode: string; errorMessage: string }, nextRunAt: string) => {
         const current = jobStates.get(jobId);
         if (!current) {
@@ -290,7 +312,17 @@ function createDataAccess(
           .map((listing) => ({ ...listing }))
       ),
       list: vi.fn(async () => [...listingStates.values()].map((listing) => ({ ...listing }))),
-      listByStatus: vi.fn(async () => []),
+      listByStatus: vi.fn(async (status: ListingRow['status'], { limit, offset, orderByCreatedAt }) =>
+        [...listingStates.values()]
+          .filter((listing) => listing.status === status)
+          .sort((left, right) =>
+            orderByCreatedAt === 'desc'
+              ? right.created_at.localeCompare(left.created_at)
+              : left.created_at.localeCompare(right.created_at)
+          )
+          .slice(offset, offset + limit)
+          .map((listing) => ({ ...listing }))
+      ),
       markPublishFailed: vi.fn(async (listingId: string, errorAt: string, error: unknown) => {
         const current = listingStates.get(listingId);
         if (!current) {
@@ -664,6 +696,115 @@ describe('job runner loop', () => {
     expect(result.publishQueuedCount).toBe(0);
     expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-STALE');
     expect(jobStates.size).toBe(1);
+  });
+
+  it('repairs orphan generating listings back to assets_ready/ready_to_generate', async () => {
+    const logger = createLogger();
+    const orphanListing = createListingRow({
+      listing_id: 'LIST-GENERATING-ORPHAN',
+      status: 'generating',
+      sub_status: 'ai_call_in_progress',
+    });
+    const failedGenerateAiJob = createJobRow({
+      id: 'job-generate-ai-failed',
+      job_type: 'generate_ai',
+      listing_id: 'LIST-GENERATING-ORPHAN',
+      max_attempts: 3,
+      status: 'failed',
+      last_error_code: 'retry_exhausted',
+    });
+    const { dataAccess, listingStates } = createDataAccess([failedGenerateAiJob], [orphanListing]);
+
+    await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+    });
+
+    expect(listingStates.get('LIST-GENERATING-ORPHAN')).toMatchObject({
+      last_error_code: 'orphan_active_state',
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    });
+  });
+
+  it('repairs orphan publishing listings back to approved_for_export/idle', async () => {
+    const logger = createLogger();
+    const orphanListing = createListingRow({
+      listing_id: 'LIST-PUBLISH-ORPHAN',
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    });
+    const failedPublishJob = createJobRow({
+      id: 'job-publish-failed',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-ORPHAN',
+      max_attempts: 3,
+      status: 'failed',
+      last_error_code: 'retry_exhausted',
+    });
+    const { dataAccess, listingStates } = createDataAccess([failedPublishJob], [orphanListing]);
+
+    await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+    });
+
+    expect(listingStates.get('LIST-PUBLISH-ORPHAN')).toMatchObject({
+      last_error_code: 'orphan_active_state',
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+  });
+
+  it('skips orphan repair when active workflow jobs still exist', async () => {
+    const logger = createLogger();
+    const generatingListing = createListingRow({
+      listing_id: 'LIST-GENERATING-ACTIVE',
+      status: 'generating',
+      sub_status: 'ai_call_in_progress',
+    });
+    const publishingListing = createListingRow({
+      listing_id: 'LIST-PUBLISH-ACTIVE',
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    });
+    const activeGenerateAiJob = createJobRow({
+      id: 'job-generate-ai-active',
+      job_type: 'generate_ai',
+      listing_id: 'LIST-GENERATING-ACTIVE',
+      max_attempts: 3,
+      status: 'running',
+      updated_at: '2026-05-22T12:59:00.000Z',
+    });
+    const activePublishJob = createJobRow({
+      id: 'job-publish-active',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-ACTIVE',
+      max_attempts: 3,
+      status: 'running',
+      updated_at: '2026-05-22T12:59:00.000Z',
+    });
+    const { dataAccess, listingStates } = createDataAccess(
+      [activeGenerateAiJob, activePublishJob],
+      [generatingListing, publishingListing]
+    );
+
+    await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+    });
+
+    expect(listingStates.get('LIST-GENERATING-ACTIVE')).toMatchObject({
+      status: 'generating',
+      sub_status: 'ai_call_in_progress',
+    });
+    expect(listingStates.get('LIST-PUBLISH-ACTIVE')).toMatchObject({
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    });
   });
 
   it('requeues stale running publish jobs and repairs listing state when attempts remain', async () => {

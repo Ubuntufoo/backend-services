@@ -128,6 +128,7 @@ function createDataAccess(
       listDueQueued: vi.fn(),
       listByListingId: vi.fn(),
       listStaleRunning: vi.fn(),
+      resetForManualRetry: vi.fn(),
       requeue: vi.fn(),
       update: vi.fn(),
     },

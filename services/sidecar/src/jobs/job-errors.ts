@@ -1,4 +1,4 @@
-import type { JobRow, Json } from '@ebay-inventory/data';
+import type { JobRow, Json, ListingRow } from '@ebay-inventory/data';
 import {
   GeminiDraftServiceError,
   GeminiDraftValidationError,
@@ -9,6 +9,8 @@ import { getJobMaxAttempts } from './retry-policy.js';
 export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
 
 export const JOB_ERROR_CODES = {
+  DUPLICATE_ACTIVE_JOB: 'duplicate_active_job',
+  LISTING_NOT_FOUND: 'listing_not_found',
   PUBLISH_APP_SETTINGS_NOT_FOUND: 'publish_app_settings_not_found',
   PUBLISH_EXPORT_STATE_PERSIST_FAILED: 'publish_export_state_persist_failed',
   PUBLISH_INVENTORY_ITEM_UPSERT_FAILED: 'publish_inventory_item_upsert_failed',
@@ -24,6 +26,8 @@ export const JOB_ERROR_CODES = {
   JOB_NOT_FOUND: 'job_not_found',
   JOB_NOT_CLAIMABLE: 'job_not_claimable',
   JOB_NOT_RUNNABLE: 'job_not_runnable',
+  MANUAL_RETRY_NOT_ALLOWED: 'manual_retry_not_allowed',
+  ORPHAN_ACTIVE_STATE: 'orphan_active_state',
   PUBLISH_FAILED: 'publish_failed',
   PUBLISH_LISTING_NOT_ELIGIBLE: 'publish_listing_not_eligible',
   PUBLISH_MISSING_LISTING_ID: 'publish_missing_listing_id',
@@ -36,6 +40,8 @@ export const JOB_ERROR_CODES = {
 export type JobErrorCode = (typeof JOB_ERROR_CODES)[keyof typeof JOB_ERROR_CODES];
 
 export type JobErrorContext = Record<string, Json>;
+type StoredErrorContext = Json | null | undefined;
+type StoredJobErrorCategory = JobErrorCategory | 'unknown';
 
 export class SidecarJobError extends Error {
   readonly category: JobErrorCategory;
@@ -71,6 +77,59 @@ function buildBaseContext(error: unknown): JobErrorContext {
       name: error.name,
     }).filter(([, value]) => value !== undefined)
   );
+}
+
+function getContextCategory(
+  context: StoredErrorContext,
+  key: 'category' | 'source_category'
+): JobErrorCategory | undefined {
+  if (!context || Array.isArray(context) || typeof context !== 'object') {
+    return undefined;
+  }
+
+  const value = context[key];
+
+  return value === 'recoverable' || value === 'terminal' || value === 'user_fixable'
+    ? value
+    : undefined;
+}
+
+function isKnownJobErrorCode(code: string): code is JobErrorCode {
+  return Object.values(JOB_ERROR_CODES).includes(code as JobErrorCode);
+}
+
+function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCategory {
+  switch (code) {
+    case JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB:
+    case JOB_ERROR_CODES.GENERATE_AI_FAILED:
+    case JOB_ERROR_CODES.LISTING_NOT_FOUND:
+    case JOB_ERROR_CODES.PUBLISH_FAILED:
+    case JOB_ERROR_CODES.PUBLISH_OFFER_CREATE_FAILED:
+    case JOB_ERROR_CODES.PUBLISH_OFFER_PUBLISH_FAILED:
+    case JOB_ERROR_CODES.PROCESS_IMAGES_FAILED:
+    case JOB_ERROR_CODES.STALE_WORKER:
+    case JOB_ERROR_CODES.ORPHAN_ACTIVE_STATE:
+      return 'recoverable';
+    case JOB_ERROR_CODES.GENERATE_AI_MISSING_IMAGE_URLS:
+    case JOB_ERROR_CODES.GENERATE_AI_LISTING_NOT_ELIGIBLE:
+    case JOB_ERROR_CODES.PUBLISH_APP_SETTINGS_NOT_FOUND:
+    case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_ELIGIBLE:
+    case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_READY:
+      return 'user_fixable';
+    case JOB_ERROR_CODES.GENERATE_AI_LISTING_NOT_FOUND:
+    case JOB_ERROR_CODES.GENERATE_AI_MISSING_LISTING_ID:
+    case JOB_ERROR_CODES.JOB_NOT_CLAIMABLE:
+    case JOB_ERROR_CODES.JOB_NOT_FOUND:
+    case JOB_ERROR_CODES.JOB_NOT_RUNNABLE:
+    case JOB_ERROR_CODES.MANUAL_RETRY_NOT_ALLOWED:
+    case JOB_ERROR_CODES.PUBLISH_EXPORT_STATE_PERSIST_FAILED:
+    case JOB_ERROR_CODES.PUBLISH_INVENTORY_ITEM_UPSERT_FAILED:
+    case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_FOUND:
+    case JOB_ERROR_CODES.PUBLISH_MISSING_LISTING_ID:
+    case JOB_ERROR_CODES.RETRY_EXHAUSTED:
+    case JOB_ERROR_CODES.UNSUPPORTED_JOB_TYPE:
+      return 'terminal';
+  }
 }
 
 function isGeminiApiKeyError(error: GeminiDraftServiceError): boolean {
@@ -211,6 +270,37 @@ export function createRetryExhaustedError(
   );
 }
 
+export function createManualRetryNotAllowedError(
+  message: string,
+  context: JobErrorContext = {}
+): SidecarJobError {
+  return new SidecarJobError(
+    JOB_ERROR_CODES.MANUAL_RETRY_NOT_ALLOWED,
+    'terminal',
+    message,
+    context
+  );
+}
+
+export function createDuplicateActiveJobError(
+  workflow: 'generate_ai' | 'publish',
+  listingId: string,
+  jobId?: string
+): SidecarJobError {
+  return new SidecarJobError(
+    JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB,
+    'recoverable',
+    `Listing "${listingId}" already has an active ${workflow} job.`,
+    Object.fromEntries(
+      Object.entries({
+        job_id: jobId,
+        listing_id: listingId,
+        workflow,
+      }).filter(([, value]) => value !== undefined)
+    ) as JobErrorContext
+  );
+}
+
 export function createStaleWorkerError(
   job: Pick<JobRow, 'id' | 'job_type'>
 ): SidecarJobError {
@@ -222,6 +312,48 @@ export function createStaleWorkerError(
       job_type: job.job_type,
     }
   );
+}
+
+export function createOrphanActiveStateError(
+  workflow: 'generate_ai' | 'publish',
+  listing: Pick<ListingRow, 'listing_id' | 'status' | 'sub_status'>,
+  latestJobState: 'failed' | 'missing'
+): SidecarJobError {
+  return new SidecarJobError(
+    JOB_ERROR_CODES.ORPHAN_ACTIVE_STATE,
+    'recoverable',
+    `Listing "${listing.listing_id}" was repaired from orphan ${workflow} state "${listing.status}/${listing.sub_status}".`,
+    {
+      latest_job_state: latestJobState,
+      listing_id: listing.listing_id,
+      repaired_from_status: listing.status,
+      repaired_from_sub_status: listing.sub_status,
+      workflow,
+    }
+  );
+}
+
+export function getStoredJobErrorCategory(
+  code: string | null | undefined,
+  context?: StoredErrorContext
+): StoredJobErrorCategory {
+  if (!code || !isKnownJobErrorCode(code)) {
+    return 'unknown';
+  }
+
+  if (code === JOB_ERROR_CODES.RETRY_EXHAUSTED) {
+    return getContextCategory(context, 'source_category') ?? 'terminal';
+  }
+
+  return getContextCategory(context, 'category') ?? getDefaultStoredErrorCategory(code);
+}
+
+export function isManualRetryAllowedStoredError(
+  code: string | null | undefined,
+  context?: StoredErrorContext
+): boolean {
+  const category = getStoredJobErrorCategory(code, context);
+  return category === 'recoverable' || category === 'user_fixable';
 }
 
 export function toJobErrorUpdateInput(error: SidecarJobError, errorAt: string): {
