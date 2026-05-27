@@ -103,6 +103,7 @@ export interface SandboxBootstrapResult {
   fulfillmentPolicyId: string;
   marketplaceId: string;
   merchantLocationKey: string;
+  persistedAppSettingsId: string;
   paymentPolicyId: string;
   returnPolicyId: string;
   warnings: string[];
@@ -134,6 +135,8 @@ interface PolicyResolutionResult {
   warnings: string[];
 }
 
+type SandboxBootstrapStatus = 'created' | 'reused';
+
 interface PolicyResolutionConfig<TPolicy, TCreateResponse> {
   bootstrapName: string;
   createDefault: () => Promise<TCreateResponse>;
@@ -149,6 +152,60 @@ interface PolicyResolutionConfig<TPolicy, TCreateResponse> {
 
 function normalizeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeText(value: string | null | undefined): string | null {
+  return hasText(value) ? value.trim() : null;
+}
+
+function isObviousPlaceholder(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^mock[-_]/i.test(normalized) ||
+    /^example[-_]?/i.test(normalized) ||
+    /^test[-_]?/i.test(normalized) ||
+    /^placeholder$/i.test(normalized) ||
+    /^changeme$/i.test(normalized) ||
+    /^replace[-_]?me$/i.test(normalized) ||
+    /^todo$/i.test(normalized) ||
+    /^<[^>]+>$/.test(normalized)
+  );
+}
+
+function isPlaceholderMarketplaceId(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value);
+  return normalized ? isObviousPlaceholder(normalized) || !/^EBAY_[A-Z_]+$/.test(normalized) : true;
+}
+
+function sanitizeStoredValue(value: string | null | undefined): string | null {
+  const normalized = normalizeText(value);
+  return normalized && !isObviousPlaceholder(normalized) ? normalized : null;
+}
+
+function assertPersistableValue(label: string, value: string): string {
+  const normalized = normalizeText(value);
+  if (!normalized || isObviousPlaceholder(normalized)) {
+    throw new Error(`Refusing to persist placeholder ${label} value "${value}".`);
+  }
+
+  return normalized;
+}
+
+function assertPersistableMarketplaceId(marketplaceId: string): string {
+  const normalized = normalizeText(marketplaceId);
+  if (!normalized || isPlaceholderMarketplaceId(normalized)) {
+    throw new Error(`Refusing to persist invalid ebay_marketplace_id "${marketplaceId}".`);
+  }
+
+  return normalized;
 }
 
 function isAuthorizationScopeError(error: unknown): boolean {
@@ -211,8 +268,8 @@ function getMarketplaceIdFromState(
 ): string {
   return (
     marketplaceId ??
-    appSettingsMarketplaceId ??
     api.getAuthClient().getConfig().marketplaceId ??
+    appSettingsMarketplaceId ??
     'EBAY_US'
   );
 }
@@ -425,11 +482,18 @@ async function resolvePolicy<TPolicy, TCreateResponse>({
 }: PolicyResolutionConfig<TPolicy, TCreateResponse>): Promise<PolicyResolutionResult> {
   const warnings: string[] = [];
   let policies = await listPolicies();
+  const sanitizedStoredId = sanitizeStoredValue(storedId);
 
-  if (storedId) {
-    const storedPolicy = policies.find((policy) => getId(policy) === storedId);
+  if (storedId && !sanitizedStoredId) {
+    warnings.push(
+      `Ignoring placeholder stored ${policyLabel} policy id "${storedId}" during sandbox bootstrap.`
+    );
+  }
+
+  if (sanitizedStoredId) {
+    const storedPolicy = policies.find((policy) => getId(policy) === sanitizedStoredId);
     if (storedPolicy) {
-      return { created: false, id: storedId, warnings };
+      return { created: false, id: sanitizedStoredId, warnings };
     }
   }
 
@@ -645,14 +709,22 @@ export async function ensureDefaultInventoryLocation(
     warnings.push(warning);
   }
 
-  if (appSettings.merchant_location_key) {
+  const storedMerchantLocationKey = sanitizeStoredValue(appSettings.merchant_location_key);
+  if (appSettings.merchant_location_key && !storedMerchantLocationKey) {
+    const warning =
+      `Ignoring placeholder stored merchant_location_key "${appSettings.merchant_location_key}" during sandbox bootstrap.`;
+    logger.warn(warning);
+    warnings.push(warning);
+  }
+
+  if (storedMerchantLocationKey) {
     const storedLocation = locations.find(
-      (location) => getLocationKey(location) === appSettings.merchant_location_key
+      (location) => getLocationKey(location) === storedMerchantLocationKey
     );
     if (storedLocation) {
       return {
         created: { location: false },
-        merchantLocationKey: appSettings.merchant_location_key,
+        merchantLocationKey: storedMerchantLocationKey,
         warnings,
       };
     }
@@ -660,19 +732,19 @@ export async function ensureDefaultInventoryLocation(
     try {
       const directStoredLocation = await getInventoryLocationByKey(
         api,
-        appSettings.merchant_location_key
+        storedMerchantLocationKey
       );
       if (directStoredLocation) {
         return {
           created: { location: false },
-          merchantLocationKey: appSettings.merchant_location_key,
+          merchantLocationKey: storedMerchantLocationKey,
           warnings,
         };
       }
     } catch (error) {
       const warning =
         `Failed direct inventory location lookup for configured merchant_location_key ` +
-        `"${appSettings.merchant_location_key}". Continuing fallback flow. ` +
+        `"${storedMerchantLocationKey}". Continuing fallback flow. ` +
         `Root cause: ${normalizeError(error)}`;
       logger.warn(warning);
       warnings.push(warning);
@@ -771,10 +843,19 @@ async function persistPolicyBootstrapSettings(
 ): Promise<void> {
   await appSettings.update(
     {
-      default_fulfillment_policy_id: result.fulfillmentPolicyId,
-      default_payment_policy_id: result.paymentPolicyId,
-      default_return_policy_id: result.returnPolicyId,
-      ebay_marketplace_id: marketplaceId,
+      default_fulfillment_policy_id: assertPersistableValue(
+        'default_fulfillment_policy_id',
+        result.fulfillmentPolicyId
+      ),
+      default_payment_policy_id: assertPersistableValue(
+        'default_payment_policy_id',
+        result.paymentPolicyId
+      ),
+      default_return_policy_id: assertPersistableValue(
+        'default_return_policy_id',
+        result.returnPolicyId
+      ),
+      ebay_marketplace_id: assertPersistableMarketplaceId(marketplaceId),
     },
     appSettingsId
   );
@@ -787,7 +868,7 @@ async function persistInventoryLocationBootstrapSettings(
 ): Promise<void> {
   await appSettings.update(
     {
-      merchant_location_key: merchantLocationKey,
+      merchant_location_key: assertPersistableValue('merchant_location_key', merchantLocationKey),
     },
     appSettingsId
   );
@@ -813,6 +894,19 @@ export async function runSandboxBootstrap({
     marketplaceId,
     initialAppSettings.ebay_marketplace_id
   );
+  const warnings: string[] = [];
+
+  if (
+    hasText(initialAppSettings.ebay_marketplace_id) &&
+    initialAppSettings.ebay_marketplace_id !== resolvedMarketplaceId
+  ) {
+    const warning =
+      `Stored app_settings.${appSettingsId}.ebay_marketplace_id ` +
+      `"${initialAppSettings.ebay_marketplace_id}" does not match active sidecar marketplace ` +
+      `"${resolvedMarketplaceId}". Bootstrap will persist "${resolvedMarketplaceId}".`;
+    logger.warn(warning);
+    warnings.push(warning);
+  }
 
   const policyResult = await ensureDefaultSellerPolicies(
     api,
@@ -842,9 +936,10 @@ export async function runSandboxBootstrap({
     fulfillmentPolicyId: policyResult.fulfillmentPolicyId,
     marketplaceId: resolvedMarketplaceId,
     merchantLocationKey: locationResult.merchantLocationKey,
+    persistedAppSettingsId: appSettingsId,
     paymentPolicyId: policyResult.paymentPolicyId,
     returnPolicyId: policyResult.returnPolicyId,
-    warnings: [...policyResult.warnings, ...locationResult.warnings],
+    warnings: [...warnings, ...policyResult.warnings, ...locationResult.warnings],
   };
 
   await persistInventoryLocationBootstrapSettings(
@@ -854,4 +949,57 @@ export async function runSandboxBootstrap({
   );
 
   return result;
+}
+
+function formatBootstrapLine(
+  label: string,
+  value: string,
+  status: SandboxBootstrapStatus
+): string {
+  return `${label}: ${value} (${status})`;
+}
+
+export function formatSandboxBootstrapResult(result: SandboxBootstrapResult): string {
+  const lines = [
+    'eBay sandbox bootstrap',
+    `marketplace: ${result.marketplaceId}`,
+    `app_settings row: ${result.persistedAppSettingsId}`,
+    '',
+    formatBootstrapLine(
+      'payment policy ID',
+      result.paymentPolicyId,
+      result.created.payment ? 'created' : 'reused'
+    ),
+    formatBootstrapLine(
+      'fulfillment policy ID',
+      result.fulfillmentPolicyId,
+      result.created.fulfillment ? 'created' : 'reused'
+    ),
+    formatBootstrapLine(
+      'return policy ID',
+      result.returnPolicyId,
+      result.created.return ? 'created' : 'reused'
+    ),
+    formatBootstrapLine(
+      'merchant location key',
+      result.merchantLocationKey,
+      result.created.location ? 'created' : 'reused'
+    ),
+    '',
+    'persisted:',
+    `- ebay_marketplace_id = ${result.marketplaceId}`,
+    `- default_payment_policy_id = ${result.paymentPolicyId}`,
+    `- default_fulfillment_policy_id = ${result.fulfillmentPolicyId}`,
+    `- default_return_policy_id = ${result.returnPolicyId}`,
+    `- merchant_location_key = ${result.merchantLocationKey}`,
+  ];
+
+  if (result.warnings.length > 0) {
+    lines.push('', 'warnings:');
+    for (const warning of result.warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
+
+  return lines.join('\n');
 }

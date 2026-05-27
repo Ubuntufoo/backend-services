@@ -6,7 +6,10 @@ import { EbaySellerApi } from '@/api/index.js';
 import { getEbayConfig } from '@/config/environment.js';
 import { loadRootEnvironment } from '@/config/env-paths.js';
 import { getSidecarDataAccess } from '@/data/sidecar-data.js';
-import { runSandboxBootstrap } from '@/ebay/sandbox-bootstrap.js';
+import {
+  formatSandboxBootstrapResult,
+  runSandboxBootstrap,
+} from '@/ebay/sandbox-bootstrap.js';
 
 loadRootEnvironment();
 
@@ -19,7 +22,7 @@ export async function runSetupSandboxCli(): Promise<void> {
     dataAccess: getSidecarDataAccess(),
   });
 
-  console.log(JSON.stringify(result, null, 2));
+  console.log(formatSandboxBootstrapResult(result));
 }
 
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
