@@ -399,7 +399,7 @@ async function runGenerateAiJob(
       gemini_attempt_count: 1,
       gemini_attempts: [startedAttempt],
       gemini_selected_model: null,
-    });
+    }, true);
     await options.dataAccess.listings.updateWorkflowState({
       listingId,
       status: 'generating',
@@ -429,7 +429,7 @@ async function runGenerateAiJob(
         },
       ],
       gemini_selected_model: modelName,
-    });
+    }, true);
     const completedJob = await options.dataAccess.jobs.complete(job.id);
 
     return {

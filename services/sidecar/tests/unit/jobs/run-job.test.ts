@@ -113,11 +113,13 @@ function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
+  geminiAttemptAuditError,
   onListingsUpdate,
   workflowStates = [],
 }: {
   job?: JobRow | null;
   listing?: ListingRow | null;
+  geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
 } = {}): SidecarDataAccess {
@@ -284,6 +286,10 @@ function createDataAccess({
       updateGeminiAttemptAudit: vi.fn(async (_jobId: string, audit) => {
         if (!jobState) {
           throw new Error('job missing');
+        }
+
+        if (geminiAttemptAuditError) {
+          throw geminiAttemptAuditError;
         }
 
         jobState = {
@@ -655,6 +661,64 @@ describe('runSidecarJob', () => {
         status: 'failed',
       }),
     ]);
+  });
+
+  it('keeps generate_ai success when Gemini audit persistence fails', async () => {
+    const dataAccess = createDataAccess({
+      geminiAttemptAuditError: new Error('audit write failed'),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+        Manufacturer: 'Upper Deck',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: ['Condition inferred from visible wear only.'],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(result.job.status).toBe('completed');
+    expect(result.job.last_error_code).toBeNull();
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+  });
+
+  it('preserves the Gemini failure when Gemini audit persistence fails', async () => {
+    const dataAccess = createDataAccess({
+      geminiAttemptAuditError: new Error('audit write failed'),
+    });
+    const generateListingDraftMock = vi.fn(async () => {
+      throw new Error('Gemini timed out');
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.job.last_error).toContain('Gemini timed out');
+    expect(result.job.last_error).not.toContain('audit write failed');
+    expect(result.listing?.last_error_code).toBe('generate_ai_failed');
   });
 
   it('returns asset prep summary for process_images jobs and does not fail batch on per-listing errors', async () => {
