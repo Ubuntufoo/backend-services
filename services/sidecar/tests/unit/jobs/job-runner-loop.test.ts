@@ -971,7 +971,34 @@ describe('job runner loop', () => {
     });
 
     expect(result.publishQueuedCount).toBe(0);
-    expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-STALE');
+    expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
+    expect(jobStates.size).toBe(1);
+  });
+
+  it('does not backfill a second publish job when a running publish job already exists', async () => {
+    const logger = createLogger();
+    const approvedListing = createListingRow({
+      listing_id: 'LIST-RUNNING',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const runningPublishJob = createJobRow({
+      id: 'job-publish-running',
+      job_type: 'publish',
+      listing_id: 'LIST-RUNNING',
+      max_attempts: 3,
+      status: 'running',
+    });
+    const { dataAccess, jobStates } = createDataAccess([runningPublishJob], [approvedListing]);
+
+    const result = await runQueuedSidecarJobsOnce({
+      dataAccess,
+      logger,
+      runJob: vi.fn(),
+    });
+
+    expect(result.publishQueuedCount).toBe(0);
+    expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
     expect(jobStates.size).toBe(1);
   });
 

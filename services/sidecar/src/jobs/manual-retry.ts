@@ -150,6 +150,17 @@ function buildListingRetryUpdate(workflow: ManualRetryWorkflow): ListingUpdate {
   };
 }
 
+function buildListingRetryRevertUpdate(listing: ListingRow): ListingUpdate {
+  return {
+    last_error_at: listing.last_error_at,
+    last_error_code: listing.last_error_code,
+    last_error_context: listing.last_error_context,
+    last_error_message: listing.last_error_message,
+    status: listing.status,
+    sub_status: listing.sub_status,
+  };
+}
+
 function assertListingRetryable(
   listing: ListingRow,
   workflow: ManualRetryWorkflow,
@@ -302,6 +313,21 @@ export async function retryListingWorkflow(
   }
 
   const enqueueResult = await enqueueWorkflowJob(options.dataAccess, listing.listing_id, workflow);
+
+  if (enqueueResult.alreadyQueued) {
+    const restoredListing = await options.dataAccess.listings.update(
+      listing.listing_id,
+      buildListingRetryRevertUpdate(listing)
+    );
+
+    return {
+      alreadyQueued: true,
+      workflow,
+      job: enqueueResult.job,
+      listing: restoredListing,
+    };
+  }
+
   return {
     alreadyQueued: enqueueResult.alreadyQueued,
     workflow,
