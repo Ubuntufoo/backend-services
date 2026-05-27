@@ -98,6 +98,12 @@ export const updateListingImageUrlsRequestSchema = z
 
 export const updateListingWorkflowStateRequestSchema = listingWorkflowStateSchema;
 
+export const enqueueGenerateAiRequestSchema = z
+  .object({
+    sellerHints: nullableTrimmedStringSchema('sellerHints'),
+  })
+  .strict();
+
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
 export type SellerEditableListingFieldsInput = z.infer<
   typeof sellerEditableListingFieldsSchema
@@ -111,3 +117,4 @@ export type UpdateListingImageUrlsRequest = z.infer<
 export type UpdateListingWorkflowStateRequest = z.infer<
   typeof updateListingWorkflowStateRequestSchema
 >;
+export type EnqueueGenerateAiRequest = z.infer<typeof enqueueGenerateAiRequestSchema>;

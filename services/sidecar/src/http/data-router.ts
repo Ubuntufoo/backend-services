@@ -4,6 +4,7 @@ import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
   listingIdParamsSchema,
   updateListingRequestSchema,
@@ -259,6 +260,63 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         subStatus: body.subStatus,
       });
       res.json(listing);
+    } catch (error) {
+      sendRouteError(res, error);
+    }
+  });
+
+  router.post('/listings/:listingId/generate-ai', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    const body = parseOrSend(res, enqueueGenerateAiRequestSchema, req.body);
+    if (!body) {
+      return;
+    }
+
+    try {
+      const dataAccess = getDataAccess();
+      const listing = await dataAccess.listings.getByListingId(params.listingId);
+
+      if (!listing) {
+        res.status(404).json({
+          error: 'not_found',
+          message: `Listing "${params.listingId}" was not found.`,
+        });
+        return;
+      }
+
+      if (listing.status !== 'assets_ready') {
+        res.status(409).json({
+          error: 'listing_not_assets_ready',
+          message: `Listing "${params.listingId}" must be assets_ready before generate_ai can be enqueued.`,
+        });
+        return;
+      }
+
+      const preparedListing = await dataAccess.listings.prepareForGenerateAi({
+        expectedUpdatedAt: listing.updated_at,
+        listingId: params.listingId,
+        sellerHints: body.sellerHints,
+      });
+
+      if (!preparedListing) {
+        res.status(409).json({
+          error: 'listing_state_stale',
+          message: `Listing "${params.listingId}" changed before generate_ai could be enqueued. Refresh and retry.`,
+        });
+        return;
+      }
+
+      const enqueueResult = await dataAccess.jobs.enqueueGenerateAi(params.listingId);
+
+      res.status(enqueueResult.alreadyQueued ? 200 : 201).json({
+        alreadyQueued: enqueueResult.alreadyQueued,
+        job: enqueueResult.job,
+        listing: preparedListing,
+      });
     } catch (error) {
       sendRouteError(res, error);
     }

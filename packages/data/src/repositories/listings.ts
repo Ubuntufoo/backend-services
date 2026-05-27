@@ -55,6 +55,12 @@ export interface GeneratedListingFieldsUpdate {
   title?: ListingUpdate['title'];
 }
 
+export interface GenerateAiPreparationUpdate {
+  expectedUpdatedAt?: string;
+  listingId: string;
+  sellerHints?: ListingUpdate['seller_hints'];
+}
+
 export interface PublishedListingUpdate {
   ebayListingId?: ListingUpdate['ebay_listing_id'];
   ebayListingStatus?: ListingUpdate['ebay_listing_status'];
@@ -328,6 +334,39 @@ export async function saveGeneratedListingFields(
   const { listingId } = input;
 
   return await updateListing(client, listingId, mapGeneratedListingFieldsUpdate(input));
+}
+
+export async function prepareListingForGenerateAi(
+  client: SupabaseDataClient,
+  input: GenerateAiPreparationUpdate
+): Promise<ListingRow | null> {
+  const changes: ListingUpdate = {
+    status: 'assets_ready',
+    sub_status: 'ready_to_generate',
+  };
+
+  if (input.sellerHints !== undefined) {
+    changes.seller_hints = input.sellerHints;
+  }
+
+  if (!input.expectedUpdatedAt) {
+    return await updateListing(client, input.listingId, changes);
+  }
+
+  const result = (await client
+    .from('listings')
+    .update(changes)
+    .eq('listing_id', input.listingId)
+    .eq('status', 'assets_ready')
+    .eq('updated_at', input.expectedUpdatedAt)
+    .select()
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? null;
 }
 
 export async function savePublishedListing(

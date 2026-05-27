@@ -82,6 +82,7 @@ function createDataAccess(): SidecarDataAccess {
       list: vi.fn(async () => [listingRow]),
       listByStatus: vi.fn(async () => [listingRow]),
       markPublishFailed: vi.fn(async () => listingRow),
+      prepareForGenerateAi: vi.fn(async () => listingRow),
       saveImageMetadata: vi.fn(async (_input) => ({
         ...listingRow,
       })),
@@ -410,6 +411,159 @@ describe('data API router', () => {
       listingId: 'LIST-001',
       status: 'approved_for_export',
       subStatus: 'publish_queued',
+    });
+  });
+
+  it('enqueues generate_ai from assets_ready and persists optional seller hints', async () => {
+    const listingState = {
+      ...listingRow,
+      seller_hints: null,
+      status: 'assets_ready',
+      sub_status: 'waiting_for_seller_hints',
+      updated_at: '2026-05-17T01:00:00.000Z',
+    } as const;
+    const preparedListing = {
+      ...listingState,
+      seller_hints: 'Use padded envelope',
+      sub_status: 'ready_to_generate',
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => listingState);
+    dataAccess.listings.prepareForGenerateAi = vi.fn(async (input) => {
+      expect(input).toEqual({
+        expectedUpdatedAt: '2026-05-17T01:00:00.000Z',
+        listingId: 'LIST-001',
+        sellerHints: 'Use padded envelope',
+      });
+      return preparedListing;
+    });
+    dataAccess.jobs.enqueueGenerateAi = vi.fn(async (listingId: string) => {
+      expect(listingId).toBe('LIST-001');
+      return {
+        alreadyQueued: false,
+        job: {
+          created_at: '2026-05-17T01:00:01.000Z',
+          id: 'job-generate-ai-row-id',
+          job_type: 'generate_ai',
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          listing_id: 'LIST-001',
+          next_run_at: null,
+          status: 'queued',
+          updated_at: '2026-05-17T01:00:01.000Z',
+        },
+      };
+    });
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/generate-ai').send({
+      sellerHints: 'Use padded envelope',
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      alreadyQueued: false,
+      job: {
+        created_at: '2026-05-17T01:00:01.000Z',
+        id: 'job-generate-ai-row-id',
+        job_type: 'generate_ai',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        next_run_at: null,
+        status: 'queued',
+        updated_at: '2026-05-17T01:00:01.000Z',
+      },
+      listing: preparedListing,
+    });
+    expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
+    expect(dataAccess.listings.prepareForGenerateAi).toHaveBeenCalledOnce();
+    expect(dataAccess.jobs.enqueueGenerateAi).toHaveBeenCalledOnce();
+  });
+
+  it('rejects generate_ai enqueue requests when listing is not assets_ready', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/generate-ai').send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: 'listing_not_assets_ready',
+      message: 'Listing "LIST-001" must be assets_ready before generate_ai can be enqueued.',
+    });
+    expect(dataAccess.listings.prepareForGenerateAi).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueueGenerateAi).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale generate_ai enqueue attempts after the listing changes in flight', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+      updated_at: '2026-05-17T01:00:00.000Z',
+    }));
+    dataAccess.listings.prepareForGenerateAi = vi.fn(async () => null);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/generate-ai').send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: 'listing_state_stale',
+      message:
+        'Listing "LIST-001" changed before generate_ai could be enqueued. Refresh and retry.',
+    });
+    expect(dataAccess.jobs.enqueueGenerateAi).not.toHaveBeenCalled();
+  });
+
+  it('returns the active generate_ai job when enqueue hits the duplicate guard', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+      updated_at: '2026-05-17T01:00:00.000Z',
+    }));
+    dataAccess.listings.prepareForGenerateAi = vi.fn(async () => ({
+      ...listingRow,
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+      updated_at: '2026-05-17T01:00:00.000Z',
+    }));
+    dataAccess.jobs.enqueueGenerateAi = vi.fn(async () => ({
+      alreadyQueued: true,
+      job: {
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-active',
+        job_type: 'generate_ai',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        next_run_at: null,
+        status: 'running',
+        updated_at: '2026-05-17T01:00:00.000Z',
+      },
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/generate-ai').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.alreadyQueued).toBe(true);
+    expect(response.body.job).toMatchObject({
+      id: 'job-generate-ai-active',
+      job_type: 'generate_ai',
+      status: 'running',
     });
   });
 
