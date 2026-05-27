@@ -13,6 +13,10 @@ import {
   toListingErrorContext,
 } from './job-errors.js';
 import { getNextRetryAt, getStaleLeaseMs, hasAttemptsRemaining } from './retry-policy.js';
+import {
+  getNextPublishEligibleAt,
+  getPublishThrottlePolicy,
+} from './publish-throttle-policy.js';
 
 const DEFAULT_BATCH_SIZE = 1;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
@@ -462,6 +466,7 @@ export async function runQueuedSidecarJobsOnce(
 ): Promise<RunQueuedSidecarJobsOnceResult> {
   const dataAccess = options.dataAccess ?? getSidecarDataAccess();
   const logger = getLogger(options.logger);
+  const publishThrottlePolicy = getPublishThrottlePolicy();
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   const runJob = options.runJob ?? runSidecarJob;
   const now = options.now ?? (() => new Date());
@@ -480,9 +485,20 @@ export async function runQueuedSidecarJobsOnce(
   let publishExecutedCount = 0;
   let publishFailedCount = 0;
   let publishSkippedCount = 0;
+  const skippedDuePublishJobs: RunSidecarJobResult['job'][] = [];
+  let publishClaimsRemaining = publishThrottlePolicy.maxPerTick;
   let skippedCount = 0;
 
   for (const queuedJob of queuedJobs) {
+    if (queuedJob.job_type === 'publish') {
+      if (publishClaimsRemaining <= 0) {
+        skippedDuePublishJobs.push(queuedJob);
+        continue;
+      }
+
+      publishClaimsRemaining -= 1;
+    }
+
     const claimedJob = await dataAccess.jobs.claimDueQueued(queuedJob.id, asIsoTimestamp(now));
 
     if (!claimedJob) {
@@ -583,6 +599,22 @@ export async function runQueuedSidecarJobsOnce(
         jobType: claimedJob.job_type,
       });
     }
+  }
+
+  if (skippedDuePublishJobs.length > 0) {
+    const nextEligibleAt = getNextPublishEligibleAt(now(), publishThrottlePolicy);
+    for (const job of skippedDuePublishJobs) {
+      await dataAccess.jobs.update(job.id, {
+        next_run_at: nextEligibleAt,
+      });
+    }
+
+    logger.info('Deferred publish jobs for throttle.', {
+      allowedPublishCount: publishClaimedCount,
+      deferredPublishCount: skippedDuePublishJobs.length,
+      duePublishCount: publishQueuedCount,
+      nextEligibleAt,
+    });
   }
 
   return {

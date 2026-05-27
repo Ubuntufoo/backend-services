@@ -367,6 +367,7 @@ export async function listDueQueuedJobs(
   return result.data ?? [];
 }
 
+
 export async function claimDueQueuedJob(
   client: SupabaseDataClient,
   jobId: string,

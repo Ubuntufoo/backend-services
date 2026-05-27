@@ -590,6 +590,283 @@ describe('job runner loop', () => {
     });
   });
 
+  it('runs at most one publish job per tick and only defers skipped due publish jobs', async () => {
+    const logger = createLogger();
+    const firstListing = createListingRow({
+      listing_id: 'LIST-PUBLISH-001',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const secondListing = createListingRow({
+      created_at: '2026-05-22T12:05:00.000Z',
+      listing_id: 'LIST-PUBLISH-002',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const futureListing = createListingRow({
+      created_at: '2026-05-22T12:10:00.000Z',
+      listing_id: 'LIST-PUBLISH-FUTURE',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const firstJob = createJobRow({
+      id: 'job-publish-001',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-001',
+      max_attempts: 3,
+      created_at: '2026-05-22T12:01:00.000Z',
+    });
+    const secondJob = createJobRow({
+      id: 'job-publish-002',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-002',
+      max_attempts: 3,
+      created_at: '2026-05-22T12:02:00.000Z',
+    });
+    const futureJob = createJobRow({
+      id: 'job-publish-future',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-FUTURE',
+      max_attempts: 3,
+      created_at: '2026-05-22T12:03:00.000Z',
+      next_run_at: '2026-05-22T13:30:00.000Z',
+    });
+    const { dataAccess, jobStates } = createDataAccess(
+      [firstJob, secondJob, futureJob],
+      [firstListing, secondListing, futureListing]
+    );
+    const runJob = vi.fn(async (jobId: string) => {
+      const job = await dataAccess.jobs.complete(jobId);
+      const listing = await dataAccess.listings.update(job.listing_id as string, {
+        status: 'exported',
+        sub_status: 'idle',
+      });
+
+      return {
+        job,
+        listing,
+      };
+    });
+
+    const firstResult = await runQueuedSidecarJobsOnce({
+      batchSize: 2,
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+      runJob,
+    });
+
+    expect(firstResult).toMatchObject({
+      claimedCount: 1,
+      executedCount: 1,
+      publishClaimedCount: 1,
+      publishExecutedCount: 1,
+      publishFailedCount: 0,
+      publishQueuedCount: 2,
+      publishSkippedCount: 0,
+    });
+    expect(jobStates.get('job-publish-001')).toMatchObject({
+      status: 'completed',
+    });
+    expect(jobStates.get('job-publish-002')).toMatchObject({
+      attempts: 0,
+      next_run_at: '2026-05-22T13:00:10.000Z',
+      status: 'queued',
+    });
+    expect(jobStates.get('job-publish-future')).toMatchObject({
+      attempts: 0,
+      next_run_at: '2026-05-22T13:30:00.000Z',
+      status: 'queued',
+    });
+    expect(runJob).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      'Deferred publish jobs for throttle.',
+      expect.objectContaining({
+        allowedPublishCount: 1,
+        deferredPublishCount: 1,
+        duePublishCount: 2,
+        nextEligibleAt: '2026-05-22T13:00:10.000Z',
+      })
+    );
+
+    const secondResult = await runQueuedSidecarJobsOnce({
+      batchSize: 2,
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+      runJob,
+    });
+
+    expect(secondResult.publishQueuedCount).toBe(0);
+    expect(runJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not throttle generate_ai or process_images jobs', async () => {
+    const logger = createLogger();
+    const generateAiJob = createJobRow({
+      id: 'job-generate-ai-001',
+      job_type: 'generate_ai',
+      listing_id: 'LIST-GENERATE-001',
+      created_at: '2026-05-22T12:01:00.000Z',
+    });
+    const processImagesJob = createJobRow({
+      id: 'job-process-images-001',
+      created_at: '2026-05-22T12:02:00.000Z',
+      job_type: 'process_images',
+    });
+    const { dataAccess } = createDataAccess([generateAiJob, processImagesJob]);
+    const runJob = vi.fn(async (jobId: string) => {
+      const job = await dataAccess.jobs.complete(jobId);
+
+      return {
+        job,
+        listing: null,
+      };
+    });
+
+    const result = await runQueuedSidecarJobsOnce({
+      batchSize: 2,
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+      runJob,
+    });
+
+    expect(result.claimedCount).toBe(2);
+    expect(result.executedCount).toBe(2);
+    expect(result.publishClaimedCount).toBe(0);
+    expect(runJob).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves publish retry next_run_at while throttling other queued publish jobs', async () => {
+    const logger = createLogger();
+    const retryListing = createListingRow({
+      listing_id: 'LIST-PUBLISH-RETRY',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const retryJob = createJobRow({
+      id: 'job-publish-retry',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-RETRY',
+      max_attempts: 3,
+      next_run_at: '2026-05-22T13:30:00.000Z',
+    });
+    const dueListing = createListingRow({
+      created_at: '2026-05-22T12:05:00.000Z',
+      listing_id: 'LIST-PUBLISH-DUE',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const dueJob = createJobRow({
+      id: 'job-publish-due',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-DUE',
+      max_attempts: 3,
+      created_at: '2026-05-22T12:01:00.000Z',
+    });
+    const { dataAccess, jobStates } = createDataAccess([dueJob, retryJob], [dueListing, retryListing]);
+    const runJob = vi.fn(async (jobId: string) => {
+      const job = await dataAccess.jobs.complete(jobId);
+      const listing = await dataAccess.listings.update(job.listing_id as string, {
+        status: 'exported',
+        sub_status: 'idle',
+      });
+
+      return {
+        job,
+        listing,
+      };
+    });
+
+    const result = await runQueuedSidecarJobsOnce({
+      batchSize: 2,
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+      runJob,
+    });
+
+    expect(result.publishQueuedCount).toBe(1);
+    expect(runJob).toHaveBeenCalledTimes(1);
+    expect(jobStates.get('job-publish-retry')).toMatchObject({
+      next_run_at: '2026-05-22T13:30:00.000Z',
+      status: 'queued',
+    });
+    expect(jobStates.get('job-publish-due')).toMatchObject({
+      status: 'completed',
+      next_run_at: null,
+    });
+  });
+
+  it('recovers stale publish jobs before throttling queued publish work', async () => {
+    const logger = createLogger();
+    const staleListing = createListingRow({
+      listing_id: 'LIST-PUBLISH-STALE',
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    });
+    const staleJob = createJobRow({
+      id: 'job-publish-stale',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-STALE',
+      max_attempts: 3,
+      status: 'running',
+      updated_at: '2026-05-22T11:00:00.000Z',
+    });
+    const dueListing = createListingRow({
+      created_at: '2026-05-22T12:05:00.000Z',
+      listing_id: 'LIST-PUBLISH-DUE-2',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const dueJob = createJobRow({
+      id: 'job-publish-due-2',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-DUE-2',
+      max_attempts: 3,
+      created_at: '2026-05-22T12:01:00.000Z',
+    });
+    const { dataAccess, jobStates, listingStates } = createDataAccess(
+      [staleJob, dueJob],
+      [staleListing, dueListing]
+    );
+    const runJob = vi.fn(async (jobId: string) => {
+      const job = await dataAccess.jobs.complete(jobId);
+      const listing = await dataAccess.listings.update(job.listing_id as string, {
+        status: 'exported',
+        sub_status: 'idle',
+      });
+
+      return {
+        job,
+        listing,
+      };
+    });
+
+    await runQueuedSidecarJobsOnce({
+      batchSize: 2,
+      dataAccess,
+      logger,
+      now: () => new Date('2026-05-22T13:00:00.000Z'),
+      runJob,
+    });
+
+    expect(jobStates.get('job-publish-stale')).toMatchObject({
+      status: 'queued',
+      last_error_code: 'stale_worker',
+      next_run_at: '2026-05-22T13:01:00.000Z',
+    });
+    expect(listingStates.get('LIST-PUBLISH-STALE')).toMatchObject({
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    expect(jobStates.get('job-publish-due-2')).toMatchObject({
+      status: 'completed',
+      next_run_at: null,
+    });
+  });
+
   it('ignores ineligible approved listings when queued-only pickup is enabled', async () => {
     const logger = createLogger();
     const { dataAccess } = createDataAccess([], [
