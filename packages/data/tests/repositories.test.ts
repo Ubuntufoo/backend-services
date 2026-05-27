@@ -38,6 +38,7 @@ import {
   saveListingImageMetadata,
   saveGeneratedListingFields,
   savePublishedListing,
+  setGeminiJobAttemptAudit,
   updateListing,
   updateAppSettings,
   updateJob,
@@ -91,6 +92,9 @@ const listingRow: ListingRow = {
 const jobRow: JobRow = {
   attempts: 0,
   created_at: '2026-05-17T00:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-row-id',
   job_type: 'process_images',
   last_error: null,
@@ -858,6 +862,9 @@ function createResetJobForManualRetryClient(
         update: vi.fn((payload: unknown) => {
           expect(payload).toEqual({
             attempts: 0,
+            gemini_attempt_count: 0,
+            gemini_attempts: [],
+            gemini_selected_model: null,
             last_error: null,
             last_error_at: null,
             last_error_code: null,
@@ -1342,6 +1349,90 @@ describe('shared repositories', () => {
 
     await expect(updateJob(updateClient, 'job-row-id', { status: 'running' })).resolves.toEqual(jobRow);
 
+    const succeededAttempt = {
+      attempt_order: 1,
+      completed_at: '2026-05-25T13:00:02.000Z',
+      duration_ms: 2000,
+      failure_code: null,
+      failure_message: null,
+      model_name: 'gemini-3.1-flash-lite',
+      started_at: '2026-05-25T13:00:00.000Z',
+      status: 'succeeded' as const,
+    };
+    const setSucceededAuditClient = createUpdateClient(
+      'jobs',
+      {
+        ...jobRow,
+        gemini_attempt_count: 1,
+        gemini_attempts: [succeededAttempt],
+        gemini_selected_model: 'gemini-3.1-flash-lite',
+      },
+      'id',
+      'job-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          gemini_attempt_count: 1,
+          gemini_attempts: [succeededAttempt],
+          gemini_selected_model: 'gemini-3.1-flash-lite',
+        });
+      }
+    );
+
+    await expect(
+      setGeminiJobAttemptAudit(setSucceededAuditClient, 'job-row-id', {
+        gemini_attempt_count: 1,
+        gemini_attempts: [succeededAttempt],
+        gemini_selected_model: 'gemini-3.1-flash-lite',
+      })
+    ).resolves.toEqual({
+      ...jobRow,
+      gemini_attempt_count: 1,
+      gemini_attempts: [succeededAttempt],
+      gemini_selected_model: 'gemini-3.1-flash-lite',
+    });
+
+    const failedAttempt = {
+      attempt_order: 1,
+      completed_at: '2026-05-25T13:00:02.000Z',
+      duration_ms: 2000,
+      failure_code: 'generate_ai_failed',
+      failure_message: 'Gemini timed out',
+      model_name: 'gemini-3.1-flash-lite',
+      started_at: '2026-05-25T13:00:00.000Z',
+      status: 'failed' as const,
+    };
+    const setFailedAuditClient = createUpdateClient(
+      'jobs',
+      {
+        ...jobRow,
+        gemini_attempt_count: 1,
+        gemini_attempts: [failedAttempt],
+        gemini_selected_model: null,
+      },
+      'id',
+      'job-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          gemini_attempt_count: 1,
+          gemini_attempts: [failedAttempt],
+          gemini_selected_model: null,
+        });
+      }
+    );
+
+    await expect(
+      setGeminiJobAttemptAudit(setFailedAuditClient, 'job-row-id', {
+        gemini_attempt_count: 1,
+        gemini_attempts: [failedAttempt],
+        gemini_selected_model: null,
+      })
+    ).resolves.toEqual({
+      ...jobRow,
+      gemini_attempt_count: 1,
+      gemini_attempts: [failedAttempt],
+      gemini_selected_model: null,
+    });
+
     const claimClient = createClaimDueQueuedJobClient(jobRow, {
       ...jobRow,
       attempts: 1,
@@ -1552,6 +1643,9 @@ describe('shared repositories', () => {
           update: vi.fn((payload: unknown) => {
             expect(payload).toEqual({
               attempts: 0,
+              gemini_attempt_count: 0,
+              gemini_attempts: [],
+              gemini_selected_model: null,
               last_error: null,
               last_error_at: null,
               last_error_code: null,

@@ -8,6 +8,9 @@ import { runSidecarJob } from '@/jobs/index.js';
 const queuedGenerateAiJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-generate-ai',
   job_type: 'generate_ai',
   last_error: null,
@@ -23,6 +26,9 @@ const queuedGenerateAiJob: JobRow = {
 const queuedProcessImagesJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-process-images',
   job_type: 'process_images',
   last_error: null,
@@ -43,6 +49,9 @@ const runningProcessImagesJob: JobRow = {
 const queuedPublishJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
   id: 'job-publish',
   job_type: 'publish',
   last_error: null,
@@ -272,6 +281,18 @@ function createDataAccess({
 
         return { ...jobState };
       }),
+      updateGeminiAttemptAudit: vi.fn(async (_jobId: string, audit) => {
+        if (!jobState) {
+          throw new Error('job missing');
+        }
+
+        jobState = {
+          ...jobState,
+          ...audit,
+        };
+
+        return { ...jobState };
+      }),
       update: jobsUpdate,
     },
     listings: {
@@ -439,10 +460,51 @@ describe('runSidecarJob', () => {
         title: '1991 Upper Deck Michael Jordan',
       })
     );
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: null,
+          duration_ms: null,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'started',
+        },
+      ],
+      gemini_selected_model: null,
+    });
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(2, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: '2026-05-20T13:00:00.000Z',
+          duration_ms: 0,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'succeeded',
+        },
+      ],
+      gemini_selected_model: 'gemini-3.1-flash-lite',
+    });
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
     expect(result.job.status).toBe('completed');
+    expect(result.job.gemini_attempt_count).toBe(1);
+    expect(result.job.gemini_selected_model).toBe('gemini-3.1-flash-lite');
+    expect(result.job.gemini_attempts).toEqual([
+      expect.objectContaining({
+        attempt_order: 1,
+        model_name: 'gemini-3.1-flash-lite',
+        status: 'succeeded',
+      }),
+    ]);
   });
 
   it('resolves category and condition ids from Gemini suggestions only for trading card singles', async () => {
@@ -550,6 +612,49 @@ describe('runSidecarJob', () => {
     expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
     expect(result.listing?.status).toBe('assets_ready');
     expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: null,
+          duration_ms: null,
+          failure_code: null,
+          failure_message: null,
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'started',
+        },
+      ],
+      gemini_selected_model: null,
+    });
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(2, 'job-generate-ai', {
+      gemini_attempt_count: 1,
+      gemini_attempts: [
+        {
+          attempt_order: 1,
+          completed_at: '2026-05-20T13:00:00.000Z',
+          duration_ms: 0,
+          failure_code: 'generate_ai_failed',
+          failure_message: 'Gemini timed out',
+          model_name: 'gemini-3.1-flash-lite',
+          started_at: '2026-05-20T13:00:00.000Z',
+          status: 'failed',
+        },
+      ],
+      gemini_selected_model: null,
+    });
+    expect(result.job.gemini_attempt_count).toBe(1);
+    expect(result.job.gemini_selected_model).toBeNull();
+    expect(result.job.gemini_attempts).toEqual([
+      expect.objectContaining({
+        attempt_order: 1,
+        failure_code: 'generate_ai_failed',
+        failure_message: 'Gemini timed out',
+        model_name: 'gemini-3.1-flash-lite',
+        status: 'failed',
+      }),
+    ]);
   });
 
   it('returns asset prep summary for process_images jobs and does not fail batch on per-listing errors', async () => {

@@ -16,6 +16,10 @@ export interface GeminiDraftConfig {
   model: string;
 }
 
+export function getConfiguredGeminiModelName(env: NodeJS.ProcessEnv = process.env): string {
+  return loadGeminiDraftConfig(env).model;
+}
+
 export function loadGeminiDraftConfig(env: NodeJS.ProcessEnv = process.env): GeminiDraftConfig {
   const loaded = loadEnv({
     serviceName: 'gemini',

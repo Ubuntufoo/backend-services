@@ -29,6 +29,7 @@ import {
   resetJobForManualRetry,
   requeueJob,
   saveListingImageMetadata,
+  setGeminiJobAttemptAudit,
   updateAppSettings,
   updateJob,
   updateListing,
@@ -40,6 +41,7 @@ import {
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
   type EnqueuePublishJobResult,
+  type GeminiJobAttemptAuditUpdate,
   type JobInsert,
   type JobErrorUpdateInput,
   type JobRow,
@@ -79,6 +81,10 @@ export interface SidecarDataAccess {
     listStaleRunning(cutoff: string): Promise<JobRow[]>;
     resetForManualRetry(jobId: string, now: string): Promise<JobRow | null>;
     requeue(jobId: string, error: JobErrorUpdateInput, nextRunAt: string): Promise<JobRow>;
+    updateGeminiAttemptAudit(
+      jobId: string,
+      audit: GeminiJobAttemptAuditUpdate
+    ): Promise<JobRow>;
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
   listings: {
@@ -147,6 +153,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       listStaleRunning: async (cutoff) => await listStaleRunningJobs(client, cutoff),
       resetForManualRetry: async (jobId, now) => await resetJobForManualRetry(client, jobId, now),
       requeue: async (jobId, error, nextRunAt) => await requeueJob(client, jobId, error, nextRunAt),
+      updateGeminiAttemptAudit: async (jobId, audit) =>
+        await setGeminiJobAttemptAudit(client, jobId, audit),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
     },
     orders: {
