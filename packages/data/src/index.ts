@@ -56,6 +56,7 @@ export {
   listDueQueuedJobs,
   listJobsByListingId,
   listJobsByListingIds,
+  listQueuedPublishJobs,
   listStaleRunningJobs,
   resetJobForManualRetry,
   requeueJob,
@@ -65,6 +66,7 @@ export {
   type EnqueuePublishJobResult,
   type JobErrorUpdateInput,
   type ListDueQueuedJobsOptions,
+  type ListQueuedPublishJobsOptions,
 } from './repositories/jobs.js';
 export {
   claimApprovedListingForPublish,

@@ -27,6 +27,7 @@ const completeJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
 const listDueQueuedJobsMock = vi.fn();
+const listQueuedPublishJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
 const listStaleRunningJobsMock = vi.fn();
 const claimDueQueuedJobMock = vi.fn();
@@ -61,6 +62,7 @@ vi.mock('@ebay-inventory/data', () => ({
   listApprovedForExportListings: listApprovedForExportListingsMock,
   listDueQueuedJobs: listDueQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
+  listQueuedPublishJobs: listQueuedPublishJobsMock,
   listStaleRunningJobs: listStaleRunningJobsMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
@@ -186,6 +188,7 @@ describe('sidecar data access', () => {
     await dataAccess.jobs.getActiveGenerateAiByListingId('LIST-001');
     await dataAccess.jobs.getById('job-row-id');
     await dataAccess.jobs.listDueQueued('2026-05-25T13:00:00.000Z', { limit: 1 });
+    await dataAccess.jobs.listQueuedPublishJobs();
     await dataAccess.jobs.listByListingId('LIST-001');
     await dataAccess.jobs.listStaleRunning('2026-05-25T12:00:00.000Z');
     await dataAccess.jobs.resetForManualRetry('job-row-id', '2026-05-25T13:00:00.000Z');
@@ -232,6 +235,7 @@ describe('sidecar data access', () => {
       '2026-05-25T13:00:00.000Z',
       { limit: 1 }
     );
+    expect(listQueuedPublishJobsMock).toHaveBeenCalledWith(client, undefined);
     expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(listStaleRunningJobsMock).toHaveBeenCalledWith(client, '2026-05-25T12:00:00.000Z');
     expect(resetJobForManualRetryMock).toHaveBeenCalledWith(
