@@ -543,4 +543,22 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).not.toHaveBeenCalled();
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
+
+  it('reports a claim race as not claimable when a queued job cannot be claimed', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedGenerateAiJob,
+    });
+    dataAccess.jobs.claimDueQueued = vi.fn(async () => null);
+
+    await expect(
+      runSidecarJob('job-generate-ai', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: 'job_not_claimable',
+      message:
+        'Job "job-generate-ai" is queued but could not be claimed for execution. It may not be due yet or another worker already claimed it.',
+    });
+  });
 });

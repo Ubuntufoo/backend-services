@@ -3,6 +3,7 @@ import {
   GeminiDraftServiceError,
   GeminiDraftValidationError,
 } from '@/gemini/index.js';
+import { getJobMaxAttempts } from './retry-policy.js';
 
 export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
 
@@ -13,6 +14,7 @@ export const JOB_ERROR_CODES = {
   GENERATE_AI_MISSING_IMAGE_URLS: 'generate_ai_missing_image_urls',
   GENERATE_AI_MISSING_LISTING_ID: 'generate_ai_missing_listing_id',
   JOB_NOT_FOUND: 'job_not_found',
+  JOB_NOT_CLAIMABLE: 'job_not_claimable',
   JOB_NOT_RUNNABLE: 'job_not_runnable',
   PROCESS_IMAGES_FAILED: 'process_images_failed',
   RETRY_EXHAUSTED: 'retry_exhausted',
@@ -22,7 +24,7 @@ export const JOB_ERROR_CODES = {
 
 export type JobErrorCode = (typeof JOB_ERROR_CODES)[keyof typeof JOB_ERROR_CODES];
 
-export type JobErrorContext = Record<string, unknown>;
+export type JobErrorContext = Record<string, Json>;
 
 export class SidecarJobError extends Error {
   readonly category: JobErrorCategory;
@@ -128,10 +130,11 @@ export function createRetryExhaustedError(
   return new SidecarJobError(
     JOB_ERROR_CODES.RETRY_EXHAUSTED,
     'terminal',
-    `Job "${job.id}" exhausted ${job.max_attempts} attempts after ${error.code}: ${error.message}`,
+    `Job "${job.id}" exhausted ${getJobMaxAttempts(job)} attempts after ${error.code}: ${error.message}`,
     {
       attempts: job.attempts,
       exhausted_code: error.code,
+      exhausted_max_attempts: getJobMaxAttempts(job),
       job_type: job.job_type,
       source_category: error.category,
     },
@@ -165,8 +168,10 @@ export function toJobErrorUpdateInput(error: SidecarJobError, errorAt: string): 
 }
 
 export function toListingErrorContext(error: SidecarJobError): Json {
-  return {
+  const context = {
     category: error.category,
     ...error.context,
-  } satisfies Json;
+  };
+
+  return context satisfies Json;
 }

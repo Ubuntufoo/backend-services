@@ -187,6 +187,12 @@ async function ensureJobRunning(
     if (claimedJob) {
       return claimedJob;
     }
+
+    throw new SidecarJobError(
+      JOB_ERROR_CODES.JOB_NOT_CLAIMABLE,
+      'terminal',
+      `Job "${job.id}" is queued but could not be claimed for execution. It may not be due yet or another worker already claimed it.`
+    );
   }
 
   throw new SidecarJobError(
