@@ -253,6 +253,7 @@ function createDataAccess({
       listDueQueued: vi.fn(async () => []),
       listByListingId: jobsListByListingId,
       listStaleRunning: vi.fn(async () => []),
+      resetForManualRetry: vi.fn(async () => null),
       requeue: vi.fn(async (_jobId: string, error, nextRunAt) => {
         if (!jobState) {
           throw new Error('job missing');

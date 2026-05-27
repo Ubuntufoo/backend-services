@@ -149,6 +149,7 @@ function createDependencies({
       listByListingId: vi.fn(),
       listDueQueued: vi.fn(),
       listStaleRunning: vi.fn(),
+      resetForManualRetry: vi.fn(),
       requeue: vi.fn(),
       update: vi.fn(),
     },

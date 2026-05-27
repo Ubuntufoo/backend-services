@@ -15,6 +15,8 @@ import {
   type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
+import { retryListingWorkflow } from '@/jobs/manual-retry.js';
+import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
 
 export interface DataApiRouterOptions {
   dataAccess?: SidecarDataAccess;
@@ -69,6 +71,28 @@ function sendRouteError(res: Response, error: unknown): void {
     error: statusCode === 400 ? 'invalid_request' : statusCode === 404 ? 'not_found' : 'server_error',
     message: responseMessage,
   });
+}
+
+function sendManualRetryError(res: Response, error: unknown): void {
+  if (error instanceof SidecarJobError) {
+    if (error.code === JOB_ERROR_CODES.JOB_NOT_FOUND) {
+      res.status(404).json({
+        error: 'not_found',
+        message: error.message,
+      });
+      return;
+    }
+
+    if (error.code === JOB_ERROR_CODES.MANUAL_RETRY_NOT_ALLOWED) {
+      res.status(409).json({
+        error: error.code,
+        message: error.message,
+      });
+      return;
+    }
+  }
+
+  sendRouteError(res, error);
 }
 
 function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpdate {
@@ -324,6 +348,24 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       });
     } catch (error) {
       sendRouteError(res, error);
+    }
+  });
+
+  router.post('/listings/:listingId/retry', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    try {
+      const result = await retryListingWorkflow({
+        dataAccess: getDataAccess(),
+        listingId: params.listingId,
+      });
+
+      res.status(200).json(result);
+    } catch (error) {
+      sendManualRetryError(res, error);
     }
   });
 

@@ -30,6 +30,7 @@ const listDueQueuedJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
 const listStaleRunningJobsMock = vi.fn();
 const claimDueQueuedJobMock = vi.fn();
+const resetJobForManualRetryMock = vi.fn();
 const requeueJobMock = vi.fn();
 const updateJobMock = vi.fn();
 const createOrderMock = vi.fn();
@@ -64,6 +65,7 @@ vi.mock('@ebay-inventory/data', () => ({
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
   markListingPublishFailed: markListingPublishFailedMock,
+  resetJobForManualRetry: resetJobForManualRetryMock,
   requeueJob: requeueJobMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
   updateAppSettings: updateAppSettingsMock,
@@ -186,6 +188,7 @@ describe('sidecar data access', () => {
     await dataAccess.jobs.listDueQueued('2026-05-25T13:00:00.000Z', { limit: 1 });
     await dataAccess.jobs.listByListingId('LIST-001');
     await dataAccess.jobs.listStaleRunning('2026-05-25T12:00:00.000Z');
+    await dataAccess.jobs.resetForManualRetry('job-row-id', '2026-05-25T13:00:00.000Z');
     await dataAccess.jobs.requeue('job-row-id', {
       errorAt: '2026-05-25T13:00:00.000Z',
       errorCode: 'retry_exhausted',
@@ -231,6 +234,11 @@ describe('sidecar data access', () => {
     );
     expect(listJobsByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(listStaleRunningJobsMock).toHaveBeenCalledWith(client, '2026-05-25T12:00:00.000Z');
+    expect(resetJobForManualRetryMock).toHaveBeenCalledWith(
+      client,
+      'job-row-id',
+      '2026-05-25T13:00:00.000Z'
+    );
     expect(requeueJobMock).toHaveBeenCalledWith(
       client,
       'job-row-id',

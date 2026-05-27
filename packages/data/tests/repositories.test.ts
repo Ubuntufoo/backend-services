@@ -31,6 +31,7 @@ import {
   listStaleRunningJobs,
   prepareListingForGenerateAi,
   markListingPublishFailed,
+  resetJobForManualRetry,
   requeueJob,
   saveListingArtifacts,
   saveListingImageMetadata,
@@ -817,6 +818,99 @@ function createClaimDueQueuedJobClient(
   } as unknown as SupabaseDataClient;
 }
 
+function createResetJobForManualRetryClient(
+  currentRow: JobRow | null,
+  expectedRow: JobRow | null,
+  expectedNow: string
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('jobs');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('id');
+              expect(firstValue).toBe('job-row-id');
+
+              return {
+                maybeSingle: vi.fn(async () => ({
+                  data: currentRow,
+                  error: null,
+                })),
+              };
+            }),
+          };
+        }),
+        update: vi.fn((payload: unknown) => {
+          expect(payload).toEqual({
+            attempts: 0,
+            last_error: null,
+            last_error_at: null,
+            last_error_code: null,
+            next_run_at: null,
+            status: 'queued',
+            updated_at: expectedNow,
+          });
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('id');
+              expect(firstValue).toBe('job-row-id');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('status');
+                  expect(secondValue).toBe('failed');
+
+                  return {
+                    eq: vi.fn((thirdColumn: string, thirdValue: string) => {
+                      expect(thirdColumn).toBe('updated_at');
+                      expect(thirdValue).toBe(currentRow?.updated_at);
+
+                      return {
+                        eq: vi.fn((fourthColumn: string, fourthValue: string) => {
+                          expect(fourthColumn).toBe('last_error_code');
+                          expect(fourthValue).toBe(currentRow?.last_error_code);
+
+                          return {
+                            select: vi.fn(() => ({
+                              maybeSingle: vi.fn(async () => ({
+                                data: expectedRow,
+                                error: null,
+                              })),
+                            })),
+                          };
+                        }),
+                        is: vi.fn((fourthColumn: string, fourthValue: null) => {
+                          expect(fourthColumn).toBe('last_error_code');
+                          expect(fourthValue).toBeNull();
+
+                          return {
+                            select: vi.fn(() => ({
+                              maybeSingle: vi.fn(async () => ({
+                                data: expectedRow,
+                                error: null,
+                              })),
+                            })),
+                          };
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 describe('shared repositories', () => {
   it('creates and fetches listings', async () => {
     const createClient = createInsertClient('listings', listingRow, (payload) => {
@@ -1359,6 +1453,55 @@ describe('shared repositories', () => {
       });
     });
     await expect(completeJob(completeClient, 'job-row-id')).resolves.toEqual(jobRow);
+  });
+
+  it('resets failed jobs for manual retry and leaves non-failed jobs untouched', async () => {
+    const failedJob: JobRow = {
+      ...publishJobRow,
+      attempts: 3,
+      last_error: 'boom',
+      last_error_at: '2026-05-25T12:00:00.000Z',
+      last_error_code: 'retry_exhausted',
+      status: 'failed',
+      updated_at: '2026-05-25T12:00:00.000Z',
+    };
+    const resetJob: JobRow = {
+      ...failedJob,
+      attempts: 0,
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: '2026-05-25T13:00:00.000Z',
+    };
+
+    await expect(
+      resetJobForManualRetry(
+        createResetJobForManualRetryClient(
+          failedJob,
+          resetJob,
+          '2026-05-25T13:00:00.000Z'
+        ),
+        'job-row-id',
+        '2026-05-25T13:00:00.000Z'
+      )
+    ).resolves.toEqual(resetJob);
+
+    await expect(
+      resetJobForManualRetry(
+        createResetJobForManualRetryClient(
+          {
+            ...failedJob,
+            status: 'completed',
+          },
+          null,
+          '2026-05-25T13:00:00.000Z'
+        ),
+        'job-row-id',
+        '2026-05-25T13:00:00.000Z'
+      )
+    ).resolves.toBeNull();
   });
 
   it('looks up the newest active generate_ai job by listing id', async () => {

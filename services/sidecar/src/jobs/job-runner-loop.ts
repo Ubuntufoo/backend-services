@@ -5,6 +5,7 @@ import {
   type RunSidecarJobResult,
 } from './run-job.js';
 import {
+  createOrphanActiveStateError,
   createRetryExhaustedError,
   createStaleWorkerError,
   SidecarJobError,
@@ -84,6 +85,30 @@ function asErrorMessage(error: unknown): string {
 
 function asIsoTimestamp(now: () => Date): string {
   return now().toISOString();
+}
+
+function getLatestWorkflowJob(
+  jobs: RunSidecarJobResult['job'][],
+  workflow: 'generate_ai' | 'publish'
+): RunSidecarJobResult['job'] | null {
+  return (
+    [...jobs]
+      .filter((job) => job.job_type === workflow)
+      .sort((left, right) => {
+        const updatedOrder = right.updated_at.localeCompare(left.updated_at);
+        return updatedOrder !== 0 ? updatedOrder : right.created_at.localeCompare(left.created_at);
+      })[0] ?? null
+  );
+}
+
+function hasActiveWorkflowJob(
+  jobs: RunSidecarJobResult['job'][],
+  workflow: 'generate_ai' | 'publish'
+): boolean {
+  return jobs.some(
+    (job) =>
+      job.job_type === workflow && (job.status === 'queued' || job.status === 'running')
+  );
 }
 
 function getLogger(logger?: SidecarJobRunnerLogger): SidecarJobRunnerLogger {
@@ -263,6 +288,118 @@ async function recoverStaleRunningJobs(
   }
 }
 
+async function repairOrphanedGenerateAiListings(
+  dataAccess: SidecarDataAccess,
+  limit: number,
+  errorAt: string,
+  logger: SidecarJobRunnerLogger
+): Promise<void> {
+  const generatingListings = await dataAccess.listings.listByStatus('generating', {
+    limit,
+    offset: 0,
+    orderByCreatedAt: 'asc',
+  });
+
+  for (const listing of generatingListings) {
+    const jobs = await dataAccess.jobs.listByListingId(listing.listing_id);
+
+    if (hasActiveWorkflowJob(jobs, 'generate_ai')) {
+      continue;
+    }
+
+    const latestGenerateAiJob = getLatestWorkflowJob(jobs, 'generate_ai');
+
+    if (latestGenerateAiJob && latestGenerateAiJob.status !== 'failed') {
+      continue;
+    }
+
+    const orphanError = createOrphanActiveStateError(
+      'generate_ai',
+      listing,
+      latestGenerateAiJob ? 'failed' : 'missing'
+    );
+
+    try {
+      await dataAccess.listings.update(listing.listing_id, {
+        last_error_at: errorAt,
+        last_error_code: orphanError.code,
+        last_error_context: toListingErrorContext(orphanError),
+        last_error_message: orphanError.message,
+        status: 'assets_ready',
+        sub_status: 'ready_to_generate',
+      });
+    } catch (error) {
+      logger.error('Failed to repair orphan generate_ai listing.', {
+        error: asErrorMessage(error),
+        listingId: listing.listing_id,
+      });
+    }
+  }
+}
+
+async function repairOrphanedPublishListings(
+  dataAccess: SidecarDataAccess,
+  limit: number,
+  errorAt: string,
+  logger: SidecarJobRunnerLogger
+): Promise<void> {
+  const approvedListings = await dataAccess.listings.listApprovedForExport({
+    limit,
+    queuedOnly: false,
+  });
+
+  for (const listing of approvedListings) {
+    if (listing.sub_status !== 'publishing_to_ebay') {
+      continue;
+    }
+
+    const jobs = await dataAccess.jobs.listByListingId(listing.listing_id);
+
+    if (hasActiveWorkflowJob(jobs, 'publish')) {
+      continue;
+    }
+
+    const latestPublishJob = getLatestWorkflowJob(jobs, 'publish');
+
+    if (latestPublishJob && latestPublishJob.status !== 'failed') {
+      continue;
+    }
+
+    const orphanError = createOrphanActiveStateError(
+      'publish',
+      listing,
+      latestPublishJob ? 'failed' : 'missing'
+    );
+
+    try {
+      await dataAccess.listings.update(listing.listing_id, {
+        last_error_at: errorAt,
+        last_error_code: orphanError.code,
+        last_error_context: toListingErrorContext(orphanError),
+        last_error_message: orphanError.message,
+        status: 'approved_for_export',
+        sub_status: 'idle',
+      });
+    } catch (error) {
+      logger.error('Failed to repair orphan publish listing.', {
+        error: asErrorMessage(error),
+        listingId: listing.listing_id,
+      });
+    }
+  }
+}
+
+async function repairOrphanedWorkflowStates(
+  dataAccess: SidecarDataAccess,
+  limit: number,
+  now: () => Date,
+  logger: SidecarJobRunnerLogger
+): Promise<void> {
+  const errorAt = asIsoTimestamp(now);
+  await repairOrphanedGenerateAiListings(dataAccess, limit, errorAt, logger);
+  await repairOrphanedPublishListings(dataAccess, limit, errorAt, logger);
+}
+
 async function backfillQueuedPublishJobs(
   dataAccess: SidecarDataAccess,
   limit: number,
@@ -295,6 +432,7 @@ export async function runQueuedSidecarJobsOnce(
   const now = options.now ?? (() => new Date());
 
   await recoverStaleRunningJobs(dataAccess, now, logger);
+  await repairOrphanedWorkflowStates(dataAccess, batchSize, now, logger);
   await backfillQueuedPublishJobs(dataAccess, batchSize, logger);
 
   const queuedJobs = await dataAccess.jobs.listDueQueued(asIsoTimestamp(now), { limit: batchSize });

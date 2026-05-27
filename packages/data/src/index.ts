@@ -56,6 +56,7 @@ export {
   listDueQueuedJobs,
   listJobsByListingId,
   listStaleRunningJobs,
+  resetJobForManualRetry,
   requeueJob,
   updateJob,
   type EnqueueGenerateAiJobResult,

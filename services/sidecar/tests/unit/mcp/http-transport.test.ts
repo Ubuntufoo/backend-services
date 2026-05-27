@@ -130,6 +130,7 @@ function createDataAccess(): SidecarDataAccess {
       listDueQueued: async () => [],
       listByListingId: async () => [],
       listStaleRunning: async () => [],
+      resetForManualRetry: async () => null,
       requeue: async () => {
         throw new Error('not implemented');
       },

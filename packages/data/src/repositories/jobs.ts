@@ -260,6 +260,56 @@ export async function getJobById(
   return requireOptionalResult(result);
 }
 
+export async function resetJobForManualRetry(
+  client: SupabaseDataClient,
+  jobId: string,
+  now: string
+): Promise<JobRow | null> {
+  const current = await getJobById(client, jobId);
+
+  if (!current || current.status !== 'failed') {
+    return null;
+  }
+
+  let query = client
+    .from('jobs')
+    .update({
+      attempts: 0,
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: now,
+    })
+    .eq('id', jobId)
+    .eq('status', 'failed')
+    .eq('updated_at', current.updated_at);
+
+  if (current.last_error_code === null) {
+    query = query.is('last_error_code', null);
+  } else {
+    query = query.eq('last_error_code', current.last_error_code);
+  }
+
+  const result = (await query
+    .select()
+    .maybeSingle()) as SingleResult<JobRow>;
+
+  if (!result.error) {
+    return result.data ?? null;
+  }
+
+  if (
+    (current.job_type === GENERATE_AI_JOB_TYPE && isActiveGenerateAiConflict(result.error)) ||
+    (current.job_type === PUBLISH_JOB_TYPE && isActivePublishConflict(result.error))
+  ) {
+    return null;
+  }
+
+  throw new Error(result.error.message);
+}
+
 export async function listJobsByListingId(
   client: SupabaseDataClient,
   listingId: string

@@ -110,6 +110,7 @@ function createDataAccess(): SidecarDataAccess {
       listDueQueued: vi.fn(),
       listByListingId: vi.fn(),
       listStaleRunning: vi.fn(),
+      resetForManualRetry: vi.fn(),
       requeue: vi.fn(),
       update: vi.fn(),
     },
@@ -571,6 +572,321 @@ describe('data API router', () => {
       job_type: 'generate_ai',
       status: 'running',
     });
+  });
+
+  it('manually retries failed recoverable generate_ai jobs asynchronously', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      image_urls: ['https://example.com/front.jpg'],
+      last_error_code: 'generate_ai_failed',
+      last_error_context: { category: 'recoverable' },
+      last_error_message: 'Gemini timeout',
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    }));
+    dataAccess.listings.update = vi.fn(async (_listingId, changes) => ({
+      ...listingRow,
+      image_urls: ['https://example.com/front.jpg'],
+      ...changes,
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 3,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-failed',
+        job_type: 'generate_ai',
+        last_error: 'Gemini timeout',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'generate_ai_failed',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => ({
+      attempts: 0,
+      created_at: '2026-05-17T01:00:00.000Z',
+      id: 'job-generate-ai-failed',
+      job_type: 'generate_ai',
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      listing_id: 'LIST-001',
+      max_attempts: 3,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: '2026-05-17T02:00:00.000Z',
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      alreadyQueued: false,
+      workflow: 'generate_ai',
+      job: expect.objectContaining({
+        id: 'job-generate-ai-failed',
+        status: 'queued',
+      }),
+      listing: expect.objectContaining({
+        last_error_at: null,
+        last_error_code: null,
+        last_error_message: null,
+        status: 'assets_ready',
+        sub_status: 'ready_to_generate',
+      }),
+    });
+    expect(dataAccess.jobs.claimDueQueued).not.toHaveBeenCalled();
+    expect(dataAccess.listings.claimApprovedForPublish).not.toHaveBeenCalled();
+  });
+
+  it('manually retries failed user-fixable generate_ai jobs after correction', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      image_urls: ['https://example.com/front.jpg'],
+      last_error_code: 'generate_ai_missing_image_urls',
+      last_error_context: { category: 'user_fixable' },
+      last_error_message: 'Missing images',
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    }));
+    dataAccess.listings.update = vi.fn(async (_listingId, changes) => ({
+      ...listingRow,
+      image_urls: ['https://example.com/front.jpg'],
+      ...changes,
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 1,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-user-fixable',
+        job_type: 'generate_ai',
+        last_error: 'Missing images',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'generate_ai_missing_image_urls',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => ({
+      attempts: 0,
+      created_at: '2026-05-17T01:00:00.000Z',
+      id: 'job-generate-ai-user-fixable',
+      job_type: 'generate_ai',
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      listing_id: 'LIST-001',
+      max_attempts: 3,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: '2026-05-17T02:00:00.000Z',
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.workflow).toBe('generate_ai');
+    expect(response.body.alreadyQueued).toBe(false);
+    expect(dataAccess.jobs.resetForManualRetry).toHaveBeenCalledWith(
+      'job-generate-ai-user-fixable',
+      expect.any(String)
+    );
+  });
+
+  it('rejects terminal generate_ai retry attempts', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      last_error_code: 'generate_ai_listing_not_found',
+      last_error_context: { category: 'terminal' },
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 1,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-terminal',
+        job_type: 'generate_ai',
+        last_error: 'listing missing',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'generate_ai_listing_not_found',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('manual_retry_not_allowed');
+    expect(dataAccess.jobs.resetForManualRetry).not.toHaveBeenCalled();
+  });
+
+  it('returns alreadyQueued for active generate_ai retry requests', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      status: 'generating',
+      sub_status: 'ai_call_in_progress',
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 1,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-active',
+        job_type: 'generate_ai',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'running',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      alreadyQueued: true,
+      workflow: 'generate_ai',
+      job: expect.objectContaining({
+        id: 'job-generate-ai-active',
+        status: 'running',
+      }),
+      listing: expect.objectContaining({
+        status: 'generating',
+        sub_status: 'ai_call_in_progress',
+      }),
+    });
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('manually retries failed recoverable publish jobs asynchronously', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      last_error_code: 'publish_offer_publish_failed',
+      last_error_context: { category: 'recoverable' },
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    }));
+    dataAccess.listings.update = vi.fn(async (_listingId, changes) => ({
+      ...listingRow,
+      ...changes,
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 2,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-publish-failed',
+        job_type: 'publish',
+        last_error: 'publish failed',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'publish_offer_publish_failed',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => ({
+      attempts: 0,
+      created_at: '2026-05-17T01:00:00.000Z',
+      id: 'job-publish-failed',
+      job_type: 'publish',
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      listing_id: 'LIST-001',
+      max_attempts: 3,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: '2026-05-17T02:00:00.000Z',
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.workflow).toBe('publish');
+    expect(response.body.job).toMatchObject({
+      id: 'job-publish-failed',
+      status: 'queued',
+    });
+    expect(dataAccess.jobs.claimDueQueued).not.toHaveBeenCalled();
+    expect(dataAccess.listings.claimApprovedForPublish).not.toHaveBeenCalled();
+  });
+
+  it('returns alreadyQueued for active publish retry requests', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      status: 'approved_for_export',
+      sub_status: 'publishing_to_ebay',
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 1,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-publish-active',
+        job_type: 'publish',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'queued',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.alreadyQueued).toBe(true);
+    expect(response.body.workflow).toBe('publish');
+    expect(dataAccess.jobs.resetForManualRetry).not.toHaveBeenCalled();
+  });
+
+  it('rejects retry for exported, listed, and sold listings', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+    dataAccess.jobs.listByListingId = vi.fn(async () => []);
+
+    for (const status of ['exported', 'listed', 'sold'] as const) {
+      dataAccess.listings.getByListingId = vi.fn(async () => ({
+        ...listingRow,
+        status,
+        sub_status: 'idle',
+      }));
+
+      const response = await request(app).post('/api/listings/LIST-001/retry').send({});
+
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('manual_retry_not_allowed');
+    }
   });
 
   it('returns immediately when workflow params are invalid before body validation', async () => {
