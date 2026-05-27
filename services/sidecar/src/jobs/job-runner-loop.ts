@@ -146,36 +146,6 @@ function getLogger(logger?: SidecarJobRunnerLogger): SidecarJobRunnerLogger {
   return logger ?? defaultLogger;
 }
 
-async function deferQueuedPublishJobs(
-  dataAccess: SidecarDataAccess,
-  nextEligibleAt: string,
-  excludedJobIds: Set<string> = new Set()
-): Promise<number> {
-  const queuedPublishJobs = await dataAccess.jobs.listQueuedPublishJobs();
-  let deferredCount = 0;
-
-  for (const job of queuedPublishJobs) {
-    if (excludedJobIds.has(job.id)) {
-      continue;
-    }
-
-    if (job.next_run_at !== null && job.next_run_at >= nextEligibleAt) {
-      continue;
-    }
-
-    if (job.next_run_at === nextEligibleAt) {
-      continue;
-    }
-
-    await dataAccess.jobs.update(job.id, {
-      next_run_at: nextEligibleAt,
-    });
-    deferredCount += 1;
-  }
-
-  return deferredCount;
-}
-
 function stopLoopState(state: ActiveLoopState): void {
   state.stopped = true;
 
@@ -515,13 +485,14 @@ export async function runQueuedSidecarJobsOnce(
   let publishExecutedCount = 0;
   let publishFailedCount = 0;
   let publishSkippedCount = 0;
-  const claimedPublishJobIds = new Set<string>();
+  const skippedDuePublishJobs: RunSidecarJobResult['job'][] = [];
   let publishClaimsRemaining = publishThrottlePolicy.maxPerTick;
   let skippedCount = 0;
 
   for (const queuedJob of queuedJobs) {
     if (queuedJob.job_type === 'publish') {
       if (publishClaimsRemaining <= 0) {
+        skippedDuePublishJobs.push(queuedJob);
         continue;
       }
 
@@ -545,7 +516,6 @@ export async function runQueuedSidecarJobsOnce(
     claimedCount += 1;
     if (claimedJob.job_type === 'publish') {
       publishClaimedCount += 1;
-      claimedPublishJobIds.add(claimedJob.id);
     }
 
     if (claimedJob.job_type === 'generate_ai') {
@@ -631,22 +601,20 @@ export async function runQueuedSidecarJobsOnce(
     }
   }
 
-  if (publishQueuedCount > 0) {
+  if (skippedDuePublishJobs.length > 0) {
     const nextEligibleAt = getNextPublishEligibleAt(now(), publishThrottlePolicy);
-    const publishDeferredCount = await deferQueuedPublishJobs(
-      dataAccess,
-      nextEligibleAt,
-      claimedPublishJobIds
-    );
-
-    if (publishDeferredCount > 0) {
-      logger.info('Deferred publish jobs for throttle.', {
-        allowedPublishCount: publishClaimedCount,
-        deferredPublishCount: publishDeferredCount,
-        duePublishCount: publishQueuedCount,
-        nextEligibleAt,
+    for (const job of skippedDuePublishJobs) {
+      await dataAccess.jobs.update(job.id, {
+        next_run_at: nextEligibleAt,
       });
     }
+
+    logger.info('Deferred publish jobs for throttle.', {
+      allowedPublishCount: publishClaimedCount,
+      deferredPublishCount: skippedDuePublishJobs.length,
+      duePublishCount: publishQueuedCount,
+      nextEligibleAt,
+    });
   }
 
   return {

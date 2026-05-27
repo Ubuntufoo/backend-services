@@ -211,12 +211,6 @@ function createDataAccess(
           .filter((job) => job.listing_id === listingId)
           .map((job) => ({ ...job }))
       ),
-      listQueuedPublishJobs: vi.fn(async () =>
-        [...jobStates.values()]
-          .filter((job) => job.job_type === 'publish' && job.status === 'queued')
-          .sort((left, right) => left.created_at.localeCompare(right.created_at))
-          .map((job) => ({ ...job }))
-      ),
       listStaleRunning: vi.fn(async (cutoff: string) =>
         [...jobStates.values()]
           .filter((job) => job.status === 'running')
@@ -596,7 +590,7 @@ describe('job runner loop', () => {
     });
   });
 
-  it('runs at most one publish job per tick and defers the rest without incrementing attempts', async () => {
+  it('runs at most one publish job per tick and only defers skipped due publish jobs', async () => {
     const logger = createLogger();
     const firstListing = createListingRow({
       listing_id: 'LIST-PUBLISH-001',
@@ -606,6 +600,12 @@ describe('job runner loop', () => {
     const secondListing = createListingRow({
       created_at: '2026-05-22T12:05:00.000Z',
       listing_id: 'LIST-PUBLISH-002',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    const futureListing = createListingRow({
+      created_at: '2026-05-22T12:10:00.000Z',
+      listing_id: 'LIST-PUBLISH-FUTURE',
       status: 'approved_for_export',
       sub_status: 'publish_queued',
     });
@@ -623,7 +623,18 @@ describe('job runner loop', () => {
       max_attempts: 3,
       created_at: '2026-05-22T12:02:00.000Z',
     });
-    const { dataAccess, jobStates } = createDataAccess([firstJob, secondJob], [firstListing, secondListing]);
+    const futureJob = createJobRow({
+      id: 'job-publish-future',
+      job_type: 'publish',
+      listing_id: 'LIST-PUBLISH-FUTURE',
+      max_attempts: 3,
+      created_at: '2026-05-22T12:03:00.000Z',
+      next_run_at: '2026-05-22T13:30:00.000Z',
+    });
+    const { dataAccess, jobStates } = createDataAccess(
+      [firstJob, secondJob, futureJob],
+      [firstListing, secondListing, futureListing]
+    );
     const runJob = vi.fn(async (jobId: string) => {
       const job = await dataAccess.jobs.complete(jobId);
       const listing = await dataAccess.listings.update(job.listing_id as string, {
@@ -662,8 +673,12 @@ describe('job runner loop', () => {
       next_run_at: '2026-05-22T13:00:10.000Z',
       status: 'queued',
     });
+    expect(jobStates.get('job-publish-future')).toMatchObject({
+      attempts: 0,
+      next_run_at: '2026-05-22T13:30:00.000Z',
+      status: 'queued',
+    });
     expect(runJob).toHaveBeenCalledTimes(1);
-    expect(dataAccess.jobs.listQueuedPublishJobs).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith(
       'Deferred publish jobs for throttle.',
       expect.objectContaining({
@@ -720,7 +735,6 @@ describe('job runner loop', () => {
     expect(result.claimedCount).toBe(2);
     expect(result.executedCount).toBe(2);
     expect(result.publishClaimedCount).toBe(0);
-    expect(dataAccess.jobs.listQueuedPublishJobs).not.toHaveBeenCalled();
     expect(runJob).toHaveBeenCalledTimes(2);
   });
 

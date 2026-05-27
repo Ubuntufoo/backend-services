@@ -43,10 +43,6 @@ export interface ListDueQueuedJobsOptions {
   limit?: number;
 }
 
-export interface ListQueuedPublishJobsOptions {
-  limit?: number;
-}
-
 export interface JobErrorUpdateInput {
   errorAt: string;
   errorCode: string;
@@ -371,29 +367,6 @@ export async function listDueQueuedJobs(
   return result.data ?? [];
 }
 
-export async function listQueuedPublishJobs(
-  client: SupabaseDataClient,
-  options: ListQueuedPublishJobsOptions = {}
-): Promise<JobRow[]> {
-  let query = client
-    .from('jobs')
-    .select('*')
-    .eq('job_type', PUBLISH_JOB_TYPE)
-    .eq('status', 'queued')
-    .order('created_at', { ascending: true });
-
-  if (options.limit !== undefined) {
-    query = query.limit(options.limit);
-  }
-
-  const result = (await query) as MultiResult<JobRow>;
-
-  if (result.error) {
-    throw new Error(result.error.message);
-  }
-
-  return result.data ?? [];
-}
 
 export async function claimDueQueuedJob(
   client: SupabaseDataClient,

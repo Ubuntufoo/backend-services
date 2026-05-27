@@ -21,7 +21,6 @@ import {
   listDueQueuedJobs,
   listJobsByListingId,
   listJobsByListingIds,
-  listQueuedPublishJobs,
   listStaleRunningJobs,
   listListings,
   listListingsByStatus,
@@ -47,7 +46,6 @@ import {
   type JobUpdate,
   type ListApprovedForExportListingsOptions,
   type ListDueQueuedJobsOptions,
-  type ListQueuedPublishJobsOptions,
   type ListListingsByStatusOptions,
   type ListingInsert,
   type ListingImageMetadataUpdate,
@@ -78,7 +76,6 @@ export interface SidecarDataAccess {
     listDueQueued(now: string, options?: ListDueQueuedJobsOptions): Promise<JobRow[]>;
     listByListingId(listingId: string): Promise<JobRow[]>;
     listByListingIds?(listingIds: string[]): Promise<JobRow[]>;
-    listQueuedPublishJobs(options?: ListQueuedPublishJobsOptions): Promise<JobRow[]>;
     listStaleRunning(cutoff: string): Promise<JobRow[]>;
     resetForManualRetry(jobId: string, now: string): Promise<JobRow | null>;
     requeue(jobId: string, error: JobErrorUpdateInput, nextRunAt: string): Promise<JobRow>;
@@ -147,7 +144,6 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       listDueQueued: async (now, options) => await listDueQueuedJobs(client, now, options),
       listByListingId: async (listingId) => await listJobsByListingId(client, listingId),
       listByListingIds: async (listingIds) => await listJobsByListingIds(client, listingIds),
-      listQueuedPublishJobs: async (options) => await listQueuedPublishJobs(client, options),
       listStaleRunning: async (cutoff) => await listStaleRunningJobs(client, cutoff),
       resetForManualRetry: async (jobId, now) => await resetJobForManualRetry(client, jobId, now),
       requeue: async (jobId, error, nextRunAt) => await requeueJob(client, jobId, error, nextRunAt),
