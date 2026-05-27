@@ -25,6 +25,7 @@ import {
   listListings,
   listListingsByStatus,
   listJobsByListingId,
+  prepareListingForGenerateAi,
   markListingPublishFailed,
   saveListingArtifacts,
   saveListingImageMetadata,
@@ -544,6 +545,54 @@ function createClaimApprovedListingClient(expectedRow: ListingRow | null): Supab
   } as unknown as SupabaseDataClient;
 }
 
+function createGenerateAiPreparationClient(
+  expectedRow: ListingRow | null,
+  expectedUpdatedAt: string,
+  onUpdate?: (payload: unknown) => void
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listings');
+
+      return {
+        update: vi.fn((payload: unknown) => {
+          onUpdate?.(payload);
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('listing_id');
+              expect(firstValue).toBe('LIST-001');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('status');
+                  expect(secondValue).toBe('assets_ready');
+
+                  return {
+                    eq: vi.fn((thirdColumn: string, thirdValue: string) => {
+                      expect(thirdColumn).toBe('updated_at');
+                      expect(thirdValue).toBe(expectedUpdatedAt);
+
+                      return {
+                        select: vi.fn(() => ({
+                          maybeSingle: vi.fn(async () => ({
+                            data: expectedRow,
+                            error: null,
+                          })),
+                        })),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 function createQueuedJobsListClient(expectedRows: JobRow[], expectedLimit: number): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
@@ -866,6 +915,50 @@ describe('shared repositories', () => {
         exportedAt: '2026-05-17T01:00:00.000Z',
       })
     ).resolves.toEqual(listingRow);
+
+    const generateAiReadyListing = {
+      ...listingRow,
+      seller_hints: 'Use padded envelope',
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    } satisfies ListingRow;
+    const generateAiClient = createGenerateAiPreparationClient(
+      generateAiReadyListing,
+      '2026-05-17T00:00:00.000Z',
+      (payload) => {
+        expect(payload).toEqual({
+          seller_hints: 'Use padded envelope',
+          status: 'assets_ready',
+          sub_status: 'ready_to_generate',
+        });
+      }
+    );
+
+    await expect(
+      prepareListingForGenerateAi(generateAiClient, {
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+        listingId: 'LIST-001',
+        sellerHints: 'Use padded envelope',
+      })
+    ).resolves.toEqual(generateAiReadyListing);
+
+    const staleGenerateAiClient = createGenerateAiPreparationClient(
+      null,
+      '2026-05-17T00:00:00.000Z',
+      (payload) => {
+        expect(payload).toEqual({
+          status: 'assets_ready',
+          sub_status: 'ready_to_generate',
+        });
+      }
+    );
+
+    await expect(
+      prepareListingForGenerateAi(staleGenerateAiClient, {
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+        listingId: 'LIST-001',
+      })
+    ).resolves.toBeNull();
   });
 
   it('claims approved publish listings conditionally and persists publish failures', async () => {

@@ -114,6 +114,56 @@ Updates only the workflow `status`/`subStatus` pair.
 
 The route validates that the pair is valid before persistence. It is separate from the seller-editable listing PATCH route and is the only backend route in this phase that can change workflow state.
 
+## `POST /api/listings/:listingId/generate-ai`
+
+Enqueues a `generate_ai` job for a listing that is already `assets_ready`.
+
+### Request body
+
+```json
+{
+  "sellerHints": "optional seller hints"
+}
+```
+
+`sellerHints` is optional. If provided, the backend persists it before enqueueing the job.
+
+### Success response
+
+HTTP `201 Created` for a new job or HTTP `200 OK` when an active job already exists.
+
+```json
+{
+  "alreadyQueued": false,
+  "job": {},
+  "listing": {}
+}
+```
+
+The route returns the created or existing active job plus the listing row after the generation-ready workflow update.
+
+### Invalid state
+
+HTTP `409 Conflict`
+
+```json
+{
+  "error": "listing_not_assets_ready",
+  "message": "Listing \"LIST-001\" must be assets_ready before generate_ai can be enqueued."
+}
+```
+
+### Stale or raced update
+
+HTTP `409 Conflict`
+
+```json
+{
+  "error": "listing_state_stale",
+  "message": "Listing \"LIST-001\" changed before generate_ai could be enqueued. Refresh and retry."
+}
+```
+
 ## `GET /api/app-settings`
 
 Reads the singleton `app_settings` row with `id = "default"`.

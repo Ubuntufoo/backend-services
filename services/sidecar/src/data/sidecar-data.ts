@@ -19,6 +19,7 @@ import {
   listJobsByListingId,
   listListings,
   listListingsByStatus,
+  prepareListingForGenerateAi,
   markListingPublishFailed,
   saveListingImageMetadata,
   updateAppSettings,
@@ -75,6 +76,13 @@ export interface SidecarDataAccess {
       options: ListListingsByStatusOptions
     ): Promise<ListingRow[]>;
     markPublishFailed(listingId: string, errorAt: string, error: unknown): Promise<ListingRow>;
+    prepareForGenerateAi?(
+      input: {
+        expectedUpdatedAt?: string;
+        listingId: string;
+        sellerHints?: ListingUpdate['seller_hints'];
+      }
+    ): Promise<ListingRow | null>;
     saveImageMetadata(input: ListingImageMetadataUpdate): Promise<ListingRow | null>;
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
@@ -103,6 +111,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       listByStatus: async (status, options) => await listListingsByStatus(client, status, options),
       markPublishFailed: async (listingId, errorAt, error) =>
         await markListingPublishFailed(client, listingId, errorAt, error),
+      prepareForGenerateAi: async (input) => await prepareListingForGenerateAi(client, input),
       saveImageMetadata: async (input) => await saveListingImageMetadata(client, input),
       update: async (listingId, changes) => await updateListing(client, listingId, changes),
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
