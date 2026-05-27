@@ -418,6 +418,8 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
+        category_id: '261328',
+        condition_id: '4000',
         description: 'Ungraded single card with visible edge wear.',
         item_specifics: {
           Player: 'Michael Jordan',
@@ -439,6 +441,75 @@ describe('runSidecarJob', () => {
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
     expect(result.job.status).toBe('completed');
+  });
+
+  it('resolves category and condition ids from Gemini suggestions only for trading card singles', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        listing_type: 'single',
+        title: 'Bo Jackson card',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1990 Score Bo Jackson',
+      description: 'Single raw card.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {},
+      priceSuggestion: 19.99,
+      confidence: {},
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-2' },
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        category_id: '261328',
+        condition_id: '4000',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+      })
+    );
+  });
+
+  it('does not resolve category id for non-single trading card listings', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        listing_type: 'lot',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1990 Score Bo Jackson',
+      description: 'Card lot.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {},
+      priceSuggestion: 19.99,
+      confidence: {},
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-3' },
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        category_id: null,
+        condition_id: '4000',
+      })
+    );
   });
 
   it('requeues recoverable generate_ai failures with next_run_at', async () => {
