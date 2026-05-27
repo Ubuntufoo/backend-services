@@ -80,11 +80,10 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7A.3 | BE | Add manual retry endpoint and orphan workflow repair | Failed/retryable listings can be safely retried and active-looking orphan states are repaired | 
 | 7A | BE | Add publish throttling | No API burst publishing | GPT-5.5 mini | Low-Medium | Prevents repeated eBay API error loops | .   -->
 | 7A | BE | Add trading-card condition descriptor support | Trading-card listings satisfy eBay category-specific condition requirements | GPT-5.5 | Medium-High | Production hardening for trading cards before serious publish testing |
-| 7A | BE | Add daily usage checks | Gemini and order sync limits enforced | GPT-5.5 | Medium | Guardrail against accidental API overuse |
-| 7B | DB | Track Gemini model attempts | AI model usage and fallback outcomes are auditable per listing | GPT-5.5 mini | Low-Medium | Should come before Gemini fallback router |
-| 7B | BE | Implement Dynamic Gemini Model Discovery & Fallback Router | Replace hardcoded Gemini model strings with a dynamic discovery engine that detects, scores, and cascades through available free-tier models on rate/quota/unavailable errors | GPT-5.5 | Medium-High | Gemini robustness; should consume model-attempt tracking |
-| 7C | FE | Add queue/error panel | Shows `assets_ready`, `generating`, `needs_review`, `approved_for_export`, publish queue, and persisted errors | GPT-5.5 mini | Low-Medium | Operational visibility; not aesthetic QOL |
-| 8	 | BE |	Implement explicit SQL API Table Grants & Security Advisor Review	Audit all existing tables using the Supabase Security Advisor ahead of the Oct 30, 2026 enforcement deadline; update table-creation flows / DB migrations to explicitly grant PostgREST/API access to the public schema.
+| 7 | DB | Track Gemini model attempts | AI model usage and fallback outcomes are auditable per listing | GPT-5.5 mini | Low-Medium | Should come before Gemini fallback router |
+| 7 | FE | Add queue/error panel | Shows `assets_ready`, `generating`, `needs_review`, `approved_for_export`, publish queue, and persisted errors | GPT-5.5 mini | Low-Medium | Operational visibility; not aesthetic QOL |
+| 7 | BE | Implement Dynamic Gemini Model Discovery & Fallback Router | Replace hardcoded Gemini model strings with a dynamic discovery engine that detects, scores, and cascades through available free-tier models on rate/quota/unavailable errors | GPT-5.5 | Medium-High | Gemini robustness; should consume model-attempt tracking |
+| 7 | BE | Add daily usage checks | Gemini and order sync limits enforced | GPT-5.5 | Medium | Guardrail against accidental API overuse |
 | 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, `sale_price` | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
 | 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability |
 | 8 | BE | Normalize image orientation during asset processing | R2 images display with correct orientation | GPT-5.5 mini | Low-Medium | Defer unless EXIF issue is confirmed |
@@ -95,6 +94,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | BE | `job-runner`: schedule 4 order checks/day | Controlled API usage | GPT-5.5 mini | Medium | Schedule only after order storage and matching exist |
 | 8 | FE | Add Unshipped Orders panel | Packing queue visible | GPT-5.5 mini | Low-Medium | Operational UI, not polish |
 | 8 | FE | Show due today/overdue warnings | 1-day handling support | GPT-5.5 mini | Low-Medium | Operational guardrail for fulfillment |
+| 8	 | BE |	Implement explicit SQL API Table Grants & Security Advisor Review	Audit all existing tables using the Supabase Security Advisor ahead of the Oct 30, 2026 enforcement deadline; update table-creation flows / DB migrations to explicitly grant PostgREST/API access to the public schema.
 | 9 | BE | Add local processed-output retention policy | `.image-service-output/<runId>` cleanup behavior defined and enforced | GPT-5.5 mini | Low-Medium | Local disk cleanup guardrail |
 | 9 | DB | Add `r2_retention_policy`, `r2_delete_after`, `r2_deleted_at` | Safe cleanup fields exist | GPT-5.5 mini | Low-Medium | Required before R2 deletion automation |
 | 9 | BE | On `sold`, set `r2_delete_after` | `sold_at + configured retention days` | GPT-5.5 mini | Low-Medium | Connects sold state to cleanup eligibility |
