@@ -44,18 +44,23 @@ export {
   updateAppSettings,
 } from './repositories/app-settings.js';
 export {
-  claimQueuedJob,
+  claimDueQueuedJob,
+  completeJob,
   createJob,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
+  failJob,
   getActiveGenerateAiJobByListingId,
   getJobById,
-  listQueuedJobs,
+  listDueQueuedJobs,
   listJobsByListingId,
+  listStaleRunningJobs,
+  requeueJob,
   updateJob,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
-  type ListQueuedJobsOptions,
+  type JobErrorUpdateInput,
+  type ListDueQueuedJobsOptions,
 } from './repositories/jobs.js';
 export {
   claimApprovedListingForPublish,

@@ -1,6 +1,7 @@
 import {
   claimApprovedListingForPublish,
-  claimQueuedJob,
+  claimDueQueuedJob,
+  completeJob,
   DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   createJob,
@@ -8,6 +9,7 @@ import {
   createOrder,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
+  failJob,
   createSupabaseServiceClient,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
@@ -15,12 +17,14 @@ import {
   getListingByListingId,
   getOrderByOrderId,
   listApprovedForExportListings,
-  listQueuedJobs,
+  listDueQueuedJobs,
   listJobsByListingId,
+  listStaleRunningJobs,
   listListings,
   listListingsByStatus,
   prepareListingForGenerateAi,
   markListingPublishFailed,
+  requeueJob,
   saveListingImageMetadata,
   updateAppSettings,
   updateJob,
@@ -33,10 +37,11 @@ import {
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
   type JobInsert,
+  type JobErrorUpdateInput,
   type JobRow,
   type JobUpdate,
   type ListApprovedForExportListingsOptions,
-  type ListQueuedJobsOptions,
+  type ListDueQueuedJobsOptions,
   type ListListingsByStatusOptions,
   type ListingInsert,
   type ListingImageMetadataUpdate,
@@ -55,14 +60,18 @@ export interface SidecarDataAccess {
     update(changes: AppSettingsUpdate, id?: string): Promise<AppSettingsRow>;
   };
   jobs: {
-    claimQueued(jobId: string): Promise<JobRow | null>;
+    claimDueQueued(jobId: string, now: string): Promise<JobRow | null>;
+    complete(jobId: string): Promise<JobRow>;
     create(input: JobInsert): Promise<JobRow>;
     enqueueGenerateAi(listingId: string): Promise<EnqueueGenerateAiJobResult>;
     enqueueProcessImages(): Promise<EnqueueProcessImagesJobResult>;
+    fail(jobId: string, error: JobErrorUpdateInput): Promise<JobRow>;
     getActiveGenerateAiByListingId(listingId: string): Promise<JobRow | null>;
     getById(jobId: string): Promise<JobRow | null>;
-    listQueued(options?: ListQueuedJobsOptions): Promise<JobRow[]>;
+    listDueQueued(now: string, options?: ListDueQueuedJobsOptions): Promise<JobRow[]>;
     listByListingId(listingId: string): Promise<JobRow[]>;
+    listStaleRunning(cutoff: string): Promise<JobRow[]>;
+    requeue(jobId: string, error: JobErrorUpdateInput, nextRunAt: string): Promise<JobRow>;
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
   listings: {
@@ -117,15 +126,19 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
     },
     jobs: {
-      claimQueued: async (jobId) => await claimQueuedJob(client, jobId),
+      claimDueQueued: async (jobId, now) => await claimDueQueuedJob(client, jobId, now),
+      complete: async (jobId) => await completeJob(client, jobId),
       create: async (input) => await createJob(client, input),
       enqueueGenerateAi: async (listingId) => await enqueueGenerateAiJob(client, listingId),
       enqueueProcessImages: async () => await enqueueProcessImagesJob(client),
+      fail: async (jobId, error) => await failJob(client, jobId, error),
       getActiveGenerateAiByListingId: async (listingId) =>
         await getActiveGenerateAiJobByListingId(client, listingId),
       getById: async (jobId) => await getJobById(client, jobId),
-      listQueued: async (options) => await listQueuedJobs(client, options),
+      listDueQueued: async (now, options) => await listDueQueuedJobs(client, now, options),
       listByListingId: async (listingId) => await listJobsByListingId(client, listingId),
+      listStaleRunning: async (cutoff) => await listStaleRunningJobs(client, cutoff),
+      requeue: async (jobId, error, nextRunAt) => await requeueJob(client, jobId, error, nextRunAt),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
     },
     orders: {

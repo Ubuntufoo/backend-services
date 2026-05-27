@@ -2,24 +2,22 @@ import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import { aspectValueSchema, generateListingDraft, type GenerateListingDraftInput } from '@/gemini/index.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  classifyJobError,
+  createRetryExhaustedError,
+  JOB_ERROR_CODES,
+  SidecarJobError,
+  toJobErrorUpdateInput,
+  toListingErrorContext,
+} from './job-errors.js';
+import {
   prepareRecordCreatedListings,
   type PrepareRecordCreatedListingsResult,
 } from './prepare-record-created-listings.js';
+import { getNextRetryAt, hasAttemptsRemaining } from './retry-policy.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
 const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const JOB_STATUS_RUNNING = 'running';
-const JOB_STATUS_COMPLETED = 'completed';
-const JOB_STATUS_FAILED = 'failed';
-const JOB_ERROR_CODE_NOT_RUNNABLE = 'job_not_runnable';
-const LISTING_ERROR_CODE_GENERATE_AI_FAILED = 'generate_ai_failed';
-const LISTING_ERROR_CODE_MISSING_IMAGE_URLS = 'generate_ai_missing_image_urls';
-const JOB_ERROR_CODE_PROCESS_IMAGES_FAILED = 'process_images_failed';
-const JOB_ERROR_CODE_UNSUPPORTED_JOB_TYPE = 'unsupported_job_type';
-const JOB_ERROR_CODE_MISSING_LISTING_ID = 'generate_ai_missing_listing_id';
-const JOB_ERROR_CODE_LISTING_NOT_FOUND = 'generate_ai_listing_not_found';
-const JOB_ERROR_CODE_LISTING_NOT_ELIGIBLE = 'generate_ai_listing_not_eligible';
-const JOB_ERROR_CODE_MISSING_IMAGE_URLS = 'generate_ai_missing_image_urls';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
 
@@ -49,16 +47,6 @@ export interface RunSidecarJobResult {
   job: JobRow;
   listing: ListingRow | null;
   processedListings?: ListingRow[];
-}
-
-class SidecarJobError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'SidecarJobError';
-    this.code = code;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -157,6 +145,8 @@ function buildGeneratedListingReviewUpdate(
     item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,
     last_error_code: null,
+    last_error_context: {},
+    last_error_message: null,
     price: draft.priceSuggestion ?? null,
     status: 'needs_review',
     sub_status: 'review_pending',
@@ -164,10 +154,12 @@ function buildGeneratedListingReviewUpdate(
   };
 }
 
-function buildRetryableFailureUpdate(errorCode: string, errorAt: string): ListingUpdate {
+function buildGenerateAiFailureUpdate(error: SidecarJobError, errorAt: string): ListingUpdate {
   return {
     last_error_at: errorAt,
-    last_error_code: errorCode,
+    last_error_code: error.code,
+    last_error_context: toListingErrorContext(error),
+    last_error_message: error.message,
     status: 'assets_ready',
     sub_status: 'ready_to_generate',
   };
@@ -180,66 +172,34 @@ function appendCleanupFailure(message: string, cleanupError: unknown): string {
   return `${message} Cleanup also failed: ${cleanupMessage}`;
 }
 
-async function markJobRunning(dataAccess: SidecarDataAccess, jobId: string): Promise<void> {
-  await dataAccess.jobs.update(jobId, {
-    last_error: null,
-    last_error_at: null,
-    last_error_code: null,
-    status: JOB_STATUS_RUNNING,
-  });
-}
-
 async function ensureJobRunning(
   dataAccess: SidecarDataAccess,
-  job: JobRow
+  job: JobRow,
+  now: () => Date
 ): Promise<JobRow> {
   if (job.status === JOB_STATUS_RUNNING) {
     return job;
   }
 
   if (job.status === 'queued') {
-    await markJobRunning(dataAccess, job.id);
+    const claimedJob = await dataAccess.jobs.claimDueQueued(job.id, asIsoTimestamp(now));
 
-    return {
-      ...job,
-      last_error: null,
-      last_error_at: null,
-      last_error_code: null,
-      status: JOB_STATUS_RUNNING,
-    };
+    if (claimedJob) {
+      return claimedJob;
+    }
+
+    throw new SidecarJobError(
+      JOB_ERROR_CODES.JOB_NOT_CLAIMABLE,
+      'terminal',
+      `Job "${job.id}" is queued but could not be claimed for execution. It may not be due yet or another worker already claimed it.`
+    );
   }
 
   throw new SidecarJobError(
-    JOB_ERROR_CODE_NOT_RUNNABLE,
+    JOB_ERROR_CODES.JOB_NOT_RUNNABLE,
+    'terminal',
     `Job "${job.id}" has status "${job.status}" and cannot be run.`
   );
-}
-
-async function markJobFailed(
-  dataAccess: SidecarDataAccess,
-  jobId: string,
-  errorCode: string,
-  errorMessage: string,
-  errorAt: string
-): Promise<JobRow> {
-  return await dataAccess.jobs.update(jobId, {
-    last_error: errorMessage,
-    last_error_at: errorAt,
-    last_error_code: errorCode,
-    status: JOB_STATUS_FAILED,
-  });
-}
-
-async function markJobCompleted(
-  dataAccess: SidecarDataAccess,
-  jobId: string
-): Promise<JobRow> {
-  return await dataAccess.jobs.update(jobId, {
-    last_error: null,
-    last_error_at: null,
-    last_error_code: null,
-    status: JOB_STATUS_COMPLETED,
-  });
 }
 
 async function getListingSafely(
@@ -253,17 +213,6 @@ async function getListingSafely(
   }
 }
 
-function toSidecarJobError(error: unknown): SidecarJobError {
-  if (error instanceof SidecarJobError) {
-    return error;
-  }
-
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  return new SidecarJobError(LISTING_ERROR_CODE_GENERATE_AI_FAILED, message, {
-    cause: error instanceof Error ? error : undefined,
-  });
-}
-
 async function runGenerateAiJob(
   job: JobRow,
   options: Required<Pick<RunSidecarJobOptions, 'dataAccess' | 'generateListingDraft' | 'now'>>
@@ -272,13 +221,12 @@ async function runGenerateAiJob(
   const errorAt = asIsoTimestamp(options.now);
 
   if (!listingId) {
-    const failedJob = await markJobFailed(
-      options.dataAccess,
-      job.id,
-      JOB_ERROR_CODE_MISSING_LISTING_ID,
-      `Job "${job.id}" is missing listing_id and cannot run generate_ai.`,
-      errorAt
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.GENERATE_AI_MISSING_LISTING_ID,
+      'terminal',
+      `Job "${job.id}" is missing listing_id and cannot run generate_ai.`
     );
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
 
     return {
       job: failedJob,
@@ -289,13 +237,12 @@ async function runGenerateAiJob(
   const listing = await options.dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
-    const failedJob = await markJobFailed(
-      options.dataAccess,
-      job.id,
-      JOB_ERROR_CODE_LISTING_NOT_FOUND,
-      `Listing "${listingId}" was not found for generate_ai.`,
-      errorAt
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.GENERATE_AI_LISTING_NOT_FOUND,
+      'terminal',
+      `Listing "${listingId}" was not found for generate_ai.`
     );
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
 
     return {
       job: failedJob,
@@ -304,13 +251,12 @@ async function runGenerateAiJob(
   }
 
   if (listing.status !== 'assets_ready') {
-    const failedJob = await markJobFailed(
-      options.dataAccess,
-      job.id,
-      JOB_ERROR_CODE_LISTING_NOT_ELIGIBLE,
-      `Listing "${listingId}" is not eligible for generate_ai from status "${listing.status}".`,
-      errorAt
+    const error = new SidecarJobError(
+      JOB_ERROR_CODES.GENERATE_AI_LISTING_NOT_ELIGIBLE,
+      'user_fixable',
+      `Listing "${listingId}" is not eligible for generate_ai from status "${listing.status}".`
     );
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
 
     return {
       job: failedJob,
@@ -321,23 +267,27 @@ async function runGenerateAiJob(
   const imageUrls = getListingImageUrls(listing);
 
   if (imageUrls.length === 0) {
-    let errorMessage = `Listing "${listingId}" does not have any image URLs for generate_ai.`;
+    let listingError = new SidecarJobError(
+      JOB_ERROR_CODES.GENERATE_AI_MISSING_IMAGE_URLS,
+      'user_fixable',
+      `Listing "${listingId}" does not have any image URLs for generate_ai.`
+    );
 
     try {
-      await options.dataAccess.listings.update(listingId, {
-        last_error_at: errorAt,
-        last_error_code: LISTING_ERROR_CODE_MISSING_IMAGE_URLS,
-      });
+      await options.dataAccess.listings.update(listingId, buildGenerateAiFailureUpdate(listingError, errorAt));
     } catch (error) {
-      errorMessage = appendCleanupFailure(errorMessage, error);
+      listingError = new SidecarJobError(
+        listingError.code,
+        listingError.category,
+        appendCleanupFailure(listingError.message, error),
+        listingError.context,
+        { cause: listingError }
+      );
     }
 
-    const failedJob = await markJobFailed(
-      options.dataAccess,
+    const failedJob = await options.dataAccess.jobs.fail(
       job.id,
-      JOB_ERROR_CODE_MISSING_IMAGE_URLS,
-      errorMessage,
-      errorAt
+      toJobErrorUpdateInput(listingError, errorAt)
     );
 
     return {
@@ -366,33 +316,50 @@ async function runGenerateAiJob(
       listingId,
       buildGeneratedListingReviewUpdate(draft)
     );
-    const completedJob = await markJobCompleted(options.dataAccess, job.id);
+    const completedJob = await options.dataAccess.jobs.complete(job.id);
 
     return {
       job: completedJob,
       listing: reviewListing,
     };
   } catch (error) {
-    const jobError = toSidecarJobError(error);
-    let jobErrorMessage = jobError.message;
+    let jobError = classifyJobError(job.job_type, error);
 
     if (generationStarted) {
       try {
         await options.dataAccess.listings.update(
           listingId,
-          buildRetryableFailureUpdate(jobError.code, errorAt)
+          buildGenerateAiFailureUpdate(jobError, errorAt)
         );
       } catch (cleanupError) {
-        jobErrorMessage = appendCleanupFailure(jobErrorMessage, cleanupError);
+        jobError = new SidecarJobError(
+          jobError.code,
+          jobError.category,
+          appendCleanupFailure(jobError.message, cleanupError),
+          jobError.context,
+          { cause: jobError }
+        );
       }
     }
 
-    const failedJob = await markJobFailed(
-      options.dataAccess,
+    if (jobError.category === 'recoverable' && hasAttemptsRemaining(job)) {
+      const requeuedJob = await options.dataAccess.jobs.requeue(
+        job.id,
+        toJobErrorUpdateInput(jobError, errorAt),
+        getNextRetryAt(job.attempts, options.now())
+      );
+
+      return {
+        job: requeuedJob,
+        listing: await getListingSafely(options.dataAccess, listingId),
+      };
+    }
+
+    const finalError =
+      jobError.category === 'recoverable' ? createRetryExhaustedError(job, jobError) : jobError;
+    const failedJob = await options.dataAccess.jobs.fail(
       job.id,
-      jobError.code,
-      jobErrorMessage,
-      errorAt
+      toJobErrorUpdateInput(finalError, errorAt)
     );
 
     return {
@@ -424,7 +391,7 @@ async function runProcessImagesJob(
       dataAccess: options.dataAccess,
       now: options.now,
     });
-    const completedJob = await markJobCompleted(options.dataAccess, job.id);
+    const completedJob = await options.dataAccess.jobs.complete(job.id);
 
     return {
       assetPrepSummary: buildAssetPrepSummary(result),
@@ -433,14 +400,24 @@ async function runProcessImagesJob(
       processedListings: result.processed,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const failedJob = await markJobFailed(
-      options.dataAccess,
-      job.id,
-      JOB_ERROR_CODE_PROCESS_IMAGES_FAILED,
-      message,
-      errorAt
-    );
+    const jobError = classifyJobError(job.job_type, error);
+
+    if (jobError.category === 'recoverable' && hasAttemptsRemaining(job)) {
+      const requeuedJob = await options.dataAccess.jobs.requeue(
+        job.id,
+        toJobErrorUpdateInput(jobError, errorAt),
+        getNextRetryAt(job.attempts, options.now())
+      );
+
+      return {
+        job: requeuedJob,
+        listing: null,
+      };
+    }
+
+    const finalError =
+      jobError.category === 'recoverable' ? createRetryExhaustedError(job, jobError) : jobError;
+    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(finalError, errorAt));
 
     return {
       job: failedJob,
@@ -461,10 +438,10 @@ export async function runSidecarJob(
   const job = await dataAccess.jobs.getById(jobId);
 
   if (!job) {
-    throw new SidecarJobError('job_not_found', `Job "${jobId}" was not found.`);
+    throw new SidecarJobError(JOB_ERROR_CODES.JOB_NOT_FOUND, 'terminal', `Job "${jobId}" was not found.`);
   }
 
-  const runnableJob = await ensureJobRunning(dataAccess, job);
+  const runnableJob = await ensureJobRunning(dataAccess, job, now);
 
   switch (runnableJob.job_type) {
     case GENERATE_AI_JOB_TYPE:
@@ -481,13 +458,12 @@ export async function runSidecarJob(
       });
     default: {
       const errorAt = asIsoTimestamp(now);
-      const failedJob = await markJobFailed(
-        dataAccess,
-        runnableJob.id,
-        JOB_ERROR_CODE_UNSUPPORTED_JOB_TYPE,
-        `Job "${runnableJob.id}" has unsupported type "${runnableJob.job_type}".`,
-        errorAt
+      const error = new SidecarJobError(
+        JOB_ERROR_CODES.UNSUPPORTED_JOB_TYPE,
+        'terminal',
+        `Job "${runnableJob.id}" has unsupported type "${runnableJob.job_type}".`
       );
+      const failedJob = await dataAccess.jobs.fail(runnableJob.id, toJobErrorUpdateInput(error, errorAt));
 
       return {
         job: failedJob,

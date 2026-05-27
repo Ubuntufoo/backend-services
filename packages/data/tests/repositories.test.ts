@@ -8,25 +8,29 @@ import type {
 } from '../src/index.js';
 import {
   claimApprovedListingForPublish,
-  claimQueuedJob,
+  claimDueQueuedJob,
+  completeJob,
   createAppSettings,
   createJob,
   createListing,
   createOrder,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
+  failJob,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
   listApprovedForExportListings,
-  listQueuedJobs,
+  listDueQueuedJobs,
   listListings,
   listListingsByStatus,
   listJobsByListingId,
+  listStaleRunningJobs,
   prepareListingForGenerateAi,
   markListingPublishFailed,
+  requeueJob,
   saveListingArtifacts,
   saveListingImageMetadata,
   saveGeneratedListingFields,
@@ -82,6 +86,7 @@ const listingRow: ListingRow = {
 };
 
 const jobRow: JobRow = {
+  attempts: 0,
   created_at: '2026-05-17T00:00:00.000Z',
   id: 'job-row-id',
   job_type: 'process_images',
@@ -89,6 +94,7 @@ const jobRow: JobRow = {
   last_error_at: null,
   last_error_code: null,
   listing_id: 'LIST-001',
+  max_attempts: 2,
   next_run_at: null,
   status: 'queued',
   updated_at: '2026-05-17T00:00:00.000Z',
@@ -593,7 +599,11 @@ function createGenerateAiPreparationClient(
   } as unknown as SupabaseDataClient;
 }
 
-function createQueuedJobsListClient(expectedRows: JobRow[], expectedLimit: number): SupabaseDataClient {
+function createDueQueuedJobsListClient(
+  expectedRows: JobRow[],
+  expectedLimit: number,
+  expectedNow: string
+): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
       expect(name).toBe('jobs');
@@ -608,17 +618,23 @@ function createQueuedJobsListClient(expectedRows: JobRow[], expectedLimit: numbe
               expect(value).toBe('queued');
 
               return {
-                order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
-                  expect(orderColumn).toBe('created_at');
-                  expect(options).toEqual({ ascending: true });
+                or: vi.fn((filter: string) => {
+                  expect(filter).toBe(`next_run_at.is.null,next_run_at.lte.${expectedNow}`);
 
                   return {
-                    limit: vi.fn(async (value: number) => {
-                      expect(value).toBe(expectedLimit);
+                    order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                      expect(orderColumn).toBe('created_at');
+                      expect(options).toEqual({ ascending: true });
 
                       return {
-                        data: expectedRows,
-                        error: null,
+                        limit: vi.fn(async (value: number) => {
+                          expect(value).toBe(expectedLimit);
+
+                          return {
+                            data: expectedRows,
+                            error: null,
+                          };
+                        }),
                       };
                     }),
                   };
@@ -632,17 +648,67 @@ function createQueuedJobsListClient(expectedRows: JobRow[], expectedLimit: numbe
   } as unknown as SupabaseDataClient;
 }
 
-function createClaimQueuedJobClient(expectedRow: JobRow | null): SupabaseDataClient {
+function createClaimDueQueuedJobClient(
+  currentRow: JobRow | null,
+  expectedRow: JobRow | null,
+  expectedNow: string
+): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
       expect(name).toBe('jobs');
 
+      if (!currentRow) {
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                or: vi.fn(() => ({
+                  maybeSingle: vi.fn(async () => ({
+                    data: null,
+                    error: null,
+                  })),
+                })),
+              })),
+            })),
+          })),
+        };
+      }
+
       return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('id');
+              expect(firstValue).toBe('job-row-id');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('status');
+                  expect(secondValue).toBe('queued');
+
+                  return {
+                    or: vi.fn((filter: string) => {
+                      expect(filter).toBe(`next_run_at.is.null,next_run_at.lte.${expectedNow}`);
+
+                      return {
+                        maybeSingle: vi.fn(async () => ({
+                          data: currentRow,
+                          error: null,
+                        })),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
         update: vi.fn((payload: unknown) => {
           expect(payload).toEqual({
-            last_error: null,
-            last_error_at: null,
-            last_error_code: null,
+            attempts: currentRow.attempts + 1,
+            next_run_at: null,
             status: 'running',
           });
 
@@ -657,12 +723,26 @@ function createClaimQueuedJobClient(expectedRow: JobRow | null): SupabaseDataCli
                   expect(secondValue).toBe('queued');
 
                   return {
-                    select: vi.fn(() => ({
-                      maybeSingle: vi.fn(async () => ({
-                        data: expectedRow,
-                        error: null,
-                      })),
-                    })),
+                    eq: vi.fn((thirdColumn: string, thirdValue: number) => {
+                      expect(thirdColumn).toBe('attempts');
+                      expect(thirdValue).toBe(currentRow.attempts);
+
+                      return {
+                        is: vi.fn((fourthColumn: string, fourthValue: null) => {
+                          expect(fourthColumn).toBe('next_run_at');
+                          expect(fourthValue).toBeNull();
+
+                          return {
+                            select: vi.fn(() => ({
+                              maybeSingle: vi.fn(async () => ({
+                                data: expectedRow,
+                                error: null,
+                              })),
+                            })),
+                          };
+                        }),
+                      };
+                    }),
                   };
                 }),
               };
@@ -1079,8 +1159,10 @@ describe('shared repositories', () => {
     const listClient = createListClient('jobs', [jobRow], 'listing_id', 'LIST-001');
     await expect(listJobsByListingId(listClient, 'LIST-001')).resolves.toEqual([jobRow]);
 
-    const queuedListClient = createQueuedJobsListClient([jobRow], 2);
-    await expect(listQueuedJobs(queuedListClient, { limit: 2 })).resolves.toEqual([jobRow]);
+    const queuedListClient = createDueQueuedJobsListClient([jobRow], 2, '2026-05-25T13:00:00.000Z');
+    await expect(
+      listDueQueuedJobs(queuedListClient, '2026-05-25T13:00:00.000Z', { limit: 2 })
+    ).resolves.toEqual([jobRow]);
 
     const updateClient = createUpdateClient('jobs', jobRow, 'id', 'job-row-id', (payload) => {
       expect(payload).toEqual({
@@ -1090,20 +1172,130 @@ describe('shared repositories', () => {
 
     await expect(updateJob(updateClient, 'job-row-id', { status: 'running' })).resolves.toEqual(jobRow);
 
-    const claimClient = createClaimQueuedJobClient({
+    const claimClient = createClaimDueQueuedJobClient(jobRow, {
       ...jobRow,
+      attempts: 1,
       status: 'running',
-    });
-    await expect(claimQueuedJob(claimClient, 'job-row-id')).resolves.toEqual({
+    }, '2026-05-25T13:00:00.000Z');
+    await expect(
+      claimDueQueuedJob(claimClient, 'job-row-id', '2026-05-25T13:00:00.000Z')
+    ).resolves.toEqual({
       ...jobRow,
+      attempts: 1,
       status: 'running',
     });
   });
 
   it('returns null when queued claim loses race', async () => {
-    const claimClient = createClaimQueuedJobClient(null);
+    const claimClient = createClaimDueQueuedJobClient(null, null, '2026-05-25T13:00:00.000Z');
 
-    await expect(claimQueuedJob(claimClient, 'job-row-id')).resolves.toBeNull();
+    await expect(
+      claimDueQueuedJob(claimClient, 'job-row-id', '2026-05-25T13:00:00.000Z')
+    ).resolves.toBeNull();
+  });
+
+  it('lists stale running jobs and wraps retry helper updates', async () => {
+    const staleJob: JobRow = {
+      ...jobRow,
+      attempts: 1,
+      last_error: 'boom',
+      last_error_at: '2026-05-25T12:00:00.000Z',
+      last_error_code: 'stale_worker',
+      next_run_at: '2026-05-25T13:01:00.000Z',
+      status: 'running',
+      updated_at: '2026-05-25T11:00:00.000Z',
+    };
+    const staleListClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('*');
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('status');
+                expect(firstValue).toBe('running');
+
+                return {
+                  lt: vi.fn((secondColumn: string, secondValue: string) => {
+                    expect(secondColumn).toBe('updated_at');
+                    expect(secondValue).toBe('2026-05-25T12:00:00.000Z');
+
+                    return {
+                      order: vi.fn((thirdColumn: string, options: { ascending: boolean }) => {
+                        expect(thirdColumn).toBe('updated_at');
+                        expect(options).toEqual({ ascending: true });
+
+                        return {
+                          data: [staleJob],
+                          error: null,
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(listStaleRunningJobs(staleListClient, '2026-05-25T12:00:00.000Z')).resolves.toEqual([
+      staleJob,
+    ]);
+
+    const requeueClient = createUpdateClient('jobs', jobRow, 'id', 'job-row-id', (payload) => {
+      expect(payload).toEqual({
+        last_error: 'boom',
+        last_error_at: '2026-05-25T13:00:00.000Z',
+        last_error_code: 'stale_worker',
+        next_run_at: '2026-05-25T13:01:00.000Z',
+        status: 'queued',
+      });
+    });
+    await expect(
+      requeueJob(
+        requeueClient,
+        'job-row-id',
+        {
+          errorAt: '2026-05-25T13:00:00.000Z',
+          errorCode: 'stale_worker',
+          errorMessage: 'boom',
+        },
+        '2026-05-25T13:01:00.000Z'
+      )
+    ).resolves.toEqual(jobRow);
+
+    const failClient = createUpdateClient('jobs', jobRow, 'id', 'job-row-id', (payload) => {
+      expect(payload).toEqual({
+        last_error: 'boom',
+        last_error_at: '2026-05-25T13:00:00.000Z',
+        last_error_code: 'retry_exhausted',
+        next_run_at: null,
+        status: 'failed',
+      });
+    });
+    await expect(
+      failJob(failClient, 'job-row-id', {
+        errorAt: '2026-05-25T13:00:00.000Z',
+        errorCode: 'retry_exhausted',
+        errorMessage: 'boom',
+      })
+    ).resolves.toEqual(jobRow);
+
+    const completeClient = createUpdateClient('jobs', jobRow, 'id', 'job-row-id', (payload) => {
+      expect(payload).toEqual({
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        next_run_at: null,
+        status: 'completed',
+      });
+    });
+    await expect(completeJob(completeClient, 'job-row-id')).resolves.toEqual(jobRow);
   });
 
   it('looks up the newest active generate_ai job by listing id', async () => {
@@ -1119,6 +1311,7 @@ describe('shared repositories', () => {
       expect(payload).toEqual({
         job_type: 'generate_ai',
         listing_id: 'LIST-001',
+        max_attempts: 3,
         status: 'queued',
       });
     });
@@ -1140,6 +1333,7 @@ describe('shared repositories', () => {
       expect(payload).toEqual({
         job_type: 'process_images',
         listing_id: null,
+        max_attempts: 2,
         status: 'queued',
       });
     });
@@ -1159,6 +1353,7 @@ describe('shared repositories', () => {
             expect(payload).toEqual({
               job_type: 'process_images',
               listing_id: null,
+              max_attempts: 2,
               status: 'queued',
             });
 
@@ -1196,6 +1391,7 @@ describe('shared repositories', () => {
             expect(payload).toEqual({
               job_type: 'generate_ai',
               listing_id: 'LIST-001',
+              max_attempts: 3,
               status: 'queued',
             });
 
@@ -1267,6 +1463,7 @@ describe('shared repositories', () => {
       expect(payload).toEqual({
         job_type: 'generate_ai',
         listing_id: 'LIST-001',
+        max_attempts: 3,
         status: 'queued',
       });
     });
@@ -1289,6 +1486,7 @@ describe('shared repositories', () => {
             expect(payload).toEqual({
               job_type: 'generate_ai',
               listing_id: 'LIST-001',
+              max_attempts: 3,
               status: 'queued',
             });
 

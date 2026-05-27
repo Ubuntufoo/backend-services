@@ -15,6 +15,7 @@ import {
 
 function createJobRow(overrides: Partial<JobRow> = {}): JobRow {
   return {
+    attempts: 0,
     created_at: '2026-05-22T12:00:00.000Z',
     id: 'job-process-images',
     job_type: 'process_images',
@@ -22,6 +23,7 @@ function createJobRow(overrides: Partial<JobRow> = {}): JobRow {
     last_error_at: null,
     last_error_code: null,
     listing_id: null,
+    max_attempts: 2,
     next_run_at: null,
     status: 'queued',
     updated_at: '2026-05-22T12:00:00.000Z',
@@ -87,7 +89,7 @@ function createDataAccess(
   listings: ListingRow[] = [createListingRow()],
   options: {
     claimApprovedForPublish?: (listingId: string, current: ListingRow | null) => ListingRow | null;
-    claimQueued?: (jobId: string, current: JobRow | null) => JobRow | null;
+    claimDueQueued?: (jobId: string, current: JobRow | null) => JobRow | null;
     markPublishFailed?: (listingId: string, errorAt: string, error: unknown, current: ListingRow) => ListingRow;
   } = {}
 ): {
@@ -105,9 +107,9 @@ function createDataAccess(
       update: vi.fn(),
     },
     jobs: {
-      claimQueued: vi.fn(async (jobId: string) => {
+      claimDueQueued: vi.fn(async (jobId: string) => {
         const current = jobStates.get(jobId) ?? null;
-        const claimed = options.claimQueued?.(jobId, current);
+        const claimed = options.claimDueQueued?.(jobId, current);
         if (claimed !== undefined) {
           if (claimed) {
             jobStates.set(jobId, { ...claimed });
@@ -123,10 +125,26 @@ function createDataAccess(
 
         const next = {
           ...current,
+          attempts: current.attempts + 1,
+          next_run_at: null,
+          status: 'running',
+        } as JobRow;
+        jobStates.set(jobId, next);
+        return { ...next };
+      }),
+      complete: vi.fn(async (jobId: string) => {
+        const current = jobStates.get(jobId);
+        if (!current) {
+          throw new Error(`Missing job ${jobId}`);
+        }
+
+        const next = {
+          ...current,
           last_error: null,
           last_error_at: null,
           last_error_code: null,
-          status: 'running',
+          next_run_at: null,
+          status: 'completed',
         } as JobRow;
         jobStates.set(jobId, next);
         return { ...next };
@@ -134,19 +152,60 @@ function createDataAccess(
       create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
       enqueueProcessImages: vi.fn(),
+      fail: vi.fn(async (jobId: string, error: { errorAt: string; errorCode: string; errorMessage: string }) => {
+        const current = jobStates.get(jobId);
+        if (!current) {
+          throw new Error(`Missing job ${jobId}`);
+        }
+
+        const next = {
+          ...current,
+          last_error: error.errorMessage,
+          last_error_at: error.errorAt,
+          last_error_code: error.errorCode,
+          next_run_at: null,
+          status: 'failed',
+        } as JobRow;
+        jobStates.set(jobId, next);
+        return { ...next };
+      }),
       getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(async (jobId: string) => {
         const current = jobStates.get(jobId);
         return current ? { ...current } : null;
       }),
-      listQueued: vi.fn(async ({ limit = 1 } = {}) =>
+      listDueQueued: vi.fn(async (_now: string, { limit = 1 } = {}) =>
         [...jobStates.values()]
           .filter((job) => job.status === 'queued')
+          .filter((job) => job.next_run_at === null || job.next_run_at <= '2026-05-22T13:00:00.000Z')
           .sort((left, right) => left.created_at.localeCompare(right.created_at))
           .slice(0, limit)
           .map((job) => ({ ...job }))
       ),
       listByListingId: vi.fn(async () => []),
+      listStaleRunning: vi.fn(async (cutoff: string) =>
+        [...jobStates.values()]
+          .filter((job) => job.status === 'running')
+          .filter((job) => job.updated_at < cutoff)
+          .map((job) => ({ ...job }))
+      ),
+      requeue: vi.fn(async (jobId: string, error: { errorAt: string; errorCode: string; errorMessage: string }, nextRunAt: string) => {
+        const current = jobStates.get(jobId);
+        if (!current) {
+          throw new Error(`Missing job ${jobId}`);
+        }
+
+        const next = {
+          ...current,
+          last_error: error.errorMessage,
+          last_error_at: error.errorAt,
+          last_error_code: error.errorCode,
+          next_run_at: nextRunAt,
+          status: 'queued',
+        } as JobRow;
+        jobStates.set(jobId, next);
+        return { ...next };
+      }),
       update: vi.fn(async (jobId: string, changes: Partial<JobRow>) => {
         const current = jobStates.get(jobId);
         if (!current) {
@@ -534,7 +593,7 @@ describe('job runner loop', () => {
   it('skips jobs already claimed by another runner', async () => {
     const logger = createLogger();
     const { dataAccess, jobStates } = createDataAccess([createJobRow()], undefined, {
-      claimQueued: () => null,
+      claimDueQueued: () => null,
     });
 
     const result = await runQueuedSidecarJobsOnce({

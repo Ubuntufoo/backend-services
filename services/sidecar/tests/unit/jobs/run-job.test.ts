@@ -5,6 +5,7 @@ import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { runSidecarJob } from '@/jobs/index.js';
 
 const queuedGenerateAiJob: JobRow = {
+  attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
   id: 'job-generate-ai',
   job_type: 'generate_ai',
@@ -12,12 +13,14 @@ const queuedGenerateAiJob: JobRow = {
   last_error_at: null,
   last_error_code: null,
   listing_id: 'LIST-001',
+  max_attempts: 3,
   next_run_at: null,
   status: 'queued',
   updated_at: '2026-05-20T12:00:00.000Z',
 };
 
 const queuedProcessImagesJob: JobRow = {
+  attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
   id: 'job-process-images',
   job_type: 'process_images',
@@ -25,6 +28,7 @@ const queuedProcessImagesJob: JobRow = {
   last_error_at: null,
   last_error_code: null,
   listing_id: null,
+  max_attempts: 2,
   next_run_at: null,
   status: 'queued',
   updated_at: '2026-05-20T12:00:00.000Z',
@@ -93,14 +97,23 @@ function createDataAccess({
   workflowStates?: ListingRow[];
 } = {}): SidecarDataAccess {
   const listingStates = workflowStates.length > 0 ? [...workflowStates] : listing ? [listing] : [];
+  let jobState = job ? { ...job } : null;
 
-  const jobsGetById = vi.fn(async () => job);
+  const jobsGetById = vi.fn(async () => (jobState ? { ...jobState } : null));
   const jobsCreate = vi.fn();
   const jobsListByListingId = vi.fn();
-  const jobsUpdate = vi.fn(async (_jobId: string, changes: Partial<JobRow>) => ({
-    ...(job ?? queuedGenerateAiJob),
-    ...changes,
-  }));
+  const jobsUpdate = vi.fn(async (_jobId: string, changes: Partial<JobRow>) => {
+    if (!jobState) {
+      throw new Error('job missing');
+    }
+
+    jobState = {
+      ...jobState,
+      ...changes,
+    };
+
+    return { ...jobState };
+  });
   const listingsCreate = vi.fn();
   const listingsList = vi.fn();
   const listingsListByStatus = vi.fn();
@@ -154,7 +167,36 @@ function createDataAccess({
       update: appSettingsUpdate,
     },
     jobs: {
-      claimQueued: vi.fn(async () => job),
+      claimDueQueued: vi.fn(async () => {
+        if (!jobState || jobState.status !== 'queued') {
+          return null;
+        }
+
+        jobState = {
+          ...jobState,
+          attempts: jobState.attempts + 1,
+          next_run_at: null,
+          status: 'running',
+        };
+
+        return { ...jobState };
+      }),
+      complete: vi.fn(async () => {
+        if (!jobState) {
+          throw new Error('job missing');
+        }
+
+        jobState = {
+          ...jobState,
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          next_run_at: null,
+          status: 'completed',
+        };
+
+        return { ...jobState };
+      }),
       create: jobsCreate,
       enqueueGenerateAi: vi.fn(async () => ({
         alreadyQueued: false,
@@ -164,10 +206,43 @@ function createDataAccess({
         alreadyQueued: false,
         job: queuedProcessImagesJob,
       })),
+      fail: vi.fn(async (_jobId: string, error) => {
+        if (!jobState) {
+          throw new Error('job missing');
+        }
+
+        jobState = {
+          ...jobState,
+          last_error: error.errorMessage,
+          last_error_at: error.errorAt,
+          last_error_code: error.errorCode,
+          next_run_at: null,
+          status: 'failed',
+        };
+
+        return { ...jobState };
+      }),
       getActiveGenerateAiByListingId: vi.fn(async () => queuedGenerateAiJob),
       getById: jobsGetById,
-      listQueued: vi.fn(async () => []),
+      listDueQueued: vi.fn(async () => []),
       listByListingId: jobsListByListingId,
+      listStaleRunning: vi.fn(async () => []),
+      requeue: vi.fn(async (_jobId: string, error, nextRunAt) => {
+        if (!jobState) {
+          throw new Error('job missing');
+        }
+
+        jobState = {
+          ...jobState,
+          last_error: error.errorMessage,
+          last_error_at: error.errorAt,
+          last_error_code: error.errorCode,
+          next_run_at: nextRunAt,
+          status: 'queued',
+        };
+
+        return { ...jobState };
+      }),
       update: jobsUpdate,
     },
     listings: {
@@ -304,6 +379,8 @@ describe('runSidecarJob', () => {
         },
         last_error_at: null,
         last_error_code: null,
+        last_error_context: {},
+        last_error_message: null,
         price: 249.99,
         status: 'needs_review',
         sub_status: 'review_pending',
@@ -316,7 +393,7 @@ describe('runSidecarJob', () => {
     expect(result.job.status).toBe('completed');
   });
 
-  it('reverts generate_ai listings to retryable state when Gemini fails', async () => {
+  it('requeues recoverable generate_ai failures with next_run_at', async () => {
     const dataAccess = createDataAccess();
     const generateListingDraftMock = vi.fn(async () => {
       throw new Error('Gemini timed out');
@@ -338,13 +415,18 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         last_error_at: '2026-05-20T13:00:00.000Z',
         last_error_code: 'generate_ai_failed',
+        last_error_context: expect.objectContaining({
+          category: 'recoverable',
+        }),
+        last_error_message: 'Gemini timed out',
         status: 'assets_ready',
         sub_status: 'ready_to_generate',
       })
     );
-    expect(result.job.status).toBe('failed');
+    expect(result.job.status).toBe('queued');
     expect(result.job.last_error_code).toBe('generate_ai_failed');
     expect(result.job.last_error).toContain('Gemini timed out');
+    expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
     expect(result.listing?.status).toBe('assets_ready');
     expect(result.listing?.sub_status).toBe('ready_to_generate');
   });
@@ -398,7 +480,7 @@ describe('runSidecarJob', () => {
     expect(result.job.last_error).toBeNull();
   });
 
-  it('marks process_images jobs failed when batch execution throws', async () => {
+  it('requeues recoverable process_images failures with next_run_at', async () => {
     const dataAccess = createDataAccess({
       job: queuedProcessImagesJob,
     });
@@ -414,9 +496,10 @@ describe('runSidecarJob', () => {
 
     expect(result.listing).toBeNull();
     expect(result.assetPrepSummary).toBeUndefined();
-    expect(result.job.status).toBe('failed');
+    expect(result.job.status).toBe('queued');
     expect(result.job.last_error_code).toBe('process_images_failed');
     expect(result.job.last_error).toContain('Supabase unavailable');
+    expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
   });
 
   it('runs already-claimed jobs without re-marking them running', async () => {
@@ -437,13 +520,7 @@ describe('runSidecarJob', () => {
     });
 
     expect(result.job.status).toBe('completed');
-    expect(dataAccess.jobs.update).toHaveBeenCalledTimes(1);
-    expect(dataAccess.jobs.update).toHaveBeenCalledWith('job-process-images', {
-      last_error: null,
-      last_error_at: null,
-      last_error_code: null,
-      status: 'completed',
-    });
+    expect(dataAccess.jobs.complete).toHaveBeenCalledWith('job-process-images');
   });
 
   it('fails unsupported job types without touching listing workflow', async () => {
@@ -465,5 +542,23 @@ describe('runSidecarJob', () => {
     expect(result.job.last_error_code).toBe('unsupported_job_type');
     expect(generateListingDraftMock).not.toHaveBeenCalled();
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
+  it('reports a claim race as not claimable when a queued job cannot be claimed', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedGenerateAiJob,
+    });
+    dataAccess.jobs.claimDueQueued = vi.fn(async () => null);
+
+    await expect(
+      runSidecarJob('job-generate-ai', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: 'job_not_claimable',
+      message:
+        'Job "job-generate-ai" is queued but could not be claimed for execution. It may not be due yet or another worker already claimed it.',
+    });
   });
 });
