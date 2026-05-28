@@ -164,6 +164,36 @@ HTTP `409 Conflict`
 }
 ```
 
+## `POST /api/listings/:listingId/retry`
+
+Retries the listing workflow only on the mounted API path above. Frontend callers should use `/api/listings/:listingId/retry`, not `/listings/:listingId/retry`.
+
+### Success response
+
+HTTP `200 OK`
+
+```json
+{
+  "alreadyQueued": false,
+  "workflow": "publish",
+  "job": {},
+  "listing": {}
+}
+```
+
+The route returns the retried or already-active workflow job and the listing row after any retry-state repair.
+
+### Conflict
+
+HTTP `409 Conflict`
+
+```json
+{
+  "error": "manual_retry_not_allowed",
+  "message": "Latest publish failure for listing \"LIST-001\" is not manually retryable."
+}
+```
+
 ## `GET /api/app-settings`
 
 Reads the singleton `app_settings` row with `id = "default"`.

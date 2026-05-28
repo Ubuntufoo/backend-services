@@ -12,6 +12,23 @@ interface AxiosConfigWithRetry extends AxiosRequestConfig {
   retryCount?: number;
 }
 
+export class EbayApiRequestError extends Error {
+  readonly ebayErrors: EbayApiError['errors'];
+  readonly statusCode?: number;
+
+  constructor(
+    message: string,
+    ebayErrors: EbayApiError['errors'],
+    statusCode?: number,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = 'EbayApiRequestError';
+    this.ebayErrors = ebayErrors;
+    this.statusCode = statusCode;
+  }
+}
+
 /**
  * Rate limit tracking
  */
@@ -251,7 +268,12 @@ export class EbayApiClient {
             ebayError.errors?.[0]?.longMessage ??
             ebayError.errors?.[0]?.message ??
             axiosError.message;
-          throw new Error(`eBay API Error: ${errorMessage}`);
+          throw new EbayApiRequestError(
+            `eBay API Error: ${errorMessage}`,
+            ebayError.errors ?? [],
+            axiosError.response.status,
+            { cause: axiosError }
+          );
         }
 
         throw error;

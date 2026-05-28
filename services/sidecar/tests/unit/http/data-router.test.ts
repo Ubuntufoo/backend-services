@@ -627,6 +627,54 @@ describe('data API router', () => {
     expect(dataAccess.listings.claimApprovedForPublish).not.toHaveBeenCalled();
   });
 
+  it('serves retry only on the mounted /api/listings/:listingId/retry path', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      last_error_code: 'generate_ai_missing_image_urls',
+      last_error_context: { category: 'user_fixable' },
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 1,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-user-fixable',
+        job_type: 'generate_ai',
+        last_error: 'Missing images',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'generate_ai_missing_image_urls',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => ({
+      attempts: 0,
+      created_at: '2026-05-17T01:00:00.000Z',
+      id: 'job-generate-ai-user-fixable',
+      job_type: 'generate_ai',
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      listing_id: 'LIST-001',
+      max_attempts: 3,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: '2026-05-17T02:00:00.000Z',
+    }));
+    const app = createApp(dataAccess);
+
+    const mountedResponse = await request(app).post('/api/listings/LIST-001/retry').send({});
+    const bareResponse = await request(app).post('/listings/LIST-001/retry').send({});
+
+    expect(mountedResponse.status).toBe(200);
+    expect(bareResponse.status).toBe(404);
+  });
+
   it('manually retries failed user-fixable generate_ai jobs after correction', async () => {
     const dataAccess = createDataAccess();
     dataAccess.listings.getByListingId = vi.fn(async () => ({

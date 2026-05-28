@@ -22,7 +22,9 @@ export async function withApiError<T>(
   try {
     return await operation();
   } catch (error) {
-    throw new Error(`${failureMessage}: ${getErrorMessage(error)}`);
+    throw new Error(`${failureMessage}: ${getErrorMessage(error)}`, {
+      cause: error instanceof Error ? error : undefined,
+    });
   }
 }
 

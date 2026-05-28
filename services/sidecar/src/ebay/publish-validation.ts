@@ -1,4 +1,5 @@
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import type { EbayApiError } from '@/types/ebay.js';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 
 export type PublishListingErrorCode =
@@ -13,6 +14,7 @@ export type PublishListingErrorCode =
 export interface PublishListingErrorContext {
   attemptedFields?: string[];
   causeMessage?: string;
+  ebayErrors?: EbayApiError['errors'];
   listingId?: string | null;
   offerId?: string;
   publishOfferListingId?: string | null;
