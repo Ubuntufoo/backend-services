@@ -9,9 +9,11 @@ From the repo root:
 ```bash
 pnpm dev
 pnpm setup
+pnpm ebay:diagnose-offer -- 11109473010
 pnpm ebay:diagnose-sandbox
 pnpm ebay:diagnose-sandbox-config
 pnpm ebay:opt-in-selling-policies
+pnpm ebay:reconcile-published-listing -- --offer-id 11109473010
 pnpm ebay:setup-sandbox
 pnpm diagnose
 pnpm sync
@@ -26,9 +28,11 @@ Or directly in this package:
 pnpm dev
 pnpm dev:stdio
 pnpm setup
+pnpm ebay:diagnose-offer -- 11109473010
 pnpm ebay:diagnose-sandbox
 pnpm ebay:diagnose-sandbox-config
 pnpm ebay:opt-in-selling-policies
+pnpm ebay:reconcile-published-listing -- --offer-id 11109473010
 pnpm ebay:setup-sandbox
 pnpm diagnose
 pnpm sync
@@ -50,7 +54,7 @@ cp env.example .env
 `pnpm dev` starts the HTTP sidecar from `src/server-http.ts`.
 Use `pnpm dev:stdio` only when you explicitly want the stdio MCP server from `src/index.ts`.
 The HTTP sidecar also starts the background job-runner loop by default; set `SIDECAR_JOB_RUNNER_ENABLED=false` to disable polling for tests or manual debugging.
-Use `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only policy/location/app_settings discovery, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
+Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only policy/location/app_settings discovery, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` for repair-only exported-state reconciliation, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
 and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.

@@ -73,6 +73,7 @@ export {
 export {
   claimApprovedListingForPublish,
   createListing,
+  getListingByOfferId,
   getListingByListingId,
   listApprovedForExportListings,
   listListings,

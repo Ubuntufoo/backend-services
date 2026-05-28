@@ -147,6 +147,7 @@ function createDataAccess({
   const listingsList = vi.fn();
   const listingsListByStatus = vi.fn();
   const listingsSaveImageMetadata = vi.fn();
+  const listingsGetByOfferId = vi.fn(async () => listingStates.at(-1) ?? null);
   const listingsGetByListingId = vi.fn(async () => listingStates.at(-1) ?? null);
   const listingsUpdate = vi.fn(async (_listingId: string, changes: Partial<ListingRow>) => {
     const current = listingStates.at(-1);
@@ -325,6 +326,7 @@ function createDataAccess({
         return nextState;
       }),
       create: listingsCreate,
+      getByOfferId: listingsGetByOfferId,
       getByListingId: listingsGetByListingId,
       listApprovedForExport: vi.fn(async () => []),
       list: listingsList,
@@ -806,7 +808,7 @@ describe('runSidecarJob', () => {
         exported_at: '2026-05-20T13:00:00.000Z',
         last_error_at: null,
         last_error_code: null,
-        last_error_context: null,
+        last_error_context: {},
         last_error_message: null,
         status: 'exported',
         sub_status: 'idle',
@@ -904,6 +906,48 @@ describe('runSidecarJob', () => {
       last_error_code: 'publish_listing_not_ready',
       status: 'approved_for_export',
       sub_status: 'idle',
+    });
+  });
+
+  it('persists enriched finalize failure context on terminal publish errors', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingError(
+        'EXPORT_STATE_PERSIST_FAILED',
+        'Published offer but local finalize failed.',
+        {
+          attemptedFields: ['ebay_offer_id', 'ebay_listing_id', 'last_error_context'],
+          causeMessage: 'null value in column "last_error_context"',
+          listingId: 'LIST-001',
+          offerId: 'OFFER-001',
+          publishOfferListingId: 'EBAY-001',
+          stage: 'finalize',
+        }
+      );
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_export_state_persist_failed');
+    expect(result.listing?.last_error_context).toMatchObject({
+      attemptedFields: ['ebay_offer_id', 'ebay_listing_id', 'last_error_context'],
+      causeMessage: 'null value in column "last_error_context"',
+      category: 'terminal',
+      offerId: 'OFFER-001',
+      publishOfferListingId: 'EBAY-001',
+      publish_error_code: 'EXPORT_STATE_PERSIST_FAILED',
+      stage: 'finalize',
     });
   });
 
