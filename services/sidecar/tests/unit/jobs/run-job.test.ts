@@ -2,7 +2,7 @@ import type { JobRow, ListingRow } from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
-import { PublishListingError } from '@/ebay/publish-validation.js';
+import { PublishListingError, PublishListingValidationError } from '@/ebay/publish-validation.js';
 import { runSidecarJob } from '@/jobs/index.js';
 
 const queuedGenerateAiJob: JobRow = {
@@ -920,6 +920,51 @@ describe('runSidecarJob', () => {
       status: 'needs_review',
       sub_status: 'review_pending',
       title: 'Vintage puzzle',
+    });
+  });
+
+  it('returns over-length local title validation errors to needs_review/review_pending', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        category_id: '1234',
+        condition_id: '4000',
+        image_urls: ['https://cdn.example.com/front.jpg'],
+        item_specifics: { Brand: 'Acme' },
+        price: 24.5,
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+        title: 'a'.repeat(81),
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingValidationError('LIST-001', [
+        'Listing "LIST-001" title must be 80 characters or fewer for eBay publish. Current length: 81.',
+      ]);
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_listing_not_ready');
+    expect(result.listing).toMatchObject({
+      category_id: '1234',
+      condition_id: '4000',
+      image_urls: ['https://cdn.example.com/front.jpg'],
+      item_specifics: { Brand: 'Acme' },
+      last_error_code: 'publish_listing_not_ready',
+      last_error_context: expect.objectContaining({
+        category: 'user_fixable',
+        validation_scope: 'listing',
+      }),
+      price: 24.5,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'a'.repeat(81),
     });
   });
 

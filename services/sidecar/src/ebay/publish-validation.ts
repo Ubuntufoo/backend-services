@@ -187,6 +187,14 @@ export function validatePublishListingReadiness(
 
   if (!hasText(listing.title)) {
     issues.push(`Listing "${listingLabel}" is missing title.`);
+  } else {
+    const normalizedTitle = listing.title.trim();
+
+    if (normalizedTitle.length > 80) {
+      issues.push(
+        `Listing "${listingLabel}" title must be 80 characters or fewer for eBay publish. Current length: ${normalizedTitle.length}.`
+      );
+    }
   }
 
   if (!hasText(listing.category_id)) {
