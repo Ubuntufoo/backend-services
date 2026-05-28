@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { publishListing } from '@/ebay/publish-listing.js';
 import {
@@ -347,6 +348,28 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
+  it('rejects 81-character titles before any inventory api calls', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        title: 'a'.repeat(81),
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'Listing "LIST-001" title must be 80 characters or fewer for eBay publish. Current length: 81.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
   it('rejects unsupported condition ids before any inventory api calls', async () => {
     const dependencies = createDependencies({
       listing: createListing({
@@ -503,6 +526,41 @@ describe('publishListing', () => {
         },
       },
     ]);
+  });
+
+  it('preserves structured eBay validation details on publishOffer failures', async () => {
+    const dependencies = createDependencies();
+    dependencies.inventoryApi.publishOffer = vi.fn(async () => {
+      throw new EbayApiRequestError(
+        'eBay API Error: Invalid value for title. The length should be between 1 and 80 characters.',
+        [
+          {
+            category: 'REQUEST',
+            domain: 'API_INVENTORY',
+            errorId: 25718,
+            longMessage:
+              'Invalid value for title. The length should be between 1 and 80 characters.',
+            message: 'Invalid value for title.',
+          },
+        ],
+        400
+      );
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'OFFER_PUBLISH_FAILED',
+      context: {
+        ebayErrors: [
+          expect.objectContaining({
+            category: 'REQUEST',
+            domain: 'API_INVENTORY',
+            errorId: 25718,
+          }),
+        ],
+        listingId: 'LIST-001',
+        stage: 'publish',
+      },
+    } satisfies Partial<PublishListingError>);
   });
 
   it('raises explicit finalization errors when publish succeeds but exported state persistence fails', async () => {

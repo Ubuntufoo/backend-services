@@ -198,13 +198,16 @@ function buildPublishFailureUpdate(
   errorAt: string,
   subStatus: 'idle' | 'publish_queued'
 ): ListingUpdate {
+  const validationScope = error.context.validation_scope;
+  const shouldReturnToReview = validationScope === 'listing';
+
   return {
     last_error_at: errorAt,
     last_error_code: error.code,
     last_error_context: toListingErrorContext(error),
     last_error_message: error.message,
-    status: 'approved_for_export',
-    sub_status: subStatus,
+    status: shouldReturnToReview ? 'needs_review' : 'approved_for_export',
+    sub_status: shouldReturnToReview ? 'review_pending' : subStatus,
   };
 }
 

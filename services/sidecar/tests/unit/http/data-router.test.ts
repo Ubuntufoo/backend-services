@@ -159,18 +159,16 @@ describe('data API router', () => {
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
   });
 
-  it('creates a manual or test listing with workflow defaults', async () => {
+  it('creates a listing with workflow defaults', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).post('/api/listings').send({
-      mode: 'test',
-    });
+    const response = await request(app).post('/api/listings').send({});
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual(
       expect.objectContaining({
-        listing_id: expect.stringMatching(/^test-/),
+        listing_id: expect.any(String),
         status: 'record_created',
         sub_status: 'idle',
         image_urls: [],
@@ -180,7 +178,7 @@ describe('data API router', () => {
     );
     expect(dataAccess.listings.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        listing_id: expect.stringMatching(/^test-/),
+        listing_id: expect.any(String),
         status: 'record_created',
         sub_status: 'idle',
         image_urls: [],
@@ -190,33 +188,11 @@ describe('data API router', () => {
     );
   });
 
-  it('rejects create requests without the required mode field', async () => {
-    const dataAccess = createDataAccess();
-    const app = createApp(dataAccess);
-
-    const response = await request(app).post('/api/listings').send({
-      title: 'Test listing',
-    });
-
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({
-      error: 'invalid_request',
-      details: [
-        {
-          message: 'Required',
-          path: 'mode',
-        },
-      ],
-    });
-    expect(dataAccess.listings.create).not.toHaveBeenCalled();
-  });
-
   it('rejects create requests with unknown fields', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
     const response = await request(app).post('/api/listings').send({
-      mode: 'test',
       status: 'needs_review',
     });
 
@@ -225,7 +201,7 @@ describe('data API router', () => {
       error: 'invalid_request',
       details: [
         {
-          message: 'Unrecognized key(s) in object: \'status\'',
+          message: "Unrecognized key(s) in object: 'status'",
           path: '',
         },
       ],
@@ -238,12 +214,19 @@ describe('data API router', () => {
     const app = createApp(dataAccess);
 
     const response = await request(app).post('/api/listings').send({
-      mode: 'test',
       captureMode: 'single_legacy_image',
     });
 
     expect(response.status).toBe(400);
-    expect(response.body.error).toBe('invalid_request');
+    expect(response.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: expect.stringContaining('Invalid enum value'),
+          path: 'captureMode',
+        },
+      ],
+    });
     expect(dataAccess.listings.create).not.toHaveBeenCalled();
   });
 
@@ -642,6 +625,54 @@ describe('data API router', () => {
     });
     expect(dataAccess.jobs.claimDueQueued).not.toHaveBeenCalled();
     expect(dataAccess.listings.claimApprovedForPublish).not.toHaveBeenCalled();
+  });
+
+  it('serves retry only on the mounted /api/listings/:listingId/retry path', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      last_error_code: 'generate_ai_missing_image_urls',
+      last_error_context: { category: 'user_fixable' },
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    }));
+    dataAccess.jobs.listByListingId = vi.fn(async () => [
+      {
+        attempts: 1,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-generate-ai-user-fixable',
+        job_type: 'generate_ai',
+        last_error: 'Missing images',
+        last_error_at: '2026-05-17T01:05:00.000Z',
+        last_error_code: 'generate_ai_missing_image_urls',
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'failed',
+        updated_at: '2026-05-17T01:05:00.000Z',
+      },
+    ]);
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => ({
+      attempts: 0,
+      created_at: '2026-05-17T01:00:00.000Z',
+      id: 'job-generate-ai-user-fixable',
+      job_type: 'generate_ai',
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      listing_id: 'LIST-001',
+      max_attempts: 3,
+      next_run_at: null,
+      status: 'queued',
+      updated_at: '2026-05-17T02:00:00.000Z',
+    }));
+    const app = createApp(dataAccess);
+
+    const mountedResponse = await request(app).post('/api/listings/LIST-001/retry').send({});
+    const bareResponse = await request(app).post('/listings/LIST-001/retry').send({});
+
+    expect(mountedResponse.status).toBe(200);
+    expect(bareResponse.status).toBe(404);
   });
 
   it('manually retries failed user-fixable generate_ai jobs after correction', async () => {

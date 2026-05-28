@@ -4,6 +4,7 @@ import {
   GeminiDraftValidationError,
 } from '@/gemini/index.js';
 import { PublishListingError } from '@/ebay/publish-validation.js';
+import type { EbayApiError } from '@/types/ebay.js';
 import { getJobMaxAttempts } from './retry-policy.js';
 
 export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
@@ -42,6 +43,8 @@ export type JobErrorCode = (typeof JOB_ERROR_CODES)[keyof typeof JOB_ERROR_CODES
 export type JobErrorContext = Record<string, Json>;
 type StoredErrorContext = Json | null | undefined;
 type StoredJobErrorCategory = JobErrorCategory | 'unknown';
+type EbayApiErrorEntry = EbayApiError['errors'][number];
+type PublishValidationScope = 'app_settings' | 'listing' | 'unknown';
 
 export class SidecarJobError extends Error {
   readonly category: JobErrorCategory;
@@ -163,6 +166,89 @@ function getPublishJobErrorCode(
   }
 }
 
+function asLowerText(value: unknown): string {
+  return typeof value === 'string' ? value.toLowerCase() : '';
+}
+
+function mentionsListingPayloadField(text: string): boolean {
+  return [
+    'title',
+    'description',
+    'price',
+    'image',
+    'images',
+    'condition',
+    'category',
+    'aspect',
+    'aspects',
+    'item specific',
+    'item_specific',
+  ].some((token) => text.includes(token));
+}
+
+function getPublishValidationScope(error: PublishListingError): PublishValidationScope | undefined {
+  if (error.code === 'APP_SETTINGS_NOT_FOUND') {
+    return 'app_settings';
+  }
+
+  if (error.code === 'LISTING_NOT_READY') {
+    const issues = error.context.issues ?? [];
+    const hasListingIssue = issues.some((issue) => mentionsListingPayloadField(asLowerText(issue)));
+    if (hasListingIssue) {
+      return 'listing';
+    }
+
+    const hasAppSettingsIssue = issues.some((issue) => asLowerText(issue).includes('app_settings.'));
+    return hasAppSettingsIssue ? 'app_settings' : 'unknown';
+  }
+
+  return undefined;
+}
+
+function isInventoryRequestValidationError(error: EbayApiErrorEntry): boolean {
+  return asLowerText(error.domain) === 'api_inventory' && asLowerText(error.category) === 'request';
+}
+
+function getValidationText(error: EbayApiErrorEntry): string {
+  const parameterText = (error.parameters ?? [])
+    .flatMap((parameter) => [parameter.name, parameter.value])
+    .join(' ');
+
+  return [error.message, error.longMessage, parameterText].filter(Boolean).join(' ').toLowerCase();
+}
+
+function getUserFixableInventoryValidationErrors(
+  error: PublishListingError
+): EbayApiErrorEntry[] {
+  const ebayErrors = error.context.ebayErrors ?? [];
+
+  return ebayErrors.filter((entry) => {
+    if (!isInventoryRequestValidationError(entry)) {
+      return false;
+    }
+
+    const text = getValidationText(entry);
+
+    if (entry.errorId === 25718 && text.includes('title')) {
+      return true;
+    }
+
+    return mentionsListingPayloadField(text);
+  });
+}
+
+function isUserFixableInventoryValidationError(error: PublishListingError): boolean {
+  if (getUserFixableInventoryValidationErrors(error).length > 0) {
+    return true;
+  }
+
+  const message = [error.message, error.context.causeMessage].filter(Boolean).join(' ').toLowerCase();
+  return (
+    message.includes('invalid value for title') ||
+    (message.includes('title') && message.includes('length should be between 1 and 80'))
+  );
+}
+
 export function classifyJobError(jobType: JobRow['job_type'], error: unknown): SidecarJobError {
   if (error instanceof SidecarJobError) {
     return error;
@@ -170,10 +256,14 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
 
   if (jobType === 'publish') {
     if (error instanceof PublishListingError) {
+      const validationScope = getPublishValidationScope(error);
+      const userFixableInventoryErrors = getUserFixableInventoryValidationErrors(error);
       const category: JobErrorCategory =
         error.code === 'EXPORT_STATE_PERSIST_FAILED' || error.code === 'LISTING_NOT_FOUND'
           ? 'terminal'
-          : error.code === 'LISTING_NOT_READY' || error.code === 'APP_SETTINGS_NOT_FOUND'
+          : error.code === 'LISTING_NOT_READY' ||
+              error.code === 'APP_SETTINGS_NOT_FOUND' ||
+              isUserFixableInventoryValidationError(error)
             ? 'user_fixable'
             : 'recoverable';
 
@@ -189,9 +279,13 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
             issues: error.context.issues,
             listingId: error.context.listingId,
             offerId: error.context.offerId,
+            ebayErrors: userFixableInventoryErrors.length > 0 ? userFixableInventoryErrors : error.context.ebayErrors,
             publish_error_code: error.code,
             publishOfferListingId: error.context.publishOfferListingId,
             stage: error.context.stage,
+            validation_scope:
+              validationScope ??
+              (isUserFixableInventoryValidationError(error) ? 'listing' : undefined),
           }).filter(([, value]) => value !== undefined)
         ) as JobErrorContext,
         { cause: error }

@@ -3,6 +3,7 @@ import { EbaySellerApi } from '@/api/index.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
 import { getEbayConfig } from '@/config/environment.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import type { EbayApiError } from '@/types/ebay.js';
 import {
   buildPublishSku,
   mapListingToInventoryItemPayload,
@@ -73,6 +74,26 @@ function getCauseMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function getEbayErrors(error: unknown): EbayApiError['errors'] | undefined {
+  const visited = new Set<Error>();
+  let current: unknown = error;
+
+  while (current instanceof Error && !visited.has(current)) {
+    visited.add(current);
+
+    if ('ebayErrors' in current) {
+      const ebayErrors = (current as { ebayErrors?: unknown }).ebayErrors;
+      if (Array.isArray(ebayErrors)) {
+        return ebayErrors as EbayApiError['errors'];
+      }
+    }
+
+    current = 'cause' in current ? current.cause : undefined;
+  }
+
+  return undefined;
+}
+
 async function loadPublishContext(
   listingId: string,
   dataAccess: SidecarDataAccess
@@ -120,7 +141,16 @@ function wrapPublishStageError(
   message: string,
   error: unknown
 ): PublishListingError {
-  return new PublishListingError(code, message, { listingId, stage }, { cause: error });
+  return new PublishListingError(
+    code,
+    message,
+    {
+      ebayErrors: getEbayErrors(error),
+      listingId,
+      stage,
+    },
+    { cause: error }
+  );
 }
 
 export async function publishListing(

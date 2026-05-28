@@ -1,4 +1,5 @@
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import type { EbayApiError } from '@/types/ebay.js';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 
 export type PublishListingErrorCode =
@@ -13,6 +14,7 @@ export type PublishListingErrorCode =
 export interface PublishListingErrorContext {
   attemptedFields?: string[];
   causeMessage?: string;
+  ebayErrors?: EbayApiError['errors'];
   listingId?: string | null;
   offerId?: string;
   publishOfferListingId?: string | null;
@@ -185,6 +187,14 @@ export function validatePublishListingReadiness(
 
   if (!hasText(listing.title)) {
     issues.push(`Listing "${listingLabel}" is missing title.`);
+  } else {
+    const normalizedTitle = listing.title.trim();
+
+    if (normalizedTitle.length > 80) {
+      issues.push(
+        `Listing "${listingLabel}" title must be 80 characters or fewer for eBay publish. Current length: ${normalizedTitle.length}.`
+      );
+    }
   }
 
   if (!hasText(listing.category_id)) {

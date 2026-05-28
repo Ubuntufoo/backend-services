@@ -197,4 +197,56 @@ describe('publish validation app settings checks', () => {
       )
     ).toThrow(PublishListingValidationError);
   });
+
+  it('allows title length 80 for publish readiness', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          title: 'a'.repeat(80),
+        }),
+        createAppSettings()
+      )
+    ).not.toThrow();
+  });
+
+  it('rejects title length 81 for publish readiness', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          title: 'a'.repeat(81),
+        }),
+        createAppSettings()
+      )
+    ).toThrow(
+      'Listing "LIST-001" title must be 80 characters or fewer for eBay publish. Current length: 81.'
+    );
+  });
+
+  it('keeps missing title behavior without adding a length issue', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          title: '   ',
+        }),
+        createAppSettings()
+      )
+    ).toThrow(PublishListingValidationError);
+
+    try {
+      validatePublishListingReadiness(
+        createListing({
+          title: '   ',
+        }),
+        createAppSettings()
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(PublishListingValidationError);
+      expect((error as PublishListingValidationError).issues).toContain(
+        'Listing "LIST-001" is missing title.'
+      );
+      expect((error as PublishListingValidationError).issues).not.toContain(
+        'Listing "LIST-001" title must be 80 characters or fewer for eBay publish. Current length: 3.'
+      );
+    }
+  });
 });

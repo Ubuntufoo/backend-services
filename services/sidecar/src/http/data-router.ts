@@ -150,7 +150,7 @@ function asStringArray(value: unknown): string[] {
 }
 
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
-  const listingId = input.listingId ?? `${input.mode}-${randomUUID()}`;
+  const listingId = input.listingId ?? randomUUID();
   const initialWorkflowState = createIdleWorkflowState('record_created');
 
   return {
