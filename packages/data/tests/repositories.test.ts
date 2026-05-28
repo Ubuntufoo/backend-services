@@ -20,6 +20,7 @@ import {
   failJob,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
+  getListingByOfferId,
   getJobById,
   getListingByListingId,
   getOrderByOrderId,
@@ -950,6 +951,9 @@ describe('shared repositories', () => {
 
     const fetchClient = createSelectClient('listings', listingRow, 'listing_id', 'LIST-001');
     await expect(getListingByListingId(fetchClient, 'LIST-001')).resolves.toEqual(listingRow);
+
+    const offerLookupClient = createSelectClient('listings', listingRow, 'ebay_offer_id', 'OFFER-001');
+    await expect(getListingByOfferId(offerLookupClient, 'OFFER-001')).resolves.toEqual(listingRow);
 
     const listClient = createListAllClient('listings', [listingRow]);
     await expect(listListings(listClient)).resolves.toEqual([listingRow]);

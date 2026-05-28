@@ -11,7 +11,11 @@ export type PublishListingErrorCode =
   | 'OFFER_PUBLISH_FAILED';
 
 export interface PublishListingErrorContext {
+  attemptedFields?: string[];
+  causeMessage?: string;
   listingId?: string | null;
+  offerId?: string;
+  publishOfferListingId?: string | null;
   issues?: string[];
   stage?: 'finalize' | 'load' | 'validate' | 'inventory_item' | 'offer' | 'publish';
 }

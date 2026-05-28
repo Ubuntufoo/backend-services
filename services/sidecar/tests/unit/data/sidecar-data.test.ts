@@ -10,6 +10,7 @@ const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
 const listListingsMock = vi.fn();
 const listListingsByStatusMock = vi.fn();
 const listApprovedForExportListingsMock = vi.fn();
+const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
 const createListingMock = vi.fn();
 const updateListingMock = vi.fn();
@@ -57,6 +58,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
+  getListingByOfferId: getListingByOfferIdMock,
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
@@ -104,6 +106,7 @@ describe('sidecar data access', () => {
       queuedOnly: true,
     });
     await dataAccess.listings.getByListingId('LIST-001');
+    await dataAccess.listings.getByOfferId('OFFER-001');
 
     expect(createSupabaseServiceClientMock).toHaveBeenCalledWith(env);
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -118,6 +121,7 @@ describe('sidecar data access', () => {
       queuedOnly: true,
     });
     expect(getListingByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(getListingByOfferIdMock).toHaveBeenCalledWith(client, 'OFFER-001');
   });
 
   it('delegates create, update, workflow, and app-settings calls to shared repository helpers', async () => {

@@ -15,6 +15,7 @@ import {
   getAppSettings,
   getActiveGenerateAiJobByListingId,
   getJobById,
+  getListingByOfferId,
   getListingByListingId,
   getOrderByOrderId,
   listApprovedForExportListings,
@@ -90,6 +91,7 @@ export interface SidecarDataAccess {
   listings: {
     claimApprovedForPublish(listingId: string): Promise<ListingRow | null>;
     create(input: ListingInsert): Promise<ListingRow>;
+    getByOfferId(offerId: string): Promise<ListingRow | null>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
     listApprovedForExport(options: ListApprovedForExportListingsOptions): Promise<ListingRow[]>;
     list(): Promise<ListingRow[]>;
@@ -124,6 +126,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       claimApprovedForPublish: async (listingId) =>
         await claimApprovedListingForPublish(client, listingId),
       create: async (input) => await createListing(client, input),
+      getByOfferId: async (offerId) => await getListingByOfferId(client, offerId),
       getByListingId: async (listingId) => await getListingByListingId(client, listingId),
       listApprovedForExport: async (options) =>
         await listApprovedForExportListings(client, options),

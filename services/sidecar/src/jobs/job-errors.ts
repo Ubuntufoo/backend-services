@@ -184,9 +184,13 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
         Object.fromEntries(
           Object.entries({
             ...buildBaseContext(error),
+            attemptedFields: error.context.attemptedFields,
+            causeMessage: error.context.causeMessage,
             issues: error.context.issues,
             listingId: error.context.listingId,
+            offerId: error.context.offerId,
             publish_error_code: error.code,
+            publishOfferListingId: error.context.publishOfferListingId,
             stage: error.context.stage,
           }).filter(([, value]) => value !== undefined)
         ) as JobErrorContext,

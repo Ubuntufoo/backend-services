@@ -189,6 +189,19 @@ export async function getListingByListingId(
   return requireOptionalResult(result);
 }
 
+export async function getListingByOfferId(
+  client: SupabaseDataClient,
+  offerId: string
+): Promise<ListingRow | null> {
+  const result = (await client
+    .from('listings')
+    .select('*')
+    .eq('ebay_offer_id', offerId)
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  return requireOptionalResult(result);
+}
+
 export async function listListings(client: SupabaseDataClient): Promise<ListingRow[]> {
   const result = (await client
     .from('listings')
