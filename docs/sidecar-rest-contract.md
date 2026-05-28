@@ -196,7 +196,6 @@ Accepted JSON body:
 ```json
 {
   "listingId": "optional-client-supplied-id",
-  "mode": "manual",
   "captureMode": "single_2_image",
   "categoryId": "optional-category-id",
   "conditionId": "optional-condition-id",
@@ -222,8 +221,7 @@ Accepted JSON body:
 
 Supported fields and constraints:
 
-- `mode`: required. Enum: `"manual" | "test"`.
-- `listingId`: optional non-empty string. If omitted, the backend generates one as `${mode}-${randomUUID()}`.
+- `listingId`: optional non-empty string. If omitted, the backend generates one with `randomUUID()`.
 - `captureMode`: optional. Enum from `@ebay-inventory/types` `CAPTURE_MODES`.
 - `listingType`: optional. Enum: `"single" | "lot"`.
 - `imageUrls`: optional array of non-empty trimmed strings.
@@ -245,18 +243,14 @@ Fields not accepted by this route:
 The smallest valid request body is:
 
 ```json
-{
-  "mode": "test"
-}
+{}
 ```
-
-`"manual"` is also valid.
 
 ### Backend defaults applied on create
 
 The route applies these defaults before inserting the row:
 
-- `listing_id`: generated as `${mode}-${randomUUID()}` when `listingId` is omitted
+- `listing_id`: generated as `randomUUID()` when `listingId` is omitted
 - `status`: always `"record_created"`
 - `sub_status`: always `"idle"`
 - `image_urls`: `[]` when `imageUrls` is omitted
@@ -293,7 +287,7 @@ Returns the full inserted `listings` table row, not a reduced DTO. Shape:
   "item_specifics": {},
   "last_error_at": null,
   "last_error_code": null,
-  "listing_id": "test-123e4567-e89b-12d3-a456-426614174000",
+  "listing_id": "123e4567-e89b-12d3-a456-426614174000",
   "listing_type": null,
   "merchant_location_key": null,
   "package_type": null,
@@ -329,8 +323,8 @@ Validation failures use this shape:
   "error": "invalid_request",
   "details": [
     {
-      "message": "Required",
-      "path": "mode"
+      "message": "title must be a string",
+      "path": "title"
     }
   ]
 }
@@ -338,7 +332,7 @@ Validation failures use this shape:
 
 Observed validation rules:
 
-- Missing required `mode` returns `message: "Required"` and `path: "mode"`.
+- Empty object is valid and creates a listing with backend defaults.
 - Wrong types return schema-specific messages. Example: numeric fields use Zod's default message such as `"Expected number, received string"`, while trimmed string fields use messages such as `"title must be a string"`.
 - Empty strings for trimmed string fields return `"... is required"`.
 - Unknown top-level fields are rejected because the schema is strict. Example:
@@ -366,9 +360,9 @@ Unexpected persistence or server failures return HTTP `500`:
 }
 ```
 
-## Frontend implication
+## Create behavior
 
-The Create Test Listing form can safely create a draft workflow record with only `mode`. Everything else in the create payload is optional, and the backend will always start the listing in:
+The route creates a draft workflow record with optional listing fields only. The backend always starts the listing in:
 
 - `status: "record_created"`
 - `sub_status: "idle"`

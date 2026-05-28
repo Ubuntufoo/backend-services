@@ -16,7 +16,6 @@ const nullableTrimmedStringSchema = (name: string): z.ZodOptional<z.ZodNullable<
 
 const listingTypeSchema = z.enum(['single', 'lot']);
 const captureModeSchema = z.enum(CAPTURE_MODES);
-const listingModeSchema = z.enum(['manual', 'test']);
 
 const itemSpecificsSchema = z.record(z.string(), z.unknown());
 const publicImageUrlSchema = z
@@ -79,7 +78,6 @@ export const sellerEditableListingFieldsSchema = z
 export const createListingRequestSchema = editableListingFieldsSchema
   .extend({
     listingId: trimmedStringSchema('listingId').optional(),
-    mode: listingModeSchema,
   })
   .strict();
 

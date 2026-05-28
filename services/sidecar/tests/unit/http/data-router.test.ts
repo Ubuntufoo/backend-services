@@ -159,18 +159,16 @@ describe('data API router', () => {
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
   });
 
-  it('creates a manual or test listing with workflow defaults', async () => {
+  it('creates a listing with workflow defaults', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).post('/api/listings').send({
-      mode: 'test',
-    });
+    const response = await request(app).post('/api/listings').send({});
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual(
       expect.objectContaining({
-        listing_id: expect.stringMatching(/^test-/),
+        listing_id: expect.any(String),
         status: 'record_created',
         sub_status: 'idle',
         image_urls: [],
@@ -180,7 +178,7 @@ describe('data API router', () => {
     );
     expect(dataAccess.listings.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        listing_id: expect.stringMatching(/^test-/),
+        listing_id: expect.any(String),
         status: 'record_created',
         sub_status: 'idle',
         image_urls: [],
@@ -190,33 +188,11 @@ describe('data API router', () => {
     );
   });
 
-  it('rejects create requests without the required mode field', async () => {
-    const dataAccess = createDataAccess();
-    const app = createApp(dataAccess);
-
-    const response = await request(app).post('/api/listings').send({
-      title: 'Test listing',
-    });
-
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({
-      error: 'invalid_request',
-      details: [
-        {
-          message: 'Required',
-          path: 'mode',
-        },
-      ],
-    });
-    expect(dataAccess.listings.create).not.toHaveBeenCalled();
-  });
-
   it('rejects create requests with unknown fields', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
     const response = await request(app).post('/api/listings').send({
-      mode: 'test',
       status: 'needs_review',
     });
 
@@ -225,7 +201,7 @@ describe('data API router', () => {
       error: 'invalid_request',
       details: [
         {
-          message: 'Unrecognized key(s) in object: \'status\'',
+          message: "Unrecognized key(s) in object: 'status'",
           path: '',
         },
       ],
@@ -238,12 +214,19 @@ describe('data API router', () => {
     const app = createApp(dataAccess);
 
     const response = await request(app).post('/api/listings').send({
-      mode: 'test',
       captureMode: 'single_legacy_image',
     });
 
     expect(response.status).toBe(400);
-    expect(response.body.error).toBe('invalid_request');
+    expect(response.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: expect.stringContaining('Invalid enum value'),
+          path: 'captureMode',
+        },
+      ],
+    });
     expect(dataAccess.listings.create).not.toHaveBeenCalled();
   });
 
