@@ -1,4 +1,5 @@
 import { z, type ZodIssue } from 'zod';
+import { RAW_CARD_CONDITION_TOKENS } from '@/listings/trading-card-conditions.js';
 
 const listingIdSchema = z
   .string({
@@ -17,6 +18,7 @@ const imageUrlSchema = z
   .min(1, 'imageUrls entries must be non-empty strings');
 
 export const aspectValueSchema = z.union([z.string(), z.array(z.string())]);
+const rawCardConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
 
 export const userHintsSchema = z.object({
   title: z.string().nullable().optional(),
@@ -48,6 +50,8 @@ export const generatedListingDraftSchema = z.object({
   title: z.string(),
   description: z.string(),
   categorySuggestion: z.string().nullable().optional(),
+  cardConditionNote: z.string().nullable().optional(),
+  cardConditionToken: rawCardConditionTokenSchema.nullable().optional(),
   conditionSuggestion: z.string().nullable().optional(),
   aspects: z.record(aspectValueSchema),
   priceSuggestion: z.number().finite().nullable().optional(),

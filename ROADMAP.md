@@ -79,7 +79,8 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7A.2 | BE | Normalize publish execution into jobs table | Publish uses job retries, stale recovery, duplicate active-job guard, and backfill from `publish_queued` |
 | 7A.3 | BE | Add manual retry endpoint and orphan workflow repair | Failed/retryable listings can be safely retried and active-looking orphan states are repaired | 
 | 7A | BE | Add publish throttling | No API burst publishing | GPT-5.5 mini | Low-Medium | Prevents repeated eBay API error loops | 
-| 7A | FE | Add eBay title length validation | Prevent approval/export when title exceeds 80 characters | GPT-5.5 mini | Low-Medium | Catches user-fixable publish errors before backend/eBay API call |.   -->
+| 7A | FE | Add eBay title length validation | Prevent approval/export when title exceeds 80 characters | GPT-5.5 mini | Low-Medium | Catches user-fixable publish errors before backend/eBay API call |
+| 7A | FE | Split exported/live listings into read-only panel | Completed listings leave edit/review panel and appear in compact Exported/Live table with eBay URL | GPT-5.5 mini | Medium | Keeps active workflow UI clean after successful publish | .   -->
 | 7A | BE | Add trading-card condition descriptor support | Trading-card listings satisfy eBay category-specific condition requirements | GPT-5.5 | Medium-High | Production hardening for trading cards before serious publish testing |
 | 7 | DB | Track Gemini model attempts | AI model usage and fallback outcomes are auditable per listing | GPT-5.5 mini | Low-Medium | Should come before Gemini fallback router |
 | 7 | FE | Add queue/error panel | Shows `assets_ready`, `generating`, `needs_review`, `approved_for_export`, publish queue, and persisted errors | GPT-5.5 mini | Low-Medium | Operational visibility; not aesthetic QOL |

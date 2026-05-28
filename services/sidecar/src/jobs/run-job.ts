@@ -12,6 +12,7 @@ import {
   resolveTradingCardListingIds,
   type GenerateListingDraftInput,
 } from '@/gemini/index.js';
+import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   publishListing as publishApprovedListing,
@@ -151,6 +152,9 @@ function buildGeneratedListingAspects(
 ): NonNullable<ListingUpdate['item_specifics']> {
   return {
     ...draft.aspects,
+    ...(draft.cardConditionToken
+      ? { [TRADING_CARD_CONDITION_ASPECT_KEY]: draft.cardConditionToken }
+      : {}),
     ...(draft.categorySuggestion
       ? { [CATEGORY_SUGGESTION_ASPECT_KEY]: draft.categorySuggestion }
       : {}),
@@ -169,6 +173,7 @@ function buildGeneratedListingReviewUpdate(
   return {
     category_id: resolvedIds.category_id,
     condition_id: resolvedIds.condition_id,
+    condition_notes: draft.cardConditionNote ?? null,
     description: draft.description,
     item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,

@@ -1,6 +1,14 @@
-import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import type { EbayApiError } from '@/types/ebay.js';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
+import {
+  GRADED_TRADING_CARD_CONDITION_ID,
+  getSavedRawCardConditionToken,
+  isRawCardConditionToken,
+  isTradingCardCategoryId,
+  RAW_TRADING_CARD_CONDITION_ID,
+  TRADING_CARD_CONDITION_ASPECT_KEY,
+} from '@/listings/trading-card-conditions.js';
 
 export type PublishListingErrorCode =
   | 'APP_SETTINGS_NOT_FOUND'
@@ -59,6 +67,10 @@ export class PublishListingValidationError extends PublishListingError {
 
 function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isRecord(value: ListingRow['item_specifics']): value is Record<string, Json> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeText(value: string | null | undefined): string | undefined {
@@ -210,6 +222,38 @@ export function validatePublishListingReadiness(
       issues.push(
         `Listing "${listingLabel}" has unsupported condition_id "${listing.condition_id.trim()}" for Inventory API mapping.`
       );
+    }
+  }
+
+  if (isTradingCardCategoryId(listing.category_id)) {
+    const normalizedConditionId = listing.condition_id?.trim();
+
+    if (normalizedConditionId === GRADED_TRADING_CARD_CONDITION_ID) {
+      issues.push(
+        `Listing "${listingLabel}" uses graded trading-card condition_id "${GRADED_TRADING_CARD_CONDITION_ID}", but graded condition descriptors are not supported yet.`
+      );
+    }
+
+    if (normalizedConditionId === RAW_TRADING_CARD_CONDITION_ID) {
+      const savedToken = getSavedRawCardConditionToken(listing.item_specifics);
+
+      if (!savedToken) {
+        const savedValue =
+          isRecord(listing.item_specifics) &&
+          typeof listing.item_specifics[TRADING_CARD_CONDITION_ASPECT_KEY] === 'string'
+            ? listing.item_specifics[TRADING_CARD_CONDITION_ASPECT_KEY]
+            : null;
+
+        if (!savedValue) {
+          issues.push(
+            `Listing "${listingLabel}" is missing item_specifics["${TRADING_CARD_CONDITION_ASPECT_KEY}"] for trading-card publish.`
+          );
+        } else if (!isRawCardConditionToken(savedValue)) {
+          issues.push(
+            `Listing "${listingLabel}" has unsupported item_specifics["${TRADING_CARD_CONDITION_ASPECT_KEY}"] value "${savedValue}" for trading-card publish.`
+          );
+        }
+      }
     }
   }
 
