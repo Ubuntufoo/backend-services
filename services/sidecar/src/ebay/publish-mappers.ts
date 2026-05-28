@@ -1,6 +1,10 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { Condition } from '@/types/ebay-enums.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
+import {
+  isTradingCardCategoryId,
+  TRADING_CARD_CONDITION_ASPECT_KEY,
+} from '@/listings/trading-card-conditions.js';
 
 type InventoryItem = components['schemas']['InventoryItem'];
 type EbayOfferDetailsWithKeys = components['schemas']['EbayOfferDetailsWithKeys'];
@@ -22,6 +26,10 @@ const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
 };
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set(['CategorySuggestion', 'ConditionSuggestion']);
 
+export interface InventoryItemPayloadOptions {
+  conditionDescriptors?: InventoryItem['conditionDescriptors'];
+}
+
 function normalizeAspectValue(value: Json): string[] | null {
   if (typeof value === 'string' && value.trim().length > 0) {
     return [value];
@@ -39,7 +47,8 @@ function normalizeAspectValue(value: Json): string[] | null {
 }
 
 function normalizeItemSpecifics(
-  itemSpecifics: ListingRow['item_specifics']
+  itemSpecifics: ListingRow['item_specifics'],
+  ignoredKeys: ReadonlySet<string>
 ): Record<string, string[]> | undefined {
   if (!itemSpecifics || typeof itemSpecifics !== 'object' || Array.isArray(itemSpecifics)) {
     return undefined;
@@ -48,7 +57,7 @@ function normalizeItemSpecifics(
   const aspects: Record<string, string[]> = {};
 
   for (const [key, value] of Object.entries(itemSpecifics)) {
-    if (INTERNAL_ITEM_SPECIFIC_KEYS.has(key)) {
+    if (ignoredKeys.has(key)) {
       continue;
     }
 
@@ -115,9 +124,16 @@ export function mapListingConditionIdToInventoryCondition(
 
 export function mapListingToInventoryItemPayload(
   listing: ListingRow,
-  appSettings: AppSettingsRow
+  appSettings: AppSettingsRow,
+  options: InventoryItemPayloadOptions = {}
 ): InventoryItem {
-  const aspects = normalizeItemSpecifics(listing.item_specifics);
+  const ignoredKeys = new Set(INTERNAL_ITEM_SPECIFIC_KEYS);
+
+  if (options.conditionDescriptors && isTradingCardCategoryId(listing.category_id)) {
+    ignoredKeys.add(TRADING_CARD_CONDITION_ASPECT_KEY);
+  }
+
+  const aspects = normalizeItemSpecifics(listing.item_specifics, ignoredKeys);
 
   return {
     availability: {
@@ -127,6 +143,7 @@ export function mapListingToInventoryItemPayload(
     },
     condition: mapListingConditionIdToInventoryCondition(listing.condition_id ?? undefined),
     conditionDescription: listing.condition_notes ?? undefined,
+    conditionDescriptors: options.conditionDescriptors,
     packageWeightAndSize: buildPackageWeightAndSize(listing, appSettings),
     product: {
       aspects: aspects as unknown as components['schemas']['Product']['aspects'],

@@ -249,4 +249,50 @@ describe('publish validation app settings checks', () => {
       );
     }
   });
+
+  it('requires raw Card Condition token for trading-card publish', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          category_id: '261328',
+          condition_id: '4000',
+          item_specifics: {},
+        }),
+        createAppSettings()
+      )
+    ).toThrow(
+      'Listing "LIST-001" is missing item_specifics["Card Condition"] for trading-card publish.'
+    );
+  });
+
+  it('rejects unsupported raw Card Condition token for trading-card publish', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          category_id: '261328',
+          condition_id: '4000',
+          item_specifics: {
+            'Card Condition': 'NEAR MINT',
+          },
+        }),
+        createAppSettings()
+      )
+    ).toThrow(
+      'Listing "LIST-001" has unsupported item_specifics["Card Condition"] value "NEAR MINT" for trading-card publish.'
+    );
+  });
+
+  it('rejects graded trading-card condition ids in v1', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          category_id: '261328',
+          condition_id: '2750',
+        }),
+        createAppSettings()
+      )
+    ).toThrow(
+      'Listing "LIST-001" uses graded trading-card condition_id "2750", but graded condition descriptors are not supported yet.'
+    );
+  });
 });

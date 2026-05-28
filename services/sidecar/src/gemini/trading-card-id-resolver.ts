@@ -1,13 +1,17 @@
 import type { ListingRow } from '@ebay-inventory/data';
 import type { GeneratedListingDraft } from './contracts.js';
+import { RAW_TRADING_CARD_CONDITION_ID } from '@/listings/trading-card-conditions.js';
 
 export interface TradingCardListingIds {
   category_id: string | null;
   condition_id: string | null;
 }
 
-const SPORTS_TRADING_CARD_CATEGORY_ID = '261328';
-const UNGRADED_CONDITION_ID = '4000';
+const CATEGORY_ID_BY_SUGGESTION_TOKEN: { categoryId: string; pattern: RegExp }[] = [
+  { categoryId: '261328', pattern: /sports trading card/ },
+  { categoryId: '183050', pattern: /non-sport trading card/ },
+  { categoryId: '183454', pattern: /ccg individual card/ },
+];
 
 function normalizeLabel(value: string | null | undefined): string {
   return (value ?? '')
@@ -19,30 +23,35 @@ function normalizeLabel(value: string | null | undefined): string {
 function shouldResolveSportsTradingCardCategory(
   listing: Pick<ListingRow, 'listing_type'>,
   draft: Pick<GeneratedListingDraft, 'categorySuggestion'>
-): boolean {
+): string | null {
   if (listing.listing_type !== 'single') {
-    return false;
+    return null;
   }
 
   const categorySuggestion = normalizeLabel(draft.categorySuggestion);
 
-  return categorySuggestion.includes('sports trading card') && !categorySuggestion.includes('lot');
+  if (categorySuggestion.includes('lot')) {
+    return null;
+  }
+
+  return (
+    CATEGORY_ID_BY_SUGGESTION_TOKEN.find(({ pattern }) => pattern.test(categorySuggestion))
+      ?.categoryId ?? null
+  );
 }
 
 function shouldResolveUngradedCondition(
-  draft: Pick<GeneratedListingDraft, 'conditionSuggestion'>
+  draft: Pick<GeneratedListingDraft, 'cardConditionToken'>
 ): boolean {
-  return normalizeLabel(draft.conditionSuggestion).includes('ungraded');
+  return typeof draft.cardConditionToken === 'string';
 }
 
 export function resolveTradingCardListingIds(
   listing: Pick<ListingRow, 'listing_type'>,
-  draft: Pick<GeneratedListingDraft, 'categorySuggestion' | 'conditionSuggestion'>
+  draft: Pick<GeneratedListingDraft, 'cardConditionToken' | 'categorySuggestion'>
 ): TradingCardListingIds {
   return {
-    category_id: shouldResolveSportsTradingCardCategory(listing, draft)
-      ? SPORTS_TRADING_CARD_CATEGORY_ID
-      : null,
-    condition_id: shouldResolveUngradedCondition(draft) ? UNGRADED_CONDITION_ID : null,
+    category_id: shouldResolveSportsTradingCardCategory(listing, draft),
+    condition_id: shouldResolveUngradedCondition(draft) ? RAW_TRADING_CARD_CONDITION_ID : null,
   };
 }

@@ -14,7 +14,7 @@ describe('resolveTradingCardListingIds', () => {
     expect(
       resolveTradingCardListingIds(createListing(), {
         categorySuggestion: 'Sports Trading Cards',
-        conditionSuggestion: 'Ungraded',
+        cardConditionToken: 'VG',
       })
     ).toEqual({
       category_id: '261328',
@@ -26,7 +26,7 @@ describe('resolveTradingCardListingIds', () => {
     expect(
       resolveTradingCardListingIds(createListing({ listing_type: 'lot' }), {
         categorySuggestion: 'Sports Trading Cards',
-        conditionSuggestion: 'Ungraded',
+        cardConditionToken: 'VG',
       })
     ).toEqual({
       category_id: null,
@@ -38,7 +38,7 @@ describe('resolveTradingCardListingIds', () => {
     expect(
       resolveTradingCardListingIds(createListing(), {
         categorySuggestion: 'Baseball Cards',
-        conditionSuggestion: 'Graded',
+        cardConditionToken: null,
       })
     ).toEqual({
       category_id: null,

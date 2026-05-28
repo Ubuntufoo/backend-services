@@ -3,6 +3,7 @@ import {
   type GeneratedListingDraft,
   generatedListingDraftSchema,
 } from './contracts.js';
+import { isRawCardConditionToken } from '@/listings/trading-card-conditions.js';
 
 type DraftRecord = Record<string, unknown>;
 type ConfidenceKey = 'title' | 'category' | 'price' | 'aspects';
@@ -69,6 +70,24 @@ function normalizeRequiredString(
 
 function normalizeNullableString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function normalizeCardConditionToken(
+  value: unknown,
+  warnings: string[]
+): GeneratedListingDraft['cardConditionToken'] {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (isRawCardConditionToken(value)) {
+    return value;
+  }
+
+  warnings.push(
+    'Gemini response field "cardConditionToken" was invalid and was reset to null.'
+  );
+  return null;
 }
 
 function normalizeAspects(value: unknown, warnings: string[]): Record<string, string | string[]> {
@@ -163,6 +182,8 @@ export function parseGeneratedDraft(
     title: normalizeRequiredString(parsed.title, 'title', serviceWarnings),
     description: normalizeRequiredString(parsed.description, 'description', serviceWarnings),
     categorySuggestion: normalizeNullableString(parsed.categorySuggestion),
+    cardConditionNote: normalizeNullableString(parsed.cardConditionNote),
+    cardConditionToken: normalizeCardConditionToken(parsed.cardConditionToken, serviceWarnings),
     conditionSuggestion: normalizeNullableString(parsed.conditionSuggestion),
     aspects: normalizeAspects(parsed.aspects, serviceWarnings),
     priceSuggestion: normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings),

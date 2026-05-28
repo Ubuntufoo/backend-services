@@ -409,6 +409,8 @@ describe('runSidecarJob', () => {
       title: '1991 Upper Deck Michael Jordan',
       description: 'Ungraded single card with visible edge wear.',
       categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: 'Visible edge wear and light corner wear.',
+      cardConditionToken: 'VG',
       conditionSuggestion: 'Ungraded',
       aspects: {
         Player: 'Michael Jordan',
@@ -451,8 +453,10 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         category_id: '261328',
         condition_id: '4000',
+        condition_notes: 'Visible edge wear and light corner wear.',
         description: 'Ungraded single card with visible edge wear.',
         item_specifics: {
+          'Card Condition': 'VG',
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
           CategorySuggestion: 'Sports Trading Cards',
@@ -526,6 +530,8 @@ describe('runSidecarJob', () => {
       title: '1990 Score Bo Jackson',
       description: 'Single raw card.',
       categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: 'No grading evidence visible.',
+      cardConditionToken: 'EX',
       conditionSuggestion: 'Ungraded',
       aspects: {},
       priceSuggestion: 19.99,
@@ -561,6 +567,8 @@ describe('runSidecarJob', () => {
       title: '1990 Score Bo Jackson',
       description: 'Card lot.',
       categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: 'Estimated from limited photos.',
+      cardConditionToken: 'GOOD',
       conditionSuggestion: 'Ungraded',
       aspects: {},
       priceSuggestion: 19.99,

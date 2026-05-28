@@ -40,6 +40,8 @@ describe('generateListingDraft', () => {
         title: '1991 Upper Deck Michael Jordan',
         description: 'Classic base card with visible wear.',
         categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: 'Visible corner wear and light edge wear.',
+        cardConditionToken: 'VG',
         conditionSuggestion: 'Ungraded',
         aspects: {
           Player: 'Michael Jordan',
@@ -135,6 +137,8 @@ describe('generateListingDraft', () => {
         title: '1986 Fleer Michael Jordan RC',
         description: 'Visible front and back images suggest an ungraded single card.',
         categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: 'Soft corners visible; condition estimated from photos.',
+        cardConditionToken: 'EX',
         conditionSuggestion: 'Ungraded',
         aspects: {
           Player: 'Michael Jordan',
@@ -196,6 +200,8 @@ describe('generateListingDraft', () => {
 
     const request = generateDraftRawMock.mock.calls[0]?.[0];
     expect(request.prompt).toContain('Generate an eBay listing draft for a trading card or card lot.');
+    expect(request.prompt).toContain('choose the closest supported raw card condition token');
+    expect(request.prompt).toContain('"cardConditionToken": "MT | MINT | NM-MT | NM | EX-MT | EX | VG-EX | VG | GOOD | FR | PR | null"');
     expect(request.prompt).toContain('Return strict JSON only with no markdown fences or explanatory prose.');
     expect(request.prompt).toContain('"listingId": "LIST-001"');
     expect(request.prompt).toContain('"https://cdn.example.com/front.jpg"');
@@ -205,6 +211,8 @@ describe('generateListingDraft', () => {
       title: '1986 Fleer Michael Jordan RC',
       description: 'Visible front and back images suggest an ungraded single card.',
       categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: 'Soft corners visible; condition estimated from photos.',
+      cardConditionToken: 'EX',
       conditionSuggestion: 'Ungraded',
       aspects: {
         Player: 'Michael Jordan',
@@ -287,6 +295,8 @@ describe('generateListingDraft', () => {
       title: 'Baseball card lot',
       description: 'Lot listing with multiple visible cards.',
       categorySuggestion: null,
+      cardConditionNote: null,
+      cardConditionToken: null,
       conditionSuggestion: null,
       aspects: {
         Sport: 'Baseball',
@@ -324,6 +334,27 @@ describe('generateListingDraft', () => {
     expect(result.priceSuggestion).toBeNull();
     expect(result.warnings).toContain(
       'Gemini response field "priceSuggestion" was invalid and was reset to null.'
+    );
+  });
+
+  it('converts invalid cardConditionToken to null', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Card lot',
+        description: 'Description',
+        aspects: {},
+        cardConditionToken: 'NEAR MINT',
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-005A',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.cardConditionToken).toBeNull();
+    expect(result.warnings).toContain(
+      'Gemini response field "cardConditionToken" was invalid and was reset to null.'
     );
   });
 

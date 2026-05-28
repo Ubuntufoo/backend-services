@@ -130,6 +130,37 @@ describe('publish mappers', () => {
     });
   });
 
+  it('adds trading-card condition descriptors and omits Card Condition from aspects', () => {
+    const payload = mapListingToInventoryItemPayload(
+      createListing({
+        category_id: '261328',
+        item_specifics: {
+          'Card Condition': 'VG',
+          Player: 'Michael Jordan',
+        },
+      }),
+      createAppSettings(),
+      {
+        conditionDescriptors: [
+          {
+            name: '40001',
+            values: ['400012'],
+          },
+        ],
+      }
+    );
+
+    expect(payload.conditionDescriptors).toEqual([
+      {
+        name: '40001',
+        values: ['400012'],
+      },
+    ]);
+    expect(payload.product?.aspects).toEqual({
+      Player: ['Michael Jordan'],
+    });
+  });
+
   it('filters internal Gemini suggestion specifics from product aspects without mutating listing specifics', () => {
     const listing = createListing({
       item_specifics: {
