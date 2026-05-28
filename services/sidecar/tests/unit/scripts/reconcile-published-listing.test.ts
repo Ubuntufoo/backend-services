@@ -65,4 +65,41 @@ describe('reconcile published listing script', () => {
       )
     );
   });
+
+  it('fails on unknown args', async () => {
+    const { runReconcilePublishedListingCli } = await import(
+      '@/scripts/reconcile-published-listing.js'
+    );
+
+    await expect(runReconcilePublishedListingCli(['--unknown'])).rejects.toThrow(
+      'Unknown argument: --unknown'
+    );
+  });
+
+  it('fails on missing identifier values', async () => {
+    const { runReconcilePublishedListingCli } = await import(
+      '@/scripts/reconcile-published-listing.js'
+    );
+
+    await expect(runReconcilePublishedListingCli(['--listing-id'])).rejects.toThrow(
+      '--listing-id requires a non-empty value.'
+    );
+    await expect(runReconcilePublishedListingCli(['--offer-id'])).rejects.toThrow(
+      '--offer-id requires a non-empty value.'
+    );
+  });
+
+  it('fails non-zero through cli when duplicate local rows are detected', async () => {
+    reconcilePublishedListingMock.mockRejectedValueOnce(
+      new Error('Multiple local listings found for ebay_offer_id "11109473010".')
+    );
+
+    const { runReconcilePublishedListingCli } = await import(
+      '@/scripts/reconcile-published-listing.js'
+    );
+
+    await expect(
+      runReconcilePublishedListingCli(['--', '--offer-id', '11109473010'])
+    ).rejects.toThrow('Multiple local listings found for ebay_offer_id "11109473010".');
+  });
 });

@@ -126,13 +126,18 @@ export async function reconcilePublishedListing(
   const ebayListingId = offer.listingId ?? null;
 
   if (!ebayListingId) {
+    const statusLabel =
+      offer.status === 'PUBLISHED'
+        ? `Offer "${offerId}" is published externally but did not expose listingId.`
+        : `Offer "${offerId}" did not expose listingId.`;
+
     return {
       ebayListingId: null,
       exportedAt: null,
       listing,
       offer,
       offerId,
-      reason: `Offer "${offerId}" is published externally but did not expose listingId.`,
+      reason: statusLabel,
       reconciled: false,
     };
   }

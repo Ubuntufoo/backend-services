@@ -248,6 +248,44 @@ function createListClient<TTable extends string, TRow>(
   } as unknown as SupabaseDataClient;
 }
 
+function createLimitedLookupClient<TTable extends string, TRow>(
+  table: TTable,
+  expectedRows: TRow[],
+  column: string,
+  value: string,
+  expectedLimit: number
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe(table);
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((actualColumn: string, actualValue: string) => {
+              expect(actualColumn).toBe(column);
+              expect(actualValue).toBe(value);
+
+              return {
+                limit: vi.fn(async (limit: number) => {
+                  expect(limit).toBe(expectedLimit);
+
+                  return {
+                    data: expectedRows,
+                    error: null,
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 function createActiveGenerateAiLookupClient(expectedRow: JobRow | null): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
@@ -952,8 +990,34 @@ describe('shared repositories', () => {
     const fetchClient = createSelectClient('listings', listingRow, 'listing_id', 'LIST-001');
     await expect(getListingByListingId(fetchClient, 'LIST-001')).resolves.toEqual(listingRow);
 
-    const offerLookupClient = createSelectClient('listings', listingRow, 'ebay_offer_id', 'OFFER-001');
+    const offerLookupClient = createLimitedLookupClient(
+      'listings',
+      [listingRow],
+      'ebay_offer_id',
+      'OFFER-001',
+      2
+    );
     await expect(getListingByOfferId(offerLookupClient, 'OFFER-001')).resolves.toEqual(listingRow);
+
+    const noOfferLookupClient = createLimitedLookupClient(
+      'listings',
+      [],
+      'ebay_offer_id',
+      'OFFER-MISSING',
+      2
+    );
+    await expect(getListingByOfferId(noOfferLookupClient, 'OFFER-MISSING')).resolves.toBeNull();
+
+    const duplicateOfferLookupClient = createLimitedLookupClient(
+      'listings',
+      [listingRow, { ...listingRow, id: 'listing-row-id-2', listing_id: 'LIST-002' }],
+      'ebay_offer_id',
+      'OFFER-DUPE',
+      2
+    );
+    await expect(getListingByOfferId(duplicateOfferLookupClient, 'OFFER-DUPE')).rejects.toThrow(
+      'Multiple local listings found for ebay_offer_id "OFFER-DUPE".'
+    );
 
     const listClient = createListAllClient('listings', [listingRow]);
     await expect(listListings(listClient)).resolves.toEqual([listingRow]);

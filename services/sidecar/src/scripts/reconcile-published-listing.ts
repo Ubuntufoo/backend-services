@@ -20,15 +20,23 @@ function parseArgs(argv: string[]): { listingId?: string; offerId?: string } {
 
     if (current === '--listing-id') {
       listingId = argv[index + 1];
+      if (!listingId || listingId === '--' || listingId.startsWith('--') || listingId.length === 0) {
+        throw new Error('--listing-id requires a non-empty value.');
+      }
       index += 1;
       continue;
     }
 
     if (current === '--offer-id') {
       offerId = argv[index + 1];
+      if (!offerId || offerId === '--' || offerId.startsWith('--') || offerId.length === 0) {
+        throw new Error('--offer-id requires a non-empty value.');
+      }
       index += 1;
       continue;
     }
+
+    throw new Error(`Unknown argument: ${current}`);
   }
 
   return { listingId, offerId };

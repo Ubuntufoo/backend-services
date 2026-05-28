@@ -197,6 +197,53 @@ describe('reconcilePublishedListing', () => {
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
     expect(result.reconciled).toBe(false);
     expect(result.ebayListingId).toBeNull();
-    expect(result.reason).toContain('did not expose listingId');
+    expect(result.reason).toBe('Offer "OFFER-001" is published externally but did not expose listingId.');
+  });
+
+  it('uses neutral reason when offer status is not published', async () => {
+    const listing = createListing();
+    const dataAccess = createDataAccess(listing);
+    const inventoryApi = {
+      getOffer: vi.fn(async () => ({
+        marketplaceId: 'EBAY_US',
+        offerId: 'OFFER-001',
+        sku: 'SKU-KEEP',
+        status: 'UNPUBLISHED',
+      })),
+    };
+
+    const result = await reconcilePublishedListing(
+      { offerId: 'OFFER-001' },
+      {
+        dataAccess,
+        inventoryApi,
+        now: () => new Date('2026-05-24T15:30:00.000Z'),
+      }
+    );
+
+    expect(result.reconciled).toBe(false);
+    expect(result.reason).toBe('Offer "OFFER-001" did not expose listingId.');
+  });
+
+  it('fails loudly when duplicate local rows are found for one offer id', async () => {
+    const listing = createListing();
+    const dataAccess = createDataAccess(listing);
+    dataAccess.listings.getByOfferId = vi.fn(async () => {
+      throw new Error('Multiple local listings found for ebay_offer_id "OFFER-001".');
+    });
+
+    await expect(
+      reconcilePublishedListing(
+        { offerId: 'OFFER-001' },
+        {
+          dataAccess,
+          inventoryApi: {
+            getOffer: vi.fn(),
+          },
+          now: () => new Date('2026-05-24T15:30:00.000Z'),
+        }
+      )
+    ).rejects.toThrow('Multiple local listings found for ebay_offer_id "OFFER-001".');
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 });

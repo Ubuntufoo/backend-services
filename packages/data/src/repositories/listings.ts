@@ -197,9 +197,23 @@ export async function getListingByOfferId(
     .from('listings')
     .select('*')
     .eq('ebay_offer_id', offerId)
-    .maybeSingle()) as SingleResult<ListingRow>;
+    .limit(2)) as MultiResult<ListingRow>;
 
-  return requireOptionalResult(result);
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  const rows = result.data ?? [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  if (rows.length > 1) {
+    throw new Error(`Multiple local listings found for ebay_offer_id "${offerId}".`);
+  }
+
+  return rows[0] ?? null;
 }
 
 export async function listListings(client: SupabaseDataClient): Promise<ListingRow[]> {
