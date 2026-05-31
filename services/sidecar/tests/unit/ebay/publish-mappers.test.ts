@@ -133,9 +133,10 @@ describe('publish mappers', () => {
   it('adds trading-card condition descriptors and omits Card Condition from aspects', () => {
     const payload = mapListingToInventoryItemPayload(
       createListing({
-        category_id: '261328',
+        category_id: '183050',
         item_specifics: {
           'Card Condition': 'VG',
+          Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
         },
       }),
@@ -157,6 +158,7 @@ describe('publish mappers', () => {
       },
     ]);
     expect(payload.product?.aspects).toEqual({
+      Franchise: ['Utah Jazz'],
       Player: ['Michael Jordan'],
     });
   });

@@ -34,14 +34,27 @@ const RAW_CARD_CONDITION_DISPLAY_LABELS: Record<RawCardConditionToken, string> =
   PR: 'Poor',
 };
 
+function buildCompoundConditionAliases(label: string): string[] {
+  const parts = label
+    .split('-')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (parts.length < 2) {
+    return [label];
+  }
+
+  return [label, parts.join(' '), parts.join(' / '), parts.join(' to ')];
+}
+
 const RAW_CARD_CONDITION_METADATA_ALIASES: Record<RawCardConditionToken, string[]> = {
   MT: ['Gem Mint'],
   MINT: ['Mint'],
-  'NM-MT': ['Near Mint-Mint', 'Near Mint or Better'],
-  NM: ['Near Mint'],
-  'EX-MT': ['Excellent-Mint'],
+  'NM-MT': [...buildCompoundConditionAliases('Near Mint-Mint'), 'Near Mint or Better'],
+  NM: ['Near Mint', 'Near Mint or Better', 'Near Mint+'],
+  'EX-MT': buildCompoundConditionAliases('Excellent-Mint'),
   EX: ['Excellent'],
-  'VG-EX': ['Very Good-Excellent'],
+  'VG-EX': buildCompoundConditionAliases('Very Good-Excellent'),
   VG: ['Very Good'],
   GOOD: ['Good'],
   FR: ['Fair'],
@@ -75,7 +88,7 @@ export function getRawCardConditionDisplayLabel(token: RawCardConditionToken): s
 }
 
 export function getRawCardConditionCandidateLabels(token: RawCardConditionToken): string[] {
-  return [token, getRawCardConditionDisplayLabel(token), ...RAW_CARD_CONDITION_METADATA_ALIASES[token]];
+  return [...new Set([token, getRawCardConditionDisplayLabel(token), ...RAW_CARD_CONDITION_METADATA_ALIASES[token]])];
 }
 
 export function getSavedRawCardConditionToken(

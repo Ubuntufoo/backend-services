@@ -17,7 +17,7 @@ describe('resolveTradingCardListingIds', () => {
         cardConditionToken: 'VG',
       })
     ).toEqual({
-      category_id: '261328',
+      category_id: '183050',
       condition_id: '4000',
     });
   });

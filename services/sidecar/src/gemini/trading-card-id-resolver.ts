@@ -8,7 +8,7 @@ export interface TradingCardListingIds {
 }
 
 const CATEGORY_ID_BY_SUGGESTION_TOKEN: { categoryId: string; pattern: RegExp }[] = [
-  { categoryId: '261328', pattern: /sports trading card/ },
+  { categoryId: '183050', pattern: /sports trading card/ },
   { categoryId: '183050', pattern: /non-sport trading card/ },
   { categoryId: '183454', pattern: /ccg individual card/ },
 ];

@@ -27,7 +27,7 @@ export interface PublishListingErrorContext {
   offerId?: string;
   publishOfferListingId?: string | null;
   issues?: string[];
-  stage?: 'finalize' | 'load' | 'validate' | 'inventory_item' | 'offer' | 'publish';
+  stage?: 'finalize' | 'load' | 'validate' | 'metadata' | 'inventory_item' | 'offer' | 'publish';
 }
 
 export class PublishListingError extends Error {
