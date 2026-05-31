@@ -176,6 +176,65 @@ This package is intended to run directly on your machine for local development a
 
 The default `app_settings` row is seeded in `supabase/migrations/20260518120000_seed_default_app_settings.sql`. Apply it through the normal Supabase migration flow for your local database if you are running one.
 
+## Supabase API Grants
+
+This repo uses an explicit SQL grant model for `public` schema tables so Supabase Data API access does not depend on implicit defaults that may tighten over time.
+
+For this local-only, single-user architecture:
+
+- trusted backend runtimes (`sidecar`, watcher, future job-runner) use `service_role`
+- `service_role` owns backend reads and writes for app tables
+- browser access stays minimal and read-only
+- `public.listings` is the only current browser-visible table
+- `anon` and `authenticated` keep `SELECT` on `public.listings` for current browser/realtime usage
+- `jobs`, `orders`, `app_settings`, and `daily_usage` stay backend-only
+
+Grants and RLS are separate controls:
+
+- grants decide whether `anon`, `authenticated`, or `service_role` can reach a table through SQL/PostgREST
+- RLS policies decide which rows those roles can read or mutate after access exists
+- this repo keeps explicit grants in migrations and does not treat them as a replacement for RLS
+
+When adding a future `public` table:
+
+1. add the table in a migration
+2. keep default access backend-only via `service_role`
+3. if browser/API exposure is needed, add explicit table grants for the required role
+4. if the table is browser/API exposed, enable RLS and add matching policies
+5. if the table uses identity or serial sequences, add the required sequence grants too
+
+Security Advisor / manual verification:
+
+- review Supabase Security Advisor after schema changes, especially after adding `public` tables
+- confirm grants:
+
+```sql
+select grantee, table_name, privilege_type
+from information_schema.role_table_grants
+where table_schema = 'public'
+  and grantee in ('anon', 'authenticated', 'service_role')
+order by table_name, grantee, privilege_type;
+```
+
+- confirm policies:
+
+```sql
+select *
+from pg_policies
+where schemaname = 'public'
+order by tablename, policyname;
+```
+
+- if browser listings/realtime stops working, also confirm publication membership:
+
+```sql
+select *
+from pg_publication_tables
+where pubname = 'supabase_realtime'
+  and schemaname = 'public'
+  and tablename = 'listings';
+```
+
 ## Supabase Realtime Troubleshooting
 
 Browser realtime for listings depends on both publication membership and RLS visibility.
