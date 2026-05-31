@@ -123,6 +123,7 @@ For a local-only setup with cloud Supabase integration:
 - run `services/sidecar` directly on your machine
 - keep Supabase hosted instead of adding a local database stack here
 - keep reusable Supabase access in `packages/data` instead of reimplementing service clients inside runtime packages
+- keep `public` schema Data API grants explicit in migrations: backend uses `service_role`, browser tables opt in intentionally
 - keep planned image, R2, Gemini, eBay, and job-runner concerns as modules or Supabase-triggered workflows until a second runtime is clearly necessary
 - avoid containerization and multi-process orchestration unless deployment needs actually appear
 
