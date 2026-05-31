@@ -1,6 +1,7 @@
 -- Make Data API table access explicit for this local-only architecture.
 -- Trusted backend runtimes use service_role. Browser access is read-only and
 -- limited to listings/realtime unless a future table explicitly opts in.
+-- Explicit REVOKE is required because broad project-level grants may already exist.
 
 grant usage on schema public to anon, authenticated, service_role;
 
