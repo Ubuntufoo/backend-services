@@ -3,9 +3,7 @@ import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { publishListing } from '@/ebay/publish-listing.js';
-import {
-  PublishListingValidationError,
-} from '@/ebay/publish-validation.js';
+import { PublishListingValidationError } from '@/ebay/publish-validation.js';
 import type { PublishListingError } from '@/ebay/publish-validation.js';
 
 function createTradingCardConditionPoliciesResponse(
@@ -131,6 +129,10 @@ function createDependencies({
   metadataApi: {
     getItemConditionPolicies: ReturnType<typeof vi.fn>;
   };
+  taxonomyApi: {
+    getDefaultCategoryTreeId: ReturnType<typeof vi.fn>;
+    getItemAspectsForCategory: ReturnType<typeof vi.fn>;
+  };
   listingUpdates: { listingId: string; changes: Partial<ListingRow> }[];
   now: () => Date;
 } {
@@ -152,6 +154,10 @@ function createDependencies({
         },
       ])
     ),
+  };
+  const taxonomyApi = {
+    getDefaultCategoryTreeId: vi.fn(async () => ({ categoryTreeId: '0' })),
+    getItemAspectsForCategory: vi.fn(async () => ({ aspects: [] })),
   };
 
   const listingsGetByListingId = vi.fn(async () => listing);
@@ -226,6 +232,7 @@ function createDependencies({
     dataAccess,
     inventoryApi,
     metadataApi,
+    taxonomyApi,
     listingUpdates,
     now: () => new Date('2026-05-24T15:30:00.000Z'),
   };
@@ -238,6 +245,8 @@ describe('publishListing', () => {
     const result = await publishListing('LIST-001', dependencies);
 
     expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).toHaveBeenCalledWith('EBAY_US');
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '1234');
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
@@ -412,6 +421,7 @@ describe('publishListing', () => {
         }),
       })
     );
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '183050');
   });
 
   it('continues trading-card publish when metadata omits Card Condition descriptor', async () => {
@@ -445,6 +455,193 @@ describe('publishListing', () => {
         }),
       })
     );
+  });
+
+  it('blocks sports-card publish when required Franchise aspect is missing', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NM',
+          Player: 'Michael Jordan',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400010', name: 'Near mint or better' }],
+        { categoryId: '183050' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Franchise',
+          aspectConstraint: { aspectRequired: true, aspectUsage: 'REQUIRED' },
+        },
+      ],
+    }));
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'Listing "LIST-001" is missing required eBay item specific "Franchise" for category "183050".',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
+  it('allows sports-card publish when required Franchise aspect is present', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NM',
+          Franchise: 'Utah Jazz',
+          Player: 'Karl Malone',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400010', name: 'Near mint or better' }],
+        { categoryId: '183050' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Franchise',
+          aspectConstraint: { aspectRequired: true },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        product: expect.objectContaining({
+          aspects: {
+            Franchise: ['Utah Jazz'],
+            Player: ['Karl Malone'],
+          },
+        }),
+      })
+    );
+  });
+
+  it('reports only missing required aspect names when multiple are required', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NM',
+          Franchise: 'Utah Jazz',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400010', name: 'Near mint or better' }],
+        { categoryId: '183050' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Franchise',
+          aspectConstraint: { aspectRequired: true },
+        },
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true },
+        },
+      ],
+    }));
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      context: {
+        issues: [
+          'Listing "LIST-001" is missing required eBay item specific "Player/Athlete" for category "183050".',
+        ],
+      },
+    } satisfies Partial<PublishListingError>);
+  });
+
+  it('keeps internal keys from satisfying required aspect validation', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NM',
+          CategorySuggestion: 'Basketball Cards',
+          ConditionSuggestion: 'Near Mint',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400010', name: 'Near mint or better' }],
+        { categoryId: '183050' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'CategorySuggestion',
+          aspectConstraint: { aspectRequired: true },
+        },
+        {
+          localizedAspectName: 'ConditionSuggestion',
+          aspectConstraint: { aspectRequired: true },
+        },
+      ],
+    }));
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      context: {
+        issues: [
+          'Listing "LIST-001" is missing required eBay item specifics for category "183050": CategorySuggestion, ConditionSuggestion.',
+        ],
+      },
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it('applies required-aspect validation to non-trading-card categories too', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '9999',
+        item_specifics: {
+          Brand: 'Acme',
+        },
+      }),
+    });
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Brand',
+          aspectConstraint: { aspectRequired: true },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '9999');
   });
 
   it.each([
@@ -754,6 +951,39 @@ describe('publishListing', () => {
       },
       message:
         'Failed to fetch trading-card condition metadata for listing "LIST-001" in category "261328".',
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it('keeps taxonomy metadata failures recoverable instead of user-fixable', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'EX-MT',
+          Franchise: 'Utah Jazz',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400021', name: 'Excellent to Mint' }],
+        { categoryId: '183050' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => {
+      throw new Error('taxonomy timeout');
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'INVENTORY_ITEM_UPSERT_FAILED',
+      context: {
+        listingId: 'LIST-001',
+        stage: 'metadata',
+      },
+      message:
+        'Failed to fetch required item-specific metadata for listing "LIST-001" in category "183050".',
     } satisfies Partial<PublishListingError>);
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
   });
