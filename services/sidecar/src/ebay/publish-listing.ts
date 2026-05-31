@@ -16,11 +16,16 @@ import {
 } from '@/listings/trading-card-conditions.js';
 import type { EbayApiError } from '@/types/ebay.js';
 import type { components as MetadataComponents } from '@/types/sell-apps/listing-metadata/sellMetadataV1Oas3.js';
+import { createLogger } from '@/utils/logger.js';
 import {
   buildPublishSku,
   mapListingToInventoryItemPayload,
   mapListingToOfferPayload,
 } from '@/ebay/publish-mappers.js';
+import {
+  getMetadataPolicies,
+  getTradingCardConditionDescriptor,
+} from '@/ebay/condition-policy-diagnostic.js';
 import {
   buildPublishedListingUpdate,
   PUBLISHED_LISTING_ATTEMPTED_FIELDS,
@@ -41,6 +46,8 @@ type MetadataResponse = MetadataComponents['schemas']['ItemConditionPolicyRespon
 type MetadataItemConditionPolicy = MetadataComponents['schemas']['ItemConditionPolicy'];
 type MetadataItemCondition = MetadataComponents['schemas']['ItemCondition'];
 type MetadataItemConditionDescriptor = MetadataComponents['schemas']['ItemConditionDescriptor'];
+
+const publishLogger = createLogger('PublishListing');
 
 export interface PublishListingDependencies {
   dataAccess: SidecarDataAccess;
@@ -115,21 +122,42 @@ function matchesRawCardConditionValue(
   );
 }
 
-function getMetadataPolicies(response: unknown): MetadataItemConditionPolicy[] {
-  if (!response || typeof response !== 'object') {
+function formatMetadataDescriptorValue(
+  value: Pick<
+    NonNullable<MetadataItemConditionDescriptor['conditionDescriptorValues']>[number],
+    'conditionDescriptorValueId' | 'conditionDescriptorValueName'
+  >
+): string {
+  const id = value.conditionDescriptorValueId?.trim() || '[missing id]';
+  const name = value.conditionDescriptorValueName?.trim() || '[missing name]';
+  return `${id}: ${name}`;
+}
+
+function getMetadataDescriptorValueDiagnostics(
+  descriptor: MetadataItemConditionDescriptor | undefined
+): string[] {
+  const values = descriptor?.conditionDescriptorValues;
+
+  if (!Array.isArray(values) || values.length === 0) {
     return [];
   }
 
-  const itemConditionPolicies = (response as MetadataResponse).itemConditionPolicies;
-  return Array.isArray(itemConditionPolicies) ? itemConditionPolicies : [];
+  return values.map((value) => formatMetadataDescriptorValue(value));
 }
 
-function getMetadataCardConditionDescriptor(
-  condition: MetadataItemCondition | undefined
-): MetadataItemConditionDescriptor | undefined {
-  return condition?.conditionDescriptors?.find(
-    (descriptor) => normalizeLookupText(descriptor.conditionDescriptorName) === 'card condition'
-  );
+function buildTradingCardMismatchIssue(
+  listing: ListingRow,
+  savedToken: RawCardConditionToken,
+  descriptor: MetadataItemConditionDescriptor | undefined
+): string {
+  const listingLabel = getListingLabel(listing);
+  const supportedValues = getMetadataDescriptorValueDiagnostics(descriptor);
+  const descriptorName = descriptor?.conditionDescriptorName?.trim() || '[not found]';
+
+  return [
+    `Listing "${listingLabel}" could not map raw card condition token "${savedToken}" (${getRawCardConditionDisplayLabel(savedToken)}) to eBay metadata for category "${listing.category_id}".`,
+    `Diagnostics: listing_id="${listing.listing_id ?? '[missing listing_id]'}", category_id="${listing.category_id ?? '[missing category_id]'}", saved_token="${savedToken}", saved_display_label="${getRawCardConditionDisplayLabel(savedToken)}", descriptor_name="${descriptorName}", supported_values=${JSON.stringify(supportedValues)}.`,
+  ].join(' ');
 }
 
 function buildTradingCardValidationError(listing: ListingRow, message: string): PublishListingValidationError {
@@ -168,26 +196,53 @@ async function resolveTradingCardConditionDescriptors(
     );
   }
 
-  const metadataResponse = await metadataApi.getItemConditionPolicies(
-    appSettings.ebay_marketplace_id!.trim(),
-    `categoryIds:{${listing.category_id!.trim()}}`
-  );
+  let metadataResponse: Awaited<ReturnType<PublishMetadataApi['getItemConditionPolicies']>>;
+
+  try {
+    metadataResponse = await metadataApi.getItemConditionPolicies(
+      appSettings.ebay_marketplace_id!.trim(),
+      `categoryIds:{${listing.category_id!.trim()}}`
+    );
+  } catch (error) {
+    throw wrapPublishStageError(
+      'INVENTORY_ITEM_UPSERT_FAILED',
+      'metadata',
+      listing.listing_id,
+      `Failed to fetch trading-card condition metadata for listing "${listingLabel}" in category "${listing.category_id}".`,
+      error
+    );
+  }
+
   const policy = getMetadataPolicies(metadataResponse).find(
     (candidate) => candidate.categoryId?.trim() === listing.category_id?.trim()
   );
   const condition = policy?.itemConditions?.find(
     (candidate) => candidate.conditionId?.trim() === RAW_TRADING_CARD_CONDITION_ID
   );
-  const descriptor = getMetadataCardConditionDescriptor(condition);
+  const descriptor = getTradingCardConditionDescriptor(condition);
+  if (!descriptor?.conditionDescriptorId) {
+    publishLogger.debug('Trading-card condition metadata had no relevant descriptor; falling back.', {
+      availableConditionIds: policy?.itemConditions?.map((candidate) => candidate.conditionId ?? '[missing]') ?? [],
+      availableDescriptorNames:
+        policy?.itemConditions?.flatMap((candidate) =>
+          candidate.conditionDescriptors?.map(
+            (descriptorCandidate) => descriptorCandidate.conditionDescriptorName ?? '[missing]'
+          ) ?? []
+        ) ?? [],
+      category_id: listing.category_id,
+      condition_id: listing.condition_id,
+      listing_id: listing.listing_id,
+      saved_token: savedToken,
+    });
+    return undefined;
+  }
+
   const descriptorValue = descriptor?.conditionDescriptorValues?.find((candidate) =>
     matchesRawCardConditionValue(savedToken, candidate.conditionDescriptorValueName)
   );
 
-  if (!descriptor?.conditionDescriptorId || !descriptorValue?.conditionDescriptorValueId) {
-    throw buildTradingCardValidationError(
-      listing,
-      `Listing "${listingLabel}" could not map raw card condition token "${savedToken}" (${getRawCardConditionDisplayLabel(savedToken)}) to eBay metadata for category "${listing.category_id}".`
-    );
+  if (!descriptorValue?.conditionDescriptorValueId) {
+    throw buildTradingCardValidationError(listing, buildTradingCardMismatchIssue(listing, savedToken, descriptor));
   }
 
   return [
@@ -265,7 +320,7 @@ async function loadPublishContext(
 function wrapPublishStageError(
   code: PublishListingError['code'],
   stage: NonNullable<PublishListingError['context']['stage']>,
-  listingId: string,
+  listingId: string | null,
   message: string,
   error: unknown
 ): PublishListingError {

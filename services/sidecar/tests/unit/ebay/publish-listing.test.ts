@@ -8,6 +8,38 @@ import {
 } from '@/ebay/publish-validation.js';
 import type { PublishListingError } from '@/ebay/publish-validation.js';
 
+function createTradingCardConditionPoliciesResponse(
+  values: Array<{ id: string; name: string }>,
+  options: { categoryId?: string; includeCardConditionDescriptor?: boolean } = {}
+) {
+  const { categoryId = '261328', includeCardConditionDescriptor = true } = options;
+
+  return {
+    itemConditionPolicies: [
+      {
+        categoryId,
+        itemConditions: [
+          {
+            conditionId: '4000',
+            conditionDescriptors: includeCardConditionDescriptor
+              ? [
+                  {
+                    conditionDescriptorId: '40001',
+                    conditionDescriptorName: 'Card Condition',
+                    conditionDescriptorValues: values.map((value) => ({
+                      conditionDescriptorValueId: value.id,
+                      conditionDescriptorValueName: value.name,
+                    })),
+                  },
+                ]
+              : [],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
@@ -108,34 +140,18 @@ function createDependencies({
     publishOffer: vi.fn(async () => publishOfferResult),
   };
   const metadataApi = {
-    getItemConditionPolicies: vi.fn(async () => ({
-      itemConditionPolicies: [
+    getItemConditionPolicies: vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([
         {
-          categoryId: '261328',
-          itemConditions: [
-            {
-              conditionId: '4000',
-              conditionDescriptors: [
-                {
-                  conditionDescriptorId: '40001',
-                  conditionDescriptorName: 'Card Condition',
-                  conditionDescriptorValues: [
-                    {
-                      conditionDescriptorValueId: '400012',
-                      conditionDescriptorValueName: 'Very Good',
-                    },
-                    {
-                      conditionDescriptorValueId: '400013',
-                      conditionDescriptorValueName: 'Poor',
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          id: '400012',
+          name: 'Very Good',
         },
-      ],
-    })),
+        {
+          id: '400013',
+          name: 'Poor',
+        },
+      ])
+    ),
   };
 
   const listingsGetByListingId = vi.fn(async () => listing);
@@ -221,6 +237,7 @@ describe('publishListing', () => {
 
     const result = await publishListing('LIST-001', dependencies);
 
+    expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
@@ -311,6 +328,118 @@ describe('publishListing', () => {
         ],
         product: expect.objectContaining({
           aspects: {
+            Player: ['Michael Jordan'],
+          },
+        }),
+      })
+    );
+  });
+
+  it('maps trading-card EX-MT token when metadata uses spelling variant', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'EX-MT',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([
+        {
+          id: '400021',
+          name: 'Excellent to Mint',
+        },
+      ])
+    );
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        conditionDescriptors: [
+          {
+            name: '40001',
+            values: ['400021'],
+          },
+        ],
+      })
+    );
+  });
+
+  it('maps NM token to exact eBay "Near mint or better" descriptor value', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NM',
+          Player: 'Michael Jordan',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [
+          {
+            id: '400010',
+            name: 'Near mint or better',
+          },
+        ],
+        {
+          categoryId: '183050',
+        }
+      )
+    );
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        conditionDescriptors: [
+          {
+            name: '40001',
+            values: ['400010'],
+          },
+        ],
+        product: expect.objectContaining({
+          aspects: {
+            Player: ['Michael Jordan'],
+          },
+        }),
+      })
+    );
+  });
+
+  it('continues trading-card publish when metadata omits Card Condition descriptor', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'VG',
+          Player: 'Michael Jordan',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([], {
+        includeCardConditionDescriptor: false,
+      })
+    );
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        conditionDescriptors: undefined,
+        product: expect.objectContaining({
+          aspects: {
+            'Card Condition': ['VG'],
             Player: ['Michael Jordan'],
           },
         }),
@@ -578,34 +707,55 @@ describe('publishListing', () => {
         },
       }),
     });
-    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () => ({
-      itemConditionPolicies: [
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([
         {
-          categoryId: '261328',
-          itemConditions: [
-            {
-              conditionId: '4000',
-              conditionDescriptors: [
-                {
-                  conditionDescriptorId: '40001',
-                  conditionDescriptorName: 'Card Condition',
-                  conditionDescriptorValues: [],
-                },
-              ],
-            },
-          ],
+          id: '400012',
+          name: 'Near Mint',
         },
-      ],
-    }));
+        {
+          id: '400013',
+          name: 'Poor',
+        },
+      ])
+    );
 
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       code: 'LISTING_NOT_READY',
       context: {
         issues: [
-          'Listing "LIST-001" could not map raw card condition token "VG" (Very Good) to eBay metadata for category "261328".',
+          'Listing "LIST-001" could not map raw card condition token "VG" (Very Good) to eBay metadata for category "261328". Diagnostics: listing_id="LIST-001", category_id="261328", saved_token="VG", saved_display_label="Very Good", descriptor_name="Card Condition", supported_values=["400012: Near Mint","400013: Poor"].',
         ],
+        listingId: 'LIST-001',
+        stage: 'validate',
       },
     } satisfies Partial<PublishListingError>);
+  });
+
+  it('keeps metadata fetch failures recoverable instead of user-fixable', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'EX-MT',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () => {
+      throw new Error('metadata timeout');
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'INVENTORY_ITEM_UPSERT_FAILED',
+      context: {
+        listingId: 'LIST-001',
+        stage: 'metadata',
+      },
+      message:
+        'Failed to fetch trading-card condition metadata for listing "LIST-001" in category "261328".',
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
   });
 
   it('wraps offer creation failures after persisting sku only', async () => {

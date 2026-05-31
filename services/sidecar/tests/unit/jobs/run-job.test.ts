@@ -413,6 +413,7 @@ describe('runSidecarJob', () => {
       cardConditionToken: 'VG',
       conditionSuggestion: 'Ungraded',
       aspects: {
+        Franchise: 'Utah Jazz',
         Player: 'Michael Jordan',
         Manufacturer: 'Upper Deck',
       },
@@ -451,12 +452,13 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
-        category_id: '261328',
+        category_id: '183050',
         condition_id: '4000',
         condition_notes: 'Visible edge wear and light corner wear.',
         description: 'Ungraded single card with visible edge wear.',
         item_specifics: {
           'Card Condition': 'VG',
+          Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
           CategorySuggestion: 'Sports Trading Cards',
@@ -549,7 +551,7 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
-        category_id: '261328',
+        category_id: '183050',
         condition_id: '4000',
         status: 'needs_review',
         sub_status: 'review_pending',

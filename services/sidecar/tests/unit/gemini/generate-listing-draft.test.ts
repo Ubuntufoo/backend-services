@@ -44,6 +44,7 @@ describe('generateListingDraft', () => {
         cardConditionToken: 'VG',
         conditionSuggestion: 'Ungraded',
         aspects: {
+          Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
         },
         priceSuggestion: 149.99,
@@ -141,6 +142,7 @@ describe('generateListingDraft', () => {
         cardConditionToken: 'EX',
         conditionSuggestion: 'Ungraded',
         aspects: {
+          Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
           Sport: 'Basketball',
           'Card Manufacturer': 'Fleer',
@@ -201,6 +203,8 @@ describe('generateListingDraft', () => {
     const request = generateDraftRawMock.mock.calls[0]?.[0];
     expect(request.prompt).toContain('Generate an eBay listing draft for a trading card or card lot.');
     expect(request.prompt).toContain('choose the closest supported raw card condition token');
+    expect(request.prompt).toContain('Include a Franchise aspect when the team, franchise, or IP is identifiable');
+    expect(request.prompt).toContain('"Franchise": "string"');
     expect(request.prompt).toContain('"cardConditionToken": "MT | MINT | NM-MT | NM | EX-MT | EX | VG-EX | VG | GOOD | FR | PR | null"');
     expect(request.prompt).toContain('Return strict JSON only with no markdown fences or explanatory prose.');
     expect(request.prompt).toContain('"listingId": "LIST-001"');
@@ -215,6 +219,7 @@ describe('generateListingDraft', () => {
       cardConditionToken: 'EX',
       conditionSuggestion: 'Ungraded',
       aspects: {
+        Franchise: 'Utah Jazz',
         Player: 'Michael Jordan',
         Sport: 'Basketball',
         'Card Manufacturer': 'Fleer',
@@ -229,6 +234,31 @@ describe('generateListingDraft', () => {
       },
       warnings: ['Condition cannot be confirmed from photos alone.'],
       rawModelResponse: rawResponse,
+    });
+  });
+
+  it('accepts Franchise as a generated aspect value', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: '1993 Finest Karl Malone',
+        description: 'Single ungraded card.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionToken: 'EX',
+        aspects: {
+          Player: 'Karl Malone',
+          Franchise: 'Utah Jazz',
+        },
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-001B',
+      imageUrls: ['https://cdn.example.com/front.jpg'],
+    });
+
+    expect(result.aspects).toEqual({
+      Player: 'Karl Malone',
+      Franchise: 'Utah Jazz',
     });
   });
 

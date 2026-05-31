@@ -20,6 +20,7 @@
     "dev:sidecar": "pnpm --filter sidecar dev",
     "dev:sidecar:stdio": "pnpm --filter sidecar dev:stdio",
     "ebay:diagnose-offer": "pnpm --filter sidecar ebay:diagnose-offer",
+    "ebay:diagnose-condition-policy": "pnpm --filter sidecar ebay:diagnose-condition-policy",
     "ebay:diagnose-sandbox": "pnpm --filter sidecar ebay:diagnose-sandbox",
     "ebay:diagnose-sandbox-config": "pnpm --filter sidecar ebay:diagnose-sandbox-config",
     "ebay:opt-in-selling-policies": "pnpm --filter sidecar ebay:opt-in-selling-policies",
