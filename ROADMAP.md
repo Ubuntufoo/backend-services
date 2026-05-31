@@ -80,28 +80,29 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7A.3 | BE | Add manual retry endpoint and orphan workflow repair | Failed/retryable listings can be safely retried and active-looking orphan states are repaired | 
 | 7A | BE | Add publish throttling | No API burst publishing | GPT-5.5 mini | Low-Medium | Prevents repeated eBay API error loops | 
 | 7A | FE | Add eBay title length validation | Prevent approval/export when title exceeds 80 characters | GPT-5.5 mini | Low-Medium | Catches user-fixable publish errors before backend/eBay API call |
-| 7A | FE | Split exported/live listings into read-only panel | Completed listings leave edit/review panel and appear in compact Exported/Live table with eBay URL | GPT-5.5 mini | Medium | Keeps active workflow UI clean after successful publish | .   -->
+| 7A | FE | Split exported/live listings into read-only panel | Completed listings leave edit/review panel and appear in compact Exported/Live table with eBay URL | GPT-5.5 mini | Medium | Keeps active workflow UI clean after successful publish |
 | 7A | BE | Add trading-card condition descriptor support | Trading-card listings satisfy eBay category-specific condition requirements | GPT-5.5 | Medium-High | Production hardening for trading cards before serious publish testing |
+| 7A | FE | Add trading-card condition review controls | User can review/edit Gemini card condition token and condition notes before approval/export | GPT-5.5 mini | Medium | Completes frontend support for BE trading-card condition descriptors |
+| 7 | DB/BE | Implement explicit SQL API Table Grants & Security Advisor Review | Supabase Security Advisor is reviewed; existing tables are audited; migrations explicitly grant required PostgREST/API access to public schema tables | GPT-5.5 mini | Low-Medium | Move earlier because new tables should follow the corrected grant pattern | .   -->
 | 7 | DB | Track Gemini model attempts | AI model usage and fallback outcomes are auditable per listing | GPT-5.5 mini | Low-Medium | Should come before Gemini fallback router |
+| 7 | BE | Add daily usage checks | Gemini and order sync limits are enforced | GPT-5.5 | Medium | Guardrail before fallback/router automation increases API call paths |
+| 7 | BE | Implement Dynamic Gemini Model Discovery & Fallback Router | Hardcoded Gemini model strings are replaced with a discovery engine that detects, scores, and cascades through available free-tier models on rate/quota/unavailable errors | GPT-5.5 | Medium-High | Should consume model-attempt tracking and obey usage checks |
 | 7 | FE | Add queue/error panel | Shows `assets_ready`, `generating`, `needs_review`, `approved_for_export`, publish queue, and persisted errors | GPT-5.5 mini | Low-Medium | Operational visibility; not aesthetic QOL |
-| 7 | BE | Implement Dynamic Gemini Model Discovery & Fallback Router | Replace hardcoded Gemini model strings with a dynamic discovery engine that detects, scores, and cascades through available free-tier models on rate/quota/unavailable errors | GPT-5.5 | Medium-High | Gemini robustness; should consume model-attempt tracking |
-| 7 | BE | Add daily usage checks | Gemini and order sync limits enforced | GPT-5.5 | Medium | Guardrail against accidental API overuse |
-| 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, `sale_price` | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
+| 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, and `sale_price` are persisted | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
+| 8 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work against eBay API | GPT-5.5 | Medium | Begin post-listing order workflow |
+| 8 | BE | Match order SKU to `listing_id` | Sold listing is identified from order SKU | GPT-5.5 mini | Medium | Required before updating listings to sold |
+| 8 | DB/BE | Update listing status to `sold` | Sale is tracked and listing status moves to `sold` when matched order data confirms sale | GPT-5.5 mini | Medium | Enables cleanup and fulfillment workflows |
+| 8 | BE | `job-runner`: schedule 4 order checks/day | Controlled order sync runs 4 times per day | GPT-5.5 mini | Medium | Schedule only after order storage and matching exist |
+| 8 | FE | Add Unshipped Orders panel | Packing queue is visible in the UI | GPT-5.5 mini | Low-Medium | Operational UI, not polish |
+| 8 | FE | Show due today/overdue warnings | 1-day handling risks are visible | GPT-5.5 mini | Low-Medium | Operational guardrail for fulfillment |
 | 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability |
 | 8 | BE | Normalize image orientation during asset processing | R2 images display with correct orientation | GPT-5.5 mini | Low-Medium | Defer unless EXIF issue is confirmed |
-| 8 | FE | Show cleanup status lightly | Optional UI visibility | GPT-5.5 mini | Low | Deferred QOL visibility |
-| 8 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work | GPT-5.5 | Medium | Begin post-listing order workflow |
-| 8 | BE | Match order SKU to `listing_id` | Sold listing identified | GPT-5.5 mini | Medium | Required before updating listings to sold |
-| 8 | DB/BE | Update listing status to `sold` | Sale tracked | GPT-5.5 mini | Medium | Enables cleanup and fulfillment workflows |
-| 8 | BE | `job-runner`: schedule 4 order checks/day | Controlled API usage | GPT-5.5 mini | Medium | Schedule only after order storage and matching exist |
-| 8 | FE | Add Unshipped Orders panel | Packing queue visible | GPT-5.5 mini | Low-Medium | Operational UI, not polish |
-| 8 | FE | Show due today/overdue warnings | 1-day handling support | GPT-5.5 mini | Low-Medium | Operational guardrail for fulfillment |
-| 8	 | BE |	Implement explicit SQL API Table Grants & Security Advisor Review	Audit all existing tables using the Supabase Security Advisor ahead of the Oct 30, 2026 enforcement deadline; update table-creation flows / DB migrations to explicitly grant PostgREST/API access to the public schema.
-| 9 | BE | Add local processed-output retention policy | `.image-service-output/<runId>` cleanup behavior defined and enforced | GPT-5.5 mini | Low-Medium | Local disk cleanup guardrail |
+| 9 | BE | Add local processed-output retention policy | `.image-service-output/<runId>` cleanup behavior is defined and enforced | GPT-5.5 mini | Low-Medium | Local disk cleanup guardrail |
 | 9 | DB | Add `r2_retention_policy`, `r2_delete_after`, `r2_deleted_at` | Safe cleanup fields exist | GPT-5.5 mini | Low-Medium | Required before R2 deletion automation |
-| 9 | BE | On `sold`, set `r2_delete_after` | `sold_at + configured retention days` | GPT-5.5 mini | Low-Medium | Connects sold state to cleanup eligibility |
-| 9 | BE | `r2-service`: `deleteObjects()` | R2 cleanup works | GPT-5.5 mini | Medium | Deletion primitive before scheduled cleanup |
-| 9 | BE | `job-runner`: cleanup eligible sold listings | Images deleted after retention | GPT-5.5 | Medium | Automated cleanup after retention window |
+| 9 | BE | On `sold`, set `r2_delete_after` | `r2_delete_after` is set from `sold_at + configured retention days` | GPT-5.5 mini | Low-Medium | Connects sold state to cleanup eligibility |
+| 9 | FE | Show cleanup status lightly | Cleanup status is visible without becoming a major UI surface | GPT-5.5 mini | Low | Better after cleanup fields exist |
+| 9 | BE | `r2-service`: `deleteObjects()` | R2 cleanup primitive works | GPT-5.5 mini | Medium | Deletion primitive before scheduled cleanup |
+| 9 | BE | `job-runner`: cleanup eligible sold listings | Images are deleted after retention window | GPT-5.5 | Medium | Automated cleanup after retention window |
 | 10 | FE | Add Sync Now buttons | Manual watcher/order sync control |
 | 10 | FE | Add settings screen | Edit `app_settings` safely |
 | 10 | BE | Add service health checks | UI can show service status |
