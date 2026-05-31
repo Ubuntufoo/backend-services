@@ -2,6 +2,7 @@ import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import { EbaySellerApi } from '@/api/index.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
 import type { MetadataApi } from '@/api/listing-metadata/metadata.js';
+import type { TaxonomyApi } from '@/api/listing-metadata/taxonomy.js';
 import { getEbayConfig } from '@/config/environment.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
@@ -35,12 +36,14 @@ import {
   PublishListingValidationError,
   validatePublishListingReadiness,
 } from '@/ebay/publish-validation.js';
+import { validateRequiredItemSpecificsForCategory } from '@/ebay/required-item-specifics-validation.js';
 
 type PublishInventoryApi = Pick<
   InventoryApi,
   'createOrReplaceInventoryItem' | 'createOffer' | 'publishOffer'
 >;
 type PublishMetadataApi = Pick<MetadataApi, 'getItemConditionPolicies'>;
+type PublishTaxonomyApi = Pick<TaxonomyApi, 'getDefaultCategoryTreeId' | 'getItemAspectsForCategory'>;
 
 type MetadataResponse = MetadataComponents['schemas']['ItemConditionPolicyResponse'];
 type MetadataItemConditionPolicy = MetadataComponents['schemas']['ItemConditionPolicy'];
@@ -53,6 +56,7 @@ export interface PublishListingDependencies {
   dataAccess: SidecarDataAccess;
   inventoryApi: PublishInventoryApi;
   metadataApi: PublishMetadataApi;
+  taxonomyApi: PublishTaxonomyApi;
   now: () => Date;
 }
 
@@ -74,6 +78,7 @@ async function createDefaultDependencies(): Promise<PublishListingDependencies> 
     dataAccess: getSidecarDataAccess(),
     inventoryApi: api.inventory,
     metadataApi: api.metadata,
+    taxonomyApi: api.taxonomy,
     now: () => new Date(),
   };
 }
@@ -81,11 +86,17 @@ async function createDefaultDependencies(): Promise<PublishListingDependencies> 
 async function resolveDependencies(
   dependencies: Partial<PublishListingDependencies>
 ): Promise<PublishListingDependencies> {
-  if (dependencies.dataAccess && dependencies.inventoryApi && dependencies.metadataApi) {
+  if (
+    dependencies.dataAccess &&
+    dependencies.inventoryApi &&
+    dependencies.metadataApi &&
+    dependencies.taxonomyApi
+  ) {
     return {
       dataAccess: dependencies.dataAccess,
       inventoryApi: dependencies.inventoryApi,
       metadataApi: dependencies.metadataApi,
+      taxonomyApi: dependencies.taxonomyApi,
       now: dependencies.now ?? (() => new Date()),
     };
   }
@@ -96,6 +107,7 @@ async function resolveDependencies(
     dataAccess: dependencies.dataAccess ?? defaults.dataAccess,
     inventoryApi: dependencies.inventoryApi ?? defaults.inventoryApi,
     metadataApi: dependencies.metadataApi ?? defaults.metadataApi,
+    taxonomyApi: dependencies.taxonomyApi ?? defaults.taxonomyApi,
     now: dependencies.now ?? defaults.now,
   };
 }
@@ -221,6 +233,8 @@ async function resolveTradingCardConditionDescriptors(
   );
   const descriptor = getTradingCardConditionDescriptor(condition);
   if (!descriptor?.conditionDescriptorId) {
+    // Some sandbox/live category policies omit Card Condition descriptors entirely; fall back to
+    // normal aspects so metadata gaps do not block publish for otherwise valid reviewed listings.
     publishLogger.debug('Trading-card condition metadata had no relevant descriptor; falling back.', {
       availableConditionIds: policy?.itemConditions?.map((candidate) => candidate.conditionId ?? '[missing]') ?? [],
       availableDescriptorNames:
@@ -351,6 +365,25 @@ export async function publishListing(
     appSettings,
     resolvedDependencies.metadataApi
   );
+  try {
+    await validateRequiredItemSpecificsForCategory({
+      listing,
+      marketplaceId: appSettings.ebay_marketplace_id?.trim() ?? '',
+      taxonomyApi: resolvedDependencies.taxonomyApi,
+    });
+  } catch (error) {
+    if (error instanceof PublishListingValidationError) {
+      throw error;
+    }
+
+    throw wrapPublishStageError(
+      'INVENTORY_ITEM_UPSERT_FAILED',
+      'metadata',
+      listing.listing_id,
+      `Failed to fetch required item-specific metadata for listing "${getListingLabel(listing)}" in category "${listing.category_id}".`,
+      error
+    );
+  }
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
   });
