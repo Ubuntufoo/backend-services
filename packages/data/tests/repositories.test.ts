@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   AppSettingsRow,
   AiModelAttemptRow,
+  DailyUsageRow,
   JobRow,
   ListingRow,
   OrderRow,
@@ -16,16 +17,23 @@ import {
   createJob,
   createListing,
   createOrder,
+  DEFAULT_ORDER_SYNC_DAILY_LIMIT,
+  DailyUsageLimitExceededError,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
   enqueuePublishJob,
   failJob,
+  getEffectiveGeminiDailyLimit,
+  getEffectiveOrderSyncDailyLimit,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
   getListingByOfferId,
   getJobById,
+  getOrCreateDailyUsage,
   getListingByListingId,
   getOrderByOrderId,
+  incrementGeminiCallsUsed,
+  incrementOrderSyncCount,
   listApprovedForExportListings,
   listAiModelAttemptsForListing,
   listAiModelAttemptsForListings,
@@ -179,6 +187,13 @@ const aiModelAttemptRow: AiModelAttemptRow = {
   routing_source: 'direct_gemini',
   started_at: '2026-05-25T13:00:00.000Z',
   status: 'started',
+};
+
+const dailyUsageRow: DailyUsageRow = {
+  gemini_calls_used: 0,
+  gemini_daily_limit: 500,
+  order_sync_count: 0,
+  usage_date: '2026-05-31',
 };
 
 function createInsertClient<TTable extends string, TRow>(
@@ -634,6 +649,108 @@ function createUpdateClient<TTable extends string, TRow>(
                     error: null,
                   })),
                 })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createDailyUsageClient({
+  appSettings = appSettingsRow,
+  dailyUsage = dailyUsageRow,
+  insertedDailyUsage = dailyUsage ?? dailyUsageRow,
+  updateResult,
+  onDailyUsageInsert,
+  onDailyUsageUpdate,
+}: {
+  appSettings?: AppSettingsRow | null;
+  dailyUsage?: DailyUsageRow | null;
+  insertedDailyUsage?: DailyUsageRow;
+  updateResult?: DailyUsageRow | null;
+  onDailyUsageInsert?: (payload: unknown) => void;
+  onDailyUsageUpdate?: (payload: unknown) => void;
+}): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      if (name === 'app_settings') {
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('*');
+
+            return {
+              eq: vi.fn((column: string, value: string) => {
+                expect(column).toBe('id');
+                expect(value).toBe('default');
+
+                return {
+                  maybeSingle: vi.fn(async () => ({
+                    data: appSettings,
+                    error: null,
+                  })),
+                };
+              }),
+            };
+          }),
+        };
+      }
+
+      expect(name).toBe('daily_usage');
+
+      return {
+        insert: vi.fn((payload: unknown) => {
+          onDailyUsageInsert?.(payload);
+
+          return {
+            select: vi.fn(() => ({
+              single: vi.fn(async () => ({
+                data: insertedDailyUsage,
+                error: null,
+              })),
+            })),
+          };
+        }),
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('usage_date');
+              expect(value).toBe(dailyUsage?.usage_date ?? insertedDailyUsage.usage_date);
+
+              return {
+                maybeSingle: vi.fn(async () => ({
+                  data: dailyUsage,
+                  error: null,
+                })),
+              };
+            }),
+          };
+        }),
+        update: vi.fn((payload: unknown) => {
+          onDailyUsageUpdate?.(payload);
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('usage_date');
+              expect(firstValue).toBe(dailyUsage?.usage_date ?? insertedDailyUsage.usage_date);
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: number) => {
+                  expect(['gemini_calls_used', 'order_sync_count']).toContain(secondColumn);
+                  expect(secondValue).toBe(dailyUsage?.[secondColumn as 'gemini_calls_used' | 'order_sync_count'] ?? 0);
+
+                  return {
+                    select: vi.fn(() => ({
+                      maybeSingle: vi.fn(async () => ({
+                        data: updateResult ?? null,
+                        error: null,
+                      })),
+                    })),
+                  };
+                }),
               };
             }),
           };
@@ -2670,6 +2787,219 @@ describe('shared repositories', () => {
 
     await expect(updateOrder(updateClient, 'ORDER-001', { fulfillment_status: 'shipped' })).resolves.toEqual(
       orderRow
+    );
+  });
+
+  it('creates today daily usage row when missing', async () => {
+    const createdRow: DailyUsageRow = {
+      ...dailyUsageRow,
+      usage_date: '2026-05-31',
+    };
+    const client = createDailyUsageClient({
+      dailyUsage: null,
+      insertedDailyUsage: createdRow,
+      onDailyUsageInsert: (payload) => {
+        expect(payload).toEqual({
+          usage_date: '2026-05-31',
+        });
+      },
+    });
+
+    await expect(getOrCreateDailyUsage(client, '2026-05-31')).resolves.toEqual(createdRow);
+  });
+
+  it('resolves Gemini limit from app settings when present', async () => {
+    const client = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: 750,
+      },
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(client, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 750,
+      source: 'app_settings',
+      usage: dailyUsageRow,
+    });
+  });
+
+  it('falls back Gemini limit to daily usage row then default', async () => {
+    const dailyUsageLimitClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: null,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_daily_limit: 610,
+      },
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(dailyUsageLimitClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 610,
+      source: 'daily_usage',
+      usage: {
+        ...dailyUsageRow,
+        gemini_daily_limit: 610,
+      },
+    });
+
+    const defaultClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: null,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_daily_limit: 0,
+      },
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(defaultClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 500,
+      source: 'default',
+      usage: {
+        ...dailyUsageRow,
+        gemini_daily_limit: 0,
+      },
+    });
+  });
+
+  it('resolves order sync limit from app settings then default constant', async () => {
+    const appSettingClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        max_order_syncs_per_day: 9,
+      },
+    });
+
+    await expect(getEffectiveOrderSyncDailyLimit(appSettingClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 9,
+      source: 'app_settings',
+      usage: dailyUsageRow,
+    });
+
+    const defaultClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        max_order_syncs_per_day: null,
+      },
+    });
+
+    await expect(getEffectiveOrderSyncDailyLimit(defaultClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: DEFAULT_ORDER_SYNC_DAILY_LIMIT,
+      source: 'default',
+      usage: dailyUsageRow,
+    });
+  });
+
+  it('increments Gemini usage when under limit and blocks once exhausted', async () => {
+    const updateRow: DailyUsageRow = {
+      ...dailyUsageRow,
+      gemini_calls_used: 5,
+    };
+    const incrementClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: 10,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_calls_used: 4,
+      },
+      updateResult: updateRow,
+      onDailyUsageUpdate: (payload) => {
+        expect(payload).toEqual({
+          gemini_calls_used: 5,
+        });
+      },
+    });
+
+    await expect(incrementGeminiCallsUsed(incrementClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 10,
+      resource: 'gemini',
+      source: 'app_settings',
+      updatedUsage: updateRow,
+      usage: {
+        ...dailyUsageRow,
+        gemini_calls_used: 4,
+      },
+    });
+
+    const blockedClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: 4,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_calls_used: 4,
+      },
+    });
+
+    await expect(incrementGeminiCallsUsed(blockedClient, '2026-05-31')).rejects.toEqual(
+      expect.objectContaining<Partial<DailyUsageLimitExceededError>>({
+        effectiveLimit: 4,
+        resource: 'gemini',
+        source: 'app_settings',
+        usageDate: '2026-05-31',
+        used: 4,
+      })
+    );
+  });
+
+  it('increments order sync usage when under limit and blocks once exhausted', async () => {
+    const updateRow: DailyUsageRow = {
+      ...dailyUsageRow,
+      order_sync_count: 3,
+    };
+    const incrementClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        max_order_syncs_per_day: 5,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        order_sync_count: 2,
+      },
+      updateResult: updateRow,
+      onDailyUsageUpdate: (payload) => {
+        expect(payload).toEqual({
+          order_sync_count: 3,
+        });
+      },
+    });
+
+    await expect(incrementOrderSyncCount(incrementClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 5,
+      resource: 'order_sync',
+      source: 'app_settings',
+      updatedUsage: updateRow,
+      usage: {
+        ...dailyUsageRow,
+        order_sync_count: 2,
+      },
+    });
+
+    const blockedClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        max_order_syncs_per_day: null,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        order_sync_count: DEFAULT_ORDER_SYNC_DAILY_LIMIT,
+      },
+    });
+
+    await expect(incrementOrderSyncCount(blockedClient, '2026-05-31')).rejects.toEqual(
+      expect.objectContaining<Partial<DailyUsageLimitExceededError>>({
+        effectiveLimit: DEFAULT_ORDER_SYNC_DAILY_LIMIT,
+        resource: 'order_sync',
+        source: 'default',
+        usageDate: '2026-05-31',
+        used: DEFAULT_ORDER_SYNC_DAILY_LIMIT,
+      })
     );
   });
 

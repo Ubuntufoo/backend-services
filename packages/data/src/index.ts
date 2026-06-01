@@ -59,6 +59,17 @@ export {
   updateAppSettings,
 } from './repositories/app-settings.js';
 export {
+  DEFAULT_ORDER_SYNC_DAILY_LIMIT,
+  DailyUsageLimitExceededError,
+  getEffectiveGeminiDailyLimit,
+  getEffectiveOrderSyncDailyLimit,
+  getOrCreateDailyUsage,
+  incrementGeminiCallsUsed,
+  incrementOrderSyncCount,
+  type DailyUsageIncrementResult,
+  type DailyUsageLimitResolution,
+} from './repositories/daily-usage.js';
+export {
   claimDueQueuedJob,
   completeJob,
   createJob,

@@ -500,13 +500,21 @@ async function runGenerateAiJob(
     status: 'started',
   };
   let aiModelAttempt: AiModelAttemptRow | null = null;
+  let providerAttemptStarted = false;
 
   try {
-    const persistedLegacyStartedAttempt = await persistGeminiAttemptAudit(options.dataAccess, job.id, {
-      gemini_attempt_count: 1,
-      gemini_attempts: [startedAttempt],
-      gemini_selected_model: null,
-    }, true);
+    await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
+    providerAttemptStarted = true;
+    const persistedLegacyStartedAttempt = await persistGeminiAttemptAudit(
+      options.dataAccess,
+      job.id,
+      {
+        gemini_attempt_count: 1,
+        gemini_attempts: [startedAttempt],
+        gemini_selected_model: null,
+      },
+      true
+    );
     await options.dataAccess.listings.updateWorkflowState({
       listingId,
       status: 'generating',
@@ -591,41 +599,41 @@ async function runGenerateAiJob(
       );
     }
 
-    await persistGeminiAttemptAudit(
-      options.dataAccess,
-      job.id,
-      {
-        gemini_attempt_count: 1,
-        gemini_attempts: [
-          {
-            ...startedAttempt,
-            completed_at: completedAt,
-            duration_ms: getDurationMs(startedAt, completedAt),
-            failure_code: jobError.code,
-            failure_message: summarizeGeminiAttemptFailureMessage(jobError.message),
-            status: 'failed',
-          },
-        ],
-        gemini_selected_model: null,
-      },
-      true
-    );
+    if (providerAttemptStarted) {
+      await persistGeminiAttemptAudit(
+        options.dataAccess,
+        job.id,
+        {
+          gemini_attempt_count: 1,
+          gemini_attempts: [
+            {
+              ...startedAttempt,
+              completed_at: completedAt,
+              duration_ms: getDurationMs(startedAt, completedAt),
+              failure_code: jobError.code,
+              failure_message: summarizeGeminiAttemptFailureMessage(jobError.message),
+              status: 'failed',
+            },
+          ],
+          gemini_selected_model: null,
+        },
+        true
+      );
+    }
 
-    if (generationStarted) {
-      try {
-        await options.dataAccess.listings.update(
-          listingId,
-          buildGenerateAiFailureUpdate(jobError, errorAt)
-        );
-      } catch (cleanupError) {
-        jobError = new SidecarJobError(
-          jobError.code,
-          jobError.category,
-          appendCleanupFailure(jobError.message, cleanupError),
-          jobError.context,
-          { cause: jobError }
-        );
-      }
+    try {
+      await options.dataAccess.listings.update(
+        listingId,
+        buildGenerateAiFailureUpdate(jobError, errorAt)
+      );
+    } catch (cleanupError) {
+      jobError = new SidecarJobError(
+        jobError.code,
+        jobError.category,
+        appendCleanupFailure(jobError.message, cleanupError),
+        jobError.context,
+        { cause: jobError }
+      );
     }
 
     if (jobError.category === 'recoverable' && hasAttemptsRemaining(job)) {

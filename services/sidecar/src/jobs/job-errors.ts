@@ -1,4 +1,9 @@
-import type { JobRow, Json, ListingRow } from '@ebay-inventory/data';
+import {
+  DailyUsageLimitExceededError,
+  type JobRow,
+  type Json,
+  type ListingRow,
+} from '@ebay-inventory/data';
 import {
   GeminiDraftServiceError,
   GeminiDraftValidationError,
@@ -10,6 +15,8 @@ import { getJobMaxAttempts } from './retry-policy.js';
 export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
 
 export const JOB_ERROR_CODES = {
+  DAILY_GEMINI_LIMIT_EXCEEDED: 'DAILY_GEMINI_LIMIT_EXCEEDED',
+  DAILY_ORDER_SYNC_LIMIT_EXCEEDED: 'DAILY_ORDER_SYNC_LIMIT_EXCEEDED',
   DUPLICATE_ACTIVE_JOB: 'duplicate_active_job',
   LISTING_NOT_FOUND: 'listing_not_found',
   PUBLISH_APP_SETTINGS_NOT_FOUND: 'publish_app_settings_not_found',
@@ -66,6 +73,20 @@ export class SidecarJobError extends Error {
   }
 }
 
+export class DailyUsageGuardrailError extends SidecarJobError {
+  constructor(
+    code:
+      | typeof JOB_ERROR_CODES.DAILY_GEMINI_LIMIT_EXCEEDED
+      | typeof JOB_ERROR_CODES.DAILY_ORDER_SYNC_LIMIT_EXCEEDED,
+    message: string,
+    context: JobErrorContext = {},
+    options?: ErrorOptions
+  ) {
+    super(code, 'recoverable', message, context, options);
+    this.name = 'DailyUsageGuardrailError';
+  }
+}
+
 function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -103,6 +124,8 @@ function isKnownJobErrorCode(code: string): code is JobErrorCode {
 
 function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCategory {
   switch (code) {
+    case JOB_ERROR_CODES.DAILY_GEMINI_LIMIT_EXCEEDED:
+    case JOB_ERROR_CODES.DAILY_ORDER_SYNC_LIMIT_EXCEEDED:
     case JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB:
     case JOB_ERROR_CODES.GENERATE_AI_FAILED:
     case JOB_ERROR_CODES.LISTING_NOT_FOUND:
@@ -137,6 +160,27 @@ function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCatego
 
 function isGeminiApiKeyError(error: GeminiDraftServiceError): boolean {
   return error.message.includes('GEMINI_API_KEY is required');
+}
+
+function createDailyUsageGuardrailError(error: DailyUsageLimitExceededError): DailyUsageGuardrailError {
+  const code =
+    error.resource === 'gemini'
+      ? JOB_ERROR_CODES.DAILY_GEMINI_LIMIT_EXCEEDED
+      : JOB_ERROR_CODES.DAILY_ORDER_SYNC_LIMIT_EXCEEDED;
+
+  return new DailyUsageGuardrailError(
+    code,
+    error.message,
+    {
+      effective_limit: error.effectiveLimit,
+      guardrail_type: 'quota_guardrail',
+      limit_source: error.source,
+      resource: error.resource,
+      usage_date: error.usageDate,
+      used: error.used,
+    },
+    { cause: error }
+  );
 }
 
 function getGeminiValidationIssues(error: GeminiDraftValidationError): string[] {
@@ -304,6 +348,10 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
   }
 
   if (jobType === 'generate_ai') {
+    if (error instanceof DailyUsageLimitExceededError) {
+      return createDailyUsageGuardrailError(error);
+    }
+
     if (error instanceof GeminiDraftValidationError) {
       return new SidecarJobError(
         JOB_ERROR_CODES.GENERATE_AI_FAILED,

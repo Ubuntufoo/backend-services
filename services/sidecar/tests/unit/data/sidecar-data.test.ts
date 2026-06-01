@@ -29,12 +29,17 @@ const enqueueGenerateAiJobMock = vi.fn();
 const enqueueProcessImagesJobMock = vi.fn();
 const enqueuePublishJobMock = vi.fn();
 const failJobMock = vi.fn();
+const getEffectiveGeminiDailyLimitMock = vi.fn();
+const getEffectiveOrderSyncDailyLimitMock = vi.fn();
 const completeJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
+const getOrCreateDailyUsageMock = vi.fn();
 const listDueQueuedJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
 const listStaleRunningJobsMock = vi.fn();
+const incrementGeminiCallsUsedMock = vi.fn();
+const incrementOrderSyncCountMock = vi.fn();
 const claimDueQueuedJobMock = vi.fn();
 const resetJobForManualRetryMock = vi.fn();
 const requeueJobMock = vi.fn();
@@ -61,12 +66,17 @@ vi.mock('@ebay-inventory/data', () => ({
   enqueueProcessImagesJob: enqueueProcessImagesJobMock,
   enqueuePublishJob: enqueuePublishJobMock,
   failJob: failJobMock,
+  getEffectiveGeminiDailyLimit: getEffectiveGeminiDailyLimitMock,
+  getEffectiveOrderSyncDailyLimit: getEffectiveOrderSyncDailyLimitMock,
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
+  getOrCreateDailyUsage: getOrCreateDailyUsageMock,
   getListingByOfferId: getListingByOfferIdMock,
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
+  incrementGeminiCallsUsed: incrementGeminiCallsUsedMock,
+  incrementOrderSyncCount: incrementOrderSyncCountMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
   listAiModelAttemptsForListing: listAiModelAttemptsForListingMock,
   listAiModelAttemptsForListings: listAiModelAttemptsForListingsMock,
@@ -254,6 +264,11 @@ describe('sidecar data access', () => {
       gemini_selected_model: 'gemini-3.1-flash-lite',
     });
     await dataAccess.jobs.update('job-row-id', { status: 'running' });
+    await dataAccess.dailyUsage.getOrCreate('2026-05-25');
+    await dataAccess.dailyUsage.getEffectiveGeminiLimit('2026-05-25');
+    await dataAccess.dailyUsage.getEffectiveOrderSyncLimit('2026-05-25');
+    await dataAccess.dailyUsage.incrementGeminiCallsUsed('2026-05-25');
+    await dataAccess.dailyUsage.incrementOrderSyncCount('2026-05-25');
 
     await dataAccess.orders.create({
       listing_id: 'LIST-001',
@@ -347,6 +362,11 @@ describe('sidecar data access', () => {
       gemini_selected_model: 'gemini-3.1-flash-lite',
     });
     expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });
+    expect(getOrCreateDailyUsageMock).toHaveBeenCalledWith(client, '2026-05-25');
+    expect(getEffectiveGeminiDailyLimitMock).toHaveBeenCalledWith(client, '2026-05-25');
+    expect(getEffectiveOrderSyncDailyLimitMock).toHaveBeenCalledWith(client, '2026-05-25');
+    expect(incrementGeminiCallsUsedMock).toHaveBeenCalledWith(client, '2026-05-25');
+    expect(incrementOrderSyncCountMock).toHaveBeenCalledWith(client, '2026-05-25');
 
     expect(createOrderMock).toHaveBeenCalledWith(
       client,

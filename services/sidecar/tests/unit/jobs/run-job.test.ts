@@ -133,6 +133,7 @@ function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
   aiModelAttemptError,
+  dailyUsageIncrementError,
   geminiAttemptAuditError,
   onListingsUpdate,
   workflowStates = [],
@@ -140,6 +141,7 @@ function createDataAccess({
   job?: JobRow | null;
   listing?: ListingRow | null;
   aiModelAttemptError?: Error;
+  dailyUsageIncrementError?: Error;
   geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
@@ -213,6 +215,58 @@ function createDataAccess({
   const appSettingsUpdate = vi.fn();
 
   return {
+    dailyUsage: {
+      getEffectiveGeminiLimit: vi.fn(async () => ({
+        effectiveLimit: 500,
+        source: 'app_settings' as const,
+        usage: {
+          gemini_calls_used: 0,
+          gemini_daily_limit: 500,
+          order_sync_count: 0,
+          usage_date: '2026-05-20',
+        },
+      })),
+      getEffectiveOrderSyncLimit: vi.fn(async () => ({
+        effectiveLimit: 25,
+        source: 'app_settings' as const,
+        usage: {
+          gemini_calls_used: 0,
+          gemini_daily_limit: 500,
+          order_sync_count: 0,
+          usage_date: '2026-05-20',
+        },
+      })),
+      getOrCreate: vi.fn(async () => ({
+        gemini_calls_used: 0,
+        gemini_daily_limit: 500,
+        order_sync_count: 0,
+        usage_date: '2026-05-20',
+      })),
+      incrementGeminiCallsUsed: vi.fn(async () => {
+        if (dailyUsageIncrementError) {
+          throw dailyUsageIncrementError;
+        }
+
+        return {
+          effectiveLimit: 500,
+          resource: 'gemini' as const,
+          source: 'app_settings' as const,
+          updatedUsage: {
+            gemini_calls_used: 1,
+            gemini_daily_limit: 500,
+            order_sync_count: 0,
+            usage_date: '2026-05-20',
+          },
+          usage: {
+            gemini_calls_used: 0,
+            gemini_daily_limit: 500,
+            order_sync_count: 0,
+            usage_date: '2026-05-20',
+          },
+        };
+      }),
+      incrementOrderSyncCount: vi.fn(),
+    },
     aiModelAttempts: {
       create: vi.fn(async (input) => {
         if (aiModelAttemptError) {
@@ -518,6 +572,7 @@ describe('runSidecarJob', () => {
       now: () => new Date('2026-05-20T13:00:00.000Z'),
     });
 
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenNthCalledWith(1, {
       listingId: 'LIST-001',
       status: 'generating',
@@ -708,6 +763,7 @@ describe('runSidecarJob', () => {
       now: () => new Date('2026-05-20T13:00:00.000Z'),
     });
 
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledWith({
       listingId: 'LIST-001',
       status: 'generating',
@@ -822,6 +878,7 @@ describe('runSidecarJob', () => {
     });
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
     expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
     expect(dataAccess.aiModelAttempts.markSucceeded).not.toHaveBeenCalled();
@@ -859,6 +916,7 @@ describe('runSidecarJob', () => {
     });
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
     expect(dataAccess.aiModelAttempts.markSucceeded).not.toHaveBeenCalled();
     expect(result.job.status).toBe('completed');
@@ -882,6 +940,7 @@ describe('runSidecarJob', () => {
     });
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
     expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
     expect(dataAccess.aiModelAttempts.markFailed).not.toHaveBeenCalled();
@@ -907,6 +966,7 @@ describe('runSidecarJob', () => {
     });
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
     expect(dataAccess.aiModelAttempts.markFailed).not.toHaveBeenCalled();
     expect(result.job.status).toBe('queued');
@@ -914,6 +974,50 @@ describe('runSidecarJob', () => {
     expect(result.job.last_error).toContain('Gemini timed out');
     expect(result.job.last_error).not.toContain('ai audit write failed');
     expect(result.listing?.last_error_code).toBe('generate_ai_failed');
+  });
+
+  it('blocks generate_ai jobs when Gemini daily usage limit is exhausted before provider attempt', async () => {
+    const dataAccess = createDataAccess({
+      dailyUsageIncrementError: new Error('placeholder'),
+    });
+    const generateListingDraftMock = vi.fn();
+
+    dataAccess.dailyUsage.incrementGeminiCallsUsed = vi.fn(async () => {
+      const { DailyUsageLimitExceededError } = await import('@ebay-inventory/data');
+
+      throw new DailyUsageLimitExceededError({
+        effectiveLimit: 500,
+        resource: 'gemini',
+        source: 'app_settings',
+        usageDate: '2026-05-20',
+        used: 500,
+      });
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('DAILY_GEMINI_LIMIT_EXCEEDED');
+    expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
+    expect(result.listing?.status).toBe('assets_ready');
+    expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(result.listing?.last_error_code).toBe('DAILY_GEMINI_LIMIT_EXCEEDED');
+    expect(result.listing?.last_error_context).toEqual(
+      expect.objectContaining({
+        category: 'recoverable',
+        guardrail_type: 'quota_guardrail',
+        resource: 'gemini',
+      })
+    );
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
+    expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('returns asset prep summary for process_images jobs and does not fail batch on per-listing errors', async () => {
