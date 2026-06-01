@@ -21,6 +21,10 @@ export {
   userHintsSchema,
 } from './contracts.js';
 
+export interface GenerateListingDraftOptions {
+  model: string;
+}
+
 function summarizeGeminiError(error: unknown): string {
   if (error instanceof GeminiDraftServiceError) {
     return error.message;
@@ -38,7 +42,8 @@ function summarizeGeminiError(error: unknown): string {
 }
 
 export function generateListingDraft(
-  input: GenerateListingDraftInput
+  input: GenerateListingDraftInput,
+  options: GenerateListingDraftOptions
 ): Promise<GeneratedListingDraft> {
   return Promise.resolve().then(async () => {
     const validatedInput = validateGenerateListingDraftInput(input);
@@ -55,7 +60,7 @@ export function generateListingDraft(
 
     try {
       const rawDraft = await client.generateDraftRaw({
-        model: config.model,
+        model: options.model,
         listingId: validatedInput.listingId,
         imageUrls: validatedInput.imageUrls,
         userHints: validatedInput.userHints,

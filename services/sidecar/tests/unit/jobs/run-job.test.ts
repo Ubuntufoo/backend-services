@@ -1,4 +1,9 @@
-import type { AiModelAttemptRow, JobRow, ListingRow } from '@ebay-inventory/data';
+import type {
+  AiModelAttemptRow,
+  JobRow,
+  ListingRow,
+  ResolvedAiModelRoute,
+} from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -83,6 +88,23 @@ const startedAiModelAttemptRow: AiModelAttemptRow = {
   status: 'started',
 };
 
+const resolvedAiModelRoute: ResolvedAiModelRoute = {
+  displayName: 'Gemini 3.1 Flash Lite',
+  fallbackOnQuotaExceeded: true,
+  fallbackOnRateLimit: true,
+  fallbackOnUnavailable: true,
+  freeTierStatus: 'unknown',
+  isFreeTierEligible: true,
+  modelName: 'gemini-3.1-flash-lite',
+  provider: 'google',
+  routeOrder: 1,
+  supportsImages: true,
+  supportsJsonOutput: true,
+  supportsStructuredOutput: true,
+  supportsText: true,
+  taskType: 'listing_draft_generation',
+};
+
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: null,
@@ -133,6 +155,8 @@ function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
   aiModelAttemptError,
+  aiModelRoute = resolvedAiModelRoute,
+  aiModelRouteError,
   dailyUsageIncrementError,
   geminiAttemptAuditError,
   onListingsUpdate,
@@ -141,6 +165,8 @@ function createDataAccess({
   job?: JobRow | null;
   listing?: ListingRow | null;
   aiModelAttemptError?: Error;
+  aiModelRoute?: ResolvedAiModelRoute;
+  aiModelRouteError?: Error;
   dailyUsageIncrementError?: Error;
   geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
@@ -215,6 +241,16 @@ function createDataAccess({
   const appSettingsUpdate = vi.fn();
 
   return {
+    aiModelRoutes: {
+      resolveForTask: vi.fn(async () => [aiModelRoute]),
+      resolvePrimaryForTask: vi.fn(async () => {
+        if (aiModelRouteError) {
+          throw aiModelRouteError;
+        }
+
+        return aiModelRoute;
+      }),
+    },
     dailyUsage: {
       getEffectiveGeminiLimit: vi.fn(async () => ({
         effectiveLimit: 500,
@@ -533,6 +569,58 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).not.toHaveBeenCalled();
   });
 
+  it('fails generate_ai jobs when no eligible AI model route is configured', async () => {
+    const { AiModelRouteNotFoundError } = await import('@ebay-inventory/data');
+    const dataAccess = createDataAccess({
+      aiModelRouteError: new AiModelRouteNotFoundError({
+        freeTierOnly: true,
+        provider: 'google',
+        requireImages: true,
+        requireJsonOutput: true,
+        requireStructuredOutput: true,
+        taskType: 'listing_draft_generation',
+      }),
+    });
+    const generateListingDraftMock = vi.fn();
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('AI_MODEL_ROUTE_NOT_CONFIGURED');
+    expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
+    expect(result.listing?.status).toBe('assets_ready');
+    expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(result.listing?.last_error_code).toBe('AI_MODEL_ROUTE_NOT_CONFIGURED');
+    expect(result.listing?.last_error_context).toEqual(
+      expect.objectContaining({
+        category: 'recoverable',
+        free_tier_only: true,
+        provider: 'google',
+        require_images: true,
+        require_json_output: true,
+        require_structured_output: true,
+        task_type: 'listing_draft_generation',
+      })
+    );
+    expect(dataAccess.aiModelRoutes.resolvePrimaryForTask).toHaveBeenCalledWith({
+      freeTierOnly: true,
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).not.toHaveBeenCalled();
+    expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
   it('transitions generate_ai listings to needs_review and persists draft fields once', async () => {
     const dataAccess = createDataAccess({
       listing: createListingRow({
@@ -578,19 +666,30 @@ describe('runSidecarJob', () => {
       status: 'generating',
       subStatus: 'ai_call_in_progress',
     });
-    expect(generateListingDraftMock).toHaveBeenCalledWith({
-      imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
-      listingId: 'LIST-001',
-      userHints: {
-        aspects: {
-          Player: 'Michael Jordan',
-          Team: ['Chicago Bulls'],
-        },
-        notes: 'Card appears ungraded.',
-        price: 199.99,
-        title: 'Possible Jordan insert',
-      },
+    expect(dataAccess.aiModelRoutes.resolvePrimaryForTask).toHaveBeenCalledWith({
+      freeTierOnly: true,
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
     });
+    expect(generateListingDraftMock).toHaveBeenCalledWith(
+      {
+        imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
+        listingId: 'LIST-001',
+        userHints: {
+          aspects: {
+            Player: 'Michael Jordan',
+            Team: ['Chicago Bulls'],
+          },
+          notes: 'Card appears ungraded.',
+          price: 199.99,
+          title: 'Possible Jordan insert',
+        },
+      },
+      { model: 'gemini-3.1-flash-lite' }
+    );
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({

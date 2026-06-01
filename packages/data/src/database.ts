@@ -77,6 +77,14 @@ export type AiModelAttemptRow = TableRow<'ai_model_attempts'>;
 export type AiModelAttemptInsert = TableInsert<'ai_model_attempts'>;
 export type AiModelAttemptUpdate = TableUpdate<'ai_model_attempts'>;
 
+export type AiModelCatalogRow = TableRow<'ai_model_catalog'>;
+export type AiModelCatalogInsert = TableInsert<'ai_model_catalog'>;
+export type AiModelCatalogUpdate = TableUpdate<'ai_model_catalog'>;
+
+export type AiModelTaskRouteRow = TableRow<'ai_model_task_routes'>;
+export type AiModelTaskRouteInsert = TableInsert<'ai_model_task_routes'>;
+export type AiModelTaskRouteUpdate = TableUpdate<'ai_model_task_routes'>;
+
 export type DailyUsageRow = TableRow<'daily_usage'>;
 export type DailyUsageInsert = TableInsert<'daily_usage'>;
 export type DailyUsageUpdate = TableUpdate<'daily_usage'>;

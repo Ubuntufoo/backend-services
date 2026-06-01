@@ -1,5 +1,7 @@
 import {
   createAiModelAttempt,
+  resolveAiModelRoutesForTask,
+  resolvePrimaryAiModelRouteForTask,
   listAiModelAttemptsForListing,
   listAiModelAttemptsForListings,
   markAiModelAttemptFailed,
@@ -50,6 +52,8 @@ import {
   type AppSettingsRow,
   type AppSettingsUpdate,
   type AiModelAttemptRow,
+  type ResolveAiModelRoutesInput,
+  type ResolvedAiModelRoute,
   type CreateAiModelAttemptInput,
   type DailyUsageIncrementResult,
   type DailyUsageLimitResolution,
@@ -77,6 +81,10 @@ import {
 } from '@ebay-inventory/data';
 
 export interface SidecarDataAccess {
+  aiModelRoutes: {
+    resolveForTask(input: ResolveAiModelRoutesInput): Promise<ResolvedAiModelRoute[]>;
+    resolvePrimaryForTask(input: ResolveAiModelRoutesInput): Promise<ResolvedAiModelRoute>;
+  };
   aiModelAttempts: {
     create(input: CreateAiModelAttemptInput): Promise<AiModelAttemptRow>;
     listByListingId(listingId: string): Promise<AiModelAttemptRow[]>;
@@ -152,6 +160,11 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
   const client = createSupabaseServiceClient(env);
 
   return {
+    aiModelRoutes: {
+      resolveForTask: async (input) => await resolveAiModelRoutesForTask(client, input),
+      resolvePrimaryForTask: async (input) =>
+        await resolvePrimaryAiModelRouteForTask(client, input),
+    },
     dailyUsage: {
       getEffectiveGeminiLimit: async (usageDate) =>
         await getEffectiveGeminiDailyLimit(client, usageDate),

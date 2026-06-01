@@ -88,6 +88,134 @@ export type Database = {
           },
         ];
       };
+      ai_model_catalog: {
+        Row: {
+          created_at: string;
+          display_name: string | null;
+          free_tier_status: string;
+          id: string;
+          input_token_limit: number | null;
+          is_enabled: boolean;
+          is_free_tier_eligible: boolean;
+          last_verified_at: string | null;
+          model_name: string;
+          notes: string | null;
+          output_token_limit: number | null;
+          provider: string;
+          supports_images: boolean;
+          supports_json_output: boolean;
+          supports_structured_output: boolean;
+          supports_text: boolean;
+          updated_at: string;
+          verification_notes: string | null;
+          verification_source_url: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          display_name?: string | null;
+          free_tier_status?: string;
+          id?: string;
+          input_token_limit?: number | null;
+          is_enabled?: boolean;
+          is_free_tier_eligible?: boolean;
+          last_verified_at?: string | null;
+          model_name: string;
+          notes?: string | null;
+          output_token_limit?: number | null;
+          provider: string;
+          supports_images?: boolean;
+          supports_json_output?: boolean;
+          supports_structured_output?: boolean;
+          supports_text?: boolean;
+          updated_at?: string;
+          verification_notes?: string | null;
+          verification_source_url?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          display_name?: string | null;
+          free_tier_status?: string;
+          id?: string;
+          input_token_limit?: number | null;
+          is_enabled?: boolean;
+          is_free_tier_eligible?: boolean;
+          last_verified_at?: string | null;
+          model_name?: string;
+          notes?: string | null;
+          output_token_limit?: number | null;
+          provider?: string;
+          supports_images?: boolean;
+          supports_json_output?: boolean;
+          supports_structured_output?: boolean;
+          supports_text?: boolean;
+          updated_at?: string;
+          verification_notes?: string | null;
+          verification_source_url?: string | null;
+        };
+        Relationships: [];
+      };
+      ai_model_task_routes: {
+        Row: {
+          created_at: string;
+          fallback_on_quota_exceeded: boolean;
+          fallback_on_rate_limit: boolean;
+          fallback_on_unavailable: boolean;
+          id: string;
+          is_enabled: boolean;
+          model_name: string;
+          notes: string | null;
+          provider: string;
+          require_images: boolean;
+          require_json_output: boolean;
+          require_structured_output: boolean;
+          route_order: number;
+          task_type: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          fallback_on_quota_exceeded?: boolean;
+          fallback_on_rate_limit?: boolean;
+          fallback_on_unavailable?: boolean;
+          id?: string;
+          is_enabled?: boolean;
+          model_name: string;
+          notes?: string | null;
+          provider: string;
+          require_images?: boolean;
+          require_json_output?: boolean;
+          require_structured_output?: boolean;
+          route_order: number;
+          task_type: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          fallback_on_quota_exceeded?: boolean;
+          fallback_on_rate_limit?: boolean;
+          fallback_on_unavailable?: boolean;
+          id?: string;
+          is_enabled?: boolean;
+          model_name?: string;
+          notes?: string | null;
+          provider?: string;
+          require_images?: boolean;
+          require_json_output?: boolean;
+          require_structured_output?: boolean;
+          route_order?: number;
+          task_type?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ai_model_task_routes_provider_model_name_fkey';
+            columns: ['provider', 'model_name'];
+            isOneToOne: false;
+            referencedRelation: 'ai_model_catalog';
+            referencedColumns: ['provider', 'model_name'];
+          },
+        ];
+      };
       app_settings: {
         Row: {
           capture_mode: string | null;
