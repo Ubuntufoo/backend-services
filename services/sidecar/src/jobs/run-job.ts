@@ -1,4 +1,5 @@
 import type {
+  AiModelAttemptRow,
   GeminiJobAttemptAuditUpdate,
   GeminiModelAttempt,
   JobRow,
@@ -32,6 +33,7 @@ import {
   type PrepareRecordCreatedListingsResult,
 } from './prepare-record-created-listings.js';
 import { getNextRetryAt, hasAttemptsRemaining } from './retry-policy.js';
+import { createLogger } from '@/utils/logger.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
 const PUBLISH_JOB_TYPE = 'publish';
@@ -39,6 +41,9 @@ const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const JOB_STATUS_RUNNING = 'running';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
+const AI_PROVIDER_GOOGLE = 'google';
+const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
+const jobLogger = createLogger('Job');
 
 type GenerateListingDraftFn = (
   input: GenerateListingDraftInput
@@ -252,6 +257,91 @@ async function persistGeminiAttemptAudit(
   }
 }
 
+async function createAiModelAttemptRecord(
+  dataAccess: SidecarDataAccess,
+  input: Parameters<SidecarDataAccess['aiModelAttempts']['create']>[0],
+  context: {
+    jobId: string;
+    listingId: string;
+    modelName: string;
+  },
+  bestEffort = false
+): Promise<AiModelAttemptRow | null> {
+  try {
+    return await dataAccess.aiModelAttempts.create(input);
+  } catch (error) {
+    if (!bestEffort) {
+      throw error;
+    }
+
+    jobLogger.warn('Failed to create ai_model_attempts audit row.', {
+      error: error instanceof Error ? error.message : String(error),
+      jobId: context.jobId,
+      listingId: context.listingId,
+      modelName: context.modelName,
+      phase: 'start',
+    });
+
+    return null;
+  }
+}
+
+async function markAiModelAttemptRecordSucceeded(
+  dataAccess: SidecarDataAccess,
+  input: Parameters<SidecarDataAccess['aiModelAttempts']['markSucceeded']>[0],
+  context: {
+    jobId: string;
+    listingId: string;
+    modelName: string;
+  },
+  bestEffort = false
+): Promise<void> {
+  try {
+    await dataAccess.aiModelAttempts.markSucceeded(input);
+  } catch (error) {
+    if (!bestEffort) {
+      throw error;
+    }
+
+    jobLogger.warn('Failed to mark ai_model_attempts audit row succeeded.', {
+      attemptId: input.id,
+      error: error instanceof Error ? error.message : String(error),
+      jobId: context.jobId,
+      listingId: context.listingId,
+      modelName: context.modelName,
+      phase: 'succeeded',
+    });
+  }
+}
+
+async function markAiModelAttemptRecordFailed(
+  dataAccess: SidecarDataAccess,
+  input: Parameters<SidecarDataAccess['aiModelAttempts']['markFailed']>[0],
+  context: {
+    jobId: string;
+    listingId: string;
+    modelName: string;
+  },
+  bestEffort = false
+): Promise<void> {
+  try {
+    await dataAccess.aiModelAttempts.markFailed(input);
+  } catch (error) {
+    if (!bestEffort) {
+      throw error;
+    }
+
+    jobLogger.warn('Failed to mark ai_model_attempts audit row failed.', {
+      attemptId: input.id,
+      error: error instanceof Error ? error.message : String(error),
+      jobId: context.jobId,
+      listingId: context.listingId,
+      modelName: context.modelName,
+      phase: 'failed',
+    });
+  }
+}
+
 async function ensureJobRunning(
   dataAccess: SidecarDataAccess,
   job: JobRow,
@@ -391,6 +481,11 @@ async function runGenerateAiJob(
   let generationStarted = false;
   const modelName = getConfiguredGeminiModelName();
   const startedAt = asIsoTimestamp(options.now);
+  const aiAttemptContext = {
+    jobId: job.id,
+    listingId,
+    modelName,
+  };
   const startedAttempt: GeminiModelAttempt = {
     attempt_order: 1,
     completed_at: null,
@@ -401,6 +496,21 @@ async function runGenerateAiJob(
     started_at: startedAt,
     status: 'started',
   };
+  const aiModelAttempt = await createAiModelAttemptRecord(
+    options.dataAccess,
+    {
+      job_id: job.id,
+      listing_id: listingId,
+      model_name: modelName,
+      provider: AI_PROVIDER_GOOGLE,
+      provider_model_id: modelName,
+      routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
+      started_at: startedAt,
+      status: 'started',
+    },
+    aiAttemptContext,
+    true
+  );
 
   try {
     await persistGeminiAttemptAudit(options.dataAccess, job.id, {
@@ -426,6 +536,18 @@ async function runGenerateAiJob(
       buildGeneratedListingReviewUpdate(listing, draft)
     );
     const completedAt = asIsoTimestamp(options.now);
+    if (aiModelAttempt) {
+      await markAiModelAttemptRecordSucceeded(
+        options.dataAccess,
+        {
+          duration_ms: getDurationMs(startedAt, completedAt),
+          finished_at: completedAt,
+          id: aiModelAttempt.id,
+        },
+        aiAttemptContext,
+        true
+      );
+    }
     await persistGeminiAttemptAudit(options.dataAccess, job.id, {
       gemini_attempt_count: 1,
       gemini_attempts: [
@@ -447,6 +569,21 @@ async function runGenerateAiJob(
   } catch (error) {
     let jobError = classifyJobError(job.job_type, error);
     const completedAt = asIsoTimestamp(options.now);
+
+    if (aiModelAttempt) {
+      await markAiModelAttemptRecordFailed(
+        options.dataAccess,
+        {
+          duration_ms: getDurationMs(startedAt, completedAt),
+          failure_code: jobError.code,
+          failure_message: summarizeGeminiAttemptFailureMessage(jobError.message),
+          finished_at: completedAt,
+          id: aiModelAttempt.id,
+        },
+        aiAttemptContext,
+        true
+      );
+    }
 
     await persistGeminiAttemptAudit(
       options.dataAccess,

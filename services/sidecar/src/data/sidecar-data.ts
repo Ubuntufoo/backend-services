@@ -1,4 +1,8 @@
 import {
+  createAiModelAttempt,
+  listAiModelAttemptsForListing,
+  markAiModelAttemptFailed,
+  markAiModelAttemptSucceeded,
   claimApprovedListingForPublish,
   claimDueQueuedJob,
   completeJob,
@@ -39,6 +43,8 @@ import {
   type AppSettingsInsert,
   type AppSettingsRow,
   type AppSettingsUpdate,
+  type AiModelAttemptRow,
+  type CreateAiModelAttemptInput,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
   type EnqueuePublishJobResult,
@@ -55,12 +61,20 @@ import {
   type ListingRow,
   type ListingUpdate,
   type ListingWorkflowTransitionInput,
+  type MarkAiModelAttemptFailedInput,
+  type MarkAiModelAttemptSucceededInput,
   type OrderInsert,
   type OrderRow,
   type OrderUpdate,
 } from '@ebay-inventory/data';
 
 export interface SidecarDataAccess {
+  aiModelAttempts: {
+    create(input: CreateAiModelAttemptInput): Promise<AiModelAttemptRow>;
+    listByListingId(listingId: string): Promise<AiModelAttemptRow[]>;
+    markFailed(input: MarkAiModelAttemptFailedInput): Promise<AiModelAttemptRow>;
+    markSucceeded(input: MarkAiModelAttemptSucceededInput): Promise<AiModelAttemptRow>;
+  };
   appSettings: {
     create(input: AppSettingsInsert): Promise<AppSettingsRow>;
     get(id?: string): Promise<AppSettingsRow | null>;
@@ -122,6 +136,12 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
   const client = createSupabaseServiceClient(env);
 
   return {
+    aiModelAttempts: {
+      create: async (input) => await createAiModelAttempt(client, input),
+      listByListingId: async (listingId) => await listAiModelAttemptsForListing(client, listingId),
+      markFailed: async (input) => await markAiModelAttemptFailed(client, input),
+      markSucceeded: async (input) => await markAiModelAttemptSucceeded(client, input),
+    },
     listings: {
       claimApprovedForPublish: async (listingId) =>
         await claimApprovedListingForPublish(client, listingId),

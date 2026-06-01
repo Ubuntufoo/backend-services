@@ -73,6 +73,10 @@ export type AppSettingsRow = TableRow<'app_settings'>;
 export type AppSettingsInsert = TableInsert<'app_settings'>;
 export type AppSettingsUpdate = TableUpdate<'app_settings'>;
 
+export type AiModelAttemptRow = TableRow<'ai_model_attempts'>;
+export type AiModelAttemptInsert = TableInsert<'ai_model_attempts'>;
+export type AiModelAttemptUpdate = TableUpdate<'ai_model_attempts'>;
+
 export type DailyUsageRow = TableRow<'daily_usage'>;
 export type DailyUsageInsert = TableInsert<'daily_usage'>;
 export type DailyUsageUpdate = TableUpdate<'daily_usage'>;

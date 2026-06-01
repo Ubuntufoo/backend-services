@@ -84,8 +84,9 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7A | BE | Add trading-card condition descriptor support | Trading-card listings satisfy eBay category-specific condition requirements | GPT-5.5 | Medium-High | Production hardening for trading cards before serious publish testing |
 | 7A | FE | Add trading-card condition review controls | User can review/edit Gemini card condition token and condition notes before approval/export | GPT-5.5 mini | Medium | Completes frontend support for BE trading-card condition descriptors |
 | 7 | FE | Add queue/error panel | Shows `assets_ready`, `generating`, `needs_review`, `approved_for_export`, publish queue, and persisted errors | GPT-5.5 mini | Low-Medium | Operational visibility; not aesthetic QOL |
-| 7 | DB/BE | Implement explicit SQL API Table Grants & Security Advisor Review | Supabase Security Advisor is reviewed; existing tables are audited; migrations explicitly grant required PostgREST/API access to public schema tables | GPT-5.5 mini | Low-Medium | Move earlier because new tables should follow the corrected grant pattern | .   -->
-| 7 | BE | Add eBay required item-specific validation | Category-required aspects are detected before publish and returned as user-fixable review errors | GPT-5.5 | Medium-High | Prevents eBay publish-time missing-aspect failures |
+| 7 | DB/BE | Implement explicit SQL API Table Grants & Security Advisor Review | Supabase Security Advisor is reviewed; existing tables are audited; migrations explicitly grant required PostgREST/API access to public schema tables | GPT-5.5 mini | Low-Medium | Move earlier because new tables should follow the corrected grant pattern |
+| 7 | BE | Add eBay required item-specific validation | Category-required aspects are detected before publish and returned as user-fixable review errors | GPT-5.5 | Medium-High | Prevents eBay publish-time missing-aspect failures |  .   -->
+| 8 | FE | Add Unshipped Orders page + listings-page count indicator | Packing queue is visible; orders needing shipment are accessible from listings page | GPT-5.5 mini | Medium | Read-only packing visibility; labels still purchased/printed in eBay Seller Hub for now |
 | 7 | DB | Track Gemini model attempts | AI model usage and fallback outcomes are auditable per listing | GPT-5.5 mini | Low-Medium | Should come before Gemini fallback router |
 | 7 | BE | Add daily usage checks | Gemini and order sync limits are enforced | GPT-5.5 | Medium | Guardrail before fallback/router automation increases API call paths |
 | 7 | BE | Implement Dynamic Gemini Model Discovery & Fallback Router | Hardcoded Gemini model strings are replaced with a discovery engine that detects, scores, and cascades through available free-tier models on rate/quota/unavailable errors | GPT-5.5 | Medium-High | Should consume model-attempt tracking and obey usage checks |
@@ -94,7 +95,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | BE | Match order SKU to `listing_id` | Sold listing is identified from order SKU | GPT-5.5 mini | Medium | Required before updating listings to sold |
 | 8 | DB/BE | Update listing status to `sold` | Sale is tracked and listing status moves to `sold` when matched order data confirms sale | GPT-5.5 mini | Medium | Enables cleanup and fulfillment workflows |
 | 8 | BE | `job-runner`: schedule 4 order checks/day | Controlled order sync runs 4 times per day | GPT-5.5 mini | Medium | Schedule only after order storage and matching exist |
-| 8 | FE | Add Unshipped Orders panel | Packing queue is visible in the UI | GPT-5.5 mini | Low-Medium | Operational UI, not polish |
+
 | 8 | FE | Show due today/overdue warnings | 1-day handling risks are visible | GPT-5.5 mini | Low-Medium | Operational guardrail for fulfillment |
 | 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability |
 | 8 | BE | Normalize image orientation during asset processing | R2 images display with correct orientation | GPT-5.5 mini | Low-Medium | Defer unless EXIF issue is confirmed |
