@@ -248,7 +248,7 @@ type GeminiRouteCapacityCatalogRow = {
 
 type GeminiRouteCapacityRow = {
   catalog: GeminiRouteCapacityCatalogRow | GeminiRouteCapacityCatalogRow[] | null;
-  is_enabled: boolean;
+  route_is_enabled: boolean;
   model_name: string;
 };
 
@@ -268,11 +268,13 @@ async function getGeminiRouteCapacityLimit(
   const result = (await client
     .from('ai_model_task_routes')
     .select(
-      'model_name, is_enabled, catalog:ai_model_catalog!inner(is_enabled, is_free_tier_eligible, free_tier_daily_request_limit)'
+      'model_name, route_is_enabled:is_enabled, catalog:ai_model_catalog!inner(is_enabled, is_free_tier_eligible, free_tier_daily_request_limit)'
     )
     .eq('task_type', GEMINI_ROUTE_CAPACITY_TASK_TYPE)
     .eq('provider', GEMINI_ROUTE_CAPACITY_PROVIDER)
-    .eq('is_enabled', true)) as MultiResult<GeminiRouteCapacityRow>;
+    .eq('is_enabled', true)
+    .eq('catalog.is_enabled', true)
+    .eq('catalog.is_free_tier_eligible', true)) as MultiResult<GeminiRouteCapacityRow>;
 
   if (result.error) {
     throw new Error(result.error.message);
@@ -281,7 +283,7 @@ async function getGeminiRouteCapacityLimit(
   const totalCapacity = (result.data ?? []).reduce((sum, row) => {
     const catalog = getGeminiRouteCapacityCatalog(row);
 
-    if (!row.is_enabled || !catalog?.is_enabled || !catalog.is_free_tier_eligible) {
+    if (!row.route_is_enabled || !catalog?.is_enabled || !catalog.is_free_tier_eligible) {
       return sum;
     }
 

@@ -206,7 +206,7 @@ type GeminiRouteCapacityTestRow = {
         is_free_tier_eligible: boolean;
       }
     | null;
-  is_enabled: boolean;
+  route_is_enabled: boolean;
   model_name: string;
 };
 
@@ -695,6 +695,7 @@ function createDailyUsageClient({
         return {
           select: vi.fn((columns: string) => {
             expect(columns).toContain('catalog:ai_model_catalog!inner');
+            expect(columns).toContain('route_is_enabled:is_enabled');
 
             return {
               eq: vi.fn((firstColumn: string, firstValue: string | boolean) => {
@@ -712,8 +713,22 @@ function createDailyUsageClient({
                         expect(thirdValue).toBe(true);
 
                         return {
-                          data: routeCapacityRows,
-                          error: null,
+                          eq: vi.fn((fourthColumn: string, fourthValue: string | boolean) => {
+                            expect(fourthColumn).toBe('catalog.is_enabled');
+                            expect(fourthValue).toBe(true);
+
+                            return {
+                              eq: vi.fn((fifthColumn: string, fifthValue: string | boolean) => {
+                                expect(fifthColumn).toBe('catalog.is_free_tier_eligible');
+                                expect(fifthValue).toBe(true);
+
+                                return {
+                                  data: routeCapacityRows,
+                                  error: null,
+                                };
+                              }),
+                            };
+                          }),
                         };
                       }),
                     };
@@ -2873,7 +2888,7 @@ describe('shared repositories', () => {
     });
   });
 
-  it('falls back Gemini limit to daily usage row, route capacity, then default', async () => {
+  it('falls back Gemini limit to daily usage row, then aggregates only enabled free-tier route capacity, then default', async () => {
     const dailyUsageLimitClient = createDailyUsageClient({
       appSettings: {
         ...appSettingsRow,
@@ -2910,7 +2925,7 @@ describe('shared repositories', () => {
             is_enabled: true,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'gemini-3.5-flash',
         },
         {
@@ -2919,7 +2934,7 @@ describe('shared repositories', () => {
             is_enabled: true,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'gemini-3-flash-preview',
         },
         {
@@ -2928,7 +2943,7 @@ describe('shared repositories', () => {
             is_enabled: true,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'gemini-3.1-flash-lite',
         },
         {
@@ -2937,8 +2952,26 @@ describe('shared repositories', () => {
             is_enabled: false,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'ignored-disabled-catalog',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 999,
+            is_enabled: true,
+            is_free_tier_eligible: false,
+          },
+          route_is_enabled: true,
+          model_name: 'ignored-paid-only-catalog',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 999,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          route_is_enabled: false,
+          model_name: 'ignored-disabled-route',
         },
       ],
     });
@@ -3037,7 +3070,7 @@ describe('shared repositories', () => {
             is_enabled: true,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'gemini-3.5-flash',
         },
         {
@@ -3046,7 +3079,7 @@ describe('shared repositories', () => {
             is_enabled: true,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'gemini-3-flash-preview',
         },
         {
@@ -3055,7 +3088,7 @@ describe('shared repositories', () => {
             is_enabled: true,
             is_free_tier_eligible: true,
           },
-          is_enabled: true,
+          route_is_enabled: true,
           model_name: 'gemini-3.1-flash-lite',
         },
       ],
