@@ -1,16 +1,13 @@
 import { GoogleGenAI, createPartFromUri, type Part } from '@google/genai';
 import { GeminiDraftServiceError } from './contracts.js';
-import type { GenerateListingDraftUserHints } from './contracts.js';
 
 const HTTP_IMAGE_FETCH_TIMEOUT_MS = 12_000;
 const HTTP_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
-export interface GeminiDraftRawRequest {
+export interface GeminiDraftProviderRequest {
   model: string;
-  listingId: string;
+  imageParts: Part[];
   prompt: string;
-  imageUrls: string[];
-  userHints?: GenerateListingDraftUserHints;
 }
 
 export interface GeminiDraftRawResult {
@@ -19,7 +16,8 @@ export interface GeminiDraftRawResult {
 }
 
 export interface GeminiDraftClient {
-  generateDraftRaw(request: GeminiDraftRawRequest): Promise<GeminiDraftRawResult>;
+  prepareImageParts(imageUrls: string[]): Promise<Part[]>;
+  generateDraftRaw(request: GeminiDraftProviderRequest): Promise<GeminiDraftRawResult>;
 }
 
 function sanitizeImageUrl(imageUrl: string): string {
@@ -168,13 +166,16 @@ async function buildImagePart(imageUrl: string): Promise<Part> {
   );
 }
 
+async function prepareImageParts(imageUrls: string[]): Promise<Part[]> {
+  return await Promise.all(imageUrls.map(async (imageUrl) => await buildImagePart(imageUrl)));
+}
+
 export function getGeminiDraftClient(apiKey: string): GeminiDraftClient {
   const client = new GoogleGenAI({ apiKey });
 
   return {
-    async generateDraftRaw(request: GeminiDraftRawRequest): Promise<GeminiDraftRawResult> {
-      const imageParts = await Promise.all(request.imageUrls.map(async (imageUrl) => await buildImagePart(imageUrl)));
-
+    prepareImageParts: async (imageUrls) => await prepareImageParts(imageUrls),
+    async generateDraftRaw(request: GeminiDraftProviderRequest): Promise<GeminiDraftRawResult> {
       const response = await client.models.generateContent({
         model: request.model,
         contents: [
@@ -182,7 +183,7 @@ export function getGeminiDraftClient(apiKey: string): GeminiDraftClient {
             role: 'user',
             parts: [
               { text: request.prompt },
-              ...imageParts,
+              ...request.imageParts,
             ],
           },
         ],

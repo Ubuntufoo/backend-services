@@ -116,12 +116,12 @@ describe('getGeminiDraftClient', () => {
     }) as typeof fetch;
 
     const client = getGeminiDraftClient('gemini-api-key');
+    const imageParts = await client.prepareImageParts(['https://cdn.example.com/front.png']);
 
     await client.generateDraftRaw({
+      imageParts,
       model: 'gemini-test-model',
-      listingId: 'LIST-001',
       prompt: 'Prompt text',
-      imageUrls: ['https://cdn.example.com/front.png'],
     });
 
     expect(createPartFromUriMock).not.toHaveBeenCalled();
@@ -155,12 +155,7 @@ describe('getGeminiDraftClient', () => {
     const client = getGeminiDraftClient('gemini-api-key');
 
     await expect(
-      client.generateDraftRaw({
-        model: 'gemini-test-model',
-        listingId: 'LIST-002',
-        prompt: 'Prompt text',
-        imageUrls: ['https://cdn.example.com/not-image'],
-      })
+      client.prepareImageParts(['https://cdn.example.com/not-image'])
     ).rejects.toThrow('returned non-image content type "text/html"');
 
     expect(generateContentMock).not.toHaveBeenCalled();
@@ -168,12 +163,12 @@ describe('getGeminiDraftClient', () => {
 
   it('preserves URI-based parts for non-HTTP Gemini file URIs', async () => {
     const client = getGeminiDraftClient('gemini-api-key');
+    const imageParts = await client.prepareImageParts(['gs://bucket/card-front.jpg']);
 
     await client.generateDraftRaw({
+      imageParts,
       model: 'gemini-test-model',
-      listingId: 'LIST-003',
       prompt: 'Prompt text',
-      imageUrls: ['gs://bucket/card-front.jpg'],
     });
 
     expect(createPartFromUriMock).toHaveBeenCalledWith(
@@ -210,21 +205,11 @@ describe('getGeminiDraftClient', () => {
     const client = getGeminiDraftClient('gemini-api-key');
 
     await expect(
-      client.generateDraftRaw({
-        model: 'gemini-test-model',
-        listingId: 'LIST-004',
-        prompt: 'Prompt text',
-        imageUrls: ['https://cdn.example.com/empty.jpg'],
-      })
+      client.prepareImageParts(['https://cdn.example.com/empty.jpg'])
     ).rejects.toBeInstanceOf(GeminiDraftServiceError);
 
     await expect(
-      client.generateDraftRaw({
-        model: 'gemini-test-model',
-        listingId: 'LIST-004',
-        prompt: 'Prompt text',
-        imageUrls: ['https://cdn.example.com/empty.jpg'],
-      })
+      client.prepareImageParts(['https://cdn.example.com/empty.jpg'])
     ).rejects.toThrow('returned an empty response body');
   });
 
@@ -240,12 +225,7 @@ describe('getGeminiDraftClient', () => {
     const client = getGeminiDraftClient('gemini-api-key');
 
     await expect(
-      client.generateDraftRaw({
-        model: 'gemini-test-model',
-        listingId: 'LIST-005',
-        prompt: 'Prompt text',
-        imageUrls: ['https://cdn.example.com/huge.jpg'],
-      })
+      client.prepareImageParts(['https://cdn.example.com/huge.jpg'])
     ).rejects.toThrow('exceeds the 10 MB limit');
 
     expect(generateContentMock).not.toHaveBeenCalled();
@@ -282,12 +262,7 @@ describe('getGeminiDraftClient', () => {
     }) as typeof fetch;
 
     const client = getGeminiDraftClient('gemini-api-key');
-    const draftPromise = client.generateDraftRaw({
-      model: 'gemini-test-model',
-      listingId: 'LIST-006',
-      prompt: 'Prompt text',
-      imageUrls: ['https://cdn.example.com/slow.jpg'],
-    });
+    const draftPromise = client.prepareImageParts(['https://cdn.example.com/slow.jpg']);
     void draftPromise.catch(() => undefined);
 
     await vi.advanceTimersByTimeAsync(12_000);
