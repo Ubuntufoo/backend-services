@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   AppSettingsRow,
+  AiModelAttemptRow,
   JobRow,
   ListingRow,
   OrderRow,
   SupabaseDataClient,
 } from '../src/index.js';
 import {
+  createAiModelAttempt,
   claimApprovedListingForPublish,
   claimDueQueuedJob,
   completeJob,
@@ -25,12 +27,15 @@ import {
   getListingByListingId,
   getOrderByOrderId,
   listApprovedForExportListings,
+  listAiModelAttemptsForListing,
   listDueQueuedJobs,
   listListings,
   listListingsByStatus,
   listJobsByListingId,
   listJobsByListingIds,
   listStaleRunningJobs,
+  markAiModelAttemptFailed,
+  markAiModelAttemptSucceeded,
   prepareListingForGenerateAi,
   markListingPublishFailed,
   resetJobForManualRetry,
@@ -154,6 +159,25 @@ const appSettingsRow: AppSettingsRow = {
   processed_folder_path: '/processed',
   r2_retention_days_after_sold: 30,
   updated_at: '2026-05-17T00:00:00.000Z',
+};
+
+const aiModelAttemptRow: AiModelAttemptRow = {
+  attempt_order: 2,
+  created_at: '2026-05-25T13:00:00.000Z',
+  duration_ms: null,
+  failure_code: null,
+  failure_message: null,
+  finished_at: null,
+  id: 'ai-model-attempt-row-id',
+  job_id: 'job-row-id',
+  listing_id: 'LIST-001',
+  metadata: {},
+  model_name: 'gemini-3.1-flash-lite',
+  provider: 'google',
+  provider_model_id: 'gemini-3.1-flash-lite',
+  routing_source: 'direct_gemini',
+  started_at: '2026-05-25T13:00:00.000Z',
+  status: 'started',
 };
 
 function createInsertClient<TTable extends string, TRow>(
@@ -609,6 +633,122 @@ function createUpdateClient<TTable extends string, TRow>(
                     error: null,
                   })),
                 })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createAiModelAttemptInsertClient(
+  expectedRow: AiModelAttemptRow,
+  existingAttemptOrder: number | null,
+  onInsert?: (payload: unknown) => void
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('ai_model_attempts');
+
+      return {
+        insert: vi.fn((payload: unknown) => {
+          onInsert?.(payload);
+
+          return {
+            select: vi.fn(() => ({
+              single: vi.fn(async () => ({
+                data: expectedRow,
+                error: null,
+              })),
+            })),
+          };
+        }),
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('attempt_order');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('listing_id');
+              expect(firstValue).toBe(expectedRow.listing_id);
+
+              const orderedQuery = {
+                order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                  expect(orderColumn).toBe('attempt_order');
+                  expect(options).toEqual({ ascending: false });
+
+                  return {
+                    limit: vi.fn(async (limit: number) => {
+                      expect(limit).toBe(1);
+
+                      return {
+                        data:
+                          existingAttemptOrder === null
+                            ? []
+                            : [{ attempt_order: existingAttemptOrder }],
+                        error: null,
+                      };
+                    }),
+                  };
+                }),
+              };
+
+              if (expectedRow.job_id === null) {
+                return {
+                  is: vi.fn((secondColumn: string, secondValue: null) => {
+                    expect(secondColumn).toBe('job_id');
+                    expect(secondValue).toBeNull();
+                    return orderedQuery;
+                  }),
+                };
+              }
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('job_id');
+                  expect(secondValue).toBe(expectedRow.job_id);
+                  return orderedQuery;
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createAiModelAttemptListClient(expectedRows: AiModelAttemptRow[]): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('ai_model_attempts');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('listing_id');
+              expect(value).toBe('LIST-001');
+
+              return {
+                order: vi.fn((firstOrderColumn: string, firstOptions: { ascending: boolean }) => {
+                  expect(firstOrderColumn).toBe('attempt_order');
+                  expect(firstOptions).toEqual({ ascending: true });
+
+                  return {
+                    order: vi.fn(async (secondOrderColumn: string, secondOptions: { ascending: boolean }) => {
+                      expect(secondOrderColumn).toBe('created_at');
+                      expect(secondOptions).toEqual({ ascending: true });
+
+                      return {
+                        data: expectedRows,
+                        error: null,
+                      };
+                    }),
+                  };
+                }),
               };
             }),
           };
@@ -1521,6 +1661,285 @@ describe('shared repositories', () => {
     await expect(
       claimDueQueuedJob(claimClient, 'job-row-id', '2026-05-25T13:00:00.000Z')
     ).resolves.toBeNull();
+  });
+
+  it('creates, lists, and updates ai model attempts', async () => {
+    const startedAttemptRow = {
+      ...aiModelAttemptRow,
+      attempt_order: 2,
+      id: 'ai-model-attempt-row-id',
+      job_id: 'job-row-id',
+      status: 'started',
+    };
+    const createClient = createAiModelAttemptInsertClient(startedAttemptRow, 1, (payload) => {
+      expect(payload).toEqual({
+        attempt_order: 2,
+        job_id: 'job-row-id',
+        listing_id: 'LIST-001',
+        metadata: {},
+        model_name: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        provider_model_id: 'gemini-3.1-flash-lite',
+        routing_source: 'direct_gemini',
+        started_at: '2026-05-25T13:00:00.000Z',
+        status: 'started',
+      });
+    });
+
+    await expect(
+      createAiModelAttempt(createClient, {
+        job_id: 'job-row-id',
+        listing_id: 'LIST-001',
+        model_name: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        provider_model_id: 'gemini-3.1-flash-lite',
+        routing_source: 'direct_gemini',
+        started_at: '2026-05-25T13:00:00.000Z',
+      })
+    ).resolves.toEqual(startedAttemptRow);
+
+    const nullJobAttemptRow = {
+      ...aiModelAttemptRow,
+      attempt_order: 1,
+      id: 'ai-model-attempt-row-null-job-id',
+      job_id: null,
+      started_at: '2026-05-25T13:05:00.000Z',
+    };
+    const createNullJobClient = createAiModelAttemptInsertClient(
+      nullJobAttemptRow,
+      null,
+      (payload) => {
+        expect(payload).toEqual({
+          attempt_order: 1,
+          job_id: null,
+          listing_id: 'LIST-001',
+          metadata: {},
+          model_name: 'gemini-3.1-flash-lite',
+          provider: 'google',
+          provider_model_id: null,
+          routing_source: null,
+          started_at: '2026-05-25T13:05:00.000Z',
+          status: 'started',
+        });
+      }
+    );
+
+    await expect(
+      createAiModelAttempt(createNullJobClient, {
+        job_id: null,
+        listing_id: 'LIST-001',
+        model_name: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        started_at: '2026-05-25T13:05:00.000Z',
+      })
+    ).resolves.toEqual(nullJobAttemptRow);
+
+    const listClient = createAiModelAttemptListClient([
+      {
+        ...startedAttemptRow,
+        attempt_order: 1,
+        created_at: '2026-05-25T13:00:00.000Z',
+        id: 'ai-model-attempt-row-1',
+      },
+      {
+        ...startedAttemptRow,
+        attempt_order: 2,
+        created_at: '2026-05-25T13:01:00.000Z',
+        id: 'ai-model-attempt-row-2',
+      },
+    ]);
+
+    await expect(listAiModelAttemptsForListing(listClient, 'LIST-001')).resolves.toEqual([
+      {
+        ...startedAttemptRow,
+        attempt_order: 1,
+        created_at: '2026-05-25T13:00:00.000Z',
+        id: 'ai-model-attempt-row-1',
+      },
+      {
+        ...startedAttemptRow,
+        attempt_order: 2,
+        created_at: '2026-05-25T13:01:00.000Z',
+        id: 'ai-model-attempt-row-2',
+      },
+    ]);
+
+    const succeededClient = createUpdateClient(
+      'ai_model_attempts',
+      {
+        ...startedAttemptRow,
+        duration_ms: 2000,
+        finished_at: '2026-05-25T13:00:02.000Z',
+        status: 'succeeded',
+      },
+      'id',
+      'ai-model-attempt-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          duration_ms: 2000,
+          finished_at: '2026-05-25T13:00:02.000Z',
+          status: 'succeeded',
+        });
+      }
+    );
+
+    await expect(
+      markAiModelAttemptSucceeded(succeededClient, {
+        duration_ms: 2000,
+        finished_at: '2026-05-25T13:00:02.000Z',
+        id: 'ai-model-attempt-row-id',
+      })
+    ).resolves.toEqual({
+      ...startedAttemptRow,
+      duration_ms: 2000,
+      finished_at: '2026-05-25T13:00:02.000Z',
+      status: 'succeeded',
+    });
+
+    const failedClient = createUpdateClient(
+      'ai_model_attempts',
+      {
+        ...startedAttemptRow,
+        duration_ms: 2000,
+        failure_code: 'generate_ai_failed',
+        failure_message: 'Gemini timed out',
+        finished_at: '2026-05-25T13:00:02.000Z',
+        status: 'failed',
+      },
+      'id',
+      'ai-model-attempt-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          duration_ms: 2000,
+          failure_code: 'generate_ai_failed',
+          failure_message: 'Gemini timed out',
+          finished_at: '2026-05-25T13:00:02.000Z',
+          status: 'failed',
+        });
+      }
+    );
+
+    await expect(
+      markAiModelAttemptFailed(failedClient, {
+        duration_ms: 2000,
+        failure_code: 'generate_ai_failed',
+        failure_message: 'Gemini timed out',
+        finished_at: '2026-05-25T13:00:02.000Z',
+        id: 'ai-model-attempt-row-id',
+      })
+    ).resolves.toEqual({
+      ...startedAttemptRow,
+      duration_ms: 2000,
+      failure_code: 'generate_ai_failed',
+      failure_message: 'Gemini timed out',
+      finished_at: '2026-05-25T13:00:02.000Z',
+      status: 'failed',
+    });
+  });
+
+  it('retries ai model attempt creation on attempt-order unique conflicts', async () => {
+    let selectCount = 0;
+    let insertCount = 0;
+
+    const retryClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('ai_model_attempts');
+
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('attempt_order');
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('listing_id');
+                expect(firstValue).toBe('LIST-001');
+
+                return {
+                  eq: vi.fn((secondColumn: string, secondValue: string) => {
+                    expect(secondColumn).toBe('job_id');
+                    expect(secondValue).toBe('job-row-id');
+
+                    return {
+                      order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                        expect(orderColumn).toBe('attempt_order');
+                        expect(options).toEqual({ ascending: false });
+
+                        return {
+                          limit: vi.fn(async (limit: number) => {
+                            expect(limit).toBe(1);
+                            selectCount += 1;
+
+                            return {
+                              data: [{ attempt_order: selectCount }],
+                              error: null,
+                            };
+                          }),
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+          insert: vi.fn((payload: unknown) => {
+            insertCount += 1;
+            expect(payload).toEqual({
+              attempt_order: insertCount === 1 ? 2 : 3,
+              job_id: 'job-row-id',
+              listing_id: 'LIST-001',
+              metadata: {},
+              model_name: 'gemini-3.1-flash-lite',
+              provider: 'google',
+              provider_model_id: 'gemini-3.1-flash-lite',
+              routing_source: 'direct_gemini',
+              started_at: '2026-05-25T13:00:00.000Z',
+              status: 'started',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () =>
+                  insertCount === 1
+                    ? {
+                        data: null,
+                        error: {
+                          code: '23505',
+                          message:
+                            'duplicate key value violates unique constraint "ai_model_attempts_listing_job_attempt_order_uidx"',
+                        },
+                      }
+                    : {
+                        data: {
+                          ...aiModelAttemptRow,
+                          attempt_order: 3,
+                          id: 'ai-model-attempt-row-retried',
+                        },
+                        error: null,
+                      }
+                ),
+              })),
+            };
+          }),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(
+      createAiModelAttempt(retryClient, {
+        job_id: 'job-row-id',
+        listing_id: 'LIST-001',
+        model_name: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        provider_model_id: 'gemini-3.1-flash-lite',
+        routing_source: 'direct_gemini',
+        started_at: '2026-05-25T13:00:00.000Z',
+      })
+    ).resolves.toEqual({
+      ...aiModelAttemptRow,
+      attempt_order: 3,
+      id: 'ai-model-attempt-row-retried',
+    });
   });
 
   it('lists stale running jobs and wraps retry helper updates', async () => {

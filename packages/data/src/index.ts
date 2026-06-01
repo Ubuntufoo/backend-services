@@ -2,6 +2,9 @@ export type {
   AppSettingsInsert,
   AppSettingsRow,
   AppSettingsUpdate,
+  AiModelAttemptInsert,
+  AiModelAttemptRow,
+  AiModelAttemptUpdate,
   Database,
   DailyUsageInsert,
   DailyUsageRow,
@@ -21,6 +24,17 @@ export type {
   TableRow,
   TableUpdate,
 } from './database.js';
+export {
+  createAiModelAttempt,
+  listAiModelAttemptsForListing,
+  markAiModelAttemptFailed,
+  markAiModelAttemptSucceeded,
+  type AiModelAttemptMetadata,
+  type AiModelAttemptStatus,
+  type CreateAiModelAttemptInput,
+  type MarkAiModelAttemptFailedInput,
+  type MarkAiModelAttemptSucceededInput,
+} from './repositories/ai-model-attempts.js';
 export {
   buildR2ImageObjectKey,
   buildPublicImageUrl,

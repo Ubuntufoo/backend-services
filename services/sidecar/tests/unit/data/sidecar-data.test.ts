@@ -7,11 +7,15 @@ import type {
 } from '@ebay-inventory/data';
 
 const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
+const createAiModelAttemptMock = vi.fn();
 const listListingsMock = vi.fn();
 const listListingsByStatusMock = vi.fn();
 const listApprovedForExportListingsMock = vi.fn();
+const listAiModelAttemptsForListingMock = vi.fn();
 const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
+const markAiModelAttemptFailedMock = vi.fn();
+const markAiModelAttemptSucceededMock = vi.fn();
 const createListingMock = vi.fn();
 const updateListingMock = vi.fn();
 const claimApprovedListingForPublishMock = vi.fn();
@@ -43,6 +47,7 @@ const updateAppSettingsMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
+  createAiModelAttempt: createAiModelAttemptMock,
   claimApprovedListingForPublish: claimApprovedListingForPublishMock,
   claimDueQueuedJob: claimDueQueuedJobMock,
   completeJob: completeJobMock,
@@ -62,12 +67,15 @@ vi.mock('@ebay-inventory/data', () => ({
   getListingByListingId: getListingByListingIdMock,
   getOrderByOrderId: getOrderByOrderIdMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
+  listAiModelAttemptsForListing: listAiModelAttemptsForListingMock,
   listDueQueuedJobs: listDueQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
   listStaleRunningJobs: listStaleRunningJobsMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
   markListingPublishFailed: markListingPublishFailedMock,
+  markAiModelAttemptFailed: markAiModelAttemptFailedMock,
+  markAiModelAttemptSucceeded: markAiModelAttemptSucceededMock,
   resetJobForManualRetry: resetJobForManualRetryMock,
   requeueJob: requeueJobMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
@@ -174,6 +182,28 @@ describe('sidecar data access', () => {
     const dataAccess = createSidecarDataAccess();
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
 
+    await dataAccess.aiModelAttempts.create({
+      job_id: 'job-row-id',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-flash-lite',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-25T13:00:00.000Z',
+    });
+    await dataAccess.aiModelAttempts.listByListingId('LIST-001');
+    await dataAccess.aiModelAttempts.markSucceeded({
+      duration_ms: 2000,
+      finished_at: '2026-05-25T13:00:02.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
+    await dataAccess.aiModelAttempts.markFailed({
+      duration_ms: 2000,
+      failure_code: 'generate_ai_failed',
+      failure_message: 'Gemini timed out',
+      finished_at: '2026-05-25T13:00:02.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
     await dataAccess.jobs.create({
       job_type: 'process_images',
       listing_id: 'LIST-001',
@@ -225,6 +255,28 @@ describe('sidecar data access', () => {
     await dataAccess.orders.getByOrderId('ORDER-001');
     await dataAccess.orders.update('ORDER-001', { fulfillment_status: 'shipped' });
 
+    expect(createAiModelAttemptMock).toHaveBeenCalledWith(client, {
+      job_id: 'job-row-id',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-flash-lite',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-25T13:00:00.000Z',
+    });
+    expect(listAiModelAttemptsForListingMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(markAiModelAttemptSucceededMock).toHaveBeenCalledWith(client, {
+      duration_ms: 2000,
+      finished_at: '2026-05-25T13:00:02.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
+    expect(markAiModelAttemptFailedMock).toHaveBeenCalledWith(client, {
+      duration_ms: 2000,
+      failure_code: 'generate_ai_failed',
+      failure_message: 'Gemini timed out',
+      finished_at: '2026-05-25T13:00:02.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
     expect(createJobMock).toHaveBeenCalledWith(
       client,
       expect.objectContaining({

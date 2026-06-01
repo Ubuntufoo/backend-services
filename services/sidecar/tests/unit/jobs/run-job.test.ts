@@ -1,4 +1,4 @@
-import type { JobRow, ListingRow } from '@ebay-inventory/data';
+import type { AiModelAttemptRow, JobRow, ListingRow } from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -64,6 +64,25 @@ const queuedPublishJob: JobRow = {
   updated_at: '2026-05-20T12:00:00.000Z',
 };
 
+const startedAiModelAttemptRow: AiModelAttemptRow = {
+  attempt_order: 1,
+  created_at: '2026-05-20T13:00:00.000Z',
+  duration_ms: null,
+  failure_code: null,
+  failure_message: null,
+  finished_at: null,
+  id: 'ai-model-attempt-row-id',
+  job_id: 'job-generate-ai',
+  listing_id: 'LIST-001',
+  metadata: {},
+  model_name: 'gemini-3.1-flash-lite',
+  provider: 'google',
+  provider_model_id: 'gemini-3.1-flash-lite',
+  routing_source: 'direct_gemini',
+  started_at: '2026-05-20T13:00:00.000Z',
+  status: 'started',
+};
+
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: null,
@@ -113,18 +132,21 @@ function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
+  aiModelAttemptError,
   geminiAttemptAuditError,
   onListingsUpdate,
   workflowStates = [],
 }: {
   job?: JobRow | null;
   listing?: ListingRow | null;
+  aiModelAttemptError?: Error;
   geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
 } = {}): SidecarDataAccess {
   const listingStates = workflowStates.length > 0 ? [...workflowStates] : listing ? [listing] : [];
   let jobState = job ? { ...job } : null;
+  let aiModelAttemptState: AiModelAttemptRow | null = null;
 
   const jobsGetById = vi.fn(async () => (jobState ? { ...jobState } : null));
   const jobsCreate = vi.fn();
@@ -191,6 +213,71 @@ function createDataAccess({
   const appSettingsUpdate = vi.fn();
 
   return {
+    aiModelAttempts: {
+      create: vi.fn(async (input) => {
+        if (aiModelAttemptError) {
+          throw aiModelAttemptError;
+        }
+
+        aiModelAttemptState = {
+          ...startedAiModelAttemptRow,
+          attempt_order: input.attempt_order ?? 1,
+          created_at: input.started_at ?? startedAiModelAttemptRow.created_at,
+          job_id: input.job_id ?? null,
+          listing_id: input.listing_id,
+          metadata: input.metadata ?? {},
+          model_name: input.model_name,
+          provider: input.provider,
+          provider_model_id: input.provider_model_id ?? null,
+          routing_source: input.routing_source ?? null,
+          started_at: input.started_at ?? startedAiModelAttemptRow.started_at,
+          status: input.status ?? 'started',
+        };
+
+        return { ...aiModelAttemptState };
+      }),
+      listByListingId: vi.fn(async (listingId: string) =>
+        aiModelAttemptState && aiModelAttemptState.listing_id === listingId ? [{ ...aiModelAttemptState }] : []
+      ),
+      markFailed: vi.fn(async (input) => {
+        if (aiModelAttemptError) {
+          throw aiModelAttemptError;
+        }
+
+        if (!aiModelAttemptState) {
+          throw new Error('ai model attempt missing');
+        }
+
+        aiModelAttemptState = {
+          ...aiModelAttemptState,
+          duration_ms: input.duration_ms ?? null,
+          failure_code: input.failure_code ?? null,
+          failure_message: input.failure_message ?? null,
+          finished_at: input.finished_at,
+          status: 'failed',
+        };
+
+        return { ...aiModelAttemptState };
+      }),
+      markSucceeded: vi.fn(async (input) => {
+        if (aiModelAttemptError) {
+          throw aiModelAttemptError;
+        }
+
+        if (!aiModelAttemptState) {
+          throw new Error('ai model attempt missing');
+        }
+
+        aiModelAttemptState = {
+          ...aiModelAttemptState,
+          duration_ms: input.duration_ms ?? null,
+          finished_at: input.finished_at,
+          status: 'succeeded',
+        };
+
+        return { ...aiModelAttemptState };
+      }),
+    },
     appSettings: {
       create: appSettingsCreate,
       get: appSettingsGet,
@@ -506,6 +593,21 @@ describe('runSidecarJob', () => {
       ],
       gemini_selected_model: 'gemini-3.1-flash-lite',
     });
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledWith({
+      job_id: 'job-generate-ai',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-flash-lite',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-20T13:00:00.000Z',
+      status: 'started',
+    });
+    expect(dataAccess.aiModelAttempts.markSucceeded).toHaveBeenCalledWith({
+      duration_ms: 0,
+      finished_at: '2026-05-20T13:00:00.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
@@ -662,6 +764,23 @@ describe('runSidecarJob', () => {
       ],
       gemini_selected_model: null,
     });
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledWith({
+      job_id: 'job-generate-ai',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-flash-lite',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-20T13:00:00.000Z',
+      status: 'started',
+    });
+    expect(dataAccess.aiModelAttempts.markFailed).toHaveBeenCalledWith({
+      duration_ms: 0,
+      failure_code: 'generate_ai_failed',
+      failure_message: 'Gemini timed out',
+      finished_at: '2026-05-20T13:00:00.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
     expect(result.job.gemini_attempt_count).toBe(1);
     expect(result.job.gemini_selected_model).toBeNull();
     expect(result.job.gemini_attempts).toEqual([
@@ -704,6 +823,44 @@ describe('runSidecarJob', () => {
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.markSucceeded).not.toHaveBeenCalled();
+    expect(result.job.status).toBe('completed');
+    expect(result.job.last_error_code).toBeNull();
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+  });
+
+  it('keeps generate_ai success when ai model audit persistence fails', async () => {
+    const dataAccess = createDataAccess({
+      aiModelAttemptError: new Error('ai audit write failed'),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+        Manufacturer: 'Upper Deck',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: ['Condition inferred from visible wear only.'],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.markSucceeded).not.toHaveBeenCalled();
     expect(result.job.status).toBe('completed');
     expect(result.job.last_error_code).toBeNull();
     expect(result.listing?.status).toBe('needs_review');
@@ -726,10 +883,36 @@ describe('runSidecarJob', () => {
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.markFailed).not.toHaveBeenCalled();
     expect(result.job.status).toBe('queued');
     expect(result.job.last_error_code).toBe('generate_ai_failed');
     expect(result.job.last_error).toContain('Gemini timed out');
     expect(result.job.last_error).not.toContain('audit write failed');
+    expect(result.listing?.last_error_code).toBe('generate_ai_failed');
+  });
+
+  it('preserves Gemini failure when ai model audit persistence fails', async () => {
+    const dataAccess = createDataAccess({
+      aiModelAttemptError: new Error('ai audit write failed'),
+    });
+    const generateListingDraftMock = vi.fn(async () => {
+      throw new Error('Gemini timed out');
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.markFailed).not.toHaveBeenCalled();
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.job.last_error).toContain('Gemini timed out');
+    expect(result.job.last_error).not.toContain('ai audit write failed');
     expect(result.listing?.last_error_code).toBe('generate_ai_failed');
   });
 

@@ -16,6 +16,78 @@ export type Database = {
   };
   public: {
     Tables: {
+      ai_model_attempts: {
+        Row: {
+          attempt_order: number;
+          created_at: string;
+          duration_ms: number | null;
+          failure_code: string | null;
+          failure_message: string | null;
+          finished_at: string | null;
+          id: string;
+          job_id: string | null;
+          listing_id: string;
+          metadata: Json;
+          model_name: string;
+          provider: string;
+          provider_model_id: string | null;
+          routing_source: string | null;
+          started_at: string;
+          status: string;
+        };
+        Insert: {
+          attempt_order: number;
+          created_at?: string;
+          duration_ms?: number | null;
+          failure_code?: string | null;
+          failure_message?: string | null;
+          finished_at?: string | null;
+          id?: string;
+          job_id?: string | null;
+          listing_id: string;
+          metadata?: Json;
+          model_name: string;
+          provider: string;
+          provider_model_id?: string | null;
+          routing_source?: string | null;
+          started_at?: string;
+          status: string;
+        };
+        Update: {
+          attempt_order?: number;
+          created_at?: string;
+          duration_ms?: number | null;
+          failure_code?: string | null;
+          failure_message?: string | null;
+          finished_at?: string | null;
+          id?: string;
+          job_id?: string | null;
+          listing_id?: string;
+          metadata?: Json;
+          model_name?: string;
+          provider?: string;
+          provider_model_id?: string | null;
+          routing_source?: string | null;
+          started_at?: string;
+          status?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ai_model_attempts_job_id_fkey';
+            columns: ['job_id'];
+            isOneToOne: false;
+            referencedRelation: 'jobs';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'ai_model_attempts_listing_id_fkey';
+            columns: ['listing_id'];
+            isOneToOne: false;
+            referencedRelation: 'listings';
+            referencedColumns: ['listing_id'];
+          },
+        ];
+      };
       app_settings: {
         Row: {
           capture_mode: string | null;
