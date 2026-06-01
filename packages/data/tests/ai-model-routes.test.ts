@@ -25,6 +25,9 @@ interface JoinedRouteRow {
   is_enabled: boolean;
   model_name: string;
   provider: string;
+  require_images: boolean;
+  require_json_output: boolean;
+  require_structured_output: boolean;
   route_order: number;
   task_type: string;
 }
@@ -49,6 +52,9 @@ function createJoinedRouteRow(overrides: Partial<JoinedRouteRow> = {}): JoinedRo
     is_enabled: true,
     model_name: 'gemini-3.1-flash-lite',
     provider: 'google',
+    require_images: false,
+    require_json_output: true,
+    require_structured_output: true,
     route_order: 1,
     task_type: 'listing_draft_generation',
     ...overrides,
@@ -63,6 +69,9 @@ function createAiModelRouteResolverClient(expectedRows: JoinedRouteRow[]): Supab
       return {
         select: vi.fn((columns: string) => {
           expect(columns).toContain('catalog:ai_model_catalog!inner');
+          expect(columns).toContain('require_images');
+          expect(columns).toContain('require_json_output');
+          expect(columns).toContain('require_structured_output');
 
           return {
             eq: vi.fn((taskColumn: string, taskValue: string) => {
@@ -226,6 +235,27 @@ describe('ai model routes repository', () => {
     expect(routes).toEqual([]);
   });
 
+  it('excludes route-required image models without image support even when caller does not require images', async () => {
+    const client = createAiModelRouteResolverClient([
+      createJoinedRouteRow({
+        catalog: {
+          ...baseCatalogRow,
+          supports_images: false,
+        },
+        require_images: true,
+        require_json_output: false,
+        require_structured_output: false,
+      }),
+    ]);
+
+    const routes = await resolveAiModelRoutesForTask(client, {
+      provider: 'google',
+      taskType: 'listing_draft_generation',
+    });
+
+    expect(routes).toEqual([]);
+  });
+
   it('excludes models without JSON support when requireJsonOutput is true', async () => {
     const client = createAiModelRouteResolverClient([
       createJoinedRouteRow({
@@ -245,6 +275,27 @@ describe('ai model routes repository', () => {
     expect(routes).toEqual([]);
   });
 
+  it('excludes route-required JSON models without JSON support even when caller does not require JSON', async () => {
+    const client = createAiModelRouteResolverClient([
+      createJoinedRouteRow({
+        catalog: {
+          ...baseCatalogRow,
+          supports_json_output: false,
+        },
+        require_images: false,
+        require_json_output: true,
+        require_structured_output: false,
+      }),
+    ]);
+
+    const routes = await resolveAiModelRoutesForTask(client, {
+      provider: 'google',
+      taskType: 'listing_draft_generation',
+    });
+
+    expect(routes).toEqual([]);
+  });
+
   it('excludes models without structured-output support when requireStructuredOutput is true', async () => {
     const client = createAiModelRouteResolverClient([
       createJoinedRouteRow({
@@ -258,6 +309,27 @@ describe('ai model routes repository', () => {
     const routes = await resolveAiModelRoutesForTask(client, {
       provider: 'google',
       requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+
+    expect(routes).toEqual([]);
+  });
+
+  it('excludes route-required structured-output models without structured support even when caller does not require structured output', async () => {
+    const client = createAiModelRouteResolverClient([
+      createJoinedRouteRow({
+        catalog: {
+          ...baseCatalogRow,
+          supports_structured_output: false,
+        },
+        require_images: false,
+        require_json_output: false,
+        require_structured_output: true,
+      }),
+    ]);
+
+    const routes = await resolveAiModelRoutesForTask(client, {
+      provider: 'google',
       taskType: 'listing_draft_generation',
     });
 

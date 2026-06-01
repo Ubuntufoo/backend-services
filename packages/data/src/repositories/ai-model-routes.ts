@@ -65,6 +65,9 @@ interface JoinedRouteRow
     | 'is_enabled'
     | 'model_name'
     | 'provider'
+    | 'require_images'
+    | 'require_json_output'
+    | 'require_structured_output'
     | 'route_order'
     | 'task_type'
   > {
@@ -85,6 +88,18 @@ function matchesRequirements(
   input: ResolveAiModelRoutesInput
 ): boolean {
   if (!row.is_enabled || !catalog.is_enabled) {
+    return false;
+  }
+
+  if (row.require_images && !catalog.supports_images) {
+    return false;
+  }
+
+  if (row.require_json_output && !catalog.supports_json_output) {
+    return false;
+  }
+
+  if (row.require_structured_output && !catalog.supports_structured_output) {
     return false;
   }
 
@@ -136,7 +151,7 @@ export async function resolveAiModelRoutesForTask(
   let query = client
     .from('ai_model_task_routes')
     .select(
-      `task_type, provider, model_name, route_order, is_enabled, fallback_on_rate_limit, fallback_on_quota_exceeded, fallback_on_unavailable, catalog:ai_model_catalog!inner(display_name, free_tier_status, is_enabled, is_free_tier_eligible, supports_text, supports_images, supports_json_output, supports_structured_output)`
+      `task_type, provider, model_name, route_order, is_enabled, require_images, require_json_output, require_structured_output, fallback_on_rate_limit, fallback_on_quota_exceeded, fallback_on_unavailable, catalog:ai_model_catalog!inner(display_name, free_tier_status, is_enabled, is_free_tier_eligible, supports_text, supports_images, supports_json_output, supports_structured_output)`
     )
     .eq('task_type', input.taskType)
     .eq('is_enabled', true);
