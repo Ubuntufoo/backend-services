@@ -8,6 +8,8 @@ import type {
 
 const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
 const createAiModelAttemptMock = vi.fn();
+const resolveAiModelRoutesForTaskMock = vi.fn();
+const resolvePrimaryAiModelRouteForTaskMock = vi.fn();
 const listListingsMock = vi.fn();
 const listListingsByStatusMock = vi.fn();
 const listApprovedForExportListingsMock = vi.fn();
@@ -54,6 +56,8 @@ const updateAppSettingsMock = vi.fn();
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
   createAiModelAttempt: createAiModelAttemptMock,
+  resolveAiModelRoutesForTask: resolveAiModelRoutesForTaskMock,
+  resolvePrimaryAiModelRouteForTask: resolvePrimaryAiModelRouteForTaskMock,
   claimApprovedListingForPublish: claimApprovedListingForPublishMock,
   claimDueQueuedJob: claimDueQueuedJobMock,
   completeJob: completeJobMock,
@@ -128,6 +132,20 @@ describe('sidecar data access', () => {
     await dataAccess.listings.getByListingId('LIST-001');
     await dataAccess.listings.getByOfferId('OFFER-001');
     await dataAccess.aiModelAttempts.listByListingIds?.(['LIST-001', 'LIST-002']);
+    await dataAccess.aiModelRoutes.resolveForTask({
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+    await dataAccess.aiModelRoutes.resolvePrimaryForTask({
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
 
     expect(createSupabaseServiceClientMock).toHaveBeenCalledWith(env);
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -147,6 +165,20 @@ describe('sidecar data access', () => {
       'LIST-001',
       'LIST-002',
     ]);
+    expect(resolveAiModelRoutesForTaskMock).toHaveBeenCalledWith(client, {
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+    expect(resolvePrimaryAiModelRouteForTaskMock).toHaveBeenCalledWith(client, {
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
   });
 
   it('delegates create, update, workflow, and app-settings calls to shared repository helpers', async () => {

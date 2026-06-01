@@ -5,6 +5,12 @@ export type {
   AiModelAttemptInsert,
   AiModelAttemptRow,
   AiModelAttemptUpdate,
+  AiModelCatalogInsert,
+  AiModelCatalogRow,
+  AiModelCatalogUpdate,
+  AiModelTaskRouteInsert,
+  AiModelTaskRouteRow,
+  AiModelTaskRouteUpdate,
   Database,
   DailyUsageInsert,
   DailyUsageRow,
@@ -24,6 +30,13 @@ export type {
   TableRow,
   TableUpdate,
 } from './database.js';
+export {
+  AiModelRouteNotFoundError,
+  resolveAiModelRoutesForTask,
+  resolvePrimaryAiModelRouteForTask,
+  type ResolveAiModelRoutesInput,
+  type ResolvedAiModelRoute,
+} from './repositories/ai-model-routes.js';
 export {
   createAiModelAttempt,
   listAiModelAttemptsForListing,

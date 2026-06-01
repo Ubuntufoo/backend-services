@@ -9,7 +9,6 @@ import type {
 import {
   aspectValueSchema,
   generateListingDraft,
-  getConfiguredGeminiModelName,
   resolveTradingCardListingIds,
   type GenerateListingDraftInput,
 } from '@/gemini/index.js';
@@ -43,10 +42,12 @@ const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
+const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
 const jobLogger = createLogger('Job');
 
 type GenerateListingDraftFn = (
-  input: GenerateListingDraftInput
+  input: GenerateListingDraftInput,
+  options: { model: string }
 ) => ReturnType<typeof generateListingDraft>;
 type PublishListingFn = (
   listingId: string,
@@ -482,27 +483,40 @@ async function runGenerateAiJob(
   }
 
   let generationStarted = false;
-  const modelName = getConfiguredGeminiModelName();
-  const startedAt = asIsoTimestamp(options.now);
+  let modelName = '';
+  let startedAt = '';
   const aiAttemptContext = {
     jobId: job.id,
     listingId,
-    modelName,
+    get modelName() {
+      return modelName;
+    },
   };
-  const startedAttempt: GeminiModelAttempt = {
-    attempt_order: 1,
-    completed_at: null,
-    duration_ms: null,
-    failure_code: null,
-    failure_message: null,
-    model_name: modelName,
-    started_at: startedAt,
-    status: 'started',
-  };
+  let startedAttempt: GeminiModelAttempt | null = null;
   let aiModelAttempt: AiModelAttemptRow | null = null;
   let providerAttemptStarted = false;
 
   try {
+    const resolvedRoute = await options.dataAccess.aiModelRoutes.resolvePrimaryForTask({
+      freeTierOnly: true,
+      provider: AI_PROVIDER_GOOGLE,
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: LISTING_DRAFT_ROUTE_TASK_TYPE,
+    });
+    modelName = resolvedRoute.modelName;
+    startedAt = asIsoTimestamp(options.now);
+    startedAttempt = {
+      attempt_order: 1,
+      completed_at: null,
+      duration_ms: null,
+      failure_code: null,
+      failure_message: null,
+      model_name: modelName,
+      started_at: startedAt,
+      status: 'started',
+    };
     await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
     providerAttemptStarted = true;
     const persistedLegacyStartedAttempt = await persistGeminiAttemptAudit(
@@ -539,11 +553,14 @@ async function runGenerateAiJob(
       );
     }
 
-    const draft = await options.generateListingDraft({
-      imageUrls,
-      listingId,
-      userHints: buildUserHints(listing),
-    });
+    const draft = await options.generateListingDraft(
+      {
+        imageUrls,
+        listingId,
+        userHints: buildUserHints(listing),
+      },
+      { model: modelName }
+    );
 
     const reviewListing = await options.dataAccess.listings.update(
       listingId,
@@ -599,7 +616,7 @@ async function runGenerateAiJob(
       );
     }
 
-    if (providerAttemptStarted) {
+    if (providerAttemptStarted && startedAttempt) {
       await persistGeminiAttemptAudit(
         options.dataAccess,
         job.id,

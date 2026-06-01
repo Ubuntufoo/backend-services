@@ -6,18 +6,12 @@ loadRootEnvironment();
 
 const geminiDraftEnvSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().optional(),
 });
 
 export const DEFAULT_GEMINI_DRAFT_MODEL = 'gemini-3.1-flash-lite';
 
 export interface GeminiDraftConfig {
   apiKey?: string;
-  model: string;
-}
-
-export function getConfiguredGeminiModelName(env: NodeJS.ProcessEnv = process.env): string {
-  return loadGeminiDraftConfig(env).model;
 }
 
 export function loadGeminiDraftConfig(env: NodeJS.ProcessEnv = process.env): GeminiDraftConfig {
@@ -28,10 +22,8 @@ export function loadGeminiDraftConfig(env: NodeJS.ProcessEnv = process.env): Gem
   });
 
   const apiKey = loaded.GEMINI_API_KEY?.trim();
-  const model = loaded.GEMINI_MODEL?.trim();
 
   return {
     apiKey: apiKey && apiKey.length > 0 ? apiKey : undefined,
-    model: model && model.length > 0 ? model : DEFAULT_GEMINI_DRAFT_MODEL,
   };
 }

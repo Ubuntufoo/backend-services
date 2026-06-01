@@ -3,7 +3,7 @@ import { DEFAULT_GEMINI_DRAFT_MODEL } from '@/gemini/config.js';
 import {
   GeminiDraftServiceError,
   GeminiDraftValidationError,
-  generateListingDraft,
+  generateListingDraft as generateListingDraftImpl,
 } from '@/gemini/index.js';
 
 const generateDraftRawMock = vi.hoisted(() => vi.fn());
@@ -17,6 +17,14 @@ function setGeminiResponse(text: string, rawResponse: unknown = { text }): void 
   generateDraftRawMock.mockResolvedValue({
     text,
     rawResponse,
+  });
+}
+
+async function generateListingDraft(
+  input: Parameters<typeof generateListingDraftImpl>[0]
+): Promise<Awaited<ReturnType<typeof generateListingDraftImpl>>> {
+  return await generateListingDraftImpl(input, {
+    model: DEFAULT_GEMINI_DRAFT_MODEL,
   });
 }
 
@@ -541,13 +549,14 @@ describe('generateListingDraft', () => {
     ).rejects.toThrow('not an object');
   });
 
-  it('uses a configured Gemini model when GEMINI_MODEL is set', async () => {
-    process.env.GEMINI_MODEL = 'gemini-3-pro-preview';
-
-    await generateListingDraft({
-      listingId: 'LIST-011',
-      imageUrls: ['https://cdn.example.com/listing.jpg'],
-    });
+  it('uses the provided Gemini model option', async () => {
+    await generateListingDraftImpl(
+      {
+        listingId: 'LIST-011',
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      },
+      { model: 'gemini-3-pro-preview' }
+    );
 
     expect(generateDraftRawMock).toHaveBeenCalledWith(
       expect.objectContaining({

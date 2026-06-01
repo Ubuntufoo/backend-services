@@ -1,4 +1,5 @@
 import {
+  AiModelRouteNotFoundError,
   DailyUsageLimitExceededError,
   type JobRow,
   type Json,
@@ -16,6 +17,7 @@ export type JobErrorCategory = 'recoverable' | 'terminal' | 'user_fixable';
 
 export const JOB_ERROR_CODES = {
   DAILY_GEMINI_LIMIT_EXCEEDED: 'DAILY_GEMINI_LIMIT_EXCEEDED',
+  AI_MODEL_ROUTE_NOT_CONFIGURED: 'AI_MODEL_ROUTE_NOT_CONFIGURED',
   DAILY_ORDER_SYNC_LIMIT_EXCEEDED: 'DAILY_ORDER_SYNC_LIMIT_EXCEEDED',
   DUPLICATE_ACTIVE_JOB: 'duplicate_active_job',
   LISTING_NOT_FOUND: 'listing_not_found',
@@ -125,6 +127,7 @@ function isKnownJobErrorCode(code: string): code is JobErrorCode {
 function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCategory {
   switch (code) {
     case JOB_ERROR_CODES.DAILY_GEMINI_LIMIT_EXCEEDED:
+    case JOB_ERROR_CODES.AI_MODEL_ROUTE_NOT_CONFIGURED:
     case JOB_ERROR_CODES.DAILY_ORDER_SYNC_LIMIT_EXCEEDED:
     case JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB:
     case JOB_ERROR_CODES.GENERATE_AI_FAILED:
@@ -348,6 +351,24 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
   }
 
   if (jobType === 'generate_ai') {
+    if (error instanceof AiModelRouteNotFoundError) {
+      return new SidecarJobError(
+        JOB_ERROR_CODES.AI_MODEL_ROUTE_NOT_CONFIGURED,
+        'recoverable',
+        error.message,
+        {
+          ...buildBaseContext(error),
+          free_tier_only: error.context.freeTierOnly ?? false,
+          provider: error.context.provider ?? null,
+          require_images: error.context.requireImages ?? false,
+          require_json_output: error.context.requireJsonOutput ?? false,
+          require_structured_output: error.context.requireStructuredOutput ?? false,
+          task_type: error.context.taskType,
+        },
+        { cause: error }
+      );
+    }
+
     if (error instanceof DailyUsageLimitExceededError) {
       return createDailyUsageGuardrailError(error);
     }

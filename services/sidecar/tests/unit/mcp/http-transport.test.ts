@@ -61,6 +61,12 @@ const emptyAiAttemptSummary = {
 
 function createDataAccess(): SidecarDataAccess {
   return {
+    aiModelRoutes: {
+      resolveForTask: async () => [],
+      resolvePrimaryForTask: async () => {
+        throw new Error('not implemented');
+      },
+    },
     aiModelAttempts: {
       create: async () => {
         throw new Error('not implemented');

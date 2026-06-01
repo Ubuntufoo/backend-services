@@ -110,6 +110,10 @@ function createDataAccess(
   });
 
   const dataAccess: SidecarDataAccess = {
+    aiModelRoutes: {
+      resolveForTask: vi.fn(async () => []),
+      resolvePrimaryForTask: vi.fn(),
+    },
     aiModelAttempts: {
       create: vi.fn(),
       listByListingId: vi.fn(),
