@@ -125,6 +125,9 @@ set
   supports_structured_output = excluded.supports_structured_output,
   notes = excluded.notes;
 
+-- Keep the seeded route_order stable during idempotent re-runs.
+-- Reordering routes should happen through explicit route-shift SQL to avoid
+-- colliding with the unique (task_type, route_order) constraint.
 insert into public.ai_model_task_routes (
   task_type,
   provider,
@@ -155,7 +158,6 @@ values (
 )
 on conflict (task_type, provider, model_name) do update
 set
-  route_order = excluded.route_order,
   is_enabled = excluded.is_enabled,
   require_images = excluded.require_images,
   require_json_output = excluded.require_json_output,
