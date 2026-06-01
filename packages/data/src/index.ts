@@ -76,11 +76,16 @@ export {
   DailyUsageLimitExceededError,
   getEffectiveGeminiDailyLimit,
   getEffectiveOrderSyncDailyLimit,
+  getGeminiDailyUsageSummary,
   getOrCreateDailyUsage,
+  GEMINI_USAGE_TIME_ZONE,
   incrementGeminiCallsUsed,
   incrementOrderSyncCount,
+  resolveGeminiDailyUsageWindow,
   type DailyUsageIncrementResult,
   type DailyUsageLimitResolution,
+  type GeminiDailyUsageSummary,
+  type GeminiDailyUsageWindow,
 } from './repositories/daily-usage.js';
 export {
   claimDueQueuedJob,

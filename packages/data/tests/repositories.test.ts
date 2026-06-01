@@ -24,6 +24,7 @@ import {
   enqueuePublishJob,
   failJob,
   getEffectiveGeminiDailyLimit,
+  getGeminiDailyUsageSummary,
   getEffectiveOrderSyncDailyLimit,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
@@ -49,6 +50,7 @@ import {
   markListingPublishFailed,
   resetJobForManualRetry,
   requeueJob,
+  resolveGeminiDailyUsageWindow,
   saveListingArtifacts,
   saveListingImageMetadata,
   saveGeneratedListingFields,
@@ -194,6 +196,18 @@ const dailyUsageRow: DailyUsageRow = {
   gemini_daily_limit: 500,
   order_sync_count: 0,
   usage_date: '2026-05-31',
+};
+
+type GeminiRouteCapacityTestRow = {
+  catalog:
+    | {
+        free_tier_daily_request_limit: number | null;
+        is_enabled: boolean;
+        is_free_tier_eligible: boolean;
+      }
+    | null;
+  is_enabled: boolean;
+  model_name: string;
 };
 
 function createInsertClient<TTable extends string, TRow>(
@@ -662,6 +676,7 @@ function createDailyUsageClient({
   appSettings = appSettingsRow,
   dailyUsage = dailyUsageRow,
   insertedDailyUsage = dailyUsage ?? dailyUsageRow,
+  routeCapacityRows = [],
   updateResult,
   onDailyUsageInsert,
   onDailyUsageUpdate,
@@ -669,12 +684,47 @@ function createDailyUsageClient({
   appSettings?: AppSettingsRow | null;
   dailyUsage?: DailyUsageRow | null;
   insertedDailyUsage?: DailyUsageRow;
+  routeCapacityRows?: GeminiRouteCapacityTestRow[];
   updateResult?: DailyUsageRow | null;
   onDailyUsageInsert?: (payload: unknown) => void;
   onDailyUsageUpdate?: (payload: unknown) => void;
 }): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
+      if (name === 'ai_model_task_routes') {
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toContain('catalog:ai_model_catalog!inner');
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string | boolean) => {
+                expect(firstColumn).toBe('task_type');
+                expect(firstValue).toBe('listing_draft_generation');
+
+                return {
+                  eq: vi.fn((secondColumn: string, secondValue: string | boolean) => {
+                    expect(secondColumn).toBe('provider');
+                    expect(secondValue).toBe('google');
+
+                    return {
+                      eq: vi.fn((thirdColumn: string, thirdValue: string | boolean) => {
+                        expect(thirdColumn).toBe('is_enabled');
+                        expect(thirdValue).toBe(true);
+
+                        return {
+                          data: routeCapacityRows,
+                          error: null,
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      }
+
       if (name === 'app_settings') {
         return {
           select: vi.fn((columns: string) => {
@@ -2823,7 +2873,7 @@ describe('shared repositories', () => {
     });
   });
 
-  it('falls back Gemini limit to daily usage row then default', async () => {
+  it('falls back Gemini limit to daily usage row, route capacity, then default', async () => {
     const dailyUsageLimitClient = createDailyUsageClient({
       appSettings: {
         ...appSettingsRow,
@@ -2841,6 +2891,64 @@ describe('shared repositories', () => {
       usage: {
         ...dailyUsageRow,
         gemini_daily_limit: 610,
+      },
+    });
+
+    const routeCapacityClient = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: null,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_daily_limit: 0,
+      },
+      routeCapacityRows: [
+        {
+          catalog: {
+            free_tier_daily_request_limit: 20,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'gemini-3.5-flash',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 20,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'gemini-3-flash-preview',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 500,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'gemini-3.1-flash-lite',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 999,
+            is_enabled: false,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'ignored-disabled-catalog',
+        },
+      ],
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(routeCapacityClient, '2026-05-31')).resolves.toEqual({
+      effectiveLimit: 540,
+      source: 'route_capacity',
+      usage: {
+        ...dailyUsageRow,
+        gemini_daily_limit: 0,
       },
     });
 
@@ -2863,6 +2971,160 @@ describe('shared repositories', () => {
         gemini_daily_limit: 0,
       },
     });
+  });
+
+  it('builds Gemini Pacific usage windows for standard, daylight, and DST-adjacent dates', () => {
+    expect(resolveGeminiDailyUsageWindow(new Date('2026-01-15T12:00:00.000Z'))).toEqual({
+      resetAt: '2026-01-16T08:00:00.000Z',
+      resetTimeZone: 'America/Los_Angeles',
+      usageDate: '2026-01-15',
+    });
+
+    expect(resolveGeminiDailyUsageWindow(new Date('2026-07-15T12:00:00.000Z'))).toEqual({
+      resetAt: '2026-07-16T07:00:00.000Z',
+      resetTimeZone: 'America/Los_Angeles',
+      usageDate: '2026-07-15',
+    });
+
+    expect(resolveGeminiDailyUsageWindow(new Date('2026-03-08T09:30:00.000Z'))).toEqual({
+      resetAt: '2026-03-09T07:00:00.000Z',
+      resetTimeZone: 'America/Los_Angeles',
+      usageDate: '2026-03-08',
+    });
+  });
+
+  it('summarizes Gemini usage with Pacific usage date, clamped remaining, and reset time', async () => {
+    const client = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: 500,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_calls_used: 21,
+        usage_date: '2026-07-15',
+      },
+    });
+
+    await expect(
+      getGeminiDailyUsageSummary(client, new Date('2026-07-15T12:00:00.000Z'))
+    ).resolves.toEqual({
+      effectiveLimit: 500,
+      remaining: 479,
+      resetAt: '2026-07-16T07:00:00.000Z',
+      resetTimeZone: 'America/Los_Angeles',
+      usageDate: '2026-07-15',
+      used: 21,
+    });
+  });
+
+  it('summarizes Gemini usage with aggregated free-tier route capacity of 540', async () => {
+    const client = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: null,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_calls_used: 21,
+        gemini_daily_limit: 0,
+        usage_date: '2026-07-15',
+      },
+      routeCapacityRows: [
+        {
+          catalog: {
+            free_tier_daily_request_limit: 20,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'gemini-3.5-flash',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 20,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'gemini-3-flash-preview',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 500,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          is_enabled: true,
+          model_name: 'gemini-3.1-flash-lite',
+        },
+      ],
+    });
+
+    await expect(
+      getGeminiDailyUsageSummary(client, new Date('2026-07-15T12:00:00.000Z'))
+    ).resolves.toEqual({
+      effectiveLimit: 540,
+      remaining: 519,
+      resetAt: '2026-07-16T07:00:00.000Z',
+      resetTimeZone: 'America/Los_Angeles',
+      usageDate: '2026-07-15',
+      used: 21,
+    });
+  });
+
+  it('uses Pacific usage date when Gemini limit and increment default date arguments are omitted', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-15T06:30:00.000Z'));
+
+    try {
+      const limitClient = createDailyUsageClient({
+        dailyUsage: {
+          ...dailyUsageRow,
+          usage_date: '2026-07-14',
+        },
+      });
+
+      await expect(getEffectiveGeminiDailyLimit(limitClient)).resolves.toEqual({
+        effectiveLimit: 500,
+        source: 'app_settings',
+        usage: {
+          ...dailyUsageRow,
+          usage_date: '2026-07-14',
+        },
+      });
+
+      const incrementClient = createDailyUsageClient({
+        dailyUsage: {
+          ...dailyUsageRow,
+          gemini_calls_used: 2,
+          usage_date: '2026-07-14',
+        },
+        updateResult: {
+          ...dailyUsageRow,
+          gemini_calls_used: 3,
+          usage_date: '2026-07-14',
+        },
+      });
+
+      await expect(incrementGeminiCallsUsed(incrementClient)).resolves.toEqual({
+        effectiveLimit: 500,
+        resource: 'gemini',
+        source: 'app_settings',
+        updatedUsage: {
+          ...dailyUsageRow,
+          gemini_calls_used: 3,
+          usage_date: '2026-07-14',
+        },
+        usage: {
+          ...dailyUsageRow,
+          gemini_calls_used: 2,
+          usage_date: '2026-07-14',
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('resolves order sync limit from app settings then default constant', async () => {
@@ -2946,6 +3208,31 @@ describe('shared repositories', () => {
         used: 4,
       })
     );
+  });
+
+  it('clamps Gemini remaining calls at zero when usage exceeds effective limit', async () => {
+    const client = createDailyUsageClient({
+      appSettings: {
+        ...appSettingsRow,
+        gemini_daily_limit: 500,
+      },
+      dailyUsage: {
+        ...dailyUsageRow,
+        gemini_calls_used: 650,
+        usage_date: '2026-05-31',
+      },
+    });
+
+    await expect(
+      getGeminiDailyUsageSummary(client, new Date('2026-06-01T06:00:00.000Z'))
+    ).resolves.toEqual({
+      effectiveLimit: 500,
+      remaining: 0,
+      resetAt: '2026-06-01T07:00:00.000Z',
+      resetTimeZone: 'America/Los_Angeles',
+      usageDate: '2026-05-31',
+      used: 650,
+    });
   });
 
   it('increments order sync usage when under limit and blocks once exhausted', async () => {

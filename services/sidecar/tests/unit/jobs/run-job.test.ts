@@ -291,6 +291,14 @@ function createDataAccess({
           usage_date: '2026-05-20',
         },
       })),
+      getGeminiSummary: vi.fn(async () => ({
+        effectiveLimit: 500,
+        remaining: 500,
+        resetAt: '2026-05-21T07:00:00.000Z',
+        resetTimeZone: 'America/Los_Angeles' as const,
+        usageDate: '2026-05-20',
+        used: 0,
+      })),
       getOrCreate: vi.fn(async () => ({
         gemini_calls_used: 0,
         gemini_daily_limit: 500,

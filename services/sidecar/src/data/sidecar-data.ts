@@ -20,6 +20,7 @@ import {
   failJob,
   getEffectiveGeminiDailyLimit,
   getEffectiveOrderSyncDailyLimit,
+  getGeminiDailyUsageSummary,
   createSupabaseServiceClient,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
@@ -57,6 +58,7 @@ import {
   type CreateAiModelAttemptInput,
   type DailyUsageIncrementResult,
   type DailyUsageLimitResolution,
+  type GeminiDailyUsageSummary,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
   type EnqueuePublishJobResult,
@@ -100,6 +102,7 @@ export interface SidecarDataAccess {
   dailyUsage: {
     getEffectiveGeminiLimit(usageDate?: string): Promise<DailyUsageLimitResolution>;
     getEffectiveOrderSyncLimit(usageDate?: string): Promise<DailyUsageLimitResolution>;
+    getGeminiSummary(now?: Date): Promise<GeminiDailyUsageSummary>;
     getOrCreate(usageDate?: string): Promise<DailyUsageLimitResolution['usage']>;
     incrementGeminiCallsUsed(usageDate?: string): Promise<DailyUsageIncrementResult>;
     incrementOrderSyncCount(usageDate?: string): Promise<DailyUsageIncrementResult>;
@@ -170,6 +173,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
         await getEffectiveGeminiDailyLimit(client, usageDate),
       getEffectiveOrderSyncLimit: async (usageDate) =>
         await getEffectiveOrderSyncDailyLimit(client, usageDate),
+      getGeminiSummary: async (now) => await getGeminiDailyUsageSummary(client, now),
       getOrCreate: async (usageDate) => await getOrCreateDailyUsage(client, usageDate),
       incrementGeminiCallsUsed: async (usageDate) =>
         await incrementGeminiCallsUsed(client, usageDate),

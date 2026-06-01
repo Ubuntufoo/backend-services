@@ -49,16 +49,6 @@ const listingRow = {
   updated_at: '2026-05-17T00:00:00.000Z',
 };
 
-const emptyAiAttemptSummary = {
-  attempt_count: 0,
-  latest_failure_code: null,
-  latest_finished_at: null,
-  latest_model_name: null,
-  latest_provider: null,
-  latest_started_at: null,
-  latest_status: null,
-};
-
 function createDataAccess(): SidecarDataAccess {
   return {
     aiModelRoutes: {
@@ -87,6 +77,14 @@ function createDataAccess(): SidecarDataAccess {
       getEffectiveOrderSyncLimit: async () => {
         throw new Error('not implemented');
       },
+      getGeminiSummary: async () => ({
+        effectiveLimit: 500,
+        remaining: 479,
+        resetAt: '2026-06-02T07:00:00.000Z',
+        resetTimeZone: 'America/Los_Angeles',
+        usageDate: '2026-06-01',
+        used: 21,
+      }),
       getOrCreate: async () => {
         throw new Error('not implemented');
       },
@@ -281,12 +279,7 @@ describe('HTTP MCP transport', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      listings: [
-        {
-          ...listingRow,
-          ai_attempt_summary: emptyAiAttemptSummary,
-        },
-      ],
+      listings: [listingRow],
     });
   });
 
