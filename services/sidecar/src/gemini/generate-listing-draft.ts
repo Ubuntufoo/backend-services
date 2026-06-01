@@ -25,6 +25,11 @@ export interface GenerateListingDraftOptions {
   model: string;
 }
 
+export interface PreparedGenerateListingDraft {
+  input: GenerateListingDraftInput;
+  execute(options: GenerateListingDraftOptions): Promise<GeneratedListingDraft>;
+}
+
 function summarizeGeminiError(error: unknown): string {
   if (error instanceof GeminiDraftServiceError) {
     return error.message;
@@ -41,42 +46,77 @@ function summarizeGeminiError(error: unknown): string {
   return 'Unknown Gemini draft generation error.';
 }
 
+function wrapGeminiDraftPreflightError(listingId: string, error: unknown): GeminiDraftServiceError {
+  if (error instanceof GeminiDraftServiceError) {
+    return error;
+  }
+
+  return new GeminiDraftServiceError(
+    `Gemini draft preflight failed for listing "${listingId}": ${summarizeGeminiError(error)}`,
+    { cause: error instanceof Error ? error : undefined }
+  );
+}
+
+function wrapGeminiDraftProviderExecutionError(
+  listingId: string,
+  error: unknown
+): GeminiDraftServiceError {
+  if (error instanceof GeminiDraftServiceError) {
+    return error;
+  }
+
+  return new GeminiDraftServiceError(
+    `Gemini draft generation failed for listing "${listingId}": ${summarizeGeminiError(error)}`,
+    { cause: error instanceof Error ? error : undefined }
+  );
+}
+
+export function prepareGenerateListingDraft(
+  input: GenerateListingDraftInput
+): Promise<PreparedGenerateListingDraft> {
+  return Promise.resolve().then(async () => {
+    const validatedInput = validateGenerateListingDraftInput(input);
+    const config = loadGeminiDraftConfig();
+
+    try {
+      if (!config.apiKey) {
+        throw new GeminiDraftServiceError(
+          'GEMINI_API_KEY is required to generate Gemini listing drafts.'
+        );
+      }
+
+      const client = getGeminiDraftClient(config.apiKey);
+      const prompt = buildGenerateListingDraftPrompt(validatedInput);
+      const imageParts = await client.prepareImageParts(validatedInput.imageUrls);
+
+      return {
+        input: validatedInput,
+        execute: async (options) => {
+          try {
+            const rawDraft = await client.generateDraftRaw({
+              imageParts,
+              model: options.model,
+              prompt,
+            });
+
+            return parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse);
+          } catch (error) {
+            throw wrapGeminiDraftProviderExecutionError(validatedInput.listingId, error);
+          }
+        },
+      };
+    } catch (error) {
+      throw wrapGeminiDraftPreflightError(validatedInput.listingId, error);
+    }
+  });
+}
+
 export function generateListingDraft(
   input: GenerateListingDraftInput,
   options: GenerateListingDraftOptions
 ): Promise<GeneratedListingDraft> {
   return Promise.resolve().then(async () => {
-    const validatedInput = validateGenerateListingDraftInput(input);
-    const config = loadGeminiDraftConfig();
-
-    if (!config.apiKey) {
-      throw new GeminiDraftServiceError(
-        'GEMINI_API_KEY is required to generate Gemini listing drafts.'
-      );
-    }
-
-    const client = getGeminiDraftClient(config.apiKey);
-    const prompt = buildGenerateListingDraftPrompt(validatedInput);
-
-    try {
-      const rawDraft = await client.generateDraftRaw({
-        model: options.model,
-        listingId: validatedInput.listingId,
-        imageUrls: validatedInput.imageUrls,
-        userHints: validatedInput.userHints,
-        prompt,
-      });
-
-      return parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse);
-    } catch (error) {
-      if (error instanceof GeminiDraftServiceError) {
-        throw error;
-      }
-
-      throw new GeminiDraftServiceError(
-        `Gemini draft generation failed for listing "${validatedInput.listingId}": ${summarizeGeminiError(error)}`,
-        { cause: error }
-      );
-    }
+    const preparedDraft = await prepareGenerateListingDraft(input);
+    return await preparedDraft.execute(options);
   });
 }

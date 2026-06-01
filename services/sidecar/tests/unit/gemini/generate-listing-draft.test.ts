@@ -8,6 +8,7 @@ import {
 
 const generateDraftRawMock = vi.hoisted(() => vi.fn());
 const getGeminiDraftClientMock = vi.hoisted(() => vi.fn());
+const prepareImagePartsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/gemini/client.js', () => ({
   getGeminiDraftClient: getGeminiDraftClientMock,
@@ -39,8 +40,11 @@ describe('generateListingDraft', () => {
 
     generateDraftRawMock.mockReset();
     getGeminiDraftClientMock.mockReset();
+    prepareImagePartsMock.mockReset();
+    prepareImagePartsMock.mockResolvedValue([{ inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }]);
     getGeminiDraftClientMock.mockReturnValue({
       generateDraftRaw: generateDraftRawMock,
+      prepareImageParts: prepareImagePartsMock,
     });
 
     setGeminiResponse(
@@ -136,6 +140,21 @@ describe('generateListingDraft', () => {
     expect(generateDraftRawMock).not.toHaveBeenCalled();
   });
 
+  it('labels image preparation failures as preflight failures', async () => {
+    prepareImagePartsMock.mockRejectedValueOnce(new Error('image fetch timed out'));
+
+    await expect(
+      generateListingDraft({
+        listingId: 'LIST-001',
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      })
+    ).rejects.toThrow(
+      'Gemini draft preflight failed for listing "LIST-001": image fetch timed out'
+    );
+
+    expect(generateDraftRawMock).not.toHaveBeenCalled();
+  });
+
   it('parses a valid raw JSON response into GeneratedListingDraft', async () => {
     const rawResponse = {
       text: '{"title":"1986 Fleer Michael Jordan RC"}',
@@ -187,24 +206,14 @@ describe('generateListingDraft', () => {
     });
 
     expect(getGeminiDraftClientMock).toHaveBeenCalledWith('gemini-api-key');
+    expect(prepareImagePartsMock).toHaveBeenCalledWith([
+      'https://cdn.example.com/front.jpg',
+      'https://cdn.example.com/back.png',
+    ]);
     expect(generateDraftRawMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        imageParts: [{ inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }],
         model: DEFAULT_GEMINI_DRAFT_MODEL,
-        listingId: 'LIST-001',
-        imageUrls: [
-          'https://cdn.example.com/front.jpg',
-          'https://cdn.example.com/back.png',
-        ],
-        userHints: {
-          title: 'Jordan rookie maybe',
-          notes: 'Check centering and corners',
-          category: 'Sports Trading Cards',
-          aspects: {
-            Athlete: 'Michael Jordan',
-            Features: ['Rookie Card'],
-          },
-          price: 4999.99,
-        },
       })
     );
 

@@ -1,16 +1,22 @@
-import type {
-  AiModelAttemptRow,
-  GeminiJobAttemptAuditUpdate,
-  GeminiModelAttempt,
-  JobRow,
-  ListingRow,
-  ListingUpdate,
+import {
+  AiModelRouteNotFoundError,
+  type AiModelAttemptRow,
+  type GeminiJobAttemptAuditUpdate,
+  type GeminiModelAttempt,
+  type JobRow,
+  type ListingRow,
+  type ListingUpdate,
+  type ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
 import {
   aspectValueSchema,
   generateListingDraft,
+  generateListingDraftWithFallback,
+  GeminiFallbackExecutionError,
+  prepareGenerateListingDraft,
   resolveTradingCardListingIds,
   type GenerateListingDraftInput,
+  type PreparedGenerateListingDraft,
 } from '@/gemini/index.js';
 import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -49,6 +55,9 @@ type GenerateListingDraftFn = (
   input: GenerateListingDraftInput,
   options: { model: string }
 ) => ReturnType<typeof generateListingDraft>;
+type PrepareListingDraftFn = (
+  input: GenerateListingDraftInput
+) => Promise<PreparedGenerateListingDraft>;
 type PublishListingFn = (
   listingId: string,
   dependencies?: Partial<PublishListingDependencies>
@@ -61,6 +70,7 @@ export interface RunSidecarJobOptions {
   dataAccess?: SidecarDataAccess;
   generateListingDraft?: GenerateListingDraftFn;
   now?: () => Date;
+  prepareListingDraft?: PrepareListingDraftFn;
   publishListing?: PublishListingFn;
   prepareRecordCreatedListings?: PrepareRecordCreatedListingsFn;
 }
@@ -243,6 +253,49 @@ function summarizeGeminiAttemptFailureMessage(message: string): string {
   return `${normalized.slice(0, 237)}...`;
 }
 
+function buildListingDraftRouteResolutionInput(): {
+  freeTierOnly: true;
+  provider: typeof AI_PROVIDER_GOOGLE;
+  requireImages: true;
+  requireJsonOutput: true;
+  requireStructuredOutput: true;
+  taskType: typeof LISTING_DRAFT_ROUTE_TASK_TYPE;
+} {
+  return {
+    freeTierOnly: true,
+    provider: AI_PROVIDER_GOOGLE,
+    requireImages: true,
+    requireJsonOutput: true,
+    requireStructuredOutput: true,
+    taskType: LISTING_DRAFT_ROUTE_TASK_TYPE,
+  };
+}
+
+function createListingDraftRouteNotFoundError(): AiModelRouteNotFoundError {
+  return new AiModelRouteNotFoundError(buildListingDraftRouteResolutionInput());
+}
+
+function enrichGeminiJobError(
+  error: SidecarJobError,
+  routerError: GeminiFallbackExecutionError<ResolvedAiModelRoute>
+): SidecarJobError {
+  return new SidecarJobError(
+    error.code,
+    error.category,
+    error.message,
+    {
+      ...error.context,
+      attempt_count: routerError.attempts.length,
+      attempted_models: routerError.attemptedModels,
+      fallback_exhausted: routerError.fallbackExhausted,
+      final_failure_code: error.code,
+      final_fallback_kind: routerError.finalFallbackKind,
+      final_failure_message: error.message,
+    },
+    { cause: error }
+  );
+}
+
 async function persistGeminiAttemptAudit(
   dataAccess: SidecarDataAccess,
   jobId: string,
@@ -346,6 +399,15 @@ async function markAiModelAttemptRecordFailed(
   }
 }
 
+function createPreparedListingDraftFromGenerateFn(
+  generateDraft: GenerateListingDraftFn
+): PrepareListingDraftFn {
+  return async (input) => ({
+    input,
+    execute: async (options) => await generateDraft(input, options),
+  });
+}
+
 async function ensureJobRunning(
   dataAccess: SidecarDataAccess,
   job: JobRow,
@@ -401,7 +463,9 @@ async function hasOtherPublishJobsForListing(
 
 async function runGenerateAiJob(
   job: JobRow,
-  options: Required<Pick<RunSidecarJobOptions, 'dataAccess' | 'generateListingDraft' | 'now'>>
+  options: Required<
+    Pick<RunSidecarJobOptions, 'dataAccess' | 'generateListingDraft' | 'now' | 'prepareListingDraft'>
+  >
 ): Promise<RunSidecarJobResult> {
   const listingId = asNonEmptyString(job.listing_id);
   const errorAt = asIsoTimestamp(options.now);
@@ -482,115 +546,186 @@ async function runGenerateAiJob(
     };
   }
 
-  let generationStarted = false;
-  let modelName = '';
-  let startedAt = '';
-  const aiAttemptContext = {
-    jobId: job.id,
-    listingId,
-    get modelName() {
-      return modelName;
-    },
-  };
-  let startedAttempt: GeminiModelAttempt | null = null;
-  let aiModelAttempt: AiModelAttemptRow | null = null;
-  let providerAttemptStarted = false;
+  const legacyAttempts: GeminiModelAttempt[] = [];
+  const aiModelAttemptRows = new Map<number, AiModelAttemptRow>();
 
   try {
-    const resolvedRoute = await options.dataAccess.aiModelRoutes.resolvePrimaryForTask({
-      freeTierOnly: true,
-      provider: AI_PROVIDER_GOOGLE,
-      requireImages: true,
-      requireJsonOutput: true,
-      requireStructuredOutput: true,
-      taskType: LISTING_DRAFT_ROUTE_TASK_TYPE,
-    });
-    modelName = resolvedRoute.modelName;
-    startedAt = asIsoTimestamp(options.now);
-    startedAttempt = {
-      attempt_order: 1,
-      completed_at: null,
-      duration_ms: null,
-      failure_code: null,
-      failure_message: null,
-      model_name: modelName,
-      started_at: startedAt,
-      status: 'started',
-    };
-    await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
-    providerAttemptStarted = true;
-    const persistedLegacyStartedAttempt = await persistGeminiAttemptAudit(
-      options.dataAccess,
-      job.id,
-      {
-        gemini_attempt_count: 1,
-        gemini_attempts: [startedAttempt],
-        gemini_selected_model: null,
-      },
-      true
+    const resolvedRoutes = await options.dataAccess.aiModelRoutes.resolveForTask(
+      buildListingDraftRouteResolutionInput()
     );
-    await options.dataAccess.listings.updateWorkflowState({
-      listingId,
-      status: 'generating',
-      subStatus: 'ai_call_in_progress',
-    });
-    generationStarted = true;
-    if (persistedLegacyStartedAttempt) {
-      aiModelAttempt = await createAiModelAttemptRecord(
-        options.dataAccess,
-        {
-          job_id: job.id,
-          listing_id: listingId,
-          model_name: modelName,
-          provider: AI_PROVIDER_GOOGLE,
-          provider_model_id: modelName,
-          routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
-          started_at: startedAt,
-          status: 'started',
-        },
-        aiAttemptContext,
-        true
-      );
+
+    if (resolvedRoutes.length === 0) {
+      throw createListingDraftRouteNotFoundError();
     }
 
-    const draft = await options.generateListingDraft(
-      {
-        imageUrls,
-        listingId,
-        userHints: buildUserHints(listing),
+    const preparedDraft = await options.prepareListingDraft({
+      imageUrls,
+      listingId,
+      userHints: buildUserHints(listing),
+    });
+
+    const routerResult = await generateListingDraftWithFallback({
+      executeRoute: async (route) => await preparedDraft.execute({ model: route.modelName }),
+      incrementDailyUsage: async () => {
+        await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
       },
-      { model: modelName }
-    );
+      now: options.now,
+      onAttemptFailed: async (attempt) => {
+        const attemptError = classifyJobError(job.job_type, attempt.error);
+        const aiAttemptContext = {
+          jobId: job.id,
+          listingId,
+          modelName: attempt.route.modelName,
+        };
+        const failedAttempt: GeminiModelAttempt = {
+          attempt_order: attempt.attemptOrder,
+          completed_at: attempt.completedAt,
+          duration_ms: attempt.durationMs,
+          failure_code: attemptError.code,
+          failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
+          model_name: attempt.route.modelName,
+          started_at: attempt.startedAt,
+          status: 'failed',
+        };
+
+        legacyAttempts[attempt.attemptOrder - 1] = failedAttempt;
+
+        const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
+        if (aiModelAttempt) {
+          await markAiModelAttemptRecordFailed(
+            options.dataAccess,
+            {
+              duration_ms: attempt.durationMs,
+              failure_code: attemptError.code,
+              failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
+              finished_at: attempt.completedAt,
+              id: aiModelAttempt.id,
+            },
+            aiAttemptContext,
+            true
+          );
+        }
+
+        await persistGeminiAttemptAudit(
+          options.dataAccess,
+          job.id,
+          {
+            gemini_attempt_count: legacyAttempts.length,
+            gemini_attempts: [...legacyAttempts],
+            gemini_selected_model: null,
+          },
+          true
+        );
+      },
+      onAttemptStarted: async (attempt) => {
+        const startedAttempt: GeminiModelAttempt = {
+          attempt_order: attempt.attemptOrder,
+          completed_at: null,
+          duration_ms: null,
+          failure_code: null,
+          failure_message: null,
+          model_name: attempt.route.modelName,
+          started_at: attempt.startedAt,
+          status: 'started',
+        };
+        const aiAttemptContext = {
+          jobId: job.id,
+          listingId,
+          modelName: attempt.route.modelName,
+        };
+
+        if (attempt.attemptOrder === 1) {
+          await options.dataAccess.listings.updateWorkflowState({
+            listingId,
+            status: 'generating',
+            subStatus: 'ai_call_in_progress',
+          });
+        }
+
+        legacyAttempts.push(startedAttempt);
+        await persistGeminiAttemptAudit(
+          options.dataAccess,
+          job.id,
+          {
+            gemini_attempt_count: legacyAttempts.length,
+            gemini_attempts: [...legacyAttempts],
+            gemini_selected_model: null,
+          },
+          true
+        );
+
+        const aiModelAttempt = await createAiModelAttemptRecord(
+          options.dataAccess,
+          {
+            attempt_order: attempt.attemptOrder,
+            job_id: job.id,
+            listing_id: listingId,
+            model_name: attempt.route.modelName,
+            provider: AI_PROVIDER_GOOGLE,
+            provider_model_id: attempt.route.modelName,
+            routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
+            started_at: attempt.startedAt,
+            status: 'started',
+          },
+          aiAttemptContext,
+          true
+        );
+
+        if (aiModelAttempt) {
+          aiModelAttemptRows.set(attempt.attemptOrder, aiModelAttempt);
+        }
+      },
+      onAttemptSucceeded: async (attempt) => {
+        const aiAttemptContext = {
+          jobId: job.id,
+          listingId,
+          modelName: attempt.route.modelName,
+        };
+        const succeededAttempt: GeminiModelAttempt = {
+          attempt_order: attempt.attemptOrder,
+          completed_at: attempt.completedAt,
+          duration_ms: attempt.durationMs,
+          failure_code: null,
+          failure_message: null,
+          model_name: attempt.route.modelName,
+          started_at: attempt.startedAt,
+          status: 'succeeded',
+        };
+
+        legacyAttempts[attempt.attemptOrder - 1] = succeededAttempt;
+
+        const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
+        if (aiModelAttempt) {
+          await markAiModelAttemptRecordSucceeded(
+            options.dataAccess,
+            {
+              duration_ms: attempt.durationMs,
+              finished_at: attempt.completedAt,
+              id: aiModelAttempt.id,
+            },
+            aiAttemptContext,
+            true
+          );
+        }
+
+        await persistGeminiAttemptAudit(
+          options.dataAccess,
+          job.id,
+          {
+            gemini_attempt_count: legacyAttempts.length,
+            gemini_attempts: [...legacyAttempts],
+            gemini_selected_model: attempt.route.modelName,
+          },
+          true
+        );
+      },
+      routes: resolvedRoutes,
+    });
 
     const reviewListing = await options.dataAccess.listings.update(
       listingId,
-      buildGeneratedListingReviewUpdate(listing, draft)
+      buildGeneratedListingReviewUpdate(listing, routerResult.draft)
     );
-    const completedAt = asIsoTimestamp(options.now);
-    if (aiModelAttempt) {
-      await markAiModelAttemptRecordSucceeded(
-        options.dataAccess,
-        {
-          duration_ms: getDurationMs(startedAt, completedAt),
-          finished_at: completedAt,
-          id: aiModelAttempt.id,
-        },
-        aiAttemptContext,
-        true
-      );
-    }
-    await persistGeminiAttemptAudit(options.dataAccess, job.id, {
-      gemini_attempt_count: 1,
-      gemini_attempts: [
-        {
-          ...startedAttempt,
-          completed_at: completedAt,
-          duration_ms: getDurationMs(startedAt, completedAt),
-          status: 'succeeded',
-        },
-      ],
-      gemini_selected_model: modelName,
-    }, true);
     const completedJob = await options.dataAccess.jobs.complete(job.id);
 
     return {
@@ -598,45 +733,13 @@ async function runGenerateAiJob(
       listing: reviewListing,
     };
   } catch (error) {
-    let jobError = classifyJobError(job.job_type, error);
-    const completedAt = asIsoTimestamp(options.now);
-
-    if (aiModelAttempt) {
-      await markAiModelAttemptRecordFailed(
-        options.dataAccess,
-        {
-          duration_ms: getDurationMs(startedAt, completedAt),
-          failure_code: jobError.code,
-          failure_message: summarizeGeminiAttemptFailureMessage(jobError.message),
-          finished_at: completedAt,
-          id: aiModelAttempt.id,
-        },
-        aiAttemptContext,
-        true
-      );
-    }
-
-    if (providerAttemptStarted && startedAttempt) {
-      await persistGeminiAttemptAudit(
-        options.dataAccess,
-        job.id,
-        {
-          gemini_attempt_count: 1,
-          gemini_attempts: [
-            {
-              ...startedAttempt,
-              completed_at: completedAt,
-              duration_ms: getDurationMs(startedAt, completedAt),
-              failure_code: jobError.code,
-              failure_message: summarizeGeminiAttemptFailureMessage(jobError.message),
-              status: 'failed',
-            },
-          ],
-          gemini_selected_model: null,
-        },
-        true
-      );
-    }
+    let jobError =
+      error instanceof GeminiFallbackExecutionError
+        ? enrichGeminiJobError(
+            classifyJobError(job.job_type, error.finalError),
+            error as GeminiFallbackExecutionError<ResolvedAiModelRoute>
+          )
+        : classifyJobError(job.job_type, error);
 
     try {
       await options.dataAccess.listings.update(
@@ -923,6 +1026,11 @@ export async function runSidecarJob(
 ): Promise<RunSidecarJobResult> {
   const dataAccess = options.dataAccess ?? getSidecarDataAccess();
   const runGenerateDraft = options.generateListingDraft ?? generateListingDraft;
+  const prepareListingDraft =
+    options.prepareListingDraft ??
+    (options.generateListingDraft
+      ? createPreparedListingDraftFromGenerateFn(runGenerateDraft)
+      : prepareGenerateListingDraft);
   const runPublishListing = options.publishListing ?? publishApprovedListing;
   const runPrepareRecordCreatedListings =
     options.prepareRecordCreatedListings ?? prepareRecordCreatedListings;
@@ -941,6 +1049,7 @@ export async function runSidecarJob(
         dataAccess,
         generateListingDraft: runGenerateDraft,
         now,
+        prepareListingDraft,
       });
     case PUBLISH_JOB_TYPE:
       return await runPublishJob(runnableJob, {

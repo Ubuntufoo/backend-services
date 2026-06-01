@@ -88,22 +88,29 @@ const startedAiModelAttemptRow: AiModelAttemptRow = {
   status: 'started',
 };
 
-const resolvedAiModelRoute: ResolvedAiModelRoute = {
-  displayName: 'Gemini 3.1 Flash Lite',
-  fallbackOnQuotaExceeded: true,
-  fallbackOnRateLimit: true,
-  fallbackOnUnavailable: true,
-  freeTierStatus: 'unknown',
-  isFreeTierEligible: true,
-  modelName: 'gemini-3.1-flash-lite',
-  provider: 'google',
-  routeOrder: 1,
-  supportsImages: true,
-  supportsJsonOutput: true,
-  supportsStructuredOutput: true,
-  supportsText: true,
-  taskType: 'listing_draft_generation',
-};
+function createResolvedAiModelRoute(
+  overrides: Partial<ResolvedAiModelRoute> = {}
+): ResolvedAiModelRoute {
+  return {
+    displayName: 'Gemini 3.1 Flash Lite',
+    fallbackOnQuotaExceeded: true,
+    fallbackOnRateLimit: true,
+    fallbackOnUnavailable: true,
+    freeTierStatus: 'unknown',
+    isFreeTierEligible: true,
+    modelName: 'gemini-3.1-flash-lite',
+    provider: 'google',
+    routeOrder: 1,
+    supportsImages: true,
+    supportsJsonOutput: true,
+    supportsStructuredOutput: true,
+    supportsText: true,
+    taskType: 'listing_draft_generation',
+    ...overrides,
+  };
+}
+
+const resolvedAiModelRoute = createResolvedAiModelRoute();
 
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -156,8 +163,10 @@ function createDataAccess({
   listing = createListingRow(),
   aiModelAttemptError,
   aiModelRoute = resolvedAiModelRoute,
+  aiModelRoutes = [aiModelRoute],
   aiModelRouteError,
   dailyUsageIncrementError,
+  dailyUsageIncrementErrors,
   geminiAttemptAuditError,
   onListingsUpdate,
   workflowStates = [],
@@ -166,15 +175,19 @@ function createDataAccess({
   listing?: ListingRow | null;
   aiModelAttemptError?: Error;
   aiModelRoute?: ResolvedAiModelRoute;
+  aiModelRoutes?: ResolvedAiModelRoute[];
   aiModelRouteError?: Error;
   dailyUsageIncrementError?: Error;
+  dailyUsageIncrementErrors?: Array<Error | undefined>;
   geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
 } = {}): SidecarDataAccess {
   const listingStates = workflowStates.length > 0 ? [...workflowStates] : listing ? [listing] : [];
   let jobState = job ? { ...job } : null;
-  let aiModelAttemptState: AiModelAttemptRow | null = null;
+  const aiModelAttemptStates: AiModelAttemptRow[] = [];
+  let aiModelAttemptIdCounter = 0;
+  const dailyUsageErrors = [...(dailyUsageIncrementErrors ?? [])];
 
   const jobsGetById = vi.fn(async () => (jobState ? { ...jobState } : null));
   const jobsCreate = vi.fn();
@@ -242,7 +255,13 @@ function createDataAccess({
 
   return {
     aiModelRoutes: {
-      resolveForTask: vi.fn(async () => [aiModelRoute]),
+      resolveForTask: vi.fn(async () => {
+        if (aiModelRouteError) {
+          throw aiModelRouteError;
+        }
+
+        return aiModelRoutes;
+      }),
       resolvePrimaryForTask: vi.fn(async () => {
         if (aiModelRouteError) {
           throw aiModelRouteError;
@@ -279,6 +298,11 @@ function createDataAccess({
         usage_date: '2026-05-20',
       })),
       incrementGeminiCallsUsed: vi.fn(async () => {
+        const nextError = dailyUsageErrors.shift();
+        if (nextError) {
+          throw nextError;
+        }
+
         if (dailyUsageIncrementError) {
           throw dailyUsageIncrementError;
         }
@@ -309,10 +333,15 @@ function createDataAccess({
           throw aiModelAttemptError;
         }
 
-        aiModelAttemptState = {
+        aiModelAttemptIdCounter += 1;
+        const aiModelAttemptState = {
           ...startedAiModelAttemptRow,
           attempt_order: input.attempt_order ?? 1,
           created_at: input.started_at ?? startedAiModelAttemptRow.created_at,
+          id:
+            aiModelAttemptIdCounter === 1
+              ? 'ai-model-attempt-row-id'
+              : `ai-model-attempt-row-id-${aiModelAttemptIdCounter}`,
           job_id: input.job_id ?? null,
           listing_id: input.listing_id,
           metadata: input.metadata ?? {},
@@ -323,29 +352,34 @@ function createDataAccess({
           started_at: input.started_at ?? startedAiModelAttemptRow.started_at,
           status: input.status ?? 'started',
         };
+        aiModelAttemptStates.push(aiModelAttemptState);
 
         return { ...aiModelAttemptState };
       }),
       listByListingId: vi.fn(async (listingId: string) =>
-        aiModelAttemptState && aiModelAttemptState.listing_id === listingId ? [{ ...aiModelAttemptState }] : []
+        aiModelAttemptStates
+          .filter((attempt) => attempt.listing_id === listingId)
+          .map((attempt) => ({ ...attempt }))
       ),
       markFailed: vi.fn(async (input) => {
         if (aiModelAttemptError) {
           throw aiModelAttemptError;
         }
 
-        if (!aiModelAttemptState) {
+        const index = aiModelAttemptStates.findIndex((attempt) => attempt.id === input.id);
+        if (index === -1) {
           throw new Error('ai model attempt missing');
         }
 
-        aiModelAttemptState = {
-          ...aiModelAttemptState,
+        const aiModelAttemptState = {
+          ...aiModelAttemptStates[index],
           duration_ms: input.duration_ms ?? null,
           failure_code: input.failure_code ?? null,
           failure_message: input.failure_message ?? null,
           finished_at: input.finished_at,
           status: 'failed',
         };
+        aiModelAttemptStates[index] = aiModelAttemptState;
 
         return { ...aiModelAttemptState };
       }),
@@ -354,16 +388,18 @@ function createDataAccess({
           throw aiModelAttemptError;
         }
 
-        if (!aiModelAttemptState) {
+        const index = aiModelAttemptStates.findIndex((attempt) => attempt.id === input.id);
+        if (index === -1) {
           throw new Error('ai model attempt missing');
         }
 
-        aiModelAttemptState = {
-          ...aiModelAttemptState,
+        const aiModelAttemptState = {
+          ...aiModelAttemptStates[index],
           duration_ms: input.duration_ms ?? null,
           finished_at: input.finished_at,
           status: 'succeeded',
         };
+        aiModelAttemptStates[index] = aiModelAttemptState;
 
         return { ...aiModelAttemptState };
       }),
@@ -570,16 +606,8 @@ describe('runSidecarJob', () => {
   });
 
   it('fails generate_ai jobs when no eligible AI model route is configured', async () => {
-    const { AiModelRouteNotFoundError } = await import('@ebay-inventory/data');
     const dataAccess = createDataAccess({
-      aiModelRouteError: new AiModelRouteNotFoundError({
-        freeTierOnly: true,
-        provider: 'google',
-        requireImages: true,
-        requireJsonOutput: true,
-        requireStructuredOutput: true,
-        taskType: 'listing_draft_generation',
-      }),
+      aiModelRoutes: [],
     });
     const generateListingDraftMock = vi.fn();
 
@@ -606,7 +634,7 @@ describe('runSidecarJob', () => {
         task_type: 'listing_draft_generation',
       })
     );
-    expect(dataAccess.aiModelRoutes.resolvePrimaryForTask).toHaveBeenCalledWith({
+    expect(dataAccess.aiModelRoutes.resolveForTask).toHaveBeenCalledWith({
       freeTierOnly: true,
       provider: 'google',
       requireImages: true,
@@ -616,6 +644,26 @@ describe('runSidecarJob', () => {
     });
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).not.toHaveBeenCalled();
     expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.updateGeminiAttemptAudit).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
+  it('does not start provider attempts when Gemini preflight fails', async () => {
+    const dataAccess = createDataAccess();
+    const prepareListingDraftMock = vi.fn(async () => {
+      throw new Error('preflight image fetch failed');
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
+    });
+
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).not.toHaveBeenCalled();
     expect(dataAccess.jobs.updateGeminiAttemptAudit).not.toHaveBeenCalled();
     expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
@@ -666,7 +714,7 @@ describe('runSidecarJob', () => {
       status: 'generating',
       subStatus: 'ai_call_in_progress',
     });
-    expect(dataAccess.aiModelRoutes.resolvePrimaryForTask).toHaveBeenCalledWith({
+    expect(dataAccess.aiModelRoutes.resolveForTask).toHaveBeenCalledWith({
       freeTierOnly: true,
       provider: 'google',
       requireImages: true,
@@ -748,6 +796,7 @@ describe('runSidecarJob', () => {
       gemini_selected_model: 'gemini-3.1-flash-lite',
     });
     expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledWith({
+      attempt_order: 1,
       job_id: 'job-generate-ai',
       listing_id: 'LIST-001',
       model_name: 'gemini-3.1-flash-lite',
@@ -775,6 +824,117 @@ describe('runSidecarJob', () => {
         status: 'succeeded',
       }),
     ]);
+  });
+
+  it('falls back to a second configured Gemini route and records both attempts', async () => {
+    const secondRoute = createResolvedAiModelRoute({
+      displayName: 'Gemini 3.1 Pro',
+      modelName: 'gemini-3.1-pro',
+      routeOrder: 2,
+    });
+    const dataAccess = createDataAccess({
+      aiModelRoutes: [resolvedAiModelRoute, secondRoute],
+    });
+    const generateListingDraftMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('429 too many requests'))
+      .mockResolvedValueOnce({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Recovered on fallback model.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Player: 'Michael Jordan',
+          Manufacturer: 'Upper Deck',
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: ['Fallback route used.'],
+        rawModelResponse: { id: 'raw-response-fallback' },
+      });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.aiModelRoutes.resolveForTask).toHaveBeenCalledWith({
+      freeTierOnly: true,
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
+    expect(generateListingDraftMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        listingId: 'LIST-001',
+      }),
+      { model: 'gemini-3.1-flash-lite' }
+    );
+    expect(generateListingDraftMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        listingId: 'LIST-001',
+      }),
+      { model: 'gemini-3.1-pro' }
+    );
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(1, {
+      attempt_order: 1,
+      job_id: 'job-generate-ai',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-flash-lite',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-20T13:00:00.000Z',
+      status: 'started',
+    });
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(2, {
+      attempt_order: 2,
+      job_id: 'job-generate-ai',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-pro',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-pro',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-20T13:00:00.000Z',
+      status: 'started',
+    });
+    expect(dataAccess.aiModelAttempts.markFailed).toHaveBeenCalledWith({
+      duration_ms: 0,
+      failure_code: 'generate_ai_failed',
+      failure_message: '429 too many requests',
+      finished_at: '2026-05-20T13:00:00.000Z',
+      id: 'ai-model-attempt-row-id',
+    });
+    expect(dataAccess.aiModelAttempts.markSucceeded).toHaveBeenCalledWith({
+      duration_ms: 0,
+      finished_at: '2026-05-20T13:00:00.000Z',
+      id: 'ai-model-attempt-row-id-2',
+    });
+    expect(result.job.status).toBe('completed');
+    expect(result.job.gemini_attempt_count).toBe(2);
+    expect(result.job.gemini_selected_model).toBe('gemini-3.1-pro');
+    expect(result.job.gemini_attempts).toEqual([
+      expect.objectContaining({
+        attempt_order: 1,
+        failure_code: 'generate_ai_failed',
+        model_name: 'gemini-3.1-flash-lite',
+        status: 'failed',
+      }),
+      expect.objectContaining({
+        attempt_order: 2,
+        model_name: 'gemini-3.1-pro',
+        status: 'succeeded',
+      }),
+    ]);
+    expect(result.listing?.status).toBe('needs_review');
   });
 
   it('resolves category and condition ids from Gemini suggestions only for trading card singles', async () => {
@@ -920,6 +1080,7 @@ describe('runSidecarJob', () => {
       gemini_selected_model: null,
     });
     expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledWith({
+      attempt_order: 1,
       job_id: 'job-generate-ai',
       listing_id: 'LIST-001',
       model_name: 'gemini-3.1-flash-lite',
@@ -947,6 +1108,64 @@ describe('runSidecarJob', () => {
         status: 'failed',
       }),
     ]);
+  });
+
+  it('stops fallback before a second provider call when daily Gemini usage is exhausted', async () => {
+    const { DailyUsageLimitExceededError } = await import('@ebay-inventory/data');
+    const dataAccess = createDataAccess({
+      aiModelRoutes: [
+        resolvedAiModelRoute,
+        createResolvedAiModelRoute({
+          displayName: 'Gemini 3.1 Pro',
+          modelName: 'gemini-3.1-pro',
+          routeOrder: 2,
+        }),
+      ],
+      dailyUsageIncrementErrors: [
+        undefined,
+        new DailyUsageLimitExceededError({
+          effectiveLimit: 500,
+          resource: 'gemini',
+          source: 'app_settings',
+          usageDate: '2026-05-20',
+          used: 500,
+        }),
+      ],
+    });
+    const generateListingDraftMock = vi.fn(async () => {
+      throw new Error('429 too many requests');
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('DAILY_GEMINI_LIMIT_EXCEEDED');
+    expect(result.listing?.last_error_context).toEqual(
+      expect.objectContaining({
+        attempt_count: 1,
+        attempted_models: ['gemini-3.1-flash-lite'],
+        final_failure_code: 'DAILY_GEMINI_LIMIT_EXCEEDED',
+        final_fallback_kind: 'rate_limit',
+      })
+    );
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledWith({
+      attempt_order: 1,
+      job_id: 'job-generate-ai',
+      listing_id: 'LIST-001',
+      model_name: 'gemini-3.1-flash-lite',
+      provider: 'google',
+      provider_model_id: 'gemini-3.1-flash-lite',
+      routing_source: 'direct_gemini',
+      started_at: '2026-05-20T13:00:00.000Z',
+      status: 'started',
+    });
   });
 
   it('keeps generate_ai success when Gemini audit persistence fails', async () => {
@@ -979,8 +1198,8 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
-    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
-    expect(dataAccess.aiModelAttempts.markSucceeded).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.markSucceeded).toHaveBeenCalledTimes(1);
     expect(result.job.status).toBe('completed');
     expect(result.job.last_error_code).toBeNull();
     expect(result.listing?.status).toBe('needs_review');
@@ -1041,8 +1260,8 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
-    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
-    expect(dataAccess.aiModelAttempts.markFailed).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.aiModelAttempts.markFailed).toHaveBeenCalledTimes(1);
     expect(result.job.status).toBe('queued');
     expect(result.job.last_error_code).toBe('generate_ai_failed');
     expect(result.job.last_error).toContain('Gemini timed out');
