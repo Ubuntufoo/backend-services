@@ -88,6 +88,7 @@ function createDataAccess(listing: ListingRow): SidecarDataAccess {
     dailyUsage: {
       getEffectiveGeminiLimit: vi.fn(),
       getEffectiveOrderSyncLimit: vi.fn(),
+      getGeminiSummary: vi.fn(),
       getOrCreate: vi.fn(),
       incrementGeminiCallsUsed: vi.fn(),
       incrementOrderSyncCount: vi.fn(),

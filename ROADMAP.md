@@ -89,9 +89,10 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 7 | DB | Track AI model attempts | Provider/model usage and fallback outcomes are auditable per listing | GPT-5.5 mini | Medium | Supports current direct Gemini path and future OpenRouter/fallback routing |  
 | 7 | BE | Expose AI attempt summary on listings API | UI can display model attempt counts without direct table access | GPT-5.5 mini | Low-Medium | Keeps `ai_model_attempts` backend-only while surfacing useful audit status |
 | 7 | FE | Display AI attempt counts in listing review UI | Listing rows/review panel show AI attempt count and latest model attempt status | GPT-5.5 mini | Low-Medium | Makes generation audit visible during review | 
-| 7 | BE | Add daily usage checks | Gemini and order sync limits are enforced | GPT-5.5 | Medium | Guardrail before fallback/router automation increases API call paths |  -->
+| 7 | BE | Add daily usage checks | Gemini and order sync limits are enforced | GPT-5.5 | Medium | Guardrail before fallback/router automation increases API call paths
 | 7 | DB/BE | Add Gemini model catalog and resolver shell | Gemini client resolves task-specific model target from DB configuration instead of hardcoded model strings | GPT-5.5 | Medium | Enables SQL-driven model ordering before fallback execution logic |
-| 7 | BE | Implement Gemini fallback execution router | Gemini generation cascades through configured eligible models on quota/rate-limit/unavailable errors | GPT-5.5 | Medium-High | Consumes model catalog, daily usage checks, and ai_model_attempts |
+| 7 | BE | Implement Gemini fallback execution router | Gemini generation cascades through configured eligible models on quota/rate-limit/unavailable errors | GPT-5.5 | Medium-High | Consumes model catalog, daily usage checks, and ai_model_attempts | 
+| 8 | BE/FE | Display daily Gemini usage in UI | Dashboard/review UI shows today’s Gemini calls used, effective daily limit, remaining calls, and reset time, in local time | GPT-5.5 mini | Low-Medium | Gives visibility into free-tier usage before generation attempts fail |  |  -->
 | 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, and `sale_price` are persisted | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
 | 8 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work against eBay API | GPT-5.5 | Medium | Begin post-listing order workflow |
 | 8 | BE | Match order SKU to `listing_id` | Sold listing is identified from order SKU | GPT-5.5 mini | Medium | Required before updating listings to sold |
@@ -101,6 +102,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | FE | Show due today/overdue warnings | 1-day handling risks are visible | GPT-5.5 mini | Low-Medium | Operational guardrail for fulfillment |
 | 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability |
 | 8 | BE | Normalize image orientation during asset processing | R2 images display with correct orientation | GPT-5.5 mini | Low-Medium | Defer unless EXIF issue is confirmed |
+| 8 | BE/DB | Add `ai_model_attempts` cleanup policy | Old AI attempt audit rows are pruned after listings are sold/closed and retention window passes | GPT-5.5 mini | Low-Medium | Prevents long-term audit-table growth while preserving active-listing troubleshooting history |
 | 9 | BE | Add local processed-output retention policy | `.image-service-output/<runId>` cleanup behavior is defined and enforced | GPT-5.5 mini | Low-Medium | Local disk cleanup guardrail |
 | 9 | DB | Add `r2_retention_policy`, `r2_delete_after`, `r2_deleted_at` | Safe cleanup fields exist | GPT-5.5 mini | Low-Medium | Required before R2 deletion automation |
 | 9 | BE | On `sold`, set `r2_delete_after` | `r2_delete_after` is set from `sold_at + configured retention days` | GPT-5.5 mini | Low-Medium | Connects sold state to cleanup eligibility |
@@ -129,4 +131,5 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 12 | BE | Add tests for assistant routing and guardrails | Unsafe or unsupported assistant actions are blocked |
 | 12 | BE | BE audit: clean up and review for refactoring | Eliminate checklist scripts, stale tests, other development artifacts |
 | 12 | Docs | Document Read-only eBay Assistant contract | Future assistant architecture is clear |
+| 12 | Cleanup | Pare down tests | Remove unnecessary or redundant test cases, and high-confidence/hardened test scenarios |
 13 | Marketing/SEO | Explore marketing options | Google search, social media, and other channels for potential traffic and user acquisition |

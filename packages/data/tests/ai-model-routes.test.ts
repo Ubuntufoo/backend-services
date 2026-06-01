@@ -34,7 +34,7 @@ interface JoinedRouteRow {
 
 const baseCatalogRow: JoinedCatalogRow = {
   display_name: 'Gemini 3.1 Flash Lite',
-  free_tier_status: 'unknown',
+  free_tier_status: 'confirmed',
   is_enabled: true,
   is_free_tier_eligible: true,
   supports_images: true,
@@ -127,16 +127,37 @@ describe('ai model routes repository', () => {
   it('returns enabled routes ordered by route_order', async () => {
     const client = createAiModelRouteResolverClient([
       createJoinedRouteRow({
-        model_name: 'gemini-3.1-flash-lite',
+        catalog: {
+          ...baseCatalogRow,
+          display_name: 'Gemini 3.5 Flash',
+        },
+        model_name: 'gemini-3.5-flash',
         route_order: 1,
       }),
       createJoinedRouteRow({
         catalog: {
           ...baseCatalogRow,
-          display_name: 'Gemini 3.1 Flash',
+          display_name: 'Gemini 3 Flash Preview',
         },
-        model_name: 'gemini-3.1-flash',
+        model_name: 'gemini-3-flash-preview',
         route_order: 2,
+      }),
+      createJoinedRouteRow({
+        catalog: {
+          ...baseCatalogRow,
+          display_name: 'Gemini 3.1 Flash Lite',
+        },
+        model_name: 'gemini-3.1-flash-lite',
+        route_order: 3,
+      }),
+      createJoinedRouteRow({
+        catalog: {
+          ...baseCatalogRow,
+          display_name: 'Ignored Inactive Model',
+          is_enabled: false,
+        },
+        model_name: 'ignored-inactive-model',
+        route_order: 4,
       }),
     ]);
 
@@ -150,16 +171,22 @@ describe('ai model routes repository', () => {
 
     expect(routes).toEqual([
       expect.objectContaining({
-        displayName: 'Gemini 3.1 Flash Lite',
-        modelName: 'gemini-3.1-flash-lite',
+        displayName: 'Gemini 3.5 Flash',
+        modelName: 'gemini-3.5-flash',
         provider: 'google',
         routeOrder: 1,
       }),
       expect.objectContaining({
-        displayName: 'Gemini 3.1 Flash',
-        modelName: 'gemini-3.1-flash',
+        displayName: 'Gemini 3 Flash Preview',
+        modelName: 'gemini-3-flash-preview',
         provider: 'google',
         routeOrder: 2,
+      }),
+      expect.objectContaining({
+        displayName: 'Gemini 3.1 Flash Lite',
+        modelName: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        routeOrder: 3,
       }),
     ]);
   });
@@ -339,12 +366,24 @@ describe('ai model routes repository', () => {
   it('returns first ordered route as primary', async () => {
     const client = createAiModelRouteResolverClient([
       createJoinedRouteRow({
-        model_name: 'gemini-3.1-flash-lite',
+        catalog: {
+          ...baseCatalogRow,
+          display_name: 'Gemini 3.5 Flash',
+        },
+        model_name: 'gemini-3.5-flash',
         route_order: 1,
       }),
       createJoinedRouteRow({
-        model_name: 'gemini-3.1-flash',
+        catalog: {
+          ...baseCatalogRow,
+          display_name: 'Gemini 3 Flash Preview',
+        },
+        model_name: 'gemini-3-flash-preview',
         route_order: 2,
+      }),
+      createJoinedRouteRow({
+        model_name: 'gemini-3.1-flash-lite',
+        route_order: 3,
       }),
     ]);
 
@@ -358,7 +397,7 @@ describe('ai model routes repository', () => {
 
     expect(route).toEqual(
       expect.objectContaining({
-        modelName: 'gemini-3.1-flash-lite',
+        modelName: 'gemini-3.5-flash',
         routeOrder: 1,
       })
     );

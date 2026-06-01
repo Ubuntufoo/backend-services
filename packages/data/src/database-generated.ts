@@ -92,6 +92,7 @@ export type Database = {
         Row: {
           created_at: string;
           display_name: string | null;
+          free_tier_daily_request_limit: number | null;
           free_tier_status: string;
           id: string;
           input_token_limit: number | null;
@@ -113,6 +114,7 @@ export type Database = {
         Insert: {
           created_at?: string;
           display_name?: string | null;
+          free_tier_daily_request_limit?: number | null;
           free_tier_status?: string;
           id?: string;
           input_token_limit?: number | null;
@@ -134,6 +136,7 @@ export type Database = {
         Update: {
           created_at?: string;
           display_name?: string | null;
+          free_tier_daily_request_limit?: number | null;
           free_tier_status?: string;
           id?: string;
           input_token_limit?: number | null;

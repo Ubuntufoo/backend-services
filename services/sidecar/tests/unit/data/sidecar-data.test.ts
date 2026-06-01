@@ -33,6 +33,7 @@ const enqueuePublishJobMock = vi.fn();
 const failJobMock = vi.fn();
 const getEffectiveGeminiDailyLimitMock = vi.fn();
 const getEffectiveOrderSyncDailyLimitMock = vi.fn();
+const getGeminiDailyUsageSummaryMock = vi.fn();
 const completeJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
@@ -72,6 +73,7 @@ vi.mock('@ebay-inventory/data', () => ({
   failJob: failJobMock,
   getEffectiveGeminiDailyLimit: getEffectiveGeminiDailyLimitMock,
   getEffectiveOrderSyncDailyLimit: getEffectiveOrderSyncDailyLimitMock,
+  getGeminiDailyUsageSummary: getGeminiDailyUsageSummaryMock,
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
@@ -299,6 +301,7 @@ describe('sidecar data access', () => {
     await dataAccess.dailyUsage.getOrCreate('2026-05-25');
     await dataAccess.dailyUsage.getEffectiveGeminiLimit('2026-05-25');
     await dataAccess.dailyUsage.getEffectiveOrderSyncLimit('2026-05-25');
+    await dataAccess.dailyUsage.getGeminiSummary(new Date('2026-05-25T13:00:00.000Z'));
     await dataAccess.dailyUsage.incrementGeminiCallsUsed('2026-05-25');
     await dataAccess.dailyUsage.incrementOrderSyncCount('2026-05-25');
 
@@ -397,6 +400,10 @@ describe('sidecar data access', () => {
     expect(getOrCreateDailyUsageMock).toHaveBeenCalledWith(client, '2026-05-25');
     expect(getEffectiveGeminiDailyLimitMock).toHaveBeenCalledWith(client, '2026-05-25');
     expect(getEffectiveOrderSyncDailyLimitMock).toHaveBeenCalledWith(client, '2026-05-25');
+    expect(getGeminiDailyUsageSummaryMock).toHaveBeenCalledWith(
+      client,
+      new Date('2026-05-25T13:00:00.000Z')
+    );
     expect(incrementGeminiCallsUsedMock).toHaveBeenCalledWith(client, '2026-05-25');
     expect(incrementOrderSyncCountMock).toHaveBeenCalledWith(client, '2026-05-25');
 

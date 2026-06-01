@@ -2,6 +2,7 @@ import type { DailyUsageRow } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
 import { getAppSettings } from './app-settings.js';
 import {
+  type MultiResult,
   requireOptionalResult,
   requireSingleResult,
   type SingleResult,
@@ -11,10 +12,13 @@ const DEFAULT_GEMINI_DAILY_LIMIT = 500;
 export const DEFAULT_ORDER_SYNC_DAILY_LIMIT = 25;
 const POSTGRES_UNIQUE_VIOLATION_CODE = '23505';
 const MAX_INCREMENT_RETRIES = 3;
+export const GEMINI_USAGE_TIME_ZONE = 'America/Los_Angeles';
 
 type DailyUsageCounterName = 'gemini_calls_used' | 'order_sync_count';
-type DailyUsageLimitSource = 'app_settings' | 'daily_usage' | 'default';
+type DailyUsageLimitSource = 'app_settings' | 'daily_usage' | 'route_capacity' | 'default';
 type DailyUsageResource = 'gemini' | 'order_sync';
+const GEMINI_ROUTE_CAPACITY_PROVIDER = 'google';
+const GEMINI_ROUTE_CAPACITY_TASK_TYPE = 'listing_draft_generation';
 
 interface SupabaseErrorWithCode {
   code?: string;
@@ -30,6 +34,18 @@ export interface DailyUsageLimitResolution {
 export interface DailyUsageIncrementResult extends DailyUsageLimitResolution {
   resource: DailyUsageResource;
   updatedUsage: DailyUsageRow;
+}
+
+export interface GeminiDailyUsageWindow {
+  resetAt: string;
+  resetTimeZone: typeof GEMINI_USAGE_TIME_ZONE;
+  usageDate: string;
+}
+
+export interface GeminiDailyUsageSummary extends GeminiDailyUsageWindow {
+  effectiveLimit: number;
+  remaining: number;
+  used: number;
 }
 
 export class DailyUsageLimitExceededError extends Error {
@@ -69,6 +85,108 @@ function isSupabaseUniqueViolation(error: unknown): error is SupabaseErrorWithCo
 
 function resolveUsageDate(usageDate?: string): string {
   return usageDate ?? new Date().toISOString().slice(0, 10);
+}
+
+function getDateFormatter(timeZone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat('en-CA', {
+    day: '2-digit',
+    month: '2-digit',
+    timeZone,
+    year: 'numeric',
+  });
+}
+
+function getDateTimeFormatter(timeZone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat('en-US', {
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+    minute: '2-digit',
+    month: '2-digit',
+    second: '2-digit',
+    timeZone,
+    year: 'numeric',
+  });
+}
+
+function formatDateParts(date: Date, timeZone: string): Record<string, string> {
+  return getDateFormatter(timeZone).formatToParts(date).reduce<Record<string, string>>(
+    (parts, part) => {
+      if (part.type !== 'literal') {
+        parts[part.type] = part.value;
+      }
+
+      return parts;
+    },
+    {}
+  );
+}
+
+function formatDateTimeParts(date: Date, timeZone: string): Record<string, string> {
+  return getDateTimeFormatter(timeZone).formatToParts(date).reduce<Record<string, string>>(
+    (parts, part) => {
+      if (part.type !== 'literal') {
+        parts[part.type] = part.value;
+      }
+
+      return parts;
+    },
+    {}
+  );
+}
+
+function toUsageDateString(parts: Record<string, string>): string {
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addDaysToIsoDate(usageDate: string, days: number): string {
+  const [year, month, day] = usageDate.split('-').map((value) => Number(value));
+  const utcDate = new Date(Date.UTC(year, month - 1, day + days));
+  return utcDate.toISOString().slice(0, 10);
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = formatDateTimeParts(date, timeZone);
+  const zonedTimestamp = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+
+  return zonedTimestamp - date.getTime();
+}
+
+function zonedMidnightToUtc(usageDate: string, timeZone: string): Date {
+  const [year, month, day] = usageDate.split('-').map((value) => Number(value));
+  let timestamp = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const offset = getTimeZoneOffsetMs(new Date(timestamp), timeZone);
+    const nextTimestamp = Date.UTC(year, month - 1, day, 0, 0, 0, 0) - offset;
+
+    if (nextTimestamp === timestamp) {
+      break;
+    }
+
+    timestamp = nextTimestamp;
+  }
+
+  return new Date(timestamp);
+}
+
+export function resolveGeminiDailyUsageWindow(now: Date = new Date()): GeminiDailyUsageWindow {
+  const usageDateParts = formatDateParts(now, GEMINI_USAGE_TIME_ZONE);
+  const usageDate = toUsageDateString(usageDateParts);
+  const nextUsageDate = addDaysToIsoDate(usageDate, 1);
+
+  return {
+    resetAt: zonedMidnightToUtc(nextUsageDate, GEMINI_USAGE_TIME_ZONE).toISOString(),
+    resetTimeZone: GEMINI_USAGE_TIME_ZONE,
+    usageDate,
+  };
 }
 
 async function getDailyUsageByDate(
@@ -122,6 +240,65 @@ function resolvePositiveLimit(
   };
 }
 
+type GeminiRouteCapacityCatalogRow = {
+  free_tier_daily_request_limit: number | null;
+  is_enabled: boolean;
+  is_free_tier_eligible: boolean;
+};
+
+type GeminiRouteCapacityRow = {
+  catalog: GeminiRouteCapacityCatalogRow | GeminiRouteCapacityCatalogRow[] | null;
+  route_is_enabled: boolean;
+  model_name: string;
+};
+
+function getGeminiRouteCapacityCatalog(
+  row: GeminiRouteCapacityRow
+): GeminiRouteCapacityCatalogRow | null {
+  if (Array.isArray(row.catalog)) {
+    return row.catalog[0] ?? null;
+  }
+
+  return row.catalog;
+}
+
+async function getGeminiRouteCapacityLimit(
+  client: SupabaseDataClient
+): Promise<number | null> {
+  const result = (await client
+    .from('ai_model_task_routes')
+    .select(
+      'model_name, route_is_enabled:is_enabled, catalog:ai_model_catalog!inner(is_enabled, is_free_tier_eligible, free_tier_daily_request_limit)'
+    )
+    .eq('task_type', GEMINI_ROUTE_CAPACITY_TASK_TYPE)
+    .eq('provider', GEMINI_ROUTE_CAPACITY_PROVIDER)
+    .eq('is_enabled', true)
+    .eq('catalog.is_enabled', true)
+    .eq('catalog.is_free_tier_eligible', true)) as MultiResult<GeminiRouteCapacityRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  const totalCapacity = (result.data ?? []).reduce((sum, row) => {
+    const catalog = getGeminiRouteCapacityCatalog(row);
+
+    if (!row.route_is_enabled || !catalog?.is_enabled || !catalog.is_free_tier_eligible) {
+      return sum;
+    }
+
+    const limit = catalog.free_tier_daily_request_limit;
+
+    if (typeof limit !== 'number' || limit <= 0) {
+      return sum;
+    }
+
+    return sum + limit;
+  }, 0);
+
+  return totalCapacity > 0 ? totalCapacity : null;
+}
+
 async function resolveLimit(
   client: SupabaseDataClient,
   usageDate: string,
@@ -131,12 +308,36 @@ async function resolveLimit(
   const appSettings = await getAppSettings(client);
 
   if (resource === 'gemini') {
+    const routeCapacityLimit = await getGeminiRouteCapacityLimit(client);
+    const preferredLimit = appSettings?.gemini_daily_limit;
+    const fallbackLimit = usage.gemini_daily_limit;
+
+    if (typeof preferredLimit === 'number' && preferredLimit > 0) {
+      return {
+        effectiveLimit: preferredLimit,
+        source: 'app_settings',
+        usage,
+      };
+    }
+
+    if (typeof fallbackLimit === 'number' && fallbackLimit > 0) {
+      return {
+        effectiveLimit: fallbackLimit,
+        source: 'daily_usage',
+        usage,
+      };
+    }
+
+    if (typeof routeCapacityLimit === 'number' && routeCapacityLimit > 0) {
+      return {
+        effectiveLimit: routeCapacityLimit,
+        source: 'route_capacity',
+        usage,
+      };
+    }
+
     return {
-      ...resolvePositiveLimit(
-        appSettings?.gemini_daily_limit,
-        usage.gemini_daily_limit,
-        DEFAULT_GEMINI_DAILY_LIMIT
-      ),
+      ...resolvePositiveLimit(undefined, undefined, DEFAULT_GEMINI_DAILY_LIMIT),
       usage,
     };
   }
@@ -233,7 +434,11 @@ export async function getEffectiveGeminiDailyLimit(
   client: SupabaseDataClient,
   usageDate?: string
 ): Promise<DailyUsageLimitResolution> {
-  return await resolveLimit(client, resolveUsageDate(usageDate), 'gemini');
+  return await resolveLimit(
+    client,
+    usageDate ?? resolveGeminiDailyUsageWindow().usageDate,
+    'gemini'
+  );
 }
 
 export async function getEffectiveOrderSyncDailyLimit(
@@ -247,7 +452,12 @@ export async function incrementGeminiCallsUsed(
   client: SupabaseDataClient,
   usageDate?: string
 ): Promise<DailyUsageIncrementResult> {
-  return await incrementUsageCounter(client, 'gemini', 'gemini_calls_used', usageDate);
+  return await incrementUsageCounter(
+    client,
+    'gemini',
+    'gemini_calls_used',
+    usageDate ?? resolveGeminiDailyUsageWindow().usageDate
+  );
 }
 
 export async function incrementOrderSyncCount(
@@ -255,4 +465,22 @@ export async function incrementOrderSyncCount(
   usageDate?: string
 ): Promise<DailyUsageIncrementResult> {
   return await incrementUsageCounter(client, 'order_sync', 'order_sync_count', usageDate);
+}
+
+export async function getGeminiDailyUsageSummary(
+  client: SupabaseDataClient,
+  now: Date = new Date()
+): Promise<GeminiDailyUsageSummary> {
+  const window = resolveGeminiDailyUsageWindow(now);
+  const resolution = await getEffectiveGeminiDailyLimit(client, window.usageDate);
+  const used = resolution.usage.gemini_calls_used;
+
+  return {
+    effectiveLimit: resolution.effectiveLimit,
+    remaining: Math.max(resolution.effectiveLimit - used, 0),
+    resetAt: window.resetAt,
+    resetTimeZone: window.resetTimeZone,
+    usageDate: window.usageDate,
+    used,
+  };
 }
