@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   getEbayConfig,
   getBaseUrl,
+  getOauthBaseUrl,
   getAuthUrl,
   isEbayEnabled,
   validateEnvironmentConfig,
@@ -139,6 +140,16 @@ describe('Environment Configuration', () => {
     it('should return sandbox URL for sandbox environment', () => {
       const url = getBaseUrl('sandbox');
       expect(url).toBe('https://api.sandbox.ebay.com');
+    });
+  });
+
+  describe('getOauthBaseUrl', () => {
+    it('should return production auth base URL for production environment', () => {
+      expect(getOauthBaseUrl('production')).toBe('https://auth.ebay.com');
+    });
+
+    it('should return sandbox auth base URL for sandbox environment', () => {
+      expect(getOauthBaseUrl('sandbox')).toBe('https://auth.sandbox.ebay.com');
     });
   });
 

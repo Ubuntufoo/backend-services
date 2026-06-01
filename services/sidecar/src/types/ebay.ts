@@ -23,6 +23,16 @@ export interface EbayConfig {
 }
 
 /**
+ * Safe eBay environment snapshot exposed to the UI.
+ */
+export interface EbayEnvironmentResponse {
+  environment: 'production' | 'sandbox';
+  marketplace_id: string;
+  api_base_url: string;
+  oauth_base_url: string;
+}
+
+/**
  * OAuth token response from eBay
  * Supports both client credentials and authorization code grants
  */

@@ -288,6 +288,13 @@ export function getBaseUrl(environment: 'production' | 'sandbox'): string {
 }
 
 /**
+ * Get the OAuth base URL for the configured environment.
+ */
+export function getOauthBaseUrl(environment: 'production' | 'sandbox'): string {
+  return environment === 'production' ? 'https://auth.ebay.com' : 'https://auth.sandbox.ebay.com';
+}
+
+/**
  * Get base URL for Identity API (uses apiz subdomain)
  */
 export function getIdentityBaseUrl(environment: 'production' | 'sandbox'): string {
@@ -359,7 +366,7 @@ export function getAuthUrl(
     return '';
   }
 
-  const authBase = env === 'production' ? 'https://auth.ebay.com' : 'https://auth.sandbox.ebay.com';
+  const authBase = getOauthBaseUrl(env);
 
   const scopeList = scopes && scopes.length > 0 ? scopes.join('%20') : scope.join('%20');
 

@@ -1,6 +1,6 @@
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ListingInsert,
   ListingUpdate,
@@ -169,6 +169,24 @@ function createApp(dataAccess: SidecarDataAccess): Express {
 }
 
 describe('data API router', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      EBAY_CLIENT_ID: 'client-id-secret',
+      EBAY_CLIENT_SECRET: 'client-secret-secret',
+      EBAY_REDIRECT_URI: 'https://example.com/return',
+      EBAY_REFRESH_TOKEN: 'refresh-token-secret',
+      EBAY_USER_ACCESS_TOKEN: 'access-token-secret',
+      EBAY_USER_REFRESH_TOKEN: 'user-refresh-token-secret',
+    } as NodeJS.ProcessEnv;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
   it('lists listings through the shared data access layer', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
@@ -209,6 +227,58 @@ describe('data API router', () => {
       used: 21,
     });
     expect(dataAccess.dailyUsage.getGeminiSummary).toHaveBeenCalledOnce();
+  });
+
+  it('returns safe eBay environment data for sandbox', async () => {
+    const dataAccess = createDataAccess();
+    process.env.EBAY_ENVIRONMENT = 'sandbox';
+    process.env.EBAY_MARKETPLACE_ID = 'EBAY_US';
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/ebay-environment');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      api_base_url: 'https://api.sandbox.ebay.com',
+      environment: 'sandbox',
+      marketplace_id: 'EBAY_US',
+      oauth_base_url: 'https://auth.sandbox.ebay.com',
+    });
+  });
+
+  it('returns safe eBay environment data for production', async () => {
+    const dataAccess = createDataAccess();
+    process.env.EBAY_ENVIRONMENT = 'production';
+    process.env.EBAY_MARKETPLACE_ID = 'EBAY_GB';
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/ebay-environment');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      api_base_url: 'https://api.ebay.com',
+      environment: 'production',
+      marketplace_id: 'EBAY_GB',
+      oauth_base_url: 'https://auth.ebay.com',
+    });
+  });
+
+  it('does not leak client credentials or tokens', async () => {
+    const dataAccess = createDataAccess();
+    process.env.EBAY_ENVIRONMENT = 'sandbox';
+    process.env.EBAY_MARKETPLACE_ID = 'EBAY_US';
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/ebay-environment');
+    const body = JSON.stringify(response.body);
+
+    expect(response.status).toBe(200);
+    expect(body).not.toContain('client-id-secret');
+    expect(body).not.toContain('client-secret-secret');
+    expect(body).not.toContain('refresh-token-secret');
+    expect(body).not.toContain('access-token-secret');
+    expect(body).not.toContain('user-refresh-token-secret');
+    expect(body).not.toContain('https://example.com/return');
   });
 
   it('lists multiple listings without AI attempt summary fields', async () => {
