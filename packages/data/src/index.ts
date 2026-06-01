@@ -27,6 +27,7 @@ export type {
 export {
   createAiModelAttempt,
   listAiModelAttemptsForListing,
+  listAiModelAttemptsForListings,
   markAiModelAttemptFailed,
   markAiModelAttemptSucceeded,
   type AiModelAttemptMetadata,

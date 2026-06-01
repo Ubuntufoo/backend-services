@@ -97,6 +97,13 @@ function createDataAccess(
   const listingStates = new Map(listings.map((listing) => [listing.listing_id, { ...listing }]));
 
   const dataAccess: SidecarDataAccess = {
+    aiModelAttempts: {
+      create: vi.fn(),
+      listByListingId: vi.fn(),
+      listByListingIds: vi.fn(),
+      markFailed: vi.fn(),
+      markSucceeded: vi.fn(),
+    },
     appSettings: {
       create: vi.fn(),
       get: vi.fn(),

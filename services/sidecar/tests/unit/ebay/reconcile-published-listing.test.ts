@@ -74,6 +74,13 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
 
 function createDataAccess(listing: ListingRow): SidecarDataAccess {
   return {
+    aiModelAttempts: {
+      create: vi.fn(),
+      listByListingId: vi.fn(),
+      listByListingIds: vi.fn(),
+      markFailed: vi.fn(),
+      markSucceeded: vi.fn(),
+    },
     appSettings: {
       create: vi.fn(),
       get: vi.fn(async () => createAppSettings()),

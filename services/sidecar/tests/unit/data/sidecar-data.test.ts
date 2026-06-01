@@ -12,6 +12,7 @@ const listListingsMock = vi.fn();
 const listListingsByStatusMock = vi.fn();
 const listApprovedForExportListingsMock = vi.fn();
 const listAiModelAttemptsForListingMock = vi.fn();
+const listAiModelAttemptsForListingsMock = vi.fn();
 const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
 const markAiModelAttemptFailedMock = vi.fn();
@@ -68,6 +69,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getOrderByOrderId: getOrderByOrderIdMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
   listAiModelAttemptsForListing: listAiModelAttemptsForListingMock,
+  listAiModelAttemptsForListings: listAiModelAttemptsForListingsMock,
   listDueQueuedJobs: listDueQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
   listStaleRunningJobs: listStaleRunningJobsMock,
@@ -115,6 +117,7 @@ describe('sidecar data access', () => {
     });
     await dataAccess.listings.getByListingId('LIST-001');
     await dataAccess.listings.getByOfferId('OFFER-001');
+    await dataAccess.aiModelAttempts.listByListingIds?.(['LIST-001', 'LIST-002']);
 
     expect(createSupabaseServiceClientMock).toHaveBeenCalledWith(env);
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -130,6 +133,10 @@ describe('sidecar data access', () => {
     });
     expect(getListingByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getListingByOfferIdMock).toHaveBeenCalledWith(client, 'OFFER-001');
+    expect(listAiModelAttemptsForListingsMock).toHaveBeenCalledWith(client, [
+      'LIST-001',
+      'LIST-002',
+    ]);
   });
 
   it('delegates create, update, workflow, and app-settings calls to shared repository helpers', async () => {

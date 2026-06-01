@@ -4,6 +4,10 @@ import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  summarizeAiModelAttemptsByListingId,
+  type AiAttemptSummary,
+} from '@/data/listing-ai-attempt-summary.js';
+import {
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
   listingIdParamsSchema,
@@ -149,6 +153,40 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string');
 }
 
+type ListingWithAiAttemptSummary = {
+  ai_attempt_summary: AiAttemptSummary | null;
+} & Record<string, unknown>;
+
+async function loadListingAiAttemptSummaries(
+  dataAccess: SidecarDataAccess,
+  listingIds: string[]
+): Promise<Map<string, AiAttemptSummary> | null> {
+  if (listingIds.length === 0) {
+    return new Map();
+  }
+
+  try {
+    const attempts = await dataAccess.aiModelAttempts.listByListingIds(listingIds);
+    return summarizeAiModelAttemptsByListingId(listingIds, attempts);
+  } catch (error) {
+    console.warn('Failed to load AI attempt summaries for listings.', {
+      error,
+      listingIds,
+    });
+    return null;
+  }
+}
+
+function applyListingAiAttemptSummary(
+  listing: Record<string, unknown>,
+  summary: AiAttemptSummary | null
+): ListingWithAiAttemptSummary {
+  return {
+    ...listing,
+    ai_attempt_summary: summary,
+  };
+}
+
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
   const listingId = input.listingId ?? randomUUID();
   const initialWorkflowState = createIdleWorkflowState('record_created');
@@ -170,8 +208,19 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
 
   router.get('/listings', async (_req: Request, res: Response) => {
     try {
-      const listings = await getDataAccess().listings.list();
-      res.json({ listings });
+      const dataAccess = getDataAccess();
+      const listings = await dataAccess.listings.list();
+      const listingIds = listings.map((listing) => listing.listing_id);
+      const summaries = await loadListingAiAttemptSummaries(dataAccess, listingIds);
+
+      res.json({
+        listings: listings.map((listing) =>
+          applyListingAiAttemptSummary(
+            listing,
+            summaries ? summaries.get(listing.listing_id) ?? null : null
+          )
+        ),
+      });
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -184,7 +233,8 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
-      const listing = await getDataAccess().listings.getByListingId(params.listingId);
+      const dataAccess = getDataAccess();
+      const listing = await dataAccess.listings.getByListingId(params.listingId);
 
       if (!listing) {
         res.status(404).json({
@@ -194,7 +244,14 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      res.json(listing);
+      const summaries = await loadListingAiAttemptSummaries(dataAccess, [params.listingId]);
+
+      res.json(
+        applyListingAiAttemptSummary(
+          listing,
+          summaries ? summaries.get(params.listingId) ?? null : null
+        )
+      );
     } catch (error) {
       sendRouteError(res, error);
     }

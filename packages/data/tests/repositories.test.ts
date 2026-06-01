@@ -28,6 +28,7 @@ import {
   getOrderByOrderId,
   listApprovedForExportListings,
   listAiModelAttemptsForListing,
+  listAiModelAttemptsForListings,
   listDueQueuedJobs,
   listListings,
   listListingsByStatus,
@@ -745,6 +746,56 @@ function createAiModelAttemptListClient(expectedRows: AiModelAttemptRow[]): Supa
                       return {
                         data: expectedRows,
                         error: null,
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createAiModelAttemptListByListingIdsClient(
+  expectedRows: AiModelAttemptRow[],
+  listingIds: string[]
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('ai_model_attempts');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            in: vi.fn((column: string, value: string[]) => {
+              expect(column).toBe('listing_id');
+              expect(value).toEqual(listingIds);
+
+              return {
+                order: vi.fn((firstOrderColumn: string, firstOptions: { ascending: boolean }) => {
+                  expect(firstOrderColumn).toBe('listing_id');
+                  expect(firstOptions).toEqual({ ascending: true });
+
+                  return {
+                    order: vi.fn((secondOrderColumn: string, secondOptions: { ascending: boolean }) => {
+                      expect(secondOrderColumn).toBe('created_at');
+                      expect(secondOptions).toEqual({ ascending: true });
+
+                      return {
+                        order: vi.fn(async (thirdOrderColumn: string, thirdOptions: { ascending: boolean }) => {
+                          expect(thirdOrderColumn).toBe('attempt_order');
+                          expect(thirdOptions).toEqual({ ascending: true });
+
+                          return {
+                            data: expectedRows,
+                            error: null,
+                          };
+                        }),
                       };
                     }),
                   };
@@ -1761,6 +1812,43 @@ describe('shared repositories', () => {
         attempt_order: 2,
         created_at: '2026-05-25T13:01:00.000Z',
         id: 'ai-model-attempt-row-2',
+      },
+    ]);
+
+    const listByIdsClient = createAiModelAttemptListByListingIdsClient(
+      [
+        {
+          ...startedAttemptRow,
+          attempt_order: 1,
+          created_at: '2026-05-25T13:00:00.000Z',
+          id: 'ai-model-attempt-row-1',
+        },
+        {
+          ...startedAttemptRow,
+          attempt_order: 1,
+          created_at: '2026-05-25T13:02:00.000Z',
+          id: 'ai-model-attempt-row-3',
+          listing_id: 'LIST-002',
+        },
+      ],
+      ['LIST-001', 'LIST-002']
+    );
+
+    await expect(
+      listAiModelAttemptsForListings(listByIdsClient, ['LIST-001', 'LIST-002'])
+    ).resolves.toEqual([
+      {
+        ...startedAttemptRow,
+        attempt_order: 1,
+        created_at: '2026-05-25T13:00:00.000Z',
+        id: 'ai-model-attempt-row-1',
+      },
+      {
+        ...startedAttemptRow,
+        attempt_order: 1,
+        created_at: '2026-05-25T13:02:00.000Z',
+        id: 'ai-model-attempt-row-3',
+        listing_id: 'LIST-002',
       },
     ]);
 

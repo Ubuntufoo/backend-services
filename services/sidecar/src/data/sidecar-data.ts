@@ -1,6 +1,7 @@
 import {
   createAiModelAttempt,
   listAiModelAttemptsForListing,
+  listAiModelAttemptsForListings,
   markAiModelAttemptFailed,
   markAiModelAttemptSucceeded,
   claimApprovedListingForPublish,
@@ -72,6 +73,7 @@ export interface SidecarDataAccess {
   aiModelAttempts: {
     create(input: CreateAiModelAttemptInput): Promise<AiModelAttemptRow>;
     listByListingId(listingId: string): Promise<AiModelAttemptRow[]>;
+    listByListingIds(listingIds: string[]): Promise<AiModelAttemptRow[]>;
     markFailed(input: MarkAiModelAttemptFailedInput): Promise<AiModelAttemptRow>;
     markSucceeded(input: MarkAiModelAttemptSucceededInput): Promise<AiModelAttemptRow>;
   };
@@ -139,6 +141,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     aiModelAttempts: {
       create: async (input) => await createAiModelAttempt(client, input),
       listByListingId: async (listingId) => await listAiModelAttemptsForListing(client, listingId),
+      listByListingIds: async (listingIds) =>
+        await listAiModelAttemptsForListings(client, listingIds),
       markFailed: async (input) => await markAiModelAttemptFailed(client, input),
       markSucceeded: async (input) => await markAiModelAttemptSucceeded(client, input),
     },
