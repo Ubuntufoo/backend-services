@@ -56,8 +56,8 @@ const secondListingRow = {
 };
 
 const geminiUsageSummary = {
-  effectiveLimit: 500,
-  remaining: 479,
+  effectiveLimit: 540,
+  remaining: 519,
   resetAt: '2026-06-02T07:00:00.000Z',
   resetTimeZone: 'America/Los_Angeles',
   usageDate: '2026-06-01',
@@ -201,8 +201,8 @@ describe('data API router', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      effective_limit: 500,
-      remaining: 479,
+      effective_limit: 540,
+      remaining: 519,
       reset_at: '2026-06-02T07:00:00.000Z',
       reset_time_zone: 'America/Los_Angeles',
       usage_date: '2026-06-01',
