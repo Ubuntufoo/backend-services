@@ -197,6 +197,7 @@ describe('generateListingDraftWithFallback', () => {
     ).rejects.toMatchObject({
       attemptedModels: ['gemini-3.1-flash-lite', 'gemini-3.1-pro'],
       fallbackExhausted: true,
+      finalFallbackKind: 'unavailable',
       name: 'GeminiFallbackExecutionError',
     });
   });

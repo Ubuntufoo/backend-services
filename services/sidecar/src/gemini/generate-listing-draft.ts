@@ -46,7 +46,21 @@ function summarizeGeminiError(error: unknown): string {
   return 'Unknown Gemini draft generation error.';
 }
 
-function wrapGeminiDraftExecutionError(listingId: string, error: unknown): GeminiDraftServiceError {
+function wrapGeminiDraftPreflightError(listingId: string, error: unknown): GeminiDraftServiceError {
+  if (error instanceof GeminiDraftServiceError) {
+    return error;
+  }
+
+  return new GeminiDraftServiceError(
+    `Gemini draft preflight failed for listing "${listingId}": ${summarizeGeminiError(error)}`,
+    { cause: error instanceof Error ? error : undefined }
+  );
+}
+
+function wrapGeminiDraftProviderExecutionError(
+  listingId: string,
+  error: unknown
+): GeminiDraftServiceError {
   if (error instanceof GeminiDraftServiceError) {
     return error;
   }
@@ -87,12 +101,12 @@ export function prepareGenerateListingDraft(
 
             return parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse);
           } catch (error) {
-            throw wrapGeminiDraftExecutionError(validatedInput.listingId, error);
+            throw wrapGeminiDraftProviderExecutionError(validatedInput.listingId, error);
           }
         },
       };
     } catch (error) {
-      throw wrapGeminiDraftExecutionError(validatedInput.listingId, error);
+      throw wrapGeminiDraftPreflightError(validatedInput.listingId, error);
     }
   });
 }

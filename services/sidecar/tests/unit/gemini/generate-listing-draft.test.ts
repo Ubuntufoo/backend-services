@@ -140,6 +140,21 @@ describe('generateListingDraft', () => {
     expect(generateDraftRawMock).not.toHaveBeenCalled();
   });
 
+  it('labels image preparation failures as preflight failures', async () => {
+    prepareImagePartsMock.mockRejectedValueOnce(new Error('image fetch timed out'));
+
+    await expect(
+      generateListingDraft({
+        listingId: 'LIST-001',
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      })
+    ).rejects.toThrow(
+      'Gemini draft preflight failed for listing "LIST-001": image fetch timed out'
+    );
+
+    expect(generateDraftRawMock).not.toHaveBeenCalled();
+  });
+
   it('parses a valid raw JSON response into GeneratedListingDraft', async () => {
     const rawResponse = {
       text: '{"title":"1986 Fleer Michael Jordan RC"}',

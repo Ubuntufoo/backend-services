@@ -289,6 +289,7 @@ function enrichGeminiJobError(
       attempted_models: routerError.attemptedModels,
       fallback_exhausted: routerError.fallbackExhausted,
       final_failure_code: error.code,
+      final_fallback_kind: routerError.finalFallbackKind,
       final_failure_message: error.message,
     },
     { cause: error }
@@ -563,12 +564,6 @@ async function runGenerateAiJob(
       userHints: buildUserHints(listing),
     });
 
-    await options.dataAccess.listings.updateWorkflowState({
-      listingId,
-      status: 'generating',
-      subStatus: 'ai_call_in_progress',
-    });
-
     const routerResult = await generateListingDraftWithFallback({
       executeRoute: async (route) => await preparedDraft.execute({ model: route.modelName }),
       incrementDailyUsage: async () => {
@@ -638,6 +633,14 @@ async function runGenerateAiJob(
           listingId,
           modelName: attempt.route.modelName,
         };
+
+        if (attempt.attemptOrder === 1) {
+          await options.dataAccess.listings.updateWorkflowState({
+            listingId,
+            status: 'generating',
+            subStatus: 'ai_call_in_progress',
+          });
+        }
 
         legacyAttempts.push(startedAttempt);
         await persistGeminiAttemptAudit(
@@ -737,19 +740,6 @@ async function runGenerateAiJob(
             error as GeminiFallbackExecutionError<ResolvedAiModelRoute>
           )
         : classifyJobError(job.job_type, error);
-
-    if (error instanceof GeminiFallbackExecutionError && legacyAttempts.length === 0) {
-      await persistGeminiAttemptAudit(
-        options.dataAccess,
-        job.id,
-        {
-          gemini_attempt_count: 0,
-          gemini_attempts: [],
-          gemini_selected_model: null,
-        },
-        true
-      );
-    }
 
     try {
       await options.dataAccess.listings.update(

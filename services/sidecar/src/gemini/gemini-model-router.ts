@@ -46,6 +46,7 @@ export class GeminiFallbackExecutionError<
   readonly attempts: GeminiFallbackAttempt<Route>[];
   readonly fallbackExhausted: boolean;
   readonly finalError: unknown;
+  readonly finalFallbackKind: GeminiFallbackKind;
 
   constructor(input: {
     attempts: GeminiFallbackAttempt<Route>[];
@@ -58,6 +59,7 @@ export class GeminiFallbackExecutionError<
     this.attemptedModels = input.attempts.map((attempt) => attempt.route.modelName);
     this.fallbackExhausted = input.fallbackExhausted;
     this.finalError = input.finalError;
+    this.finalFallbackKind = input.attempts.at(-1)?.fallbackKind ?? 'none';
   }
 }
 

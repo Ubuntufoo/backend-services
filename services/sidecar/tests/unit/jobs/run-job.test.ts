@@ -1149,6 +1149,7 @@ describe('runSidecarJob', () => {
         attempt_count: 1,
         attempted_models: ['gemini-3.1-flash-lite'],
         final_failure_code: 'DAILY_GEMINI_LIMIT_EXCEEDED',
+        final_fallback_kind: 'rate_limit',
       })
     );
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
@@ -1334,7 +1335,7 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).not.toHaveBeenCalled();
     expect(dataAccess.jobs.updateGeminiAttemptAudit).not.toHaveBeenCalled();
     expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('returns asset prep summary for process_images jobs and does not fail batch on per-listing errors', async () => {
