@@ -113,6 +113,13 @@ function createDataAccess(): SidecarDataAccess {
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
+    dailyUsage: {
+      getEffectiveGeminiLimit: vi.fn(),
+      getEffectiveOrderSyncLimit: vi.fn(),
+      getOrCreate: vi.fn(),
+      incrementGeminiCallsUsed: vi.fn(),
+      incrementOrderSyncCount: vi.fn(),
+    },
     listings: {
       claimApprovedForPublish: vi.fn(async () => null),
       create: vi.fn(async (input: ListingInsert) => ({

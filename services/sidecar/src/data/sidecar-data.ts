@@ -16,13 +16,18 @@ import {
   enqueueProcessImagesJob,
   enqueuePublishJob,
   failJob,
+  getEffectiveGeminiDailyLimit,
+  getEffectiveOrderSyncDailyLimit,
   createSupabaseServiceClient,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
   getJobById,
+  getOrCreateDailyUsage,
   getListingByOfferId,
   getListingByListingId,
   getOrderByOrderId,
+  incrementGeminiCallsUsed,
+  incrementOrderSyncCount,
   listApprovedForExportListings,
   listDueQueuedJobs,
   listJobsByListingId,
@@ -46,6 +51,8 @@ import {
   type AppSettingsUpdate,
   type AiModelAttemptRow,
   type CreateAiModelAttemptInput,
+  type DailyUsageIncrementResult,
+  type DailyUsageLimitResolution,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
   type EnqueuePublishJobResult,
@@ -81,6 +88,13 @@ export interface SidecarDataAccess {
     create(input: AppSettingsInsert): Promise<AppSettingsRow>;
     get(id?: string): Promise<AppSettingsRow | null>;
     update(changes: AppSettingsUpdate, id?: string): Promise<AppSettingsRow>;
+  };
+  dailyUsage: {
+    getEffectiveGeminiLimit(usageDate?: string): Promise<DailyUsageLimitResolution>;
+    getEffectiveOrderSyncLimit(usageDate?: string): Promise<DailyUsageLimitResolution>;
+    getOrCreate(usageDate?: string): Promise<DailyUsageLimitResolution['usage']>;
+    incrementGeminiCallsUsed(usageDate?: string): Promise<DailyUsageIncrementResult>;
+    incrementOrderSyncCount(usageDate?: string): Promise<DailyUsageIncrementResult>;
   };
   jobs: {
     claimDueQueued(jobId: string, now: string): Promise<JobRow | null>;
@@ -138,6 +152,17 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
   const client = createSupabaseServiceClient(env);
 
   return {
+    dailyUsage: {
+      getEffectiveGeminiLimit: async (usageDate) =>
+        await getEffectiveGeminiDailyLimit(client, usageDate),
+      getEffectiveOrderSyncLimit: async (usageDate) =>
+        await getEffectiveOrderSyncDailyLimit(client, usageDate),
+      getOrCreate: async (usageDate) => await getOrCreateDailyUsage(client, usageDate),
+      incrementGeminiCallsUsed: async (usageDate) =>
+        await incrementGeminiCallsUsed(client, usageDate),
+      incrementOrderSyncCount: async (usageDate) =>
+        await incrementOrderSyncCount(client, usageDate),
+    },
     aiModelAttempts: {
       create: async (input) => await createAiModelAttempt(client, input),
       listByListingId: async (listingId) => await listAiModelAttemptsForListing(client, listingId),

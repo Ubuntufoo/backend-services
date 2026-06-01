@@ -74,6 +74,23 @@ function createDataAccess(): SidecarDataAccess {
         throw new Error('not implemented');
       },
     },
+    dailyUsage: {
+      getEffectiveGeminiLimit: async () => {
+        throw new Error('not implemented');
+      },
+      getEffectiveOrderSyncLimit: async () => {
+        throw new Error('not implemented');
+      },
+      getOrCreate: async () => {
+        throw new Error('not implemented');
+      },
+      incrementGeminiCallsUsed: async () => {
+        throw new Error('not implemented');
+      },
+      incrementOrderSyncCount: async () => {
+        throw new Error('not implemented');
+      },
+    },
     listings: {
       claimApprovedForPublish: async () => null,
       create: async () => listingRow,

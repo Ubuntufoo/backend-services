@@ -117,6 +117,13 @@ function createDataAccess(
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
+    dailyUsage: {
+      getEffectiveGeminiLimit: vi.fn(),
+      getEffectiveOrderSyncLimit: vi.fn(),
+      getOrCreate: vi.fn(),
+      incrementGeminiCallsUsed: vi.fn(),
+      incrementOrderSyncCount: vi.fn(),
+    },
     appSettings: {
       create: vi.fn(),
       get: vi.fn(),
