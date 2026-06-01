@@ -247,13 +247,16 @@ async function persistGeminiAttemptAudit(
   jobId: string,
   audit: GeminiJobAttemptAuditUpdate,
   bestEffort = false
-): Promise<void> {
+): Promise<boolean> {
   try {
     await dataAccess.jobs.updateGeminiAttemptAudit(jobId, audit);
+    return true;
   } catch (error) {
     if (!bestEffort) {
       throw error;
     }
+
+    return false;
   }
 }
 
@@ -496,24 +499,10 @@ async function runGenerateAiJob(
     started_at: startedAt,
     status: 'started',
   };
-  const aiModelAttempt = await createAiModelAttemptRecord(
-    options.dataAccess,
-    {
-      job_id: job.id,
-      listing_id: listingId,
-      model_name: modelName,
-      provider: AI_PROVIDER_GOOGLE,
-      provider_model_id: modelName,
-      routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
-      started_at: startedAt,
-      status: 'started',
-    },
-    aiAttemptContext,
-    true
-  );
+  let aiModelAttempt: AiModelAttemptRow | null = null;
 
   try {
-    await persistGeminiAttemptAudit(options.dataAccess, job.id, {
+    const persistedLegacyStartedAttempt = await persistGeminiAttemptAudit(options.dataAccess, job.id, {
       gemini_attempt_count: 1,
       gemini_attempts: [startedAttempt],
       gemini_selected_model: null,
@@ -524,6 +513,23 @@ async function runGenerateAiJob(
       subStatus: 'ai_call_in_progress',
     });
     generationStarted = true;
+    if (persistedLegacyStartedAttempt) {
+      aiModelAttempt = await createAiModelAttemptRecord(
+        options.dataAccess,
+        {
+          job_id: job.id,
+          listing_id: listingId,
+          model_name: modelName,
+          provider: AI_PROVIDER_GOOGLE,
+          provider_model_id: modelName,
+          routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
+          started_at: startedAt,
+          status: 'started',
+        },
+        aiAttemptContext,
+        true
+      );
+    }
 
     const draft = await options.generateListingDraft({
       imageUrls,

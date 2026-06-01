@@ -1837,6 +1837,111 @@ describe('shared repositories', () => {
     });
   });
 
+  it('retries ai model attempt creation on attempt-order unique conflicts', async () => {
+    let selectCount = 0;
+    let insertCount = 0;
+
+    const retryClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('ai_model_attempts');
+
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('attempt_order');
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('listing_id');
+                expect(firstValue).toBe('LIST-001');
+
+                return {
+                  eq: vi.fn((secondColumn: string, secondValue: string) => {
+                    expect(secondColumn).toBe('job_id');
+                    expect(secondValue).toBe('job-row-id');
+
+                    return {
+                      order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                        expect(orderColumn).toBe('attempt_order');
+                        expect(options).toEqual({ ascending: false });
+
+                        return {
+                          limit: vi.fn(async (limit: number) => {
+                            expect(limit).toBe(1);
+                            selectCount += 1;
+
+                            return {
+                              data: [{ attempt_order: selectCount }],
+                              error: null,
+                            };
+                          }),
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+          insert: vi.fn((payload: unknown) => {
+            insertCount += 1;
+            expect(payload).toEqual({
+              attempt_order: insertCount === 1 ? 2 : 3,
+              job_id: 'job-row-id',
+              listing_id: 'LIST-001',
+              metadata: {},
+              model_name: 'gemini-3.1-flash-lite',
+              provider: 'google',
+              provider_model_id: 'gemini-3.1-flash-lite',
+              routing_source: 'direct_gemini',
+              started_at: '2026-05-25T13:00:00.000Z',
+              status: 'started',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () =>
+                  insertCount === 1
+                    ? {
+                        data: null,
+                        error: {
+                          code: '23505',
+                          message:
+                            'duplicate key value violates unique constraint "ai_model_attempts_listing_job_attempt_order_uidx"',
+                        },
+                      }
+                    : {
+                        data: {
+                          ...aiModelAttemptRow,
+                          attempt_order: 3,
+                          id: 'ai-model-attempt-row-retried',
+                        },
+                        error: null,
+                      }
+                ),
+              })),
+            };
+          }),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(
+      createAiModelAttempt(retryClient, {
+        job_id: 'job-row-id',
+        listing_id: 'LIST-001',
+        model_name: 'gemini-3.1-flash-lite',
+        provider: 'google',
+        provider_model_id: 'gemini-3.1-flash-lite',
+        routing_source: 'direct_gemini',
+        started_at: '2026-05-25T13:00:00.000Z',
+      })
+    ).resolves.toEqual({
+      ...aiModelAttemptRow,
+      attempt_order: 3,
+      id: 'ai-model-attempt-row-retried',
+    });
+  });
+
   it('lists stale running jobs and wraps retry helper updates', async () => {
     const staleJob: JobRow = {
       ...jobRow,

@@ -823,6 +823,8 @@ describe('runSidecarJob', () => {
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.markSucceeded).not.toHaveBeenCalled();
     expect(result.job.status).toBe('completed');
     expect(result.job.last_error_code).toBeNull();
     expect(result.listing?.status).toBe('needs_review');
@@ -881,6 +883,8 @@ describe('runSidecarJob', () => {
 
     expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenCalledTimes(2);
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.markFailed).not.toHaveBeenCalled();
     expect(result.job.status).toBe('queued');
     expect(result.job.last_error_code).toBe('generate_ai_failed');
     expect(result.job.last_error).toContain('Gemini timed out');
