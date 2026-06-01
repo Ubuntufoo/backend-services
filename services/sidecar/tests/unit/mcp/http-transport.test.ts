@@ -49,8 +49,31 @@ const listingRow = {
   updated_at: '2026-05-17T00:00:00.000Z',
 };
 
+const emptyAiAttemptSummary = {
+  attempt_count: 0,
+  latest_failure_code: null,
+  latest_finished_at: null,
+  latest_model_name: null,
+  latest_provider: null,
+  latest_started_at: null,
+  latest_status: null,
+};
+
 function createDataAccess(): SidecarDataAccess {
   return {
+    aiModelAttempts: {
+      create: async () => {
+        throw new Error('not implemented');
+      },
+      listByListingId: async () => [],
+      listByListingIds: async () => [],
+      markFailed: async () => {
+        throw new Error('not implemented');
+      },
+      markSucceeded: async () => {
+        throw new Error('not implemented');
+      },
+    },
     listings: {
       claimApprovedForPublish: async () => null,
       create: async () => listingRow,
@@ -235,7 +258,12 @@ describe('HTTP MCP transport', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      listings: [listingRow],
+      listings: [
+        {
+          ...listingRow,
+          ai_attempt_summary: emptyAiAttemptSummary,
+        },
+      ],
     });
   });
 

@@ -49,6 +49,41 @@ const listingRow = {
   updated_at: '2026-05-17T00:00:00.000Z',
 };
 
+const secondListingRow = {
+  ...listingRow,
+  listing_id: 'LIST-002',
+  sku: 'SKU-002',
+};
+
+const aiAttemptSummaryRow = {
+  attempt_order: 2,
+  created_at: '2026-05-25T13:01:00.000Z',
+  duration_ms: 2000,
+  failure_code: null,
+  failure_message: null,
+  finished_at: '2026-05-25T13:01:02.000Z',
+  id: 'ai-model-attempt-002',
+  job_id: 'job-row-id',
+  listing_id: 'LIST-001',
+  metadata: {},
+  model_name: 'gemini-3.1-flash-lite',
+  provider: 'google',
+  provider_model_id: 'gemini-3.1-flash-lite',
+  routing_source: 'direct_gemini',
+  started_at: '2026-05-25T13:01:00.000Z',
+  status: 'succeeded',
+};
+
+const emptyAiAttemptSummary = {
+  attempt_count: 0,
+  latest_failure_code: null,
+  latest_finished_at: null,
+  latest_model_name: null,
+  latest_provider: null,
+  latest_started_at: null,
+  latest_status: null,
+};
+
 const appSettingsRow = {
   capture_mode: 'single_2_image',
   default_fulfillment_policy_id: null,
@@ -71,6 +106,13 @@ const appSettingsRow = {
 
 function createDataAccess(): SidecarDataAccess {
   return {
+    aiModelAttempts: {
+      create: vi.fn(),
+      listByListingId: vi.fn(),
+      listByListingIds: vi.fn(async () => []),
+      markFailed: vi.fn(),
+      markSucceeded: vi.fn(),
+    },
     listings: {
       claimApprovedForPublish: vi.fn(async () => null),
       create: vi.fn(async (input: ListingInsert) => ({
@@ -143,7 +185,12 @@ describe('data API router', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      listings: [listingRow],
+      listings: [
+        {
+          ...listingRow,
+          ai_attempt_summary: emptyAiAttemptSummary,
+        },
+      ],
     });
     expect(dataAccess.listings.list).toHaveBeenCalledOnce();
   });
@@ -155,8 +202,102 @@ describe('data API router', () => {
     const response = await request(app).get('/api/listings/LIST-001');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual(listingRow);
+    expect(response.body).toEqual({
+      ...listingRow,
+      ai_attempt_summary: emptyAiAttemptSummary,
+    });
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
+  });
+
+  it('adds attempt summary for one succeeded listing read', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.aiModelAttempts.listByListingIds.mockResolvedValueOnce([aiAttemptSummaryRow]);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/listings/LIST-001');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      ...listingRow,
+      ai_attempt_summary: {
+        attempt_count: 1,
+        latest_failure_code: null,
+        latest_finished_at: '2026-05-25T13:01:02.000Z',
+        latest_model_name: 'gemini-3.1-flash-lite',
+        latest_provider: 'google',
+        latest_started_at: '2026-05-25T13:01:00.000Z',
+        latest_status: 'succeeded',
+      },
+    });
+    expect(dataAccess.aiModelAttempts.listByListingIds).toHaveBeenCalledWith(['LIST-001']);
+  });
+
+  it('includes attempt summaries for multiple listings in list response', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.list.mockResolvedValueOnce([listingRow, secondListingRow]);
+    dataAccess.aiModelAttempts.listByListingIds.mockResolvedValueOnce([
+      {
+        ...aiAttemptSummaryRow,
+        attempt_order: 1,
+        created_at: '2026-05-25T13:00:00.000Z',
+        finished_at: null,
+        started_at: '2026-05-25T13:00:00.000Z',
+        status: 'started',
+      },
+      {
+        ...aiAttemptSummaryRow,
+        attempt_order: 2,
+        created_at: '2026-05-25T13:00:00.000Z',
+        failure_code: 'generate_ai_failed',
+        failure_message: 'Gemini timed out',
+        finished_at: '2026-05-25T13:00:02.000Z',
+        started_at: '2026-05-25T13:00:00.000Z',
+        status: 'failed',
+      },
+    ]);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/listings');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      listings: [
+        {
+          ...listingRow,
+          ai_attempt_summary: {
+            attempt_count: 2,
+            latest_failure_code: 'generate_ai_failed',
+            latest_finished_at: '2026-05-25T13:00:02.000Z',
+            latest_model_name: 'gemini-3.1-flash-lite',
+            latest_provider: 'google',
+            latest_started_at: '2026-05-25T13:00:00.000Z',
+            latest_status: 'failed',
+          },
+        },
+        {
+          ...secondListingRow,
+          ai_attempt_summary: emptyAiAttemptSummary,
+        },
+      ],
+    });
+    expect(dataAccess.aiModelAttempts.listByListingIds).toHaveBeenCalledWith([
+      'LIST-001',
+      'LIST-002',
+    ]);
+  });
+
+  it('keeps listing responses when attempt summary lookup fails', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.aiModelAttempts.listByListingIds.mockRejectedValueOnce(new Error('boom'));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/listings/LIST-001');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      ...listingRow,
+      ai_attempt_summary: null,
+    });
   });
 
   it('creates a listing with workflow defaults', async () => {

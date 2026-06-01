@@ -208,3 +208,28 @@ export async function listAiModelAttemptsForListing(
 
   return result.data ?? [];
 }
+
+export async function listAiModelAttemptsForListings(
+  client: SupabaseDataClient,
+  listingIds: string[]
+): Promise<AiModelAttemptRow[]> {
+  const uniqueListingIds = Array.from(new Set(listingIds)).filter((listingId) => listingId.length > 0);
+
+  if (uniqueListingIds.length === 0) {
+    return [];
+  }
+
+  const result = (await client
+    .from('ai_model_attempts')
+    .select('*')
+    .in('listing_id', uniqueListingIds)
+    .order('listing_id', { ascending: true })
+    .order('created_at', { ascending: true })
+    .order('attempt_order', { ascending: true })) as MultiResult<AiModelAttemptRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data ?? [];
+}
