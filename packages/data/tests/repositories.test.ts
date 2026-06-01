@@ -2879,6 +2879,35 @@ describe('shared repositories', () => {
         ...appSettingsRow,
         gemini_daily_limit: 750,
       },
+      routeCapacityRows: [
+        {
+          catalog: {
+            free_tier_daily_request_limit: 20,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          route_is_enabled: true,
+          model_name: 'gemini-3.5-flash',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 20,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          route_is_enabled: true,
+          model_name: 'gemini-3-flash-preview',
+        },
+        {
+          catalog: {
+            free_tier_daily_request_limit: 500,
+            is_enabled: true,
+            is_free_tier_eligible: true,
+          },
+          route_is_enabled: true,
+          model_name: 'gemini-3.1-flash-lite',
+        },
+      ],
     });
 
     await expect(getEffectiveGeminiDailyLimit(client, '2026-05-31')).resolves.toEqual({
