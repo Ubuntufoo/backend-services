@@ -161,14 +161,12 @@ async function loadListingAiAttemptSummaries(
   dataAccess: SidecarDataAccess,
   listingIds: string[]
 ): Promise<Map<string, AiAttemptSummary> | null> {
-  const listByListingIds = dataAccess.aiModelAttempts.listByListingIds;
-
-  if (!listByListingIds || listingIds.length === 0) {
+  if (listingIds.length === 0) {
     return new Map();
   }
 
   try {
-    const attempts = await listByListingIds(listingIds);
+    const attempts = await dataAccess.aiModelAttempts.listByListingIds(listingIds);
     return summarizeAiModelAttemptsByListingId(listingIds, attempts);
   } catch (error) {
     console.warn('Failed to load AI attempt summaries for listings.', {
