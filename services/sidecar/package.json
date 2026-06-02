@@ -14,6 +14,7 @@
     "dev:stdio": "pnpm run build:deps && tsx src/index.ts",
     "ebay:diagnose-offer": "tsx src/scripts/diagnose-offer.ts",
     "ebay:diagnose-condition-policy": "tsx src/scripts/diagnose-condition-policy.ts",
+    "ebay:diagnose-live-readiness": "tsx src/scripts/diagnose-live-readiness.ts",
     "ebay:diagnose-sandbox": "tsx src/scripts/diagnose-sandbox.ts",
     "ebay:diagnose-sandbox-config": "tsx src/scripts/diagnose-sandbox-config.ts",
     "ebay:cleanup-sandbox": "tsx src/scripts/cleanup-ebay-sandbox.ts",
