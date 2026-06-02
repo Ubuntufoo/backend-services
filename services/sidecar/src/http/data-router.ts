@@ -3,6 +3,7 @@ import { DEFAULT_APP_SETTINGS_ID, type ListingInsert, type ListingUpdate } from 
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import { getBaseUrl, getOauthBaseUrl } from '@/config/environment.js';
 import {
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
@@ -14,6 +15,7 @@ import {
   type EditableListingFieldsInput,
   type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
+import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow } from '@/jobs/manual-retry.js';
 import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
@@ -149,6 +151,18 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string');
 }
 
+function getEbayEnvironmentResponse(): EbayEnvironmentResponse {
+  const environment = process.env.EBAY_ENVIRONMENT === 'production' ? 'production' : 'sandbox';
+  const marketplaceId = (process.env.EBAY_MARKETPLACE_ID ?? '').trim() || 'EBAY_US';
+
+  return {
+    environment,
+    marketplace_id: marketplaceId,
+    api_base_url: getBaseUrl(environment),
+    oauth_base_url: getOauthBaseUrl(environment),
+  };
+}
+
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
   const listingId = input.listingId ?? randomUUID();
   const initialWorkflowState = createIdleWorkflowState('record_created');
@@ -216,6 +230,10 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     } catch (error) {
       sendRouteError(res, error);
     }
+  });
+
+  router.get('/ebay-environment', (_req: Request, res: Response) => {
+    res.json(getEbayEnvironmentResponse());
   });
 
   router.post('/listings', async (req: Request, res: Response) => {
