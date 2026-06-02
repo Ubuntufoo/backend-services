@@ -2,27 +2,50 @@
 
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { EbaySellerApi } from '@/api/index.js';
-import { getEbayConfig } from '@/config/environment.js';
-import { loadRootEnvironment } from '@/config/env-paths.js';
 import {
-  DEFAULT_SANDBOX_CLEANUP_PREFIXES,
-  collectSandboxCleanupTargets,
-  performSandboxCleanup,
+  runSandboxCleanup,
+  type SandboxCleanupInput,
 } from '@/ebay/sandbox-cleanup.js';
+import { loadRootEnvironment } from '@/config/env-paths.js';
 
 loadRootEnvironment();
 
-interface ParsedArgs {
-  confirmSandboxCleanup: boolean;
-  delete: boolean;
-  prefixes: string[];
+type ParsedArgs = SandboxCleanupInput;
+
+function parsePositiveInteger(value: string, flagName: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${flagName} requires a positive integer value.`);
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${flagName} requires a positive integer value.`);
+  }
+
+  return parsed;
+}
+
+function parseNonEmptyValue(value: string | undefined, flagName: string): string {
+  if (!value || value === '--' || value.startsWith('--')) {
+    throw new Error(`${flagName} requires a non-empty value.`);
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${flagName} requires a non-empty value.`);
+  }
+
+  return trimmed;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
+  const skus: string[] = [];
   const prefixes: string[] = [];
+  let allowLargeRange = false;
   let confirmSandboxCleanup = false;
   let destructiveDelete = false;
+  let from: number | undefined;
+  let to: number | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const current = argv[index];
@@ -31,13 +54,32 @@ function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
 
-    if (current === '--prefix') {
-      const prefix = argv[index + 1];
-      if (!prefix || prefix === '--' || prefix.startsWith('--') || prefix.length === 0) {
-        throw new Error('--prefix requires a non-empty value.');
-      }
-      prefixes.push(prefix);
+    if (current === '--sku') {
+      skus.push(parseNonEmptyValue(argv[index + 1], '--sku'));
       index += 1;
+      continue;
+    }
+
+    if (current === '--prefix') {
+      prefixes.push(parseNonEmptyValue(argv[index + 1], '--prefix'));
+      index += 1;
+      continue;
+    }
+
+    if (current === '--from') {
+      from = parsePositiveInteger(parseNonEmptyValue(argv[index + 1], '--from'), '--from');
+      index += 1;
+      continue;
+    }
+
+    if (current === '--to') {
+      to = parsePositiveInteger(parseNonEmptyValue(argv[index + 1], '--to'), '--to');
+      index += 1;
+      continue;
+    }
+
+    if (current === '--allow-large-range') {
+      allowLargeRange = true;
       continue;
     }
 
@@ -55,9 +97,13 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   return {
+    allowLargeRange,
     confirmSandboxCleanup,
     delete: destructiveDelete,
-    prefixes: prefixes.length > 0 ? prefixes : [...DEFAULT_SANDBOX_CLEANUP_PREFIXES],
+    from,
+    prefixes,
+    skus,
+    to,
   };
 }
 
@@ -65,47 +111,39 @@ function printSummary(summary: unknown): void {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-async function createEbayApi(): Promise<EbaySellerApi> {
-  const api = new EbaySellerApi(getEbayConfig());
-  await api.initialize();
-  return api;
-}
-
 export async function runCleanupEbaySandboxCli(argv: string[] = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
-
-  if (process.env.EBAY_ENVIRONMENT !== 'sandbox') {
-    throw new Error('EBAY_ENVIRONMENT must be set to "sandbox" before running sandbox cleanup.');
-  }
 
   if (args.delete && !args.confirmSandboxCleanup) {
     throw new Error('Destructive sandbox cleanup requires --confirm-sandbox-cleanup.');
   }
-
-  const api = await createEbayApi();
-  const targets = await collectSandboxCleanupTargets(api, args.prefixes);
+  const report = await runSandboxCleanup(args);
 
   printSummary({
-    mode: args.delete ? 'delete' : 'dry-run',
-    matchedSkus: targets.map((target) => target.inventoryItem.sku),
-    prefixes: args.prefixes,
-    targets,
+    candidateCount: report.candidateCount,
+    candidateSkus: report.candidateSkus,
+    foundSkus: report.foundSkus,
+    from: report.from,
+    missingSkus: report.missingSkus,
+    offersBySku: report.offersBySku,
+    prefixes: report.prefixes,
+    skus: report.skus,
+    sourceMode: report.sourceMode,
+    to: report.to,
   });
 
   if (!args.delete) {
     return;
   }
 
-  const outcomes = await performSandboxCleanup(api, targets);
-  const success = outcomes.every((outcome) => outcome.status !== 'failed');
-
   printSummary({
+    candidateCount: report.candidateCount,
     mode: 'delete',
-    outcomes,
-    success,
+    outcomes: report.outcomes,
+    success: report.success,
   });
 
-  if (!success) {
+  if (!report.success) {
     throw new Error('One or more sandbox cleanup operations failed.');
   }
 }
