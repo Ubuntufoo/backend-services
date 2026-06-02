@@ -40,15 +40,14 @@ import { validateRequiredItemSpecificsForCategory } from '@/ebay/required-item-s
 
 type PublishInventoryApi = Pick<
   InventoryApi,
-  'createOrReplaceInventoryItem' | 'createOffer' | 'publishOffer'
+  'createOrReplaceInventoryItem' | 'createOffer' | 'getOffers' | 'publishOffer'
 >;
 type PublishMetadataApi = Pick<MetadataApi, 'getItemConditionPolicies'>;
 type PublishTaxonomyApi = Pick<TaxonomyApi, 'getDefaultCategoryTreeId' | 'getItemAspectsForCategory'>;
 
-type MetadataResponse = MetadataComponents['schemas']['ItemConditionPolicyResponse'];
-type MetadataItemConditionPolicy = MetadataComponents['schemas']['ItemConditionPolicy'];
-type MetadataItemCondition = MetadataComponents['schemas']['ItemCondition'];
 type MetadataItemConditionDescriptor = MetadataComponents['schemas']['ItemConditionDescriptor'];
+type OfferLookupResponse = Awaited<ReturnType<PublishInventoryApi['getOffers']>>;
+type OfferLookupEntry = NonNullable<OfferLookupResponse['offers']>[number];
 
 const publishLogger = createLogger('PublishListing');
 
@@ -291,6 +290,83 @@ function getEbayErrors(error: unknown): EbayApiError['errors'] | undefined {
   return undefined;
 }
 
+function getTrimmedString(value: string | null | undefined): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function getEbayErrorText(error: EbayApiError['errors'][number]): string {
+  return [error.message, error.longMessage, ...(error.parameters ?? []).flatMap((parameter) => [
+    parameter.name,
+    parameter.value,
+  ])]
+    .filter((value) => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+function getEbayErrorParameterValue(
+  error: EbayApiError['errors'][number],
+  name: string
+): string | undefined {
+  const parameter = error.parameters?.find((entry) => entry.name === name);
+  return getTrimmedString(parameter?.value);
+}
+
+function isDuplicateOfferAlreadyExistsError(error: unknown): boolean {
+  return (
+    getEbayErrors(error)?.some(
+      (entry) =>
+        entry.errorId === 25002 && getEbayErrorText(entry).includes('offer entity already exists')
+    ) ?? false
+  );
+}
+
+function getDuplicateOfferIdFromError(error: unknown): string | undefined {
+  const duplicateOfferError = getEbayErrors(error)?.find(
+    (entry) =>
+      entry.errorId === 25002 && getEbayErrorText(entry).includes('offer entity already exists')
+  );
+
+  return duplicateOfferError ? getEbayErrorParameterValue(duplicateOfferError, 'offerId') : undefined;
+}
+
+function getOfferIdFromLookupEntry(offer: OfferLookupEntry): string | undefined {
+  return getTrimmedString(offer.offerId);
+}
+
+function isPublishedOffer(offer: OfferLookupEntry): boolean {
+  return getTrimmedString(offer.status)?.toUpperCase() === 'PUBLISHED';
+}
+
+function pickLookupOffer(
+  offers: OfferLookupEntry[],
+  preferredOfferId?: string
+): OfferLookupEntry | undefined {
+  const preferred = getTrimmedString(preferredOfferId);
+
+  if (preferred) {
+    const matchingOffer = offers.find((offer) => getOfferIdFromLookupEntry(offer) === preferred);
+    if (matchingOffer) {
+      return matchingOffer;
+    }
+  }
+
+  return (
+    offers.find((offer) => getTrimmedString(offer.format)?.toUpperCase() === 'FIXED_PRICE') ??
+    offers.find((offer) => getOfferIdFromLookupEntry(offer) !== undefined)
+  );
+}
+
+async function resolveExistingOfferForSku(
+  inventoryApi: PublishInventoryApi,
+  sku: string,
+  marketplaceId: string,
+  preferredOfferId?: string
+): Promise<OfferLookupEntry | undefined> {
+  const response = await inventoryApi.getOffers(sku, marketplaceId, 25);
+  return pickLookupOffer(response.offers ?? [], preferredOfferId);
+}
+
 async function loadPublishContext(
   listingId: string,
   dataAccess: SidecarDataAccess
@@ -388,7 +464,8 @@ export async function publishListing(
     conditionDescriptors,
   });
   const offerPayload = mapListingToOfferPayload(listing, appSettings, sku);
-  const reusedExistingOffer = typeof listing.ebay_offer_id === 'string' && listing.ebay_offer_id.length > 0;
+  const marketplaceId = appSettings.ebay_marketplace_id!.trim();
+  let reusedExistingOffer = getTrimmedString(listing.ebay_offer_id) !== undefined;
 
   try {
     await resolvedDependencies.inventoryApi.createOrReplaceInventoryItem(sku, inventoryItemPayload);
@@ -405,12 +482,13 @@ export async function publishListing(
     );
   }
 
-  let offerId = listing.ebay_offer_id ?? null;
+  let offerId = getTrimmedString(listing.ebay_offer_id) ?? null;
+  let recoveredOffer: OfferLookupEntry | undefined;
 
   if (!offerId) {
     try {
       const createOfferResponse = await resolvedDependencies.inventoryApi.createOffer(offerPayload);
-      offerId = createOfferResponse.offerId ?? null;
+      offerId = getTrimmedString(createOfferResponse.offerId) ?? null;
 
       if (!offerId) {
         throw new Error('createOffer completed without offerId.');
@@ -421,14 +499,131 @@ export async function publishListing(
         sku,
       });
     } catch (error) {
-      throw wrapPublishStageError(
-        'OFFER_CREATE_FAILED',
-        'offer',
+      if (!isDuplicateOfferAlreadyExistsError(error)) {
+        throw wrapPublishStageError(
+          'OFFER_CREATE_FAILED',
+          'offer',
+          listingId,
+          `Failed to create offer for listing "${listingId}".`,
+          error
+        );
+      }
+
+      const duplicateOfferId = getDuplicateOfferIdFromError(error);
+
+      if (duplicateOfferId) {
+        offerId = duplicateOfferId;
+      }
+
+      try {
+        recoveredOffer = await resolveExistingOfferForSku(
+          resolvedDependencies.inventoryApi,
+          sku,
+          marketplaceId,
+          offerId ?? undefined
+        );
+      } catch (lookupError) {
+        if (!offerId) {
+          throw new PublishListingError(
+            'OFFER_CREATE_FAILED',
+            `eBay reported an existing offer for SKU "${sku}" but did not return an offerId, and the existing offer could not be resolved.`,
+            {
+              causeMessage: getCauseMessage(lookupError),
+              ebayErrors: getEbayErrors(error),
+              listingId,
+              stage: 'offer',
+            },
+            { cause: lookupError instanceof Error ? lookupError : undefined }
+          );
+        }
+      }
+
+      const recoveredOfferId = recoveredOffer ? getOfferIdFromLookupEntry(recoveredOffer) : undefined;
+      offerId = offerId ?? recoveredOfferId ?? null;
+
+      if (!offerId) {
+        throw new PublishListingError(
+          'OFFER_CREATE_FAILED',
+          `eBay reported an existing offer for SKU "${sku}" but no offerId could be resolved.`,
+          {
+            causeMessage: getCauseMessage(error),
+            ebayErrors: getEbayErrors(error),
+            listingId,
+            stage: 'offer',
+          },
+          { cause: error instanceof Error ? error : undefined }
+        );
+      }
+
+      reusedExistingOffer = true;
+
+      await resolvedDependencies.dataAccess.listings.update(listingId, {
+        ebay_offer_id: offerId,
+        sku,
+      });
+
+      if (!recoveredOffer) {
+        try {
+          recoveredOffer = await resolveExistingOfferForSku(
+            resolvedDependencies.inventoryApi,
+            sku,
+            marketplaceId,
+            offerId
+          );
+        } catch {
+          recoveredOffer = undefined;
+        }
+      }
+    }
+  }
+
+  if (!offerId) {
+    throw new PublishListingError('OFFER_CREATE_FAILED', `Failed to resolve an offer for listing "${listingId}".`, {
+      listingId,
+      stage: 'offer',
+    });
+  }
+
+  if (recoveredOffer && isPublishedOffer(recoveredOffer)) {
+    const exportedAt = resolvedDependencies.now().toISOString();
+    const recoveredListingId = getTrimmedString(recoveredOffer.listing?.listingId) ?? null;
+
+    try {
+      await resolvedDependencies.dataAccess.listings.update(
         listingId,
-        `Failed to create offer for listing "${listingId}".`,
-        error
+        buildPublishedListingUpdate({
+          appSettings,
+          ebayListingId: recoveredListingId,
+          ebayOfferId: offerId,
+          exportedAt,
+          sku,
+        })
+      );
+    } catch (error) {
+      throw new PublishListingError(
+        'EXPORT_STATE_PERSIST_FAILED',
+        `Recovered a published offer for listing "${listingId}" but failed to persist exported state.`,
+        {
+          attemptedFields: [...PUBLISHED_LISTING_ATTEMPTED_FIELDS],
+          causeMessage: getCauseMessage(error),
+          listingId,
+          offerId,
+          publishOfferListingId: recoveredListingId,
+          stage: 'finalize',
+        },
+        { cause: error instanceof Error ? error : undefined }
       );
     }
+
+    return {
+      ebayListingId: recoveredListingId,
+      exportedAt,
+      listingId,
+      offerId,
+      reusedExistingOffer,
+      sku,
+      status: 'exported',
+    };
   }
 
   try {
