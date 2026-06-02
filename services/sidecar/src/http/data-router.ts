@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { DEFAULT_APP_SETTINGS_ID, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
+import type { GeminiUsageLastAttempt } from '@ebay-inventory/data';
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -163,6 +164,23 @@ function getEbayEnvironmentResponse(): EbayEnvironmentResponse {
   };
 }
 
+function mapGeminiUsageLastAttempt(
+  attempt: GeminiUsageLastAttempt | null
+): GeminiUsageLastAttempt | null {
+  if (!attempt) {
+    return null;
+  }
+
+  return {
+    display_name: attempt.display_name,
+    finished_at: attempt.finished_at,
+    model_name: attempt.model_name,
+    provider: attempt.provider,
+    started_at: attempt.started_at,
+    status: attempt.status,
+  };
+}
+
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
   const listingId = input.listingId ?? randomUUID();
   const initialWorkflowState = createIdleWorkflowState('record_created');
@@ -218,9 +236,11 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
   router.get('/gemini-usage', async (_req: Request, res: Response) => {
     try {
       const summary = await getDataAccess().dailyUsage.getGeminiSummary();
+      const lastAttempt = await getDataAccess().aiModelAttempts.getLatestGeminiUsageAttempt();
 
       res.json({
         effective_limit: summary.effectiveLimit,
+        last_attempt: mapGeminiUsageLastAttempt(lastAttempt),
         remaining: summary.remaining,
         reset_at: summary.resetAt,
         reset_time_zone: summary.resetTimeZone,

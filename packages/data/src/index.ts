@@ -39,10 +39,12 @@ export {
 } from './repositories/ai-model-routes.js';
 export {
   createAiModelAttempt,
+  getLatestGeminiUsageAttempt,
   listAiModelAttemptsForListing,
   listAiModelAttemptsForListings,
   markAiModelAttemptFailed,
   markAiModelAttemptSucceeded,
+  type GeminiUsageLastAttempt,
   type AiModelAttemptMetadata,
   type AiModelAttemptStatus,
   type CreateAiModelAttemptInput,

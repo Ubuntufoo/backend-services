@@ -64,6 +64,15 @@ const geminiUsageSummary = {
   used: 21,
 };
 
+const geminiUsageLastAttempt = {
+  display_name: 'Gemini 3.5 Flash',
+  finished_at: '2026-06-01T06:59:12.000Z',
+  model_name: 'gemini-3.5-flash',
+  provider: 'google',
+  started_at: '2026-06-01T06:59:00.000Z',
+  status: 'succeeded',
+};
+
 const appSettingsRow = {
   capture_mode: 'single_2_image',
   default_fulfillment_policy_id: null,
@@ -92,6 +101,7 @@ function createDataAccess(): SidecarDataAccess {
     },
     aiModelAttempts: {
       create: vi.fn(),
+      getLatestGeminiUsageAttempt: vi.fn(async () => null),
       listByListingId: vi.fn(),
       listByListingIds: vi.fn(async () => []),
       markFailed: vi.fn(),
@@ -213,6 +223,7 @@ describe('data API router', () => {
 
   it('returns Gemini daily usage summary', async () => {
     const dataAccess = createDataAccess();
+    dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt = vi.fn(async () => geminiUsageLastAttempt);
     const app = createApp(dataAccess);
 
     const response = await request(app).get('/api/gemini-usage');
@@ -220,6 +231,7 @@ describe('data API router', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       effective_limit: 540,
+      last_attempt: geminiUsageLastAttempt,
       remaining: 519,
       reset_at: '2026-06-02T07:00:00.000Z',
       reset_time_zone: 'America/Los_Angeles',
@@ -227,6 +239,18 @@ describe('data API router', () => {
       used: 21,
     });
     expect(dataAccess.dailyUsage.getGeminiSummary).toHaveBeenCalledOnce();
+    expect(dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt).toHaveBeenCalledOnce();
+  });
+
+  it('returns null Gemini last attempt cleanly', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt = vi.fn(async () => null);
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/gemini-usage');
+
+    expect(response.status).toBe(200);
+    expect(response.body.last_attempt).toBeNull();
   });
 
   it('returns safe eBay environment data for sandbox', async () => {

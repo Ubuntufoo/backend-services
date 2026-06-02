@@ -15,6 +15,7 @@ const listListingsByStatusMock = vi.fn();
 const listApprovedForExportListingsMock = vi.fn();
 const listAiModelAttemptsForListingMock = vi.fn();
 const listAiModelAttemptsForListingsMock = vi.fn();
+const getLatestGeminiUsageAttemptMock = vi.fn();
 const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
 const markAiModelAttemptFailedMock = vi.fn();
@@ -57,9 +58,10 @@ const updateAppSettingsMock = vi.fn();
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
   createAiModelAttempt: createAiModelAttemptMock,
-  resolveAiModelRoutesForTask: resolveAiModelRoutesForTaskMock,
-  resolvePrimaryAiModelRouteForTask: resolvePrimaryAiModelRouteForTaskMock,
-  claimApprovedListingForPublish: claimApprovedListingForPublishMock,
+    resolveAiModelRoutesForTask: resolveAiModelRoutesForTaskMock,
+    resolvePrimaryAiModelRouteForTask: resolvePrimaryAiModelRouteForTaskMock,
+  getLatestGeminiUsageAttempt: getLatestGeminiUsageAttemptMock,
+    claimApprovedListingForPublish: claimApprovedListingForPublishMock,
   claimDueQueuedJob: claimDueQueuedJobMock,
   completeJob: completeJobMock,
   createAppSettings: createAppSettingsMock,
@@ -134,6 +136,7 @@ describe('sidecar data access', () => {
     await dataAccess.listings.getByListingId('LIST-001');
     await dataAccess.listings.getByOfferId('OFFER-001');
     await dataAccess.aiModelAttempts.listByListingIds?.(['LIST-001', 'LIST-002']);
+    await dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt();
     await dataAccess.aiModelRoutes.resolveForTask({
       provider: 'google',
       requireImages: true,
@@ -167,6 +170,7 @@ describe('sidecar data access', () => {
       'LIST-001',
       'LIST-002',
     ]);
+    expect(getLatestGeminiUsageAttemptMock).toHaveBeenCalledWith(client);
     expect(resolveAiModelRoutesForTaskMock).toHaveBeenCalledWith(client, {
       provider: 'google',
       requireImages: true,
