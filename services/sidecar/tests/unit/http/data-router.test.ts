@@ -253,6 +253,30 @@ describe('data API router', () => {
     expect(response.body.last_attempt).toBeNull();
   });
 
+  it('keeps Gemini usage available when the latest-attempt lookup fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const dataAccess = createDataAccess();
+    dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt = vi.fn(async () => {
+      throw new Error('attempt lookup failed');
+    });
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/gemini-usage');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      effective_limit: 540,
+      last_attempt: null,
+      remaining: 519,
+      reset_at: '2026-06-02T07:00:00.000Z',
+      reset_time_zone: 'America/Los_Angeles',
+      usage_date: '2026-06-01',
+      used: 21,
+    });
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
+
   it('returns safe eBay environment data for sandbox', async () => {
     const dataAccess = createDataAccess();
     process.env.EBAY_ENVIRONMENT = 'sandbox';

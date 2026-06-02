@@ -1,8 +1,8 @@
 import type {
   AiModelAttemptInsert,
   AiModelAttemptRow,
-  AiModelCatalogRow,
   AiModelAttemptUpdate,
+  AiModelCatalogRow,
   Json,
 } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
@@ -65,17 +65,12 @@ interface AttemptOrderRow {
 
 interface JoinedCatalogRow extends Pick<AiModelCatalogRow, 'display_name'> {}
 
-interface JoinedJobRow {
-  job_type: string;
-}
-
 interface LatestGeminiUsageAttemptRow
   extends Pick<
     AiModelAttemptRow,
-    'finished_at' | 'model_name' | 'provider' | 'started_at' | 'status'
+    'finished_at' | 'id' | 'model_name' | 'provider' | 'started_at' | 'status'
   > {
-  catalog: JoinedCatalogRow | JoinedCatalogRow[] | null;
-  job: JoinedJobRow | JoinedJobRow[] | null;
+  job: unknown;
 }
 
 interface SupabaseErrorWithCode {
@@ -108,20 +103,45 @@ function withOptionalMetadata<TUpdate extends { metadata?: Json }>(
   };
 }
 
-function getJoinedCatalog(row: LatestGeminiUsageAttemptRow): JoinedCatalogRow | null {
-  if (Array.isArray(row.catalog)) {
-    return row.catalog[0] ?? null;
-  }
-
-  return row.catalog;
+function warnGeminiUsageLookupIssue(message: string, error: unknown, context: Record<string, string>): void {
+  console.warn(message, {
+    ...context,
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
-function getJoinedJob(row: LatestGeminiUsageAttemptRow): JoinedJobRow | null {
-  if (Array.isArray(row.job)) {
-    return row.job[0] ?? null;
-  }
+async function getAiModelCatalogDisplayName(
+  client: SupabaseDataClient,
+  provider: string,
+  modelName: string
+): Promise<string | null> {
+  try {
+    const result = (await client
+      .from('ai_model_catalog')
+      .select('display_name')
+      .eq('provider', provider)
+      .eq('model_name', modelName)
+      .maybeSingle()) as SingleResult<JoinedCatalogRow>;
 
-  return row.job;
+    if (result.error) {
+      warnGeminiUsageLookupIssue(
+        'Failed to resolve Gemini usage catalog display name.',
+        result.error,
+        { modelName, provider }
+      );
+      return null;
+    }
+
+    const catalogRow = requireOptionalResult(result);
+    return catalogRow?.display_name ?? null;
+  } catch (error) {
+    warnGeminiUsageLookupIssue(
+      'Failed to resolve Gemini usage catalog display name.',
+      error,
+      { modelName, provider }
+    );
+    return null;
+  }
 }
 
 async function getNextAiModelAttemptOrder(
@@ -288,7 +308,7 @@ export async function getLatestGeminiUsageAttempt(
   const result = (await client
     .from('ai_model_attempts')
     .select(
-      'provider, model_name, status, started_at, finished_at, catalog:ai_model_catalog(display_name), job:jobs!inner(job_type)'
+      'provider, model_name, status, started_at, finished_at, id, job:jobs!inner(job_type)'
     )
     .eq('provider', GEMINI_PROVIDER)
     .eq('job.job_type', GEMINI_GENERATE_AI_JOB_TYPE)
@@ -307,15 +327,10 @@ export async function getLatestGeminiUsageAttempt(
     return null;
   }
 
-  const catalog = getJoinedCatalog(row);
-  const job = getJoinedJob(row);
-
-  if (!job) {
-    return null;
-  }
+  const displayName = await getAiModelCatalogDisplayName(client, row.provider, row.model_name);
 
   return {
-    display_name: catalog?.display_name ?? null,
+    display_name: displayName,
     finished_at: row.finished_at,
     model_name: row.model_name,
     provider: row.provider,

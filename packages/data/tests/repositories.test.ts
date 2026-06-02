@@ -992,62 +992,97 @@ function createAiModelAttemptListByListingIdsClient(
   } as unknown as SupabaseDataClient;
 }
 
-function createLatestGeminiUsageAttemptClient(
-  expectedRow: {
-    catalog: { display_name: string | null } | null;
+function createLatestGeminiUsageAttemptClient(input: {
+  attemptError?: string | null;
+  attemptRow: {
     finished_at: string | null;
-    job: { job_type: string } | null;
+    id: string;
     model_name: string;
     provider: string;
     started_at: string;
     status: string;
-  } | null
-): SupabaseDataClient {
+  } | null;
+  catalogError?: string | null;
+  catalogRow?: {
+    display_name: string | null;
+  } | null;
+}): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
-      expect(name).toBe('ai_model_attempts');
+      if (name === 'ai_model_attempts') {
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe(
+              'provider, model_name, status, started_at, finished_at, id, job:jobs!inner(job_type)'
+            );
+
+            return {
+              eq: vi.fn((firstColumn: string, firstValue: string) => {
+                expect(firstColumn).toBe('provider');
+                expect(firstValue).toBe('google');
+
+                return {
+                  eq: vi.fn((secondColumn: string, secondValue: string) => {
+                    expect(secondColumn).toBe('job.job_type');
+                    expect(secondValue).toBe('generate_ai');
+
+                    return {
+                      order: vi.fn((firstOrderColumn: string, firstOptions: { ascending: boolean }) => {
+                        expect(firstOrderColumn).toBe('created_at');
+                        expect(firstOptions).toEqual({ ascending: false });
+
+                        return {
+                          order: vi.fn((secondOrderColumn: string, secondOptions: { ascending: boolean }) => {
+                            expect(secondOrderColumn).toBe('id');
+                            expect(secondOptions).toEqual({ ascending: false });
+
+                            return {
+                              limit: vi.fn((limit: number) => {
+                                expect(limit).toBe(1);
+
+                                return {
+                                  maybeSingle: vi.fn(async () => ({
+                                    data: input.attemptRow,
+                                    error: input.attemptError
+                                      ? { message: input.attemptError }
+                                      : null,
+                                  })),
+                                };
+                              }),
+                            };
+                          }),
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      }
+
+      expect(name).toBe('ai_model_catalog');
 
       return {
         select: vi.fn((columns: string) => {
-          expect(columns).toBe(
-            'provider, model_name, status, started_at, finished_at, catalog:ai_model_catalog(display_name), job:jobs!inner(job_type)'
-          );
+          expect(columns).toBe('display_name');
 
           return {
             eq: vi.fn((firstColumn: string, firstValue: string) => {
               expect(firstColumn).toBe('provider');
-              expect(firstValue).toBe('google');
+              expect(firstValue).toBe(input.attemptRow?.provider ?? 'google');
 
               return {
                 eq: vi.fn((secondColumn: string, secondValue: string) => {
-                  expect(secondColumn).toBe('job.job_type');
-                  expect(secondValue).toBe('generate_ai');
+                  expect(secondColumn).toBe('model_name');
+                  expect(secondValue).toBe(input.attemptRow?.model_name ?? 'gemini-3.5-flash');
 
                   return {
-                    order: vi.fn((firstOrderColumn: string, firstOptions: { ascending: boolean }) => {
-                      expect(firstOrderColumn).toBe('created_at');
-                      expect(firstOptions).toEqual({ ascending: false });
-
-                      return {
-                        order: vi.fn((secondOrderColumn: string, secondOptions: { ascending: boolean }) => {
-                          expect(secondOrderColumn).toBe('id');
-                          expect(secondOptions).toEqual({ ascending: false });
-
-                          return {
-                            limit: vi.fn((limit: number) => {
-                              expect(limit).toBe(1);
-
-                              return {
-                                maybeSingle: vi.fn(async () => ({
-                                  data: expectedRow,
-                                  error: null,
-                                })),
-                              };
-                            }),
-                          };
-                        }),
-                      };
-                    }),
+                    maybeSingle: vi.fn(async () => ({
+                      data: input.catalogRow ?? null,
+                      error: input.catalogError ? { message: input.catalogError } : null,
+                    })),
                   };
                 }),
               };
@@ -2102,18 +2137,18 @@ describe('shared repositories', () => {
       },
     ]);
 
-  const latestGeminiClient = createLatestGeminiUsageAttemptClient({
-    catalog: {
-      display_name: 'Gemini 3.5 Flash',
-    },
-    finished_at: '2026-05-25T13:00:02.000Z',
-    job: {
-      job_type: 'generate_ai',
-    },
-    model_name: 'gemini-3.5-flash',
-    provider: 'google',
-    started_at: '2026-05-25T13:00:00.000Z',
-    status: 'succeeded',
+    const latestGeminiClient = createLatestGeminiUsageAttemptClient({
+      attemptRow: {
+        finished_at: '2026-05-25T13:00:02.000Z',
+        id: 'ai-model-attempt-row-id',
+        model_name: 'gemini-3.5-flash',
+        provider: 'google',
+        started_at: '2026-05-25T13:00:00.000Z',
+        status: 'succeeded',
+      },
+      catalogRow: {
+        display_name: 'Gemini 3.5 Flash',
+      },
     });
 
     await expect(getLatestGeminiUsageAttempt(latestGeminiClient)).resolves.toEqual({
@@ -2125,16 +2160,16 @@ describe('shared repositories', () => {
       status: 'succeeded',
     });
 
-  const latestGeminiWithoutCatalogClient = createLatestGeminiUsageAttemptClient({
-    catalog: null,
-    finished_at: '2026-05-25T13:00:02.000Z',
-    job: {
-      job_type: 'generate_ai',
-    },
-    model_name: 'gemini-3.5-flash',
-    provider: 'google',
-    started_at: '2026-05-25T13:00:00.000Z',
-    status: 'succeeded',
+    const latestGeminiWithoutCatalogClient = createLatestGeminiUsageAttemptClient({
+      attemptRow: {
+        finished_at: '2026-05-25T13:00:02.000Z',
+        id: 'ai-model-attempt-row-id',
+        model_name: 'gemini-3.5-flash',
+        provider: 'google',
+        started_at: '2026-05-25T13:00:00.000Z',
+        status: 'succeeded',
+      },
+      catalogRow: null,
     });
 
     await expect(
@@ -2148,7 +2183,33 @@ describe('shared repositories', () => {
       status: 'succeeded',
     });
 
-    const latestGeminiMissingClient = createLatestGeminiUsageAttemptClient(null);
+    const latestGeminiCatalogErrorClient = createLatestGeminiUsageAttemptClient({
+      attemptRow: {
+        finished_at: '2026-05-25T13:00:02.000Z',
+        id: 'ai-model-attempt-row-id',
+        model_name: 'gemini-3.5-flash',
+        provider: 'google',
+        started_at: '2026-05-25T13:00:00.000Z',
+        status: 'succeeded',
+      },
+      catalogError: 'catalog lookup failed',
+    });
+
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(getLatestGeminiUsageAttempt(latestGeminiCatalogErrorClient)).resolves.toEqual({
+      display_name: null,
+      finished_at: '2026-05-25T13:00:02.000Z',
+      model_name: 'gemini-3.5-flash',
+      provider: 'google',
+      started_at: '2026-05-25T13:00:00.000Z',
+      status: 'succeeded',
+    });
+    expect(consoleWarnSpy).toHaveBeenCalledOnce();
+    consoleWarnSpy.mockRestore();
+
+    const latestGeminiMissingClient = createLatestGeminiUsageAttemptClient({
+      attemptRow: null,
+    });
 
     await expect(getLatestGeminiUsageAttempt(latestGeminiMissingClient)).resolves.toBeNull();
 
