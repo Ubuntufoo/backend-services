@@ -21,6 +21,7 @@
     "dev:sidecar:stdio": "pnpm --filter sidecar dev:stdio",
     "ebay:diagnose-offer": "pnpm --filter sidecar ebay:diagnose-offer",
     "ebay:diagnose-condition-policy": "pnpm --filter sidecar ebay:diagnose-condition-policy",
+    "ebay:diagnose-live-readiness": "pnpm --filter sidecar ebay:diagnose-live-readiness",
     "ebay:diagnose-sandbox": "pnpm --filter sidecar ebay:diagnose-sandbox",
     "ebay:diagnose-sandbox-config": "pnpm --filter sidecar ebay:diagnose-sandbox-config",
     "ebay:cleanup-sandbox": "pnpm --filter sidecar ebay:cleanup-sandbox",
