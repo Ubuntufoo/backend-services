@@ -181,6 +181,12 @@ function mapGeminiUsageLastAttempt(
   };
 }
 
+function warnGeminiUsageAttemptLookup(error: unknown): void {
+  console.warn('Failed to load latest Gemini usage attempt.', {
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
   const listingId = input.listingId ?? randomUUID();
   const initialWorkflowState = createIdleWorkflowState('record_created');
@@ -236,7 +242,13 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
   router.get('/gemini-usage', async (_req: Request, res: Response) => {
     try {
       const summary = await getDataAccess().dailyUsage.getGeminiSummary();
-      const lastAttempt = await getDataAccess().aiModelAttempts.getLatestGeminiUsageAttempt();
+      let lastAttempt: GeminiUsageLastAttempt | null = null;
+
+      try {
+        lastAttempt = await getDataAccess().aiModelAttempts.getLatestGeminiUsageAttempt();
+      } catch (error) {
+        warnGeminiUsageAttemptLookup(error);
+      }
 
       res.json({
         effective_limit: summary.effectiveLimit,
