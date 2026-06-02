@@ -7,7 +7,7 @@ import { PublishListingValidationError } from '@/ebay/publish-validation.js';
 import type { PublishListingError } from '@/ebay/publish-validation.js';
 
 function createTradingCardConditionPoliciesResponse(
-  values: Array<{ id: string; name: string }>,
+  values: { id: string; name: string }[],
   options: { categoryId?: string; includeCardConditionDescriptor?: boolean } = {}
 ) {
   const { categoryId = '261328', includeCardConditionDescriptor = true } = options;
@@ -109,14 +109,38 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
   };
 }
 
+function createOfferAlreadyExistsError(options: {
+  offerId?: string;
+  includeOfferIdParameter?: boolean;
+} = {}) {
+  const offerId = options.offerId ?? 'OFFER-RECOVERED';
+
+  return new EbayApiRequestError(
+    'eBay API Error: Offer entity already exists.',
+    [
+      {
+        category: 'REQUEST',
+        domain: 'API_INVENTORY',
+        errorId: 25002,
+        longMessage: 'Offer entity already exists.',
+        message: 'Offer entity already exists.',
+        parameters: options.includeOfferIdParameter === false ? [] : [{ name: 'offerId', value: offerId }],
+      },
+    ],
+    409
+  );
+}
+
 function createDependencies({
   appSettings = createAppSettings(),
   createOfferResult = { offerId: 'OFFER-001' },
+  getOffersResult = { offers: [] },
   listing = createListing(),
   publishOfferResult = { listingId: 'EBAY-001' },
 }: {
   appSettings?: AppSettingsRow | null;
   createOfferResult?: { offerId?: string };
+  getOffersResult?: { offers?: Record<string, unknown>[] };
   listing?: ListingRow | null;
   publishOfferResult?: { listingId?: string };
 } = {}): {
@@ -124,6 +148,7 @@ function createDependencies({
   inventoryApi: {
     createOffer: ReturnType<typeof vi.fn>;
     createOrReplaceInventoryItem: ReturnType<typeof vi.fn>;
+    getOffers: ReturnType<typeof vi.fn>;
     publishOffer: ReturnType<typeof vi.fn>;
   };
   metadataApi: {
@@ -139,6 +164,7 @@ function createDependencies({
   const inventoryApi = {
     createOffer: vi.fn(async () => createOfferResult),
     createOrReplaceInventoryItem: vi.fn(async () => undefined),
+    getOffers: vi.fn(async () => getOffersResult),
     publishOffer: vi.fn(async () => publishOfferResult),
   };
   const metadataApi = {
@@ -1024,6 +1050,132 @@ describe('publishListing', () => {
         },
       },
     ]);
+  });
+
+  it('reuses an existing offer returned by eBay and continues publish without retrying createOffer', async () => {
+    const dependencies = createDependencies({
+      createOfferResult: { offerId: undefined },
+      getOffersResult: {
+        offers: [
+          {
+            format: 'FIXED_PRICE',
+            listing: {
+              listingId: 'EBAY-RECOVERED',
+            },
+            offerId: 'OFFER-RECOVERED',
+            status: 'UNPUBLISHED',
+          },
+        ],
+      },
+    });
+    dependencies.inventoryApi.createOffer = vi.fn(async () => {
+      throw createOfferAlreadyExistsError({ offerId: 'OFFER-RECOVERED' });
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
+    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledWith('LIST-001', 'EBAY_US', 25);
+    expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-RECOVERED');
+    expect(dependencies.listingUpdates).toEqual([
+      {
+        listingId: 'LIST-001',
+        changes: {
+          sku: 'LIST-001',
+        },
+      },
+      {
+        listingId: 'LIST-001',
+        changes: {
+          ebay_offer_id: 'OFFER-RECOVERED',
+          sku: 'LIST-001',
+        },
+      },
+      {
+        listingId: 'LIST-001',
+        changes: {
+          ebay_listing_id: 'EBAY-001',
+          ebay_listing_url: 'https://www.ebay.com/itm/EBAY-001',
+          ebay_offer_id: 'OFFER-RECOVERED',
+          exported_at: '2026-05-24T15:30:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: {},
+          last_error_message: null,
+          sku: 'LIST-001',
+          status: 'exported',
+          sub_status: 'idle',
+        },
+      },
+    ]);
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-001',
+      exportedAt: '2026-05-24T15:30:00.000Z',
+      listingId: 'LIST-001',
+      offerId: 'OFFER-RECOVERED',
+      reusedExistingOffer: true,
+      sku: 'LIST-001',
+      status: 'exported',
+    });
+  });
+
+  it('skips duplicate live listing creation when the recovered offer is already published', async () => {
+    const dependencies = createDependencies({
+      getOffersResult: {
+        offers: [
+          {
+            format: 'FIXED_PRICE',
+            listing: {
+              listingId: 'EBAY-ALREADY-PUBLISHED',
+            },
+            offerId: 'OFFER-PUBLISHED',
+            status: 'PUBLISHED',
+          },
+        ],
+      },
+    });
+    dependencies.inventoryApi.createOffer = vi.fn(async () => {
+      throw createOfferAlreadyExistsError({ offerId: 'OFFER-PUBLISHED' });
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
+    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledTimes(1);
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-ALREADY-PUBLISHED',
+      exportedAt: '2026-05-24T15:30:00.000Z',
+      listingId: 'LIST-001',
+      offerId: 'OFFER-PUBLISHED',
+      reusedExistingOffer: true,
+      sku: 'LIST-001',
+      status: 'exported',
+    });
+  });
+
+  it('returns a clear recoverable error when eBay reports a duplicate offer without offerId', async () => {
+    const dependencies = createDependencies({
+      getOffersResult: {
+        offers: [],
+      },
+    });
+    dependencies.inventoryApi.createOffer = vi.fn(async () => {
+      throw createOfferAlreadyExistsError({ includeOfferIdParameter: false });
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'OFFER_CREATE_FAILED',
+      context: {
+        listingId: 'LIST-001',
+        stage: 'offer',
+      },
+      message:
+        'eBay reported an existing offer for SKU "LIST-001" but no offerId could be resolved.',
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
+    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledTimes(1);
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
   it('wraps publishOffer failures and preserves offer id for retry safety', async () => {
