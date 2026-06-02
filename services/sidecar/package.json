@@ -16,6 +16,7 @@
     "ebay:diagnose-condition-policy": "tsx src/scripts/diagnose-condition-policy.ts",
     "ebay:diagnose-sandbox": "tsx src/scripts/diagnose-sandbox.ts",
     "ebay:diagnose-sandbox-config": "tsx src/scripts/diagnose-sandbox-config.ts",
+    "ebay:cleanup-sandbox": "tsx src/scripts/cleanup-ebay-sandbox.ts",
     "ebay:opt-in-selling-policies": "tsx src/scripts/opt-in-selling-policies.ts",
     "ebay:reconcile-published-listing": "tsx src/scripts/reconcile-published-listing.ts",
     "ebay:setup-sandbox": "tsx src/scripts/setup-sandbox.ts",

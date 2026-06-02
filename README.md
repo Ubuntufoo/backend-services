@@ -76,30 +76,32 @@ Use this table as the current local start/run reference. Update it as new servic
 ## Sidecar
 
 End-user setup, local development, and MCP-specific usage now live in [services/sidecar/README.md](services/sidecar/README.md).
-
-Useful root-level convenience commands:
+These commands work from the repo root or from `services/sidecar`.
 
 ```bash
-pnpm dev
-pnpm setup
-pnpm ebay:diagnose-offer -- 11109473010
-pnpm ebay:diagnose-sandbox
-pnpm ebay:diagnose-sandbox-config
-pnpm ebay:opt-in-selling-policies
-pnpm ebay:reconcile-published-listing -- --offer-id 11109473010
-pnpm ebay:setup-sandbox
-pnpm validate:env
-pnpm validate:ebay-oauth
-pnpm diagnose
-pnpm sync
-pnpm update:api-status
-pnpm dev:sidecar
-pnpm dev:sidecar:stdio
+pnpm dev # start HTTP sidecar for local app integration
+pnpm dev:sidecar # start HTTP sidecar alias
+pnpm dev:sidecar:stdio # start MCP stdio sidecar
+pnpm setup # run local setup wizard
+pnpm ebay:diagnose-offer -- 11109473010 # inspect one offer
+pnpm ebay:diagnose-sandbox # check sandbox eBay account state
+pnpm ebay:diagnose-sandbox-config # inspect sandbox policies and inventory config
+pnpm ebay:cleanup-sandbox -- --sku Single-000001 # dry-run exact sandbox SKU cleanup
+pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --from 1 --to 50 # dry-run generated sandbox SKU cleanup
+pnpm ebay:cleanup-sandbox -- --sku Single-000001 --delete --confirm-sandbox-cleanup # delete exact sandbox SKU
+pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --from 1 --to 50 --delete --confirm-sandbox-cleanup # delete generated sandbox SKUs
+pnpm ebay:opt-in-selling-policies # request selling policy opt-in
+pnpm ebay:reconcile-published-listing -- --offer-id 11109473010 # repair local export state
+pnpm ebay:setup-sandbox # bootstrap sandbox policies and location
+pnpm validate:env # validate shared env config
+pnpm validate:ebay-oauth # validate eBay OAuth tokens
+pnpm diagnose # run repo diagnostics
+pnpm sync # sync local sidecar state
+pnpm update:api-status # refresh API status docs
 ```
 
-`pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
 Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
-Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox seller-program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only business-policy/location discovery, and `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`.
+Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox seller-program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only business-policy/location discovery, `pnpm ebay:cleanup-sandbox -- --sku <SKU>` for exact sandbox SKU cleanup, `pnpm ebay:cleanup-sandbox -- --prefix <PREFIX> --from <N> --to <M>` for generated sandbox SKU cleanup that avoids the unreliable inventory-list endpoint, and `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`.
 Use `pnpm ebay:setup-sandbox` to bootstrap sandbox business policies and default inventory location into `app_settings`, reusing valid existing IDs when possible and persisting the active sidecar marketplace.
 Use `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` for repair-only exported-state reconciliation; command never republishes or mutates inventory.
 If eBay sandbox seller account is not eligible for Business Policy, keep bootstrap command for future accounts but manually seed `public.app_settings.default_payment_policy_id`, `default_fulfillment_policy_id`, `default_return_policy_id`, and `merchant_location_key`, then continue downstream work with mocked/injected IDs.

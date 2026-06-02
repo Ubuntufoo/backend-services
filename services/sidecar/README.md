@@ -4,43 +4,29 @@
 
 ## Commands
 
-From the repo root:
+These commands work from the repo root or from `services/sidecar`.
 
 ```bash
-pnpm dev
-pnpm setup
-pnpm ebay:diagnose-offer -- 11109473010
-pnpm ebay:diagnose-sandbox
-pnpm ebay:diagnose-sandbox-config
-pnpm ebay:opt-in-selling-policies
-pnpm ebay:reconcile-published-listing -- --offer-id 11109473010
-pnpm ebay:setup-sandbox
-pnpm diagnose
-pnpm sync
-pnpm ebay:validate-oauth
-pnpm test
-pnpm test:coverage
-```
-
-Or directly in this package:
-
-```bash
-pnpm dev
-pnpm dev:stdio
-pnpm setup
-pnpm ebay:diagnose-offer -- 11109473010
-pnpm ebay:diagnose-sandbox
-pnpm ebay:diagnose-sandbox-config
-pnpm ebay:opt-in-selling-policies
-pnpm ebay:reconcile-published-listing -- --offer-id 11109473010
-pnpm ebay:setup-sandbox
-pnpm diagnose
-pnpm sync
-pnpm ebay:validate-oauth
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm test:coverage
+pnpm dev # start HTTP sidecar
+pnpm dev:stdio # start MCP stdio sidecar
+pnpm setup # run setup wizard
+pnpm ebay:diagnose-offer -- 11109473010 # inspect one offer
+pnpm ebay:diagnose-sandbox # check sandbox eBay account state
+pnpm ebay:diagnose-sandbox-config # inspect sandbox config and policies
+pnpm ebay:cleanup-sandbox -- --sku Single-000001 # dry-run exact sandbox SKU cleanup
+pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --from 1 --to 50 # dry-run generated sandbox SKU cleanup
+pnpm ebay:cleanup-sandbox -- --sku Single-000001 --delete --confirm-sandbox-cleanup # delete exact sandbox SKU
+pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --from 1 --to 50 --delete --confirm-sandbox-cleanup # delete generated sandbox SKUs
+pnpm ebay:opt-in-selling-policies # request selling policy opt-in
+pnpm ebay:reconcile-published-listing -- --offer-id 11109473010 # repair exported listing state
+pnpm ebay:setup-sandbox # bootstrap sandbox policies and location
+pnpm diagnose # run diagnostics
+pnpm sync # sync local sidecar state
+pnpm ebay:validate-oauth # validate OAuth tokens
+pnpm lint # lint package
+pnpm typecheck # typecheck package
+pnpm test # run tests
+pnpm test:coverage # run coverage tests
 ```
 
 ## Environment
@@ -54,7 +40,7 @@ cp env.example .env
 `pnpm dev` starts the HTTP sidecar from `src/server-http.ts`.
 Use `pnpm dev:stdio` only when you explicitly want the stdio MCP server from `src/index.ts`.
 The HTTP sidecar also starts the background job-runner loop by default; set `SIDECAR_JOB_RUNNER_ENABLED=false` to disable polling for tests or manual debugging.
-Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only policy/location/app_settings discovery, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` for repair-only exported-state reconciliation, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
+Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only policy/location/app_settings discovery, `pnpm ebay:cleanup-sandbox -- --sku <SKU>` for exact sandbox SKU cleanup, `pnpm ebay:cleanup-sandbox -- --prefix <PREFIX> --from <N> --to <M>` for generated sandbox SKU cleanup that avoids the unreliable inventory-list endpoint, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` for repair-only exported-state reconciliation, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
 and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.

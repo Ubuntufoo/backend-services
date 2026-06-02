@@ -23,6 +23,7 @@
     "ebay:diagnose-condition-policy": "pnpm --filter sidecar ebay:diagnose-condition-policy",
     "ebay:diagnose-sandbox": "pnpm --filter sidecar ebay:diagnose-sandbox",
     "ebay:diagnose-sandbox-config": "pnpm --filter sidecar ebay:diagnose-sandbox-config",
+    "ebay:cleanup-sandbox": "pnpm --filter sidecar ebay:cleanup-sandbox",
     "ebay:opt-in-selling-policies": "pnpm --filter sidecar ebay:opt-in-selling-policies",
     "ebay:reconcile-published-listing": "pnpm --filter sidecar ebay:reconcile-published-listing",
     "ebay:setup-sandbox": "pnpm --filter sidecar ebay:setup-sandbox",
