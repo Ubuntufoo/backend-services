@@ -2,6 +2,7 @@ import {
   createAiModelAttempt,
   resolveAiModelRoutesForTask,
   resolvePrimaryAiModelRouteForTask,
+  getLatestGeminiUsageAttempt,
   listAiModelAttemptsForListing,
   listAiModelAttemptsForListings,
   markAiModelAttemptFailed,
@@ -53,6 +54,7 @@ import {
   type AppSettingsRow,
   type AppSettingsUpdate,
   type AiModelAttemptRow,
+  type GeminiUsageLastAttempt,
   type ResolveAiModelRoutesInput,
   type ResolvedAiModelRoute,
   type CreateAiModelAttemptInput,
@@ -89,6 +91,7 @@ export interface SidecarDataAccess {
   };
   aiModelAttempts: {
     create(input: CreateAiModelAttemptInput): Promise<AiModelAttemptRow>;
+    getLatestGeminiUsageAttempt(): Promise<GeminiUsageLastAttempt | null>;
     listByListingId(listingId: string): Promise<AiModelAttemptRow[]>;
     listByListingIds(listingIds: string[]): Promise<AiModelAttemptRow[]>;
     markFailed(input: MarkAiModelAttemptFailedInput): Promise<AiModelAttemptRow>;
@@ -182,6 +185,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     },
     aiModelAttempts: {
       create: async (input) => await createAiModelAttempt(client, input),
+      getLatestGeminiUsageAttempt: async () => await getLatestGeminiUsageAttempt(client),
       listByListingId: async (listingId) => await listAiModelAttemptsForListing(client, listingId),
       listByListingIds: async (listingIds) =>
         await listAiModelAttemptsForListings(client, listingIds),

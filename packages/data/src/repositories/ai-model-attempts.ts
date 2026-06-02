@@ -1,17 +1,25 @@
 import type {
   AiModelAttemptInsert,
   AiModelAttemptRow,
+  AiModelCatalogRow,
   AiModelAttemptUpdate,
   Json,
 } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
-import { requireSingleResult, type MultiResult, type SingleResult } from './shared.js';
+import {
+  requireOptionalResult,
+  requireSingleResult,
+  type MultiResult,
+  type SingleResult,
+} from './shared.js';
 
 export type AiModelAttemptStatus = 'started' | 'succeeded' | 'failed' | 'skipped';
 export type AiModelAttemptMetadata = Record<string, Json | undefined>;
 const POSTGRES_UNIQUE_VIOLATION_CODE = '23505';
 const AI_MODEL_ATTEMPTS_UNIQUE_INDEX = 'ai_model_attempts_listing_job_attempt_order_uidx';
 const MAX_CREATE_AI_MODEL_ATTEMPT_RETRIES = 3;
+const GEMINI_PROVIDER = 'google';
+const GEMINI_GENERATE_AI_JOB_TYPE = 'generate_ai';
 
 export interface CreateAiModelAttemptInput {
   attempt_order?: number;
@@ -24,6 +32,15 @@ export interface CreateAiModelAttemptInput {
   routing_source?: string | null;
   started_at?: string;
   status?: AiModelAttemptStatus;
+}
+
+export interface GeminiUsageLastAttempt {
+  display_name: string | null;
+  finished_at: string | null;
+  model_name: string;
+  provider: string;
+  started_at: string;
+  status: string;
 }
 
 export interface MarkAiModelAttemptSucceededInput {
@@ -44,6 +61,21 @@ export interface MarkAiModelAttemptFailedInput {
 
 interface AttemptOrderRow {
   attempt_order: number;
+}
+
+interface JoinedCatalogRow extends Pick<AiModelCatalogRow, 'display_name'> {}
+
+interface JoinedJobRow {
+  job_type: string;
+}
+
+interface LatestGeminiUsageAttemptRow
+  extends Pick<
+    AiModelAttemptRow,
+    'finished_at' | 'model_name' | 'provider' | 'started_at' | 'status'
+  > {
+  catalog: JoinedCatalogRow | JoinedCatalogRow[] | null;
+  job: JoinedJobRow | JoinedJobRow[] | null;
 }
 
 interface SupabaseErrorWithCode {
@@ -74,6 +106,22 @@ function withOptionalMetadata<TUpdate extends { metadata?: Json }>(
     ...changes,
     metadata: metadata as Json,
   };
+}
+
+function getJoinedCatalog(row: LatestGeminiUsageAttemptRow): JoinedCatalogRow | null {
+  if (Array.isArray(row.catalog)) {
+    return row.catalog[0] ?? null;
+  }
+
+  return row.catalog;
+}
+
+function getJoinedJob(row: LatestGeminiUsageAttemptRow): JoinedJobRow | null {
+  if (Array.isArray(row.job)) {
+    return row.job[0] ?? null;
+  }
+
+  return row.job;
 }
 
 async function getNextAiModelAttemptOrder(
@@ -232,4 +280,46 @@ export async function listAiModelAttemptsForListings(
   }
 
   return result.data ?? [];
+}
+
+export async function getLatestGeminiUsageAttempt(
+  client: SupabaseDataClient
+): Promise<GeminiUsageLastAttempt | null> {
+  const result = (await client
+    .from('ai_model_attempts')
+    .select(
+      'provider, model_name, status, started_at, finished_at, catalog:ai_model_catalog(display_name), job:jobs!inner(job_type)'
+    )
+    .eq('provider', GEMINI_PROVIDER)
+    .eq('job.job_type', GEMINI_GENERATE_AI_JOB_TYPE)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()) as SingleResult<LatestGeminiUsageAttemptRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  const row = requireOptionalResult(result);
+
+  if (!row) {
+    return null;
+  }
+
+  const catalog = getJoinedCatalog(row);
+  const job = getJoinedJob(row);
+
+  if (!job) {
+    return null;
+  }
+
+  return {
+    display_name: catalog?.display_name ?? null,
+    finished_at: row.finished_at,
+    model_name: row.model_name,
+    provider: row.provider,
+    started_at: row.started_at,
+    status: row.status,
+  };
 }
