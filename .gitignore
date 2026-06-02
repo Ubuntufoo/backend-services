@@ -15,6 +15,7 @@ SERVICES.md
 .codex-plugins/
 .agents/skills/
 .agents/
+.codex/
 
 # Build and cache output
 build/
