@@ -14,7 +14,7 @@ pnpm ebay:diagnose-offer -- 11109473010 # inspect one offer
 pnpm ebay:diagnose-sandbox # check sandbox eBay account state
 pnpm ebay:diagnose-sandbox-config # inspect sandbox config and policies
 pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- # dry-run sandbox cleanup
-pnpm ebay:cleanup-sandbox -- --delete --confirm-sandbox-cleanup # remove matching sandbox inventory
+pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --delete --confirm-sandbox-cleanup # remove matching sandbox inventory
 pnpm ebay:opt-in-selling-policies # request selling policy opt-in
 pnpm ebay:reconcile-published-listing -- --offer-id 11109473010 # repair exported listing state
 pnpm ebay:setup-sandbox # bootstrap sandbox policies and location
@@ -39,6 +39,7 @@ cp env.example .env
 Use `pnpm dev:stdio` only when you explicitly want the stdio MCP server from `src/index.ts`.
 The HTTP sidecar also starts the background job-runner loop by default; set `SIDECAR_JOB_RUNNER_ENABLED=false` to disable polling for tests or manual debugging.
 Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only policy/location/app_settings discovery, `pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot-` for sandbox-only cleanup of abandoned items, `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`, `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` for repair-only exported-state reconciliation, and `pnpm ebay:setup-sandbox` to bootstrap policies/location after account eligibility exists.
+Destructive cleanup should be run with explicit `--prefix` values. If no prefix is provided, the command defaults to `Single-` and `Lot-`.
 
 The sidecar reads shared runtime configuration from the repo root `backend-services/.env`
 and overlays `backend-services/.env.local` for machine-local overrides and persisted OAuth tokens.

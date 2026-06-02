@@ -87,7 +87,7 @@ pnpm ebay:diagnose-offer -- 11109473010 # inspect one offer
 pnpm ebay:diagnose-sandbox # check sandbox eBay account state
 pnpm ebay:diagnose-sandbox-config # inspect sandbox policies and inventory config
 pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- # dry-run sandbox inventory cleanup
-pnpm ebay:cleanup-sandbox -- --delete --confirm-sandbox-cleanup # remove matching sandbox inventory
+pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --delete --confirm-sandbox-cleanup # remove matching sandbox inventory
 pnpm ebay:opt-in-selling-policies # request selling policy opt-in
 pnpm ebay:reconcile-published-listing -- --offer-id 11109473010 # repair local export state
 pnpm ebay:setup-sandbox # bootstrap sandbox policies and location
@@ -101,6 +101,7 @@ pnpm update:api-status # refresh API status docs
 `pnpm dev` and `pnpm dev:sidecar` start the HTTP sidecar for local app integration.
 Use `pnpm dev:sidecar:stdio` only when you explicitly want the stdio MCP server.
 Use `pnpm ebay:diagnose-offer -- <offerId>` for read-only offer inspection, `pnpm ebay:diagnose-sandbox` for read-only sandbox seller-program diagnostics, `pnpm ebay:diagnose-sandbox-config` for read-only business-policy/location discovery, `pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot-` for sandbox-only abandoned inventory cleanup, and `pnpm ebay:opt-in-selling-policies` to request `SELLING_POLICY_MANAGEMENT`.
+Destructive cleanup should be run with explicit `--prefix` values. If no prefix is provided, the command defaults to `Single-` and `Lot-`.
 Use `pnpm ebay:setup-sandbox` to bootstrap sandbox business policies and default inventory location into `app_settings`, reusing valid existing IDs when possible and persisting the active sidecar marketplace.
 Use `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` for repair-only exported-state reconciliation; command never republishes or mutates inventory.
 If eBay sandbox seller account is not eligible for Business Policy, keep bootstrap command for future accounts but manually seed `public.app_settings.default_payment_policy_id`, `default_fulfillment_policy_id`, `default_return_policy_id`, and `merchant_location_key`, then continue downstream work with mocked/injected IDs.
