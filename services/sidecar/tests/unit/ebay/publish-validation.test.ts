@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import {
+  PublishRequiredFieldValidationError,
   PublishListingValidationError,
+  assertPublishReady,
   getPublishAppSettingIssues,
+  validatePublishReady,
   validatePublishListingReadiness,
 } from '@/ebay/publish-validation.js';
+import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -89,6 +93,402 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
 
   return appSettings;
 }
+
+function createPublishConfig(
+  overrides: Partial<ResolvedPublishConfig> = {}
+): ResolvedPublishConfig {
+  return {
+    environment: 'sandbox',
+    fulfillmentPolicyId: 'FULFILLMENT-1',
+    marketplaceId: 'EBAY_US',
+    merchantLocationKey: 'warehouse-1',
+    paymentPolicyId: 'PAYMENT-1',
+    returnPolicyId: 'RETURN-1',
+    source: 'environment_config',
+    ...overrides,
+  };
+}
+
+describe('validatePublishReady', () => {
+  it('passes for valid listing and valid config', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toEqual({ ok: true });
+  });
+
+  it('throws structured required-field error via assert helper', () => {
+    expect(() =>
+      assertPublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+          title: '   ',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toThrow(PublishRequiredFieldValidationError);
+  });
+
+  it('reports missing title', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+          title: null,
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      code: 'PUBLISH_REQUIRED_FIELD_MISSING',
+      fields: [{ field: 'title', message: 'Title is required before publishing.' }],
+      kind: 'user_fixable',
+      ok: false,
+    });
+  });
+
+  it('reports blank and whitespace title', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+          title: '   ',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'title', message: 'Title is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing description', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          description: '  ',
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'description', message: 'Description is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it.each([
+    { label: 'missing', price: null },
+    { label: 'zero', price: 0 },
+    { label: 'negative', price: -1 },
+  ])('reports invalid price: $label', ({ price }) => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          price,
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'price', message: 'Price must be greater than 0 before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing category ID', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          category_id: '  ',
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'categoryId', message: 'Category ID is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing condition ID', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          condition_id: null,
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'conditionId', message: 'Condition ID is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing image URLs', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          image_urls: [],
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [
+        {
+          field: 'imageUrls',
+          message: 'At least one image URL is required before publishing.',
+        },
+      ],
+      ok: false,
+    });
+  });
+
+  it('reports invalid image URL', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          image_urls: ['ftp://cdn.example.com/front.jpg'],
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [
+        {
+          field: 'imageUrls',
+          message: 'At least one valid HTTP/HTTPS image URL is required before publishing.',
+        },
+      ],
+      ok: false,
+    });
+  });
+
+  it('reports missing SKU or custom label', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: '   ',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'sku', message: 'SKU or custom label is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it.each([
+    { label: 'missing', quantity: null },
+    { label: 'zero', quantity: 0 },
+    { label: 'negative', quantity: -1 },
+  ])('reports invalid quantity: $label', ({ quantity }) => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig(),
+        quantity,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'quantity', message: 'Quantity must be greater than 0 before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing marketplace ID', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig({
+          marketplaceId: '   ',
+        }),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'marketplaceId', message: 'Marketplace ID is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing payment policy ID', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig({
+          paymentPolicyId: '',
+        }),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [
+        { field: 'paymentPolicyId', message: 'Payment policy ID is required before publishing.' },
+      ],
+      ok: false,
+    });
+  });
+
+  it('reports missing fulfillment policy ID', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig({
+          fulfillmentPolicyId: ' ',
+        }),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [
+        {
+          field: 'fulfillmentPolicyId',
+          message: 'Fulfillment policy ID is required before publishing.',
+        },
+      ],
+      ok: false,
+    });
+  });
+
+  it('reports missing return policy ID', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig({
+          returnPolicyId: null as unknown as string,
+        }),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [{ field: 'returnPolicyId', message: 'Return policy ID is required before publishing.' }],
+      ok: false,
+    });
+  });
+
+  it('reports missing merchant location key', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          sku: 'SKU-001',
+        }),
+        publishConfig: createPublishConfig({
+          merchantLocationKey: '  ',
+        }),
+        quantity: 1,
+      })
+    ).toMatchObject({
+      fields: [
+        {
+          field: 'merchantLocationKey',
+          message: 'Merchant location key is required before publishing.',
+        },
+      ],
+      ok: false,
+    });
+  });
+
+  it('returns multiple missing fields together', () => {
+    expect(
+      validatePublishReady({
+        listing: createListing({
+          category_id: '   ',
+          condition_id: null,
+          description: ' ',
+          image_urls: [],
+          price: 0,
+          sku: null,
+          title: null,
+        }),
+        publishConfig: createPublishConfig({
+          fulfillmentPolicyId: ' ',
+          marketplaceId: '',
+          merchantLocationKey: ' ',
+          paymentPolicyId: '',
+          returnPolicyId: '',
+        }),
+        quantity: 0,
+      })
+    ).toEqual({
+      code: 'PUBLISH_REQUIRED_FIELD_MISSING',
+      fields: [
+        { field: 'title', message: 'Title is required before publishing.', scope: 'listing' },
+        {
+          field: 'description',
+          message: 'Description is required before publishing.',
+          scope: 'listing',
+        },
+        { field: 'price', message: 'Price must be greater than 0 before publishing.', scope: 'listing' },
+        { field: 'categoryId', message: 'Category ID is required before publishing.', scope: 'listing' },
+        { field: 'conditionId', message: 'Condition ID is required before publishing.', scope: 'listing' },
+        {
+          field: 'sku',
+          message: 'SKU or custom label is required before publishing.',
+          scope: 'listing',
+        },
+        {
+          field: 'quantity',
+          message: 'Quantity must be greater than 0 before publishing.',
+          scope: 'listing',
+        },
+        {
+          field: 'imageUrls',
+          message: 'At least one image URL is required before publishing.',
+          scope: 'listing',
+        },
+        {
+          field: 'marketplaceId',
+          message: 'Marketplace ID is required before publishing.',
+          scope: 'publish_config',
+        },
+        {
+          field: 'paymentPolicyId',
+          message: 'Payment policy ID is required before publishing.',
+          scope: 'publish_config',
+        },
+        {
+          field: 'fulfillmentPolicyId',
+          message: 'Fulfillment policy ID is required before publishing.',
+          scope: 'publish_config',
+        },
+        {
+          field: 'returnPolicyId',
+          message: 'Return policy ID is required before publishing.',
+          scope: 'publish_config',
+        },
+        {
+          field: 'merchantLocationKey',
+          message: 'Merchant location key is required before publishing.',
+          scope: 'publish_config',
+        },
+      ],
+      kind: 'user_fixable',
+      ok: false,
+    });
+  });
+});
 
 describe('publish validation app settings checks', () => {
   it('flags null ebay marketplace before offer creation', () => {
