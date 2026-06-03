@@ -5,6 +5,7 @@ import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { publishListing } from '@/ebay/publish-listing.js';
 import { PublishListingValidationError } from '@/ebay/publish-validation.js';
 import type { PublishListingError } from '@/ebay/publish-validation.js';
+import type { EbayConfig } from '@/types/ebay.js';
 
 function createTradingCardConditionPoliciesResponse(
   values: { id: string; name: string }[],
@@ -87,7 +88,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
 }
 
 function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettingsRow {
-  return {
+  const appSettings: AppSettingsRow = {
     capture_mode: 'single_2_image',
     default_fulfillment_policy_id: 'FULFILLMENT-1',
     default_package_type: 'LETTER',
@@ -95,6 +96,7 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     default_return_policy_id: 'RETURN-1',
     default_shipping_profile: null,
     ebay_marketplace_id: 'EBAY_US',
+    ebay_publish_config: null,
     gemini_daily_limit: 500,
     handling_days: 2,
     id: 'default',
@@ -107,6 +109,27 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     updated_at: '2026-05-24T11:00:00.000Z',
     ...overrides,
   };
+
+  if (appSettings.ebay_publish_config == null) {
+    appSettings.ebay_publish_config = {
+      production: {
+        fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+        marketplaceId: 'EBAY_US',
+        merchantLocationKey: 'live-warehouse-1',
+        paymentPolicyId: 'LIVE-PAYMENT-1',
+        returnPolicyId: 'LIVE-RETURN-1',
+      },
+      sandbox: {
+        fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        marketplaceId: appSettings.ebay_marketplace_id,
+        merchantLocationKey: appSettings.merchant_location_key,
+        paymentPolicyId: appSettings.default_payment_policy_id,
+        returnPolicyId: appSettings.default_return_policy_id,
+      },
+    };
+  }
+
+  return appSettings;
 }
 
 function createOfferAlreadyExistsError(options: {
@@ -137,17 +160,23 @@ function createDependencies({
   getOffersResult = { offers: [] },
   listing = createListing(),
   publishOfferResult = { listingId: 'EBAY-001' },
+  runtimeConfig = {
+    environment: 'sandbox',
+    marketplaceId: 'EBAY_US',
+  } satisfies Pick<EbayConfig, 'environment' | 'marketplaceId'>,
 }: {
   appSettings?: AppSettingsRow | null;
   createOfferResult?: { offerId?: string };
   getOffersResult?: { offers?: Record<string, unknown>[] };
   listing?: ListingRow | null;
   publishOfferResult?: { listingId?: string };
+  runtimeConfig?: Pick<EbayConfig, 'environment' | 'marketplaceId'>;
 } = {}): {
   dataAccess: SidecarDataAccess;
   inventoryApi: {
     createOffer: ReturnType<typeof vi.fn>;
     createOrReplaceInventoryItem: ReturnType<typeof vi.fn>;
+    getInventoryLocation: ReturnType<typeof vi.fn>;
     getOffers: ReturnType<typeof vi.fn>;
     publishOffer: ReturnType<typeof vi.fn>;
   };
@@ -160,10 +189,16 @@ function createDependencies({
   };
   listingUpdates: { listingId: string; changes: Partial<ListingRow> }[];
   now: () => Date;
+  runtimeConfig: Pick<EbayConfig, 'environment' | 'marketplaceId'>;
 } {
   const inventoryApi = {
     createOffer: vi.fn(async () => createOfferResult),
     createOrReplaceInventoryItem: vi.fn(async () => undefined),
+    getInventoryLocation: vi.fn(async () => ({
+      merchantLocationKey: runtimeConfig.environment === 'production' ? 'live-warehouse-1' : 'warehouse-1',
+      merchantLocationStatus: 'ENABLED',
+      name: 'Warehouse',
+    })),
     getOffers: vi.fn(async () => getOffersResult),
     publishOffer: vi.fn(async () => publishOfferResult),
   };
@@ -276,6 +311,7 @@ function createDependencies({
     taxonomyApi,
     listingUpdates,
     now: () => new Date('2026-05-24T15:30:00.000Z'),
+    runtimeConfig,
   };
 }
 
@@ -288,6 +324,7 @@ describe('publishListing', () => {
     expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
     expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).toHaveBeenCalledWith('EBAY_US');
     expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '1234');
+    expect(dependencies.inventoryApi.getInventoryLocation).toHaveBeenCalledWith('warehouse-1');
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
@@ -344,6 +381,67 @@ describe('publishListing', () => {
       sku: 'LIST-001',
       status: 'exported',
     });
+  });
+
+  it('uses production publish config when production runtime active', async () => {
+    const dependencies = createDependencies({
+      runtimeConfig: {
+        environment: 'production',
+        marketplaceId: 'EBAY_US',
+      },
+    });
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.getInventoryLocation).toHaveBeenCalledWith('live-warehouse-1');
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingPolicies: {
+          fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+          paymentPolicyId: 'LIVE-PAYMENT-1',
+          returnPolicyId: 'LIVE-RETURN-1',
+        },
+        merchantLocationKey: 'live-warehouse-1',
+        marketplaceId: 'EBAY_US',
+      })
+    );
+  });
+
+  it('fails before createOffer when sandbox location key cannot be verified', async () => {
+    const dependencies = createDependencies({
+      appSettings: createAppSettings({
+        ebay_publish_config: {
+          production: {
+            fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+            marketplaceId: 'EBAY_US',
+            merchantLocationKey: 'live-warehouse-1',
+            paymentPolicyId: 'LIVE-PAYMENT-1',
+            returnPolicyId: 'LIVE-RETURN-1',
+          },
+          sandbox: {
+            fulfillmentPolicyId: 'SANDBOX-FULFILLMENT-1',
+            marketplaceId: 'EBAY_US',
+            merchantLocationKey: 'prod-location-key-in-sandbox',
+            paymentPolicyId: 'SANDBOX-PAYMENT-1',
+            returnPolicyId: 'SANDBOX-RETURN-1',
+          },
+        },
+      }),
+    });
+    dependencies.inventoryApi.getInventoryLocation.mockRejectedValue(new Error('Location not found.'));
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'merchant_location_key_missing_for_environment: merchant location "prod-location-key-in-sandbox" could not be verified for sandbox.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
   it('maps reviewed trading-card condition token into conditionDescriptors', async () => {
@@ -730,35 +828,45 @@ describe('publishListing', () => {
       appSettings: {
         ebay_marketplace_id: null,
       },
-      issues: ['app_settings.ebay_marketplace_id is required for publish.'],
+      issues: [
+        'marketplace_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.marketplaceId is required for sandbox publish config.',
+      ],
       label: 'missing marketplace',
     },
     {
       appSettings: {
         default_payment_policy_id: '   ',
       },
-      issues: ['app_settings.default_payment_policy_id is required for publish.'],
+      issues: [
+        'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId is required for sandbox publish config.',
+      ],
       label: 'blank payment policy',
     },
     {
       appSettings: {
         default_fulfillment_policy_id: '   ',
       },
-      issues: ['app_settings.default_fulfillment_policy_id is required for publish.'],
+      issues: [
+        'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId is required for sandbox publish config.',
+      ],
       label: 'blank fulfillment policy',
     },
     {
       appSettings: {
         default_return_policy_id: '   ',
       },
-      issues: ['app_settings.default_return_policy_id is required for publish.'],
+      issues: [
+        'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId is required for sandbox publish config.',
+      ],
       label: 'blank return policy',
     },
     {
       appSettings: {
         merchant_location_key: '   ',
       },
-      issues: ['app_settings.merchant_location_key is required for publish.'],
+      issues: [
+        'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey is required for sandbox publish config.',
+      ],
       label: 'blank merchant location',
     },
     {
@@ -769,10 +877,10 @@ describe('publishListing', () => {
         merchant_location_key: 'default-main-location',
       },
       issues: [
-        'app_settings.default_payment_policy_id "mock-payment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.',
-        'app_settings.default_fulfillment_policy_id "mock-fulfillment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.',
-        'app_settings.default_return_policy_id "mock-return-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.',
-        'app_settings.merchant_location_key "default-main-location" looks like a placeholder. Run sandbox location diagnostics and update app_settings.default before publish.',
+        'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId "mock-payment-policy-id" is a placeholder.',
+        'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
+        'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId "mock-return-policy-id" is a placeholder.',
+        'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "default-main-location" looks like a placeholder.',
       ],
       label: 'default-main-location with mock policies',
     },

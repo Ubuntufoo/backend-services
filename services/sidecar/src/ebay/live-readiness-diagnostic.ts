@@ -2,7 +2,7 @@ import { DEFAULT_APP_SETTINGS_ID, type AppSettingsRow } from '@ebay-inventory/da
 import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import type { EbayOAuthValidationConfig } from '@/ebay/config.js';
-import { getPublishAppSettingIssues } from '@/ebay/publish-validation.js';
+import { resolvePublishConfig } from '@/ebay/publish-config.js';
 import { EbayOAuthRequestError, type ExchangeRefreshTokenOptions } from '@/ebay/oauth-client.js';
 import {
   validateEbayOAuth,
@@ -451,28 +451,17 @@ function buildPublishConfigResolutionCheck(
     );
   }
 
-  const issues = getPublishAppSettingIssues(appSettingsState.value).map(
-    normalizePublishIssueForLiveReadiness
-  );
-
-  if (appSettingsState.value.ebay_marketplace_id !== context.marketplaceId) {
-    issues.push(
-      `app_settings.ebay_marketplace_id "${appSettingsState.value.ebay_marketplace_id ?? '[missing]'}" does not match runtime marketplace "${context.marketplaceId}".`
-    );
-  }
-
-  if (context.environment !== 'production') {
-    issues.push('Runtime environment must resolve to production for live publish readiness.');
-  }
+  const resolution = resolvePublishConfig(appSettingsState.value, {
+    environment: 'production',
+    runtimeMarketplaceId: context.marketplaceId,
+  });
+  const issues = resolution.issues.map(normalizePublishIssueForLiveReadiness);
 
   const details = {
     appSettingsId: appSettingsState.value.id,
-    default_fulfillment_policy_id: appSettingsState.value.default_fulfillment_policy_id,
-    default_payment_policy_id: appSettingsState.value.default_payment_policy_id,
-    default_return_policy_id: appSettingsState.value.default_return_policy_id,
-    ebay_marketplace_id: appSettingsState.value.ebay_marketplace_id,
+    environment: 'production',
     issues,
-    merchant_location_key: appSettingsState.value.merchant_location_key,
+    resolvedConfig: resolution.config,
     runtimeMarketplaceId: context.marketplaceId,
   };
 
@@ -535,14 +524,10 @@ async function runSellerAccessCheck(context: ReportContext, api: LiveReadinessAp
 }
 
 function getConfiguredValue(
-  appSettingsState: { error?: unknown; value: AppSettingsRow | null },
-  field:
-    | 'default_payment_policy_id'
-    | 'default_fulfillment_policy_id'
-    | 'default_return_policy_id'
-    | 'merchant_location_key'
+  resolution: ReturnType<typeof resolvePublishConfig>,
+  field: 'paymentPolicyId' | 'fulfillmentPolicyId' | 'returnPolicyId' | 'merchantLocationKey'
 ): string | null {
-  const value = appSettingsState.value?.[field];
+  const value = resolution.config?.[field];
   return normalizeText(typeof value === 'string' ? value : null);
 }
 
@@ -552,10 +537,7 @@ async function runPolicyCheck<TPolicy extends { marketplaceId?: string | null; n
     appSettingsState: { error?: unknown; value: AppSettingsRow | null };
     checkName: 'payment_policy' | 'fulfillment_policy' | 'return_policy';
     context: ReportContext;
-    field:
-      | 'default_payment_policy_id'
-      | 'default_fulfillment_policy_id'
-      | 'default_return_policy_id';
+    field: 'paymentPolicyId' | 'fulfillmentPolicyId' | 'returnPolicyId';
     idField: 'paymentPolicyId' | 'fulfillmentPolicyId' | 'returnPolicyId';
     label: string;
   }
@@ -575,7 +557,23 @@ async function runPolicyCheck<TPolicy extends { marketplaceId?: string | null; n
     });
   }
 
-  const configuredValue = getConfiguredValue(input.appSettingsState, input.field);
+  const resolution = resolvePublishConfig(input.appSettingsState.value, {
+    environment: 'production',
+    runtimeMarketplaceId: input.context.marketplaceId,
+  });
+
+  if (!resolution.config) {
+    return buildCheck(
+      input.checkName,
+      'fail',
+      `${input.label} could not be resolved from production publish config.`,
+      {
+        issues: resolution.issues,
+      }
+    );
+  }
+
+  const configuredValue = getConfiguredValue(resolution, input.field);
   if (!configuredValue) {
     return buildCheck(
       input.checkName,
@@ -648,7 +646,22 @@ async function runInventoryLocationCheck(
     });
   }
 
-  const merchantLocationKey = getConfiguredValue(appSettingsState, 'merchant_location_key');
+  const resolution = resolvePublishConfig(appSettingsState.value, {
+    environment: 'production',
+    runtimeMarketplaceId: context.marketplaceId,
+  });
+  if (!resolution.config) {
+    return buildCheck(
+      'inventory_location',
+      'fail',
+      'Inventory location could not be resolved from production publish config.',
+      {
+        issues: resolution.issues,
+      }
+    );
+  }
+
+  const merchantLocationKey = getConfiguredValue(resolution, 'merchantLocationKey');
   if (!merchantLocationKey) {
     return buildCheck(
       'inventory_location',
@@ -846,7 +859,7 @@ export async function getLiveReadinessDiagnostic({
       appSettingsState,
       checkName: 'payment_policy',
       context,
-      field: 'default_payment_policy_id',
+      field: 'paymentPolicyId',
       idField: 'paymentPolicyId',
       label: 'Payment policy',
     }),
@@ -855,7 +868,7 @@ export async function getLiveReadinessDiagnostic({
       appSettingsState,
       checkName: 'fulfillment_policy',
       context,
-      field: 'default_fulfillment_policy_id',
+      field: 'fulfillmentPolicyId',
       idField: 'fulfillmentPolicyId',
       label: 'Fulfillment policy',
     }),
@@ -864,7 +877,7 @@ export async function getLiveReadinessDiagnostic({
       appSettingsState,
       checkName: 'return_policy',
       context,
-      field: 'default_return_policy_id',
+      field: 'returnPolicyId',
       idField: 'returnPolicyId',
       label: 'Return policy',
     }),

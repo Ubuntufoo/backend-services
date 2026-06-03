@@ -5,6 +5,7 @@ import type { MetadataApi } from '@/api/listing-metadata/metadata.js';
 import type { TaxonomyApi } from '@/api/listing-metadata/taxonomy.js';
 import { getEbayConfig } from '@/config/environment.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import type { EbayConfig } from '@/types/ebay.js';
 import {
   getRawCardConditionCandidateLabels,
   getRawCardConditionDescriptorValueId,
@@ -37,11 +38,12 @@ import {
   PublishListingValidationError,
   validatePublishListingReadiness,
 } from '@/ebay/publish-validation.js';
+import { resolvePublishConfig, type ResolvedPublishConfig } from '@/ebay/publish-config.js';
 import { validateRequiredItemSpecificsForCategory } from '@/ebay/required-item-specifics-validation.js';
 
 type PublishInventoryApi = Pick<
   InventoryApi,
-  'createOrReplaceInventoryItem' | 'createOffer' | 'getOffers' | 'publishOffer'
+  'createOrReplaceInventoryItem' | 'createOffer' | 'getInventoryLocation' | 'getOffers' | 'publishOffer'
 >;
 type PublishMetadataApi = Pick<MetadataApi, 'getItemConditionPolicies'>;
 type PublishTaxonomyApi = Pick<TaxonomyApi, 'getDefaultCategoryTreeId' | 'getItemAspectsForCategory'>;
@@ -58,6 +60,7 @@ export interface PublishListingDependencies {
   metadataApi: PublishMetadataApi;
   taxonomyApi: PublishTaxonomyApi;
   now: () => Date;
+  runtimeConfig: Pick<EbayConfig, 'environment' | 'marketplaceId'>;
 }
 
 export interface PublishListingResult {
@@ -71,7 +74,8 @@ export interface PublishListingResult {
 }
 
 async function createDefaultDependencies(): Promise<PublishListingDependencies> {
-  const api = new EbaySellerApi(getEbayConfig());
+  const runtimeConfig = getEbayConfig();
+  const api = new EbaySellerApi(runtimeConfig);
   await api.initialize();
 
   return {
@@ -80,6 +84,10 @@ async function createDefaultDependencies(): Promise<PublishListingDependencies> 
     metadataApi: api.metadata,
     taxonomyApi: api.taxonomy,
     now: () => new Date(),
+    runtimeConfig: {
+      environment: runtimeConfig.environment,
+      marketplaceId: runtimeConfig.marketplaceId ?? 'EBAY_US',
+    },
   };
 }
 
@@ -98,6 +106,10 @@ async function resolveDependencies(
       metadataApi: dependencies.metadataApi,
       taxonomyApi: dependencies.taxonomyApi,
       now: dependencies.now ?? (() => new Date()),
+      runtimeConfig: dependencies.runtimeConfig ?? {
+        environment: 'sandbox',
+        marketplaceId: 'EBAY_US',
+      },
     };
   }
 
@@ -109,6 +121,7 @@ async function resolveDependencies(
     metadataApi: dependencies.metadataApi ?? defaults.metadataApi,
     taxonomyApi: dependencies.taxonomyApi ?? defaults.taxonomyApi,
     now: dependencies.now ?? defaults.now,
+    runtimeConfig: dependencies.runtimeConfig ?? defaults.runtimeConfig,
   };
 }
 
@@ -183,7 +196,7 @@ function buildTradingCardValidationError(listing: ListingRow, message: string): 
 
 async function resolveTradingCardConditionDescriptors(
   listing: ListingRow,
-  appSettings: AppSettingsRow,
+  marketplaceId: string,
   metadataApi: PublishMetadataApi
 ) {
   if (!isTradingCardCategoryId(listing.category_id)) {
@@ -217,7 +230,7 @@ async function resolveTradingCardConditionDescriptors(
 
   try {
     metadataResponse = await metadataApi.getItemConditionPolicies(
-      appSettings.ebay_marketplace_id!.trim(),
+      marketplaceId,
       `categoryIds:{${listing.category_id!.trim()}}`
     );
   } catch (error) {
@@ -436,25 +449,64 @@ function wrapPublishStageError(
   );
 }
 
+async function verifyResolvedMerchantLocation(
+  inventoryApi: PublishInventoryApi,
+  listingId: string,
+  publishConfig: ResolvedPublishConfig
+): Promise<void> {
+  try {
+    const location = await inventoryApi.getInventoryLocation(publishConfig.merchantLocationKey);
+    const status = getTrimmedString(location.merchantLocationStatus)?.toUpperCase();
+
+    if (status && status !== 'ENABLED') {
+      throw new PublishListingValidationError(listingId, [
+        `merchant_location_key_missing_for_environment: merchant location "${publishConfig.merchantLocationKey}" exists for ${publishConfig.environment} but status is "${status}", not ENABLED.`,
+      ]);
+    }
+  } catch (error) {
+    if (error instanceof PublishListingValidationError) {
+      throw error;
+    }
+
+    throw new PublishListingValidationError(listingId, [
+      `merchant_location_key_missing_for_environment: merchant location "${publishConfig.merchantLocationKey}" could not be verified for ${publishConfig.environment}.`,
+    ]);
+  }
+}
+
 export async function publishListing(
   listingId: string,
   dependencies: Partial<PublishListingDependencies> = {}
 ): Promise<PublishListingResult> {
   const resolvedDependencies = await resolveDependencies(dependencies);
   const { appSettings, listing } = await loadPublishContext(listingId, resolvedDependencies.dataAccess);
+  const runtimeMarketplaceId = resolvedDependencies.runtimeConfig.marketplaceId ?? 'EBAY_US';
+  const publishConfigResult = resolvePublishConfig(appSettings, {
+    environment: resolvedDependencies.runtimeConfig.environment,
+    runtimeMarketplaceId,
+  });
 
-  validatePublishListingReadiness(listing, appSettings);
+  validatePublishListingReadiness(listing, appSettings, {
+    environment: resolvedDependencies.runtimeConfig.environment,
+    runtimeMarketplaceId,
+  });
+
+  if (!publishConfigResult.config) {
+    throw new PublishListingValidationError(listing.listing_id, publishConfigResult.issues);
+  }
+
+  const publishConfig = publishConfigResult.config;
 
   const sku = buildPublishSku(listing);
   const conditionDescriptors = await resolveTradingCardConditionDescriptors(
     listing,
-    appSettings,
+    publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
   try {
     await validateRequiredItemSpecificsForCategory({
       listing,
-      marketplaceId: appSettings.ebay_marketplace_id?.trim() ?? '',
+      marketplaceId: publishConfig.marketplaceId,
       taxonomyApi: resolvedDependencies.taxonomyApi,
     });
   } catch (error) {
@@ -473,9 +525,22 @@ export async function publishListing(
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
   });
-  const offerPayload = mapListingToOfferPayload(listing, appSettings, sku);
-  const marketplaceId = appSettings.ebay_marketplace_id!.trim();
+  const offerPayload = mapListingToOfferPayload(listing, publishConfig, sku);
+  const marketplaceId = publishConfig.marketplaceId;
   let reusedExistingOffer = getTrimmedString(listing.ebay_offer_id) !== undefined;
+
+  publishLogger.info('Resolved publish config for listing publish.', {
+    environment: publishConfig.environment,
+    fulfillmentPolicyId: publishConfig.fulfillmentPolicyId,
+    listingId,
+    marketplaceId: publishConfig.marketplaceId,
+    merchantLocationKey: publishConfig.merchantLocationKey,
+    paymentPolicyId: publishConfig.paymentPolicyId,
+    returnPolicyId: publishConfig.returnPolicyId,
+    source: publishConfig.source,
+  });
+
+  await verifyResolvedMerchantLocation(resolvedDependencies.inventoryApi, listingId, publishConfig);
 
   try {
     await resolvedDependencies.inventoryApi.createOrReplaceInventoryItem(sku, inventoryItemPayload);

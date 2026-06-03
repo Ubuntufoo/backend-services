@@ -1,6 +1,8 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import type { EbayApiError } from '@/types/ebay.js';
+import type { EbayEnvironment } from '@/ebay/config.js';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
+import { getPublishAppSettingIssues } from '@/ebay/publish-config.js';
 import {
   GRADED_TRADING_CARD_CONDITION_ID,
   getSavedRawCardConditionToken,
@@ -65,47 +67,14 @@ export class PublishListingValidationError extends PublishListingError {
   }
 }
 
+export { getPublishAppSettingIssues } from '@/ebay/publish-config.js';
+
 function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
 function isRecord(value: ListingRow['item_specifics']): value is Record<string, Json> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function normalizeText(value: string | null | undefined): string | undefined {
-  return hasText(value) ? value.trim() : undefined;
-}
-
-function isMockPlaceholder(value: string | null | undefined): boolean {
-  const normalized = normalizeText(value);
-  return normalized ? /^mock-/i.test(normalized) : false;
-}
-
-function isPlaceholderMarketplaceId(value: string | null | undefined): boolean {
-  const normalized = normalizeText(value);
-  return normalized ? isMockPlaceholder(normalized) || !/^EBAY_[A-Z_]+$/.test(normalized) : false;
-}
-
-function hasNonRealPolicySettings(appSettings: AppSettingsRow): boolean {
-  return [
-    appSettings.default_payment_policy_id,
-    appSettings.default_fulfillment_policy_id,
-    appSettings.default_return_policy_id,
-  ].some((value) => !hasText(value) || isMockPlaceholder(value));
-}
-
-function isPlaceholderMerchantLocationKey(appSettings: AppSettingsRow): boolean {
-  const normalized = normalizeText(appSettings.merchant_location_key);
-  if (!normalized) {
-    return false;
-  }
-
-  if (isMockPlaceholder(normalized)) {
-    return true;
-  }
-
-  return normalized === 'default-main-location' && hasNonRealPolicySettings(appSettings);
 }
 
 function getListingLabel(listing: Pick<ListingRow, 'listing_id'>): string {
@@ -134,55 +103,13 @@ function getImageUrlIssues(listing: ListingRow): string[] {
   return issues;
 }
 
-export function getPublishAppSettingIssues(appSettings: AppSettingsRow): string[] {
-  const issues: string[] = [];
-
-  if (!hasText(appSettings.ebay_marketplace_id)) {
-    issues.push('app_settings.ebay_marketplace_id is required for publish.');
-  } else if (isPlaceholderMarketplaceId(appSettings.ebay_marketplace_id)) {
-    issues.push(
-      `app_settings.ebay_marketplace_id "${appSettings.ebay_marketplace_id.trim()}" is not a valid publish marketplace.`
-    );
-  }
-
-  if (!hasText(appSettings.default_payment_policy_id)) {
-    issues.push('app_settings.default_payment_policy_id is required for publish.');
-  } else if (isMockPlaceholder(appSettings.default_payment_policy_id)) {
-    issues.push(
-      `app_settings.default_payment_policy_id "${appSettings.default_payment_policy_id.trim()}" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.`
-    );
-  }
-
-  if (!hasText(appSettings.default_fulfillment_policy_id)) {
-    issues.push('app_settings.default_fulfillment_policy_id is required for publish.');
-  } else if (isMockPlaceholder(appSettings.default_fulfillment_policy_id)) {
-    issues.push(
-      `app_settings.default_fulfillment_policy_id "${appSettings.default_fulfillment_policy_id.trim()}" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.`
-    );
-  }
-
-  if (!hasText(appSettings.default_return_policy_id)) {
-    issues.push('app_settings.default_return_policy_id is required for publish.');
-  } else if (isMockPlaceholder(appSettings.default_return_policy_id)) {
-    issues.push(
-      `app_settings.default_return_policy_id "${appSettings.default_return_policy_id.trim()}" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.`
-    );
-  }
-
-  if (!hasText(appSettings.merchant_location_key)) {
-    issues.push('app_settings.merchant_location_key is required for publish.');
-  } else if (isPlaceholderMerchantLocationKey(appSettings)) {
-    issues.push(
-      `app_settings.merchant_location_key "${appSettings.merchant_location_key.trim()}" looks like a placeholder. Run sandbox location diagnostics and update app_settings.default before publish.`
-    );
-  }
-
-  return issues;
-}
-
 export function validatePublishListingReadiness(
   listing: ListingRow,
-  appSettings: AppSettingsRow
+  appSettings: AppSettingsRow,
+  options: {
+    environment?: EbayEnvironment;
+    runtimeMarketplaceId?: string | null;
+  } = {}
 ): void {
   const listingLabel = getListingLabel(listing);
   const issues: string[] = [];
@@ -263,7 +190,12 @@ export function validatePublishListingReadiness(
     issues.push(`Listing "${listingLabel}" is missing a valid price.`);
   }
 
-  issues.push(...getPublishAppSettingIssues(appSettings));
+  issues.push(
+    ...getPublishAppSettingIssues(appSettings, {
+      environment: options.environment,
+      runtimeMarketplaceId: options.runtimeMarketplaceId,
+    })
+  );
 
   if (issues.length > 0) {
     throw new PublishListingValidationError(listing.listing_id, issues);

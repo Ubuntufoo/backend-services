@@ -47,27 +47,13 @@ function createListingForOfferPayload() {
 
 function createAppSettingsForOfferPayload() {
   return {
-    ai_instructions: null,
-    auto_process_enabled: true,
-    created_at: '2026-05-24T09:00:00.000Z',
-    default_condition_id: '3000',
-    default_fulfillment_policy_id: 'FULFILLMENT-1',
-    default_location_id: null,
-    default_payment_policy_id: 'PAYMENT-1',
-    default_return_policy_id: 'RETURN-1',
-    default_shipping_profile: null,
-    ebay_marketplace_id: 'EBAY_US',
-    gemini_daily_limit: 500,
-    handling_days: 2,
-    id: 'settings-1',
-    incoming_folder_path: '/incoming',
-    max_order_syncs_per_day: 25,
-    merchant_location_key: 'warehouse-1',
-    office_location_name: null,
-    processed_folder_path: '/processed',
-    r2_retention_days_after_sold: 30,
-    updated_at: '2026-05-24T09:30:00.000Z',
-    user_id: 'user-1',
+    environment: 'sandbox',
+    fulfillmentPolicyId: 'FULFILLMENT-1',
+    marketplaceId: 'EBAY_US',
+    merchantLocationKey: 'warehouse-1',
+    paymentPolicyId: 'PAYMENT-1',
+    returnPolicyId: 'RETURN-1',
+    source: 'environment_config',
   } satisfies Parameters<typeof mapListingToOfferPayload>[1];
 }
 

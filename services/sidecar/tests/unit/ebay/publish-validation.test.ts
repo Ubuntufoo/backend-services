@@ -53,7 +53,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
 }
 
 function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettingsRow {
-  return {
+  const appSettings: AppSettingsRow = {
     capture_mode: 'single_2_image',
     default_fulfillment_policy_id: 'FULFILLMENT-1',
     default_package_type: 'LETTER',
@@ -61,6 +61,7 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     default_return_policy_id: 'RETURN-1',
     default_shipping_profile: null,
     ebay_marketplace_id: 'EBAY_US',
+    ebay_publish_config: null,
     gemini_daily_limit: 500,
     handling_days: 2,
     id: 'default',
@@ -73,25 +74,43 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     updated_at: '2026-05-24T11:00:00.000Z',
     ...overrides,
   };
+
+  if (appSettings.ebay_publish_config == null) {
+    appSettings.ebay_publish_config = {
+      sandbox: {
+        fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        marketplaceId: appSettings.ebay_marketplace_id,
+        merchantLocationKey: appSettings.merchant_location_key,
+        paymentPolicyId: appSettings.default_payment_policy_id,
+        returnPolicyId: appSettings.default_return_policy_id,
+      },
+    };
+  }
+
+  return appSettings;
 }
 
 describe('publish validation app settings checks', () => {
   it('flags null ebay marketplace before offer creation', () => {
     expect(getPublishAppSettingIssues(createAppSettings({ ebay_marketplace_id: null }))).toContain(
-      'app_settings.ebay_marketplace_id is required for publish.'
+      'marketplace_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.marketplaceId is required for sandbox publish config.'
     );
   });
 
   it('flags blank ebay marketplace before offer creation', () => {
     expect(
       getPublishAppSettingIssues(createAppSettings({ ebay_marketplace_id: '   ' }))
-    ).toContain('app_settings.ebay_marketplace_id is required for publish.');
+    ).toContain(
+      'marketplace_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.marketplaceId is required for sandbox publish config.'
+    );
   });
 
   it('flags blank payment policy id before offer creation', () => {
     expect(
       getPublishAppSettingIssues(createAppSettings({ default_payment_policy_id: '   ' }))
-    ).toContain('app_settings.default_payment_policy_id is required for publish.');
+    ).toContain(
+      'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId is required for sandbox publish config.'
+    );
   });
 
   it('flags placeholder fulfillment policy id before offer creation', () => {
@@ -102,14 +121,16 @@ describe('publish validation app settings checks', () => {
         })
       )
     ).toContain(
-      'app_settings.default_fulfillment_policy_id "mock-fulfillment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.'
+      'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.'
     );
   });
 
   it('flags blank fulfillment policy id before offer creation', () => {
     expect(
       getPublishAppSettingIssues(createAppSettings({ default_fulfillment_policy_id: '   ' }))
-    ).toContain('app_settings.default_fulfillment_policy_id is required for publish.');
+    ).toContain(
+      'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId is required for sandbox publish config.'
+    );
   });
 
   it('flags placeholder payment policy id before offer creation', () => {
@@ -120,14 +141,16 @@ describe('publish validation app settings checks', () => {
         })
       )
     ).toContain(
-      'app_settings.default_payment_policy_id "mock-payment-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.'
+      'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId "mock-payment-policy-id" is a placeholder.'
     );
   });
 
   it('flags blank return policy id before offer creation', () => {
     expect(
       getPublishAppSettingIssues(createAppSettings({ default_return_policy_id: '   ' }))
-    ).toContain('app_settings.default_return_policy_id is required for publish.');
+    ).toContain(
+      'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId is required for sandbox publish config.'
+    );
   });
 
   it('flags placeholder return policy id before offer creation', () => {
@@ -138,14 +161,16 @@ describe('publish validation app settings checks', () => {
         })
       )
     ).toContain(
-      'app_settings.default_return_policy_id "mock-return-policy-id" is a placeholder. Run sandbox policy diagnostics and update app_settings.default before publish.'
+      'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId "mock-return-policy-id" is a placeholder.'
     );
   });
 
   it('flags blank merchant location key before offer creation', () => {
     expect(
       getPublishAppSettingIssues(createAppSettings({ merchant_location_key: '   ' }))
-    ).toContain('app_settings.merchant_location_key is required for publish.');
+    ).toContain(
+      'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey is required for sandbox publish config.'
+    );
   });
 
   it('flags placeholder merchant location key before offer creation', () => {
@@ -156,7 +181,7 @@ describe('publish validation app settings checks', () => {
         })
       )
     ).toContain(
-      'app_settings.merchant_location_key "mock-main-location" looks like a placeholder. Run sandbox location diagnostics and update app_settings.default before publish.'
+      'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "mock-main-location" looks like a placeholder.'
     );
   });
 
@@ -169,7 +194,7 @@ describe('publish validation app settings checks', () => {
         })
       )
     ).toContain(
-      'app_settings.merchant_location_key "default-main-location" looks like a placeholder. Run sandbox location diagnostics and update app_settings.default before publish.'
+      'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "default-main-location" looks like a placeholder.'
     );
   });
 

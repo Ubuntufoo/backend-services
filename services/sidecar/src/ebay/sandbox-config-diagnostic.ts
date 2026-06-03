@@ -1,6 +1,6 @@
 import { DEFAULT_APP_SETTINGS_ID, type AppSettingsRow } from '@ebay-inventory/data';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
-import { getPublishAppSettingIssues } from '@/ebay/publish-validation.js';
+import { getPublishAppSettingIssues } from '@/ebay/publish-config.js';
 import {
   DEFAULT_LOCATION_KEY,
   POLICY_NAMES,
