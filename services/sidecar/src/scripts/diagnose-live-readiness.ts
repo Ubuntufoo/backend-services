@@ -10,7 +10,7 @@ import {
 
 function withSilencedConsoleError<T>(callback: () => T): T {
   const originalConsoleError = console.error;
-  console.error = () => undefined;
+  console.error = ((..._args: never[]) => undefined) as typeof console.error;
 
   try {
     return callback();
@@ -27,23 +27,8 @@ function createStreamCapture(): StreamCapture {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
   const originalStderrWrite = process.stderr.write.bind(process.stderr);
 
-  const swallowStdoutWrite: typeof process.stdout.write = (chunk, encoding, cb) => {
-    if (typeof encoding === 'function') {
-      encoding();
-    } else if (typeof cb === 'function') {
-      cb();
-    }
-    return true;
-  };
-
-  const swallowStderrWrite: typeof process.stderr.write = (chunk, encoding, cb) => {
-    if (typeof encoding === 'function') {
-      encoding();
-    } else if (typeof cb === 'function') {
-      cb();
-    }
-    return true;
-  };
+  const swallowStdoutWrite = ((..._args: unknown[]) => true) as typeof process.stdout.write;
+  const swallowStderrWrite = ((..._args: unknown[]) => true) as typeof process.stderr.write;
 
   process.stdout.write = swallowStdoutWrite;
   process.stderr.write = swallowStderrWrite;

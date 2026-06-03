@@ -661,8 +661,7 @@ async function runInventoryLocationCheck(
   }
 
   try {
-    const location: InventoryLocationFull =
-      await api.inventory.getInventoryLocation(merchantLocationKey);
+    const location = (await api.inventory.getInventoryLocation(merchantLocationKey)) as InventoryLocationFull;
     return buildCheck(
       'inventory_location',
       'pass',
