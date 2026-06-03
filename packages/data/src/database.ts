@@ -12,15 +12,15 @@ export type Database = Omit<GeneratedDatabase, 'public'> & {
   public: Omit<GeneratedDatabase['public'], 'Tables'> & {
     Tables: Omit<GeneratedPublicTables, 'app_settings' | 'listings'> & {
       app_settings: {
-        Row: Omit<GeneratedAppSettings['Row'], 'capture_mode'> & {
+        Row: Omit<GeneratedAppSettings['Row'], 'capture_mode' | 'ebay_publish_config'> & {
           capture_mode: CaptureMode | null;
           ebay_publish_config?: Json | null;
         };
-        Insert: Omit<GeneratedAppSettings['Insert'], 'capture_mode'> & {
+        Insert: Omit<GeneratedAppSettings['Insert'], 'capture_mode' | 'ebay_publish_config'> & {
           capture_mode?: CaptureMode | null;
           ebay_publish_config?: Json | null;
         };
-        Update: Omit<GeneratedAppSettings['Update'], 'capture_mode'> & {
+        Update: Omit<GeneratedAppSettings['Update'], 'capture_mode' | 'ebay_publish_config'> & {
           capture_mode?: CaptureMode | null;
           ebay_publish_config?: Json | null;
         };
