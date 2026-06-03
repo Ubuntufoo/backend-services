@@ -455,7 +455,9 @@ async function verifyResolvedMerchantLocation(
   publishConfig: ResolvedPublishConfig
 ): Promise<void> {
   try {
-    const location = await inventoryApi.getInventoryLocation(publishConfig.merchantLocationKey);
+    const location = (await inventoryApi.getInventoryLocation(publishConfig.merchantLocationKey)) as {
+      merchantLocationStatus?: string | null;
+    };
     const status = getTrimmedString(location.merchantLocationStatus)?.toUpperCase();
 
     if (status && status !== 'ENABLED') {

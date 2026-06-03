@@ -79,7 +79,7 @@ function getEnvironmentConfigFields(
     return null;
   }
 
-  const environmentConfig = root[environment];
+  const environmentConfig = root[environment] as Json | Record<string, unknown> | undefined;
   if (!isRecord(environmentConfig)) {
     return null;
   }
