@@ -29,6 +29,18 @@ describe('listing workflow validation', () => {
     });
   });
 
+  it('accepts exported listings in idle final state', () => {
+    const parsed = listingWorkflowStateSchema.parse({
+      status: 'exported',
+      subStatus: 'idle',
+    });
+
+    expect(parsed).toEqual({
+      status: 'exported',
+      subStatus: 'idle',
+    });
+  });
+
   it('rejects incompatible workflow state pairs immediately', () => {
     const result = listingWorkflowStateSchema.safeParse({
       status: 'record_created',
