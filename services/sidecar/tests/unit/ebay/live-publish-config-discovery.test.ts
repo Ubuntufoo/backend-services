@@ -253,17 +253,25 @@ describe('live publish config discovery', () => {
 
   it('does not call mutation methods', async () => {
     const api = createApi();
-    const mutationGuard = vi.fn();
+    const accountMutationGuard = vi.fn();
+    const inventoryMutationGuard = vi.fn();
+    (api as unknown as Record<string, unknown>).account = {
+      ...api.account,
+      createPaymentPolicy: accountMutationGuard,
+      createFulfillmentPolicy: accountMutationGuard,
+      createReturnPolicy: accountMutationGuard,
+      updatePaymentPolicy: accountMutationGuard,
+      updateFulfillmentPolicy: accountMutationGuard,
+      updateReturnPolicy: accountMutationGuard,
+    };
     (api as unknown as Record<string, unknown>).inventory = {
       ...api.inventory,
-      createOrReplaceInventoryItem: mutationGuard,
-      createOrReplaceInventoryLocation: mutationGuard,
-      createPaymentPolicy: mutationGuard,
-      createFulfillmentPolicy: mutationGuard,
-      createReturnPolicy: mutationGuard,
-      updatePaymentPolicy: mutationGuard,
-      updateFulfillmentPolicy: mutationGuard,
-      updateReturnPolicy: mutationGuard,
+      createOrReplaceInventoryItem: inventoryMutationGuard,
+      createOrReplaceInventoryLocation: inventoryMutationGuard,
+      updateLocationDetails: inventoryMutationGuard,
+      enableInventoryLocation: inventoryMutationGuard,
+      createOffer: inventoryMutationGuard,
+      publishOffer: inventoryMutationGuard,
     };
 
     await discoverLivePublishConfig({
@@ -279,7 +287,7 @@ describe('live publish config discovery', () => {
       }),
     });
 
-    expect(mutationGuard).not.toHaveBeenCalled();
+    expect(accountMutationGuard).not.toHaveBeenCalled();
+    expect(inventoryMutationGuard).not.toHaveBeenCalled();
   });
 });
-
