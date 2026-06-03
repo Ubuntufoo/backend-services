@@ -14,7 +14,6 @@ import type { InventoryApi } from '@/api/listing-management/inventory.js';
 import type { components as AccountComponents } from '@/types/sell-apps/account-management/sellAccountV1Oas3.js';
 import type { components as InventoryComponents } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 
-type SellingPrivileges = AccountComponents['schemas']['SellingPrivileges'];
 type PaymentPolicy = AccountComponents['schemas']['PaymentPolicy'];
 type FulfillmentPolicy = AccountComponents['schemas']['FulfillmentPolicy'];
 type ReturnPolicy = AccountComponents['schemas']['ReturnPolicy'];
@@ -26,18 +25,19 @@ const DEFAULT_MARKETPLACE_ID = 'EBAY_US';
 
 export const LIVE_READINESS_CHECK_NAMES = [
   'environment_config',
+  'production_publish_guard',
   'oauth_refresh',
   'seller_account_access',
   'payment_policy',
   'fulfillment_policy',
   'return_policy',
   'inventory_location',
-  'publish_config_alignment',
+  'publish_config_resolution',
 ] as const;
 
 export type LiveReadinessCheckName = (typeof LIVE_READINESS_CHECK_NAMES)[number];
-export type LiveReadinessCheckStatus = 'pass' | 'fail';
-export type LiveReadinessOverallStatus = 'ready' | 'not_ready';
+export type LiveReadinessCheckStatus = 'pass' | 'fail' | 'warning';
+export type LiveReadinessOverallStatus = 'ready' | 'blocked' | 'warning';
 
 export interface LiveReadinessCheck {
   details: Record<string, unknown>;
@@ -52,8 +52,8 @@ export interface LiveReadinessReport {
   checks: LiveReadinessCheck[];
   environment: string;
   marketplaceId: string;
-  oauthBaseUrl: string;
   overallStatus: LiveReadinessOverallStatus;
+  productionPublishEnabled: boolean;
 }
 
 export interface LiveReadinessApi {
@@ -84,6 +84,7 @@ interface ReportContext {
   environment: string;
   marketplaceId: string;
   oauthBaseUrl: string;
+  productionPublishEnabled: boolean;
   sensitiveValues: string[];
 }
 
@@ -95,6 +96,7 @@ interface FailureReportOptions {
   marketplaceId?: string;
   oauthBaseUrl?: string;
   processEnv?: NodeJS.ProcessEnv;
+  productionPublishEnabled?: boolean;
   sensitiveValues?: string[];
 }
 
@@ -209,28 +211,37 @@ function buildCheck(
 }
 
 function buildBlockedCheck(
-  name: Exclude<LiveReadinessCheckName, 'environment_config' | 'oauth_refresh' | 'publish_config_alignment'>,
+  name: Exclude<
+    LiveReadinessCheckName,
+    'environment_config' | 'production_publish_guard' | 'oauth_refresh' | 'publish_config_resolution'
+  >,
   blockedBy: 'environment_config' | 'oauth_refresh',
   message: string
 ): LiveReadinessCheck {
-  return buildCheck(name, 'fail', message, { blockedBy });
+  return buildCheck(name, 'warning', message, { blockedBy });
 }
 
 function buildReport(
   context: Pick<
     ReportContext,
-    'apiBaseUrl' | 'checkedAt' | 'environment' | 'marketplaceId' | 'oauthBaseUrl'
+    'apiBaseUrl' | 'checkedAt' | 'environment' | 'marketplaceId' | 'productionPublishEnabled'
   >,
   checks: LiveReadinessCheck[]
 ): LiveReadinessReport {
+  const hasFailure = checks.some((check) => check.status === 'fail');
+  const hasBlockingWarning = checks.some(
+    (check) => check.status === 'warning' && check.name !== 'production_publish_guard'
+  );
+  const hasWarning = checks.some((check) => check.status === 'warning');
+
   return {
     apiBaseUrl: context.apiBaseUrl,
     checkedAt: context.checkedAt,
     checks,
     environment: context.environment,
     marketplaceId: context.marketplaceId,
-    oauthBaseUrl: context.oauthBaseUrl,
-    overallStatus: checks.every((check) => check.status === 'pass') ? 'ready' : 'not_ready',
+    overallStatus: hasFailure || hasBlockingWarning ? 'blocked' : hasWarning ? 'warning' : 'ready',
+    productionPublishEnabled: context.productionPublishEnabled,
   };
 }
 
@@ -276,7 +287,7 @@ function serializeError(error: unknown, sensitiveValues: string[]): Record<strin
       name: error.name,
     };
 
-    const issues = (error as { issues?: Array<{ message?: string; path?: unknown }> }).issues;
+    const issues = (error as { issues?: { message?: string; path?: unknown }[] }).issues;
     if (Array.isArray(issues) && issues.length > 0) {
       base.issues = issues.map((issue) => ({
         message: sanitizeText(issue.message ?? 'Unknown issue', sensitiveValues),
@@ -378,6 +389,28 @@ function buildEnvironmentCheck(
   );
 }
 
+function buildProductionPublishGuardCheck(
+  oauthConfig: EbayOAuthValidationConfig
+): LiveReadinessCheck {
+  return oauthConfig.publishEnabled
+    ? buildCheck(
+        'production_publish_guard',
+        'pass',
+        'Production publish guard enabled.',
+        {
+          productionPublishEnabled: true,
+        }
+      )
+    : buildCheck(
+        'production_publish_guard',
+        'warning',
+        'Production publish guard disabled. Live publish remains locally blocked.',
+        {
+          productionPublishEnabled: false,
+        }
+      );
+}
+
 async function loadAppSettings(
   dataAccess: Pick<SidecarDataAccess, 'appSettings'>,
   appSettingsId: string
@@ -394,22 +427,22 @@ async function loadAppSettings(
   }
 }
 
-function buildPublishConfigAlignmentCheck(
+function buildPublishConfigResolutionCheck(
   appSettingsState: { error?: unknown; value: AppSettingsRow | null },
   context: ReportContext
 ): LiveReadinessCheck {
   if (appSettingsState.error) {
     return buildCheck(
-      'publish_config_alignment',
+      'publish_config_resolution',
       'fail',
-      'Could not read app_settings.default for publish config alignment.',
+      'Could not resolve publish config from app_settings.default.',
       serializeError(appSettingsState.error, context.sensitiveValues)
     );
   }
 
   if (!appSettingsState.value) {
     return buildCheck(
-      'publish_config_alignment',
+      'publish_config_resolution',
       'fail',
       'Required app_settings.default row missing.',
       {
@@ -445,17 +478,17 @@ function buildPublishConfigAlignmentCheck(
 
   if (issues.length === 0) {
     return buildCheck(
-      'publish_config_alignment',
+      'publish_config_resolution',
       'pass',
-      'Publish config is internally aligned for production.',
+      'Publish config resolved successfully from app_settings.default.',
       details
     );
   }
 
   return buildCheck(
-    'publish_config_alignment',
+    'publish_config_resolution',
     'fail',
-    'Publish config is not internally aligned for production.',
+    'Publish config could not be resolved safely for production.',
     details
   );
 }
@@ -509,7 +542,8 @@ function getConfiguredValue(
     | 'default_return_policy_id'
     | 'merchant_location_key'
 ): string | null {
-  return normalizeText(appSettingsState.value?.[field] as string | null | undefined);
+  const value = appSettingsState.value?.[field];
+  return normalizeText(typeof value === 'string' ? value : null);
 }
 
 async function runPolicyCheck<TPolicy extends { marketplaceId?: string | null; name?: string | null }>(
@@ -627,7 +661,8 @@ async function runInventoryLocationCheck(
   }
 
   try {
-    const location = (await api.inventory.getInventoryLocation(merchantLocationKey)) as InventoryLocationFull;
+    const location: InventoryLocationFull =
+      await api.inventory.getInventoryLocation(merchantLocationKey);
     return buildCheck(
       'inventory_location',
       'pass',
@@ -668,19 +703,22 @@ export async function getLiveReadinessDiagnostic({
     environment: runtimeConfig.environment,
     marketplaceId: runtimeConfig.marketplaceId ?? oauthConfig.marketplaceId ?? DEFAULT_MARKETPLACE_ID,
     oauthBaseUrl: oauthConfig.oauthBaseUrl,
+    productionPublishEnabled: oauthConfig.publishEnabled,
     sensitiveValues,
   };
 
   const environmentCheck = buildEnvironmentCheck(runtimeConfig, oauthConfig, sensitiveValues);
+  const productionPublishGuardCheck = buildProductionPublishGuardCheck(oauthConfig);
   const appSettingsState = await loadAppSettings(dataAccess, appSettingsId);
-  const publishConfigCheck = buildPublishConfigAlignmentCheck(appSettingsState, context);
+  const publishConfigCheck = buildPublishConfigResolutionCheck(appSettingsState, context);
 
   if (environmentCheck.status === 'fail') {
     return buildReport(context, [
       environmentCheck,
+      productionPublishGuardCheck,
       buildCheck(
         'oauth_refresh',
-        'fail',
+        'warning',
         'OAuth refresh check skipped because production environment config failed.',
         { blockedBy: 'environment_config' }
       ),
@@ -723,6 +761,7 @@ export async function getLiveReadinessDiagnostic({
   if (oauthCheck.status === 'fail') {
     return buildReport(context, [
       environmentCheck,
+      productionPublishGuardCheck,
       oauthCheck,
       buildBlockedCheck(
         'seller_account_access',
@@ -759,6 +798,7 @@ export async function getLiveReadinessDiagnostic({
     const initFailureDetails = serializeError(error, sensitiveValues);
     return buildReport(context, [
       environmentCheck,
+      productionPublishGuardCheck,
       oauthCheck,
       buildCheck(
         'seller_account_access',
@@ -834,6 +874,7 @@ export async function getLiveReadinessDiagnostic({
 
   return buildReport(context, [
     environmentCheck,
+    productionPublishGuardCheck,
     oauthCheck,
     sellerAccessCheck,
     paymentPolicyCheck,
@@ -852,6 +893,7 @@ export function createUnexpectedLiveReadinessReport({
   marketplaceId = process.env.EBAY_MARKETPLACE_ID ?? DEFAULT_MARKETPLACE_ID,
   oauthBaseUrl,
   processEnv = process.env,
+  productionPublishEnabled = processEnv.EBAY_PUBLISH_ENABLED === 'true',
   sensitiveValues = [],
 }: FailureReportOptions): LiveReadinessReport {
   const mergedSensitiveValues = [
@@ -876,7 +918,7 @@ export function createUnexpectedLiveReadinessReport({
       checkedAt,
       environment,
       marketplaceId,
-      oauthBaseUrl: resolvedOauthBaseUrl,
+      productionPublishEnabled,
     },
     [
       buildCheck(
@@ -886,8 +928,19 @@ export function createUnexpectedLiveReadinessReport({
         failureDetails
       ),
       buildCheck(
+        'production_publish_guard',
+        productionPublishEnabled ? 'pass' : 'warning',
+        productionPublishEnabled
+          ? 'Production publish guard enabled.'
+          : 'Production publish guard disabled. Live publish remains locally blocked.',
+        {
+          oauthBaseUrl: resolvedOauthBaseUrl,
+          productionPublishEnabled,
+        }
+      ),
+      buildCheck(
         'oauth_refresh',
-        'fail',
+        'warning',
         'OAuth refresh check skipped because diagnostic preparation failed.',
         { blockedBy: 'environment_config' }
       ),
@@ -917,9 +970,9 @@ export function createUnexpectedLiveReadinessReport({
         'Inventory location check skipped because diagnostic preparation failed.'
       ),
       buildCheck(
-        'publish_config_alignment',
-        'fail',
-        'Publish config alignment check skipped because diagnostic preparation failed.',
+        'publish_config_resolution',
+        'warning',
+        'Publish config resolution check skipped because diagnostic preparation failed.',
         { blockedBy: 'environment_config' }
       ),
     ]
