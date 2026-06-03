@@ -282,6 +282,21 @@ describe('publish validation app settings checks', () => {
     );
   });
 
+  it('accepts legacy raw Card Condition tokens via explicit conservative normalization', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          category_id: '261328',
+          condition_id: '4000',
+          item_specifics: {
+            'Card Condition': 'EX-MT',
+          },
+        }),
+        createAppSettings()
+      )
+    ).not.toThrow();
+  });
+
   it('rejects graded trading-card condition ids in v1', () => {
     expect(() =>
       validatePublishListingReadiness(

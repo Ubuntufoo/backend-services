@@ -7,6 +7,7 @@ import { getEbayConfig } from '@/config/environment.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   getRawCardConditionCandidateLabels,
+  getRawCardConditionDescriptorValueId,
   getSavedRawCardConditionToken,
   getRawCardConditionDisplayLabel,
   GRADED_TRADING_CARD_CONDITION_ID,
@@ -124,12 +125,17 @@ function getListingLabel(listing: Pick<ListingRow, 'listing_id'>): string {
 
 function matchesRawCardConditionValue(
   token: RawCardConditionToken,
+  valueId: string | null | undefined,
   valueName: string | null | undefined
 ): boolean {
+  const normalizedValueId = valueId?.trim();
   const normalizedValueName = normalizeLookupText(valueName);
 
-  return getRawCardConditionCandidateLabels(token).some(
+  return (
+    normalizedValueId === getRawCardConditionDescriptorValueId(token) ||
+    getRawCardConditionCandidateLabels(token).some(
     (candidate) => normalizeLookupText(candidate) === normalizedValueName
+    )
   );
 }
 
@@ -251,7 +257,11 @@ async function resolveTradingCardConditionDescriptors(
   }
 
   const descriptorValue = descriptor?.conditionDescriptorValues?.find((candidate) =>
-    matchesRawCardConditionValue(savedToken, candidate.conditionDescriptorValueName)
+    matchesRawCardConditionValue(
+      savedToken,
+      candidate.conditionDescriptorValueId,
+      candidate.conditionDescriptorValueName
+    )
   );
 
   if (!descriptorValue?.conditionDescriptorValueId) {

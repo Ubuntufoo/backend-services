@@ -53,7 +53,7 @@ describe('generateListingDraft', () => {
         description: 'Classic base card with visible wear.',
         categorySuggestion: 'Sports Trading Cards',
         cardConditionNote: 'Visible corner wear and light edge wear.',
-        cardConditionToken: 'VG',
+        cardConditionToken: 'VERY_GOOD',
         conditionSuggestion: 'Ungraded',
         aspects: {
           Franchise: 'Utah Jazz',
@@ -166,7 +166,7 @@ describe('generateListingDraft', () => {
         description: 'Visible front and back images suggest an ungraded single card.',
         categorySuggestion: 'Sports Trading Cards',
         cardConditionNote: 'Soft corners visible; condition estimated from photos.',
-        cardConditionToken: 'EX',
+        cardConditionToken: 'EXCELLENT',
         conditionSuggestion: 'Ungraded',
         aspects: {
           Franchise: 'Utah Jazz',
@@ -220,9 +220,18 @@ describe('generateListingDraft', () => {
     const request = generateDraftRawMock.mock.calls[0]?.[0];
     expect(request.prompt).toContain('Generate an eBay listing draft for a trading card or card lot.');
     expect(request.prompt).toContain('choose the closest supported raw card condition token');
+    expect(request.prompt).toContain(
+      'Supported raw card condition tokens: NEAR_MINT_OR_BETTER, EXCELLENT, VERY_GOOD, POOR.'
+    );
+    expect(request.prompt).toContain('Do not return PSA/BGS/SGC-style numeric grades.');
+    expect(request.prompt).toContain(
+      'Do not return collector shorthand such as NM-MT, EX-MT, VG-EX, MT, NM, EX, VG, FR, or PR.'
+    );
     expect(request.prompt).toContain('Include a Franchise aspect when the team, franchise, or IP is identifiable');
     expect(request.prompt).toContain('"Franchise": "string"');
-    expect(request.prompt).toContain('"cardConditionToken": "MT | MINT | NM-MT | NM | EX-MT | EX | VG-EX | VG | GOOD | FR | PR | null"');
+    expect(request.prompt).toContain(
+      '"cardConditionToken": "NEAR_MINT_OR_BETTER | EXCELLENT | VERY_GOOD | POOR | null"'
+    );
     expect(request.prompt).toContain('Return strict JSON only with no markdown fences or explanatory prose.');
     expect(request.prompt).toContain('"listingId": "LIST-001"');
     expect(request.prompt).toContain('"https://cdn.example.com/front.jpg"');
@@ -233,7 +242,7 @@ describe('generateListingDraft', () => {
       description: 'Visible front and back images suggest an ungraded single card.',
       categorySuggestion: 'Sports Trading Cards',
       cardConditionNote: 'Soft corners visible; condition estimated from photos.',
-      cardConditionToken: 'EX',
+      cardConditionToken: 'EXCELLENT',
       conditionSuggestion: 'Ungraded',
       aspects: {
         Franchise: 'Utah Jazz',
@@ -260,7 +269,7 @@ describe('generateListingDraft', () => {
         title: '1993 Finest Karl Malone',
         description: 'Single ungraded card.',
         categorySuggestion: 'Sports Trading Cards',
-        cardConditionToken: 'EX',
+        cardConditionToken: 'EXCELLENT',
         aspects: {
           Player: 'Karl Malone',
           Franchise: 'Utah Jazz',
@@ -390,7 +399,7 @@ describe('generateListingDraft', () => {
         title: 'Card lot',
         description: 'Description',
         aspects: {},
-        cardConditionToken: 'NEAR MINT',
+        cardConditionToken: 'EX-MT',
       })
     );
 
@@ -403,6 +412,24 @@ describe('generateListingDraft', () => {
     expect(result.warnings).toContain(
       'Gemini response field "cardConditionToken" was invalid and was reset to null.'
     );
+  });
+
+  it('accepts supported cardConditionToken values only from the new scale', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Card lot',
+        description: 'Description',
+        aspects: {},
+        cardConditionToken: 'POOR',
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-005B',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.cardConditionToken).toBe('POOR');
   });
 
   it('drops invalid confidence values outside 0 to 1', async () => {

@@ -353,7 +353,7 @@ describe('publishListing', () => {
         condition_id: '4000',
         condition_notes: 'Visible corner wear.',
         item_specifics: {
-          'Card Condition': 'VG',
+          'Card Condition': 'VERY_GOOD',
           Player: 'Michael Jordan',
         },
       }),
@@ -385,7 +385,7 @@ describe('publishListing', () => {
     );
   });
 
-  it('maps trading-card EX-MT token when metadata uses spelling variant', async () => {
+  it('normalizes legacy EX-MT token to supported eBay Excellent descriptor', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '261328',
@@ -398,8 +398,8 @@ describe('publishListing', () => {
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
       createTradingCardConditionPoliciesResponse([
         {
-          id: '400021',
-          name: 'Excellent to Mint',
+          id: '400011',
+          name: 'Excellent',
         },
       ])
     );
@@ -412,20 +412,20 @@ describe('publishListing', () => {
         conditionDescriptors: [
           {
             name: '40001',
-            values: ['400021'],
+            values: ['400011'],
           },
         ],
       })
     );
   });
 
-  it('maps NM token to exact eBay "Near mint or better" descriptor value', async () => {
+  it('maps NEAR_MINT_OR_BETTER token to exact eBay descriptor value', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '183050',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'NM',
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
           Player: 'Michael Jordan',
         },
       }),
@@ -465,13 +465,53 @@ describe('publishListing', () => {
     expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '183050');
   });
 
+  it('covers Single-000004 legacy EX-MT sandbox case with conservative normalization', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        listing_id: 'Single-000004',
+        category_id: '183050',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'EX-MT',
+          Franchise: 'Utah Jazz',
+          Player: 'Michael Jordan',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [
+          { id: '400010', name: 'Near mint or better' },
+          { id: '400011', name: 'Excellent' },
+          { id: '400012', name: 'Very good' },
+          { id: '400013', name: 'Poor' },
+        ],
+        { categoryId: '183050' }
+      )
+    );
+
+    await publishListing('Single-000004', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      'Single-000004',
+      expect.objectContaining({
+        conditionDescriptors: [
+          {
+            name: '40001',
+            values: ['400011'],
+          },
+        ],
+      })
+    );
+  });
+
   it('continues trading-card publish when metadata omits Card Condition descriptor', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '261328',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'VG',
+          'Card Condition': 'VERY_GOOD',
           Player: 'Michael Jordan',
         },
       }),
@@ -490,7 +530,7 @@ describe('publishListing', () => {
         conditionDescriptors: undefined,
         product: expect.objectContaining({
           aspects: {
-            'Card Condition': ['VG'],
+            'Card Condition': ['Very good'],
             Player: ['Michael Jordan'],
           },
         }),
@@ -504,7 +544,7 @@ describe('publishListing', () => {
         category_id: '183050',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'NM',
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
           Player: 'Michael Jordan',
         },
       }),
@@ -545,7 +585,7 @@ describe('publishListing', () => {
         category_id: '183050',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'NM',
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
           Franchise: 'Utah Jazz',
           Player: 'Karl Malone',
         },
@@ -587,7 +627,7 @@ describe('publishListing', () => {
         category_id: '183050',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'NM',
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
           Franchise: 'Utah Jazz',
         },
       }),
@@ -626,7 +666,7 @@ describe('publishListing', () => {
         category_id: '183050',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'NM',
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
           CategorySuggestion: 'Basketball Cards',
           ConditionSuggestion: 'Near Mint',
         },
@@ -941,15 +981,15 @@ describe('publishListing', () => {
         category_id: '261328',
         condition_id: '4000',
         item_specifics: {
-          'Card Condition': 'VG',
+          'Card Condition': 'VERY_GOOD',
         },
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
       createTradingCardConditionPoliciesResponse([
         {
-          id: '400012',
-          name: 'Near Mint',
+          id: '400010',
+          name: 'Near mint or better',
         },
         {
           id: '400013',
@@ -962,7 +1002,7 @@ describe('publishListing', () => {
       code: 'LISTING_NOT_READY',
       context: {
         issues: [
-          'Listing "LIST-001" could not map raw card condition token "VG" (Very Good) to eBay metadata for category "261328". Diagnostics: listing_id="LIST-001", category_id="261328", saved_token="VG", saved_display_label="Very Good", descriptor_name="Card Condition", supported_values=["400012: Near Mint","400013: Poor"].',
+          'Listing "LIST-001" could not map raw card condition token "VERY_GOOD" (Very good) to eBay metadata for category "261328". Diagnostics: listing_id="LIST-001", category_id="261328", saved_token="VERY_GOOD", saved_display_label="Very good", descriptor_name="Card Condition", supported_values=["400010: Near mint or better","400013: Poor"].',
         ],
         listingId: 'LIST-001',
         stage: 'validate',
@@ -1009,7 +1049,7 @@ describe('publishListing', () => {
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
       createTradingCardConditionPoliciesResponse(
-        [{ id: '400021', name: 'Excellent to Mint' }],
+        [{ id: '400011', name: 'Excellent' }],
         { categoryId: '183050' }
       )
     );
