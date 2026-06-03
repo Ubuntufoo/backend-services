@@ -34,11 +34,16 @@ import {
   PUBLISHED_LISTING_ATTEMPTED_FIELDS,
 } from '@/ebay/published-listing-state.js';
 import {
+  assertPublishReady,
   PublishListingError,
   PublishListingValidationError,
   validatePublishListingReadiness,
 } from '@/ebay/publish-validation.js';
-import { resolvePublishConfig, type ResolvedPublishConfig } from '@/ebay/publish-config.js';
+import {
+  getPublishConfigCandidate,
+  resolvePublishConfig,
+  type ResolvedPublishConfig,
+} from '@/ebay/publish-config.js';
 import { validateRequiredItemSpecificsForCategory } from '@/ebay/required-item-specifics-validation.js';
 
 type PublishInventoryApi = Pick<
@@ -486,6 +491,16 @@ export async function publishListing(
   const publishConfigResult = resolvePublishConfig(appSettings, {
     environment: resolvedDependencies.runtimeConfig.environment,
     runtimeMarketplaceId,
+  });
+  const publishConfigCandidate = getPublishConfigCandidate(appSettings, {
+    environment: resolvedDependencies.runtimeConfig.environment,
+    runtimeMarketplaceId,
+  });
+
+  assertPublishReady({
+    listing,
+    publishConfig: publishConfigCandidate,
+    quantity: 1,
   });
 
   validatePublishListingReadiness(listing, appSettings, {

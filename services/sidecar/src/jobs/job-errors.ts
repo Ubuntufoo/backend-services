@@ -239,6 +239,20 @@ function getPublishValidationScope(error: PublishListingError): PublishValidatio
   }
 
   if (error.code === 'LISTING_NOT_READY') {
+    const fields = error.context.fields ?? [];
+    if (fields.length > 0) {
+      const hasListingField = fields.some((field) => field.scope === 'listing');
+      const hasPublishConfigField = fields.some((field) => field.scope === 'publish_config');
+
+      if (hasListingField) {
+        return 'listing';
+      }
+
+      if (hasPublishConfigField) {
+        return 'app_settings';
+      }
+    }
+
     const issues = error.context.issues ?? [];
     const hasListingIssue = issues.some((issue) => mentionsListingPayloadField(asLowerText(issue)));
     if (hasListingIssue) {
@@ -323,6 +337,7 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
             ...buildBaseContext(error),
             attemptedFields: error.context.attemptedFields,
             causeMessage: error.context.causeMessage,
+            fields: error.context.fields,
             issues: error.context.issues,
             listingId: error.context.listingId,
             offerId: error.context.offerId,
@@ -330,6 +345,7 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
             publish_error_code: error.code,
             publishOfferListingId: error.context.publishOfferListingId,
             stage: error.context.stage,
+            validation_code: error.context.validationCode,
             validation_scope:
               validationScope ??
               (isUserFixableInventoryValidationError(error) ? 'listing' : undefined),

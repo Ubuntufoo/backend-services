@@ -220,7 +220,9 @@ function buildPublishFailureUpdate(
   subStatus: 'idle' | 'publish_queued'
 ): ListingUpdate {
   const validationScope = error.context.validation_scope;
-  const shouldReturnToReview = validationScope === 'listing';
+  const shouldReturnToReview =
+    validationScope === 'listing' ||
+    error.context.validation_code === 'PUBLISH_REQUIRED_FIELD_MISSING';
 
   return {
     last_error_at: errorAt,
@@ -237,10 +239,6 @@ function appendCleanupFailure(message: string, cleanupError: unknown): string {
     cleanupError instanceof Error ? cleanupError.message : 'Unknown cleanup error';
 
   return `${message} Cleanup also failed: ${cleanupMessage}`;
-}
-
-function getDurationMs(startedAt: string, completedAt: string): number {
-  return Math.max(0, Date.parse(completedAt) - Date.parse(startedAt));
 }
 
 function summarizeGeminiAttemptFailureMessage(message: string): string {
@@ -402,7 +400,7 @@ async function markAiModelAttemptRecordFailed(
 function createPreparedListingDraftFromGenerateFn(
   generateDraft: GenerateListingDraftFn
 ): PrepareListingDraftFn {
-  return async (input) => ({
+  return (input) => Promise.resolve({
     input,
     execute: async (options) => await generateDraft(input, options),
   });

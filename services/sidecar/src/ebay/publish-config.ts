@@ -38,6 +38,8 @@ export interface PublishConfigResolutionResult {
   issues: string[];
 }
 
+export type PublishConfigCandidate = Partial<ResolvedPublishConfig> | null;
+
 function hasText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -290,6 +292,41 @@ export function resolvePublishConfig(
     },
     issues: [],
   };
+}
+
+export function getPublishConfigCandidate(
+  appSettings: AppSettingsRow,
+  options: PublishConfigResolutionOptions
+): PublishConfigCandidate {
+  const environmentFields = getEnvironmentConfigFields(appSettings, options.environment);
+
+  if (environmentFields) {
+    return {
+      environment: options.environment,
+      fulfillmentPolicyId: environmentFields.fulfillmentPolicyId ?? undefined,
+      marketplaceId: environmentFields.marketplaceId ?? undefined,
+      merchantLocationKey: environmentFields.merchantLocationKey ?? undefined,
+      paymentPolicyId: environmentFields.paymentPolicyId ?? undefined,
+      returnPolicyId: environmentFields.returnPolicyId ?? undefined,
+      source: 'environment_config',
+    };
+  }
+
+  if (options.environment === 'sandbox' && !getPublishConfigRoot(appSettings) && hasLegacyFlatPublishConfig(appSettings)) {
+    const legacyFields = getLegacyFlatFields(appSettings);
+
+    return {
+      environment: options.environment,
+      fulfillmentPolicyId: legacyFields.fulfillmentPolicyId ?? undefined,
+      marketplaceId: legacyFields.marketplaceId ?? undefined,
+      merchantLocationKey: legacyFields.merchantLocationKey ?? undefined,
+      paymentPolicyId: legacyFields.paymentPolicyId ?? undefined,
+      returnPolicyId: legacyFields.returnPolicyId ?? undefined,
+      source: 'legacy_flat',
+    };
+  }
+
+  return null;
 }
 
 export function getPublishAppSettingIssues(

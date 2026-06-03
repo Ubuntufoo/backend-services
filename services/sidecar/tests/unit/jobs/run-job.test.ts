@@ -7,7 +7,11 @@ import type {
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
-import { PublishListingError, PublishListingValidationError } from '@/ebay/publish-validation.js';
+import {
+  PublishListingError,
+  PublishListingValidationError,
+  PublishRequiredFieldValidationError,
+} from '@/ebay/publish-validation.js';
 import { runSidecarJob } from '@/jobs/index.js';
 
 const queuedGenerateAiJob: JobRow = {
@@ -178,7 +182,7 @@ function createDataAccess({
   aiModelRoutes?: ResolvedAiModelRoute[];
   aiModelRouteError?: Error;
   dailyUsageIncrementError?: Error;
-  dailyUsageIncrementErrors?: Array<Error | undefined>;
+  dailyUsageIncrementErrors?: (Error | undefined)[];
   geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
@@ -1540,6 +1544,77 @@ describe('runSidecarJob', () => {
         validation_scope: 'listing',
       }),
       price: 24.5,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Vintage puzzle',
+    });
+  });
+
+  it('returns structured required-field publish validation errors to needs_review/review_pending without wiping listing data', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        category_id: '1234',
+        condition_id: '4000',
+        description: 'Detailed listing description.',
+        image_urls: ['https://cdn.example.com/front.jpg'],
+        item_specifics: { Brand: 'Acme' },
+        price: 24.5,
+        sku: 'LIST-001',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+        title: 'Vintage puzzle',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishRequiredFieldValidationError('LIST-001', [
+        {
+          field: 'marketplaceId',
+          message: 'Marketplace ID is required before publishing.',
+          scope: 'publish_config',
+        },
+        {
+          field: 'paymentPolicyId',
+          message: 'Payment policy ID is required before publishing.',
+          scope: 'publish_config',
+        },
+      ]);
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_listing_not_ready');
+    expect(result.listing).toMatchObject({
+      category_id: '1234',
+      condition_id: '4000',
+      description: 'Detailed listing description.',
+      image_urls: ['https://cdn.example.com/front.jpg'],
+      item_specifics: { Brand: 'Acme' },
+      last_error_code: 'publish_listing_not_ready',
+      last_error_context: expect.objectContaining({
+        category: 'user_fixable',
+        fields: [
+          {
+            field: 'marketplaceId',
+            message: 'Marketplace ID is required before publishing.',
+            scope: 'publish_config',
+          },
+          {
+            field: 'paymentPolicyId',
+            message: 'Payment policy ID is required before publishing.',
+            scope: 'publish_config',
+          },
+        ],
+        validation_code: 'PUBLISH_REQUIRED_FIELD_MISSING',
+        validation_scope: 'app_settings',
+      }),
+      price: 24.5,
+      sku: 'LIST-001',
       status: 'needs_review',
       sub_status: 'review_pending',
       title: 'Vintage puzzle',
