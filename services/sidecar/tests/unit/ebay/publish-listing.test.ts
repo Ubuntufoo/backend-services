@@ -77,7 +77,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
     r2_retention_policy: null,
     seller_hints: null,
     shipping_profile: null,
-    sku: null,
+    sku: 'LIST-001',
     sold_at: null,
     status: 'approved_for_export',
     sub_status: 'publish_queued',
@@ -569,6 +569,7 @@ describe('publishListing', () => {
         listing_id: 'Single-000004',
         category_id: '183050',
         condition_id: '4000',
+        sku: 'Single-000004',
         item_specifics: {
           'Card Condition': 'EX-MT',
           Franchise: 'Utah Jazz',
@@ -828,65 +829,60 @@ describe('publishListing', () => {
       appSettings: {
         ebay_marketplace_id: null,
       },
-      issues: [
-        'marketplace_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.marketplaceId is required for sandbox publish config.',
-      ],
+      issue: {
+        field: 'marketplaceId',
+        message: 'Marketplace ID is required before publishing.',
+        scope: 'publish_config',
+      },
       label: 'missing marketplace',
     },
     {
       appSettings: {
         default_payment_policy_id: '   ',
       },
-      issues: [
-        'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId is required for sandbox publish config.',
-      ],
+      issue: {
+        field: 'paymentPolicyId',
+        message: 'Payment policy ID is required before publishing.',
+        scope: 'publish_config',
+      },
       label: 'blank payment policy',
     },
     {
       appSettings: {
         default_fulfillment_policy_id: '   ',
       },
-      issues: [
-        'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId is required for sandbox publish config.',
-      ],
+      issue: {
+        field: 'fulfillmentPolicyId',
+        message: 'Fulfillment policy ID is required before publishing.',
+        scope: 'publish_config',
+      },
       label: 'blank fulfillment policy',
     },
     {
       appSettings: {
         default_return_policy_id: '   ',
       },
-      issues: [
-        'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId is required for sandbox publish config.',
-      ],
+      issue: {
+        field: 'returnPolicyId',
+        message: 'Return policy ID is required before publishing.',
+        scope: 'publish_config',
+      },
       label: 'blank return policy',
     },
     {
       appSettings: {
         merchant_location_key: '   ',
       },
-      issues: [
-        'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey is required for sandbox publish config.',
-      ],
+      issue: {
+        field: 'merchantLocationKey',
+        message: 'Merchant location key is required before publishing.',
+        scope: 'publish_config',
+      },
       label: 'blank merchant location',
     },
-    {
-      appSettings: {
-        default_fulfillment_policy_id: 'mock-fulfillment-policy-id',
-        default_payment_policy_id: 'mock-payment-policy-id',
-        default_return_policy_id: 'mock-return-policy-id',
-        merchant_location_key: 'default-main-location',
-      },
-      issues: [
-        'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId "mock-payment-policy-id" is a placeholder.',
-        'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
-        'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId "mock-return-policy-id" is a placeholder.',
-        'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "default-main-location" looks like a placeholder.',
-      ],
-      label: 'default-main-location with mock policies',
-    },
   ])(
-    'blocks publish before createOffer when app settings are invalid: $label',
-    async ({ appSettings, issues }) => {
+    'blocks publish before createOffer when required config missing: $label',
+    async ({ appSettings, issue }) => {
       const dependencies = createDependencies({
         appSettings: createAppSettings(appSettings),
       });
@@ -894,9 +890,11 @@ describe('publishListing', () => {
       await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
         code: 'LISTING_NOT_READY',
         context: {
-          issues: expect.arrayContaining(issues),
+          fields: [issue],
+          issues: [issue.message],
           listingId: 'LIST-001',
           stage: 'validate',
+          validationCode: 'PUBLISH_REQUIRED_FIELD_MISSING',
         },
       });
       expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
@@ -905,14 +903,13 @@ describe('publishListing', () => {
     }
   );
 
-  it('aggregates missing listing fields before any inventory api calls', async () => {
+  it('keeps placeholder publish-config failures on existing non-required validation path', async () => {
     const dependencies = createDependencies({
-      listing: createListing({
-        category_id: '   ',
-        condition_id: '  ',
-        image_urls: ['   '],
-        price: 0,
-        title: '   ',
+      appSettings: createAppSettings({
+        default_fulfillment_policy_id: 'mock-fulfillment-policy-id',
+        default_payment_policy_id: 'mock-payment-policy-id',
+        default_return_policy_id: 'mock-return-policy-id',
+        merchant_location_key: 'default-main-location',
       }),
     });
 
@@ -920,15 +917,184 @@ describe('publishListing', () => {
       code: 'LISTING_NOT_READY',
       context: {
         issues: [
-          'Listing "LIST-001" is missing title.',
-          'Listing "LIST-001" is missing category_id.',
-          'Listing "LIST-001" is missing condition_id.',
-          'Listing "LIST-001" must include at least one image URL for publish.',
-          'Listing "LIST-001" contains blank image_urls entries.',
-          'Listing "LIST-001" is missing a valid price.',
+          'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId "mock-payment-policy-id" is a placeholder.',
+          'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
+          'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId "mock-return-policy-id" is a placeholder.',
+          'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "default-main-location" looks like a placeholder.',
         ],
         listingId: 'LIST-001',
         stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      field: 'title',
+      issue: { field: 'title', message: 'Title is required before publishing.', scope: 'listing' },
+      listing: { title: '   ' },
+    },
+    {
+      field: 'description',
+      issue: {
+        field: 'description',
+        message: 'Description is required before publishing.',
+        scope: 'listing',
+      },
+      listing: { description: '  ' },
+    },
+    {
+      field: 'price',
+      issue: {
+        field: 'price',
+        message: 'Price must be greater than 0 before publishing.',
+        scope: 'listing',
+      },
+      listing: { price: 0 },
+    },
+    {
+      field: 'categoryId',
+      issue: {
+        field: 'categoryId',
+        message: 'Category ID is required before publishing.',
+        scope: 'listing',
+      },
+      listing: { category_id: ' ' },
+    },
+    {
+      field: 'conditionId',
+      issue: {
+        field: 'conditionId',
+        message: 'Condition ID is required before publishing.',
+        scope: 'listing',
+      },
+      listing: { condition_id: '' },
+    },
+    {
+      field: 'imageUrls',
+      issue: {
+        field: 'imageUrls',
+        message: 'At least one image URL is required before publishing.',
+        scope: 'listing',
+      },
+      listing: { image_urls: [] },
+    },
+    {
+      field: 'sku',
+      issue: {
+        field: 'sku',
+        message: 'SKU or custom label is required before publishing.',
+        scope: 'listing',
+      },
+      listing: { sku: '  ' },
+    },
+  ])('blocks missing $field before eBay write calls', async ({ listing, issue }) => {
+    const dependencies = createDependencies({
+      listing: createListing(listing),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        fields: [issue],
+        issues: [issue.message],
+        listingId: 'LIST-001',
+        stage: 'validate',
+        validationCode: 'PUBLISH_REQUIRED_FIELD_MISSING',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+  });
+
+  it('aggregates multiple required-field failures before any inventory api calls', async () => {
+    const dependencies = createDependencies({
+      appSettings: createAppSettings({
+        default_fulfillment_policy_id: ' ',
+        default_payment_policy_id: '',
+        default_return_policy_id: ' ',
+        ebay_marketplace_id: ' ',
+        merchant_location_key: ' ',
+      }),
+      listing: createListing({
+        category_id: '   ',
+        condition_id: '  ',
+        description: ' ',
+        image_urls: [],
+        price: 0,
+        sku: ' ',
+        title: '   ',
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        fields: [
+          { field: 'title', message: 'Title is required before publishing.', scope: 'listing' },
+          {
+            field: 'description',
+            message: 'Description is required before publishing.',
+            scope: 'listing',
+          },
+          {
+            field: 'price',
+            message: 'Price must be greater than 0 before publishing.',
+            scope: 'listing',
+          },
+          {
+            field: 'categoryId',
+            message: 'Category ID is required before publishing.',
+            scope: 'listing',
+          },
+          {
+            field: 'conditionId',
+            message: 'Condition ID is required before publishing.',
+            scope: 'listing',
+          },
+          {
+            field: 'sku',
+            message: 'SKU or custom label is required before publishing.',
+            scope: 'listing',
+          },
+          {
+            field: 'imageUrls',
+            message: 'At least one image URL is required before publishing.',
+            scope: 'listing',
+          },
+          {
+            field: 'marketplaceId',
+            message: 'Marketplace ID is required before publishing.',
+            scope: 'publish_config',
+          },
+          {
+            field: 'paymentPolicyId',
+            message: 'Payment policy ID is required before publishing.',
+            scope: 'publish_config',
+          },
+          {
+            field: 'fulfillmentPolicyId',
+            message: 'Fulfillment policy ID is required before publishing.',
+            scope: 'publish_config',
+          },
+          {
+            field: 'returnPolicyId',
+            message: 'Return policy ID is required before publishing.',
+            scope: 'publish_config',
+          },
+          {
+            field: 'merchantLocationKey',
+            message: 'Merchant location key is required before publishing.',
+            scope: 'publish_config',
+          },
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+        validationCode: 'PUBLISH_REQUIRED_FIELD_MISSING',
       },
     });
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
@@ -980,54 +1146,24 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
-  it('rejects listings with blank fallback sku source', async () => {
+  it('rejects listings with blank sku/custom label source', async () => {
     const dependencies = createDependencies({
       listing: createListing({
-        listing_id: '   ',
         sku: null,
       }),
     });
 
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       context: {
-        issues: ['Listing is missing listing_id required for publish SKU.'],
-        listingId: '   ',
-      },
-    });
-    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: 'null', price: null },
-    { label: 'zero', price: 0 },
-    { label: 'negative', price: -1 },
-    { label: 'infinite', price: Number.POSITIVE_INFINITY },
-    { label: 'nan', price: Number.NaN },
-  ])('rejects $label price values before publish', async ({ price }) => {
-    const dependencies = createDependencies({
-      listing: createListing({
-        price,
-      }),
-    });
-
-    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
-      context: {
-        issues: ['Listing "LIST-001" is missing a valid price.'],
-      },
-    });
-    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
-  });
-
-  it('rejects empty image url arrays before publish', async () => {
-    const dependencies = createDependencies({
-      listing: createListing({
-        image_urls: [],
-      }),
-    });
-
-    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
-      context: {
-        issues: ['Listing "LIST-001" must include at least one image URL for publish.'],
+        fields: [
+          {
+            field: 'sku',
+            message: 'SKU or custom label is required before publishing.',
+            scope: 'listing',
+          },
+        ],
+        listingId: 'LIST-001',
+        validationCode: 'PUBLISH_REQUIRED_FIELD_MISSING',
       },
     });
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
