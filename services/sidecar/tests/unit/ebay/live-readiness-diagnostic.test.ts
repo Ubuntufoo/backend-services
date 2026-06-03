@@ -39,16 +39,31 @@ function createOauthConfig(
 }
 
 function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettingsRow {
-  return {
+  const appSettings = {
     default_fulfillment_policy_id: 'FULFILLMENT-REAL',
     default_package_type: null,
     default_payment_policy_id: 'PAYMENT-REAL',
     default_return_policy_id: 'RETURN-REAL',
     ebay_marketplace_id: 'EBAY_US',
+    ebay_publish_config: null,
     id: DEFAULT_APP_SETTINGS_ID,
     merchant_location_key: 'warehouse-main',
     ...overrides,
   } as AppSettingsRow;
+
+  if (appSettings.ebay_publish_config == null) {
+    appSettings.ebay_publish_config = {
+      production: {
+        fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        marketplaceId: appSettings.ebay_marketplace_id,
+        merchantLocationKey: appSettings.merchant_location_key,
+        paymentPolicyId: appSettings.default_payment_policy_id,
+        returnPolicyId: appSettings.default_return_policy_id,
+      },
+    };
+  }
+
+  return appSettings;
 }
 
 function createApi() {
@@ -183,8 +198,10 @@ describe('live readiness diagnostic', () => {
     expect(
       report.checks.find((check) => check.name === 'publish_config_resolution')?.details
     ).toMatchObject({
-      default_payment_policy_id: 'PAYMENT-REAL',
-      merchant_location_key: 'warehouse-main',
+      resolvedConfig: {
+        merchantLocationKey: 'warehouse-main',
+        paymentPolicyId: 'PAYMENT-REAL',
+      },
     });
   });
 

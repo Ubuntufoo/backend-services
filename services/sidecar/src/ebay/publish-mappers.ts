@@ -1,5 +1,6 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { Condition } from '@/types/ebay-enums.js';
+import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 import {
   getRawCardConditionDisplayLabel,
@@ -165,10 +166,10 @@ export function mapListingToInventoryItemPayload(
 
 export function mapListingToOfferPayload(
   listing: ListingRow,
-  appSettings: AppSettingsRow,
+  publishConfig: ResolvedPublishConfig,
   sku: string
 ): EbayOfferDetailsWithKeys {
-  const marketplaceId = appSettings.ebay_marketplace_id ?? 'EBAY_US';
+  const marketplaceId = publishConfig.marketplaceId;
 
   return {
     availableQuantity: 1,
@@ -176,12 +177,12 @@ export function mapListingToOfferPayload(
     format: 'FIXED_PRICE',
     listingDescription: listing.description ?? undefined,
     listingPolicies: {
-      fulfillmentPolicyId: appSettings.default_fulfillment_policy_id ?? undefined,
-      paymentPolicyId: appSettings.default_payment_policy_id ?? undefined,
-      returnPolicyId: appSettings.default_return_policy_id ?? undefined,
+      fulfillmentPolicyId: publishConfig.fulfillmentPolicyId,
+      paymentPolicyId: publishConfig.paymentPolicyId,
+      returnPolicyId: publishConfig.returnPolicyId,
     },
     marketplaceId,
-    merchantLocationKey: appSettings.merchant_location_key ?? undefined,
+    merchantLocationKey: publishConfig.merchantLocationKey,
     pricingSummary: {
       price: {
         currency: getMarketplaceCurrency(marketplaceId),

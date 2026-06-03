@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
+import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 import {
   buildPublishSku,
   mapListingConditionIdToInventoryCondition,
@@ -76,6 +77,21 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     processed_folder_path: '/processed',
     r2_retention_days_after_sold: 30,
     updated_at: '2026-05-24T11:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function createResolvedPublishConfig(
+  overrides: Partial<ResolvedPublishConfig> = {}
+): ResolvedPublishConfig {
+  return {
+    environment: 'sandbox',
+    fulfillmentPolicyId: 'FULFILLMENT-1',
+    marketplaceId: 'EBAY_US',
+    merchantLocationKey: 'warehouse-1',
+    paymentPolicyId: 'PAYMENT-1',
+    returnPolicyId: 'RETURN-1',
+    source: 'environment_config',
     ...overrides,
   };
 }
@@ -209,7 +225,7 @@ describe('publish mappers', () => {
   });
 
   it('maps listing data to an offer payload using stored policies and location key', () => {
-    const payload = mapListingToOfferPayload(createListing(), createAppSettings(), 'SKU-001');
+    const payload = mapListingToOfferPayload(createListing(), createResolvedPublishConfig(), 'SKU-001');
 
     expect(payload).toEqual({
       availableQuantity: 1,

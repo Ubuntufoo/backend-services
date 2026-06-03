@@ -2,6 +2,7 @@ import type { CaptureMode, ListingStatus, ListingSubStatus } from '@ebay-invento
 import type { Database as GeneratedDatabase } from './database-generated.js';
 
 export type { Json } from './database-generated.js';
+import type { Json } from './database-generated.js';
 
 type GeneratedPublicTables = GeneratedDatabase['public']['Tables'];
 type GeneratedAppSettings = GeneratedPublicTables['app_settings'];
@@ -11,14 +12,17 @@ export type Database = Omit<GeneratedDatabase, 'public'> & {
   public: Omit<GeneratedDatabase['public'], 'Tables'> & {
     Tables: Omit<GeneratedPublicTables, 'app_settings' | 'listings'> & {
       app_settings: {
-        Row: Omit<GeneratedAppSettings['Row'], 'capture_mode'> & {
+        Row: Omit<GeneratedAppSettings['Row'], 'capture_mode' | 'ebay_publish_config'> & {
           capture_mode: CaptureMode | null;
+          ebay_publish_config?: Json | null;
         };
-        Insert: Omit<GeneratedAppSettings['Insert'], 'capture_mode'> & {
+        Insert: Omit<GeneratedAppSettings['Insert'], 'capture_mode' | 'ebay_publish_config'> & {
           capture_mode?: CaptureMode | null;
+          ebay_publish_config?: Json | null;
         };
-        Update: Omit<GeneratedAppSettings['Update'], 'capture_mode'> & {
+        Update: Omit<GeneratedAppSettings['Update'], 'capture_mode' | 'ebay_publish_config'> & {
           capture_mode?: CaptureMode | null;
+          ebay_publish_config?: Json | null;
         };
         Relationships: GeneratedAppSettings['Relationships'];
       };

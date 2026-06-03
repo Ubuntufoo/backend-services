@@ -228,6 +228,7 @@ export type Database = {
           default_return_policy_id: string | null;
           default_shipping_profile: string | null;
           ebay_marketplace_id: string | null;
+          ebay_publish_config: Json | null;
           gemini_daily_limit: number | null;
           handling_days: number | null;
           id: string;
@@ -247,6 +248,7 @@ export type Database = {
           default_return_policy_id?: string | null;
           default_shipping_profile?: string | null;
           ebay_marketplace_id?: string | null;
+          ebay_publish_config?: Json | null;
           gemini_daily_limit?: number | null;
           handling_days?: number | null;
           id?: string;
@@ -266,6 +268,7 @@ export type Database = {
           default_return_policy_id?: string | null;
           default_shipping_profile?: string | null;
           ebay_marketplace_id?: string | null;
+          ebay_publish_config?: Json | null;
           gemini_daily_limit?: number | null;
           handling_days?: number | null;
           id?: string;

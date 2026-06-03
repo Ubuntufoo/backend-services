@@ -14,7 +14,8 @@ insert into public.app_settings (
   default_return_policy_id,
   default_shipping_profile,
   default_package_type,
-  ebay_marketplace_id
+  ebay_marketplace_id,
+  ebay_publish_config
 )
 values (
   'default',
@@ -23,6 +24,7 @@ values (
   25,
   2,
   30,
+  null,
   null,
   null,
   null,
