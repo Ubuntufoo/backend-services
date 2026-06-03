@@ -135,7 +135,7 @@ describe('publish mappers', () => {
       createListing({
         category_id: '183050',
         item_specifics: {
-          'Card Condition': 'VG',
+          'Card Condition': 'VERY_GOOD',
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
         },
@@ -159,6 +159,24 @@ describe('publish mappers', () => {
     ]);
     expect(payload.product?.aspects).toEqual({
       Franchise: ['Utah Jazz'],
+      Player: ['Michael Jordan'],
+    });
+  });
+
+  it('normalizes legacy Card Condition aspect values to supported labels when descriptors are unavailable', () => {
+    const payload = mapListingToInventoryItemPayload(
+      createListing({
+        category_id: '183050',
+        item_specifics: {
+          'Card Condition': 'EX-MT',
+          Player: 'Michael Jordan',
+        },
+      }),
+      createAppSettings()
+    );
+
+    expect(payload.product?.aspects).toEqual({
+      'Card Condition': ['Excellent'],
       Player: ['Michael Jordan'],
     });
   });

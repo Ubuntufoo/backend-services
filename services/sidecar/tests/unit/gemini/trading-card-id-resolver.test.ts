@@ -14,7 +14,7 @@ describe('resolveTradingCardListingIds', () => {
     expect(
       resolveTradingCardListingIds(createListing(), {
         categorySuggestion: 'Sports Trading Cards',
-        cardConditionToken: 'VG',
+        cardConditionToken: 'VERY_GOOD',
       })
     ).toEqual({
       category_id: '183050',
@@ -26,7 +26,7 @@ describe('resolveTradingCardListingIds', () => {
     expect(
       resolveTradingCardListingIds(createListing({ listing_type: 'lot' }), {
         categorySuggestion: 'Sports Trading Cards',
-        cardConditionToken: 'VG',
+        cardConditionToken: 'VERY_GOOD',
       })
     ).toEqual({
       category_id: null,

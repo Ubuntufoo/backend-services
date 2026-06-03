@@ -5,6 +5,14 @@ export const RAW_TRADING_CARD_CONDITION_ID = '4000';
 export const GRADED_TRADING_CARD_CONDITION_ID = '2750';
 
 export const RAW_CARD_CONDITION_TOKENS = [
+  'NEAR_MINT_OR_BETTER',
+  'EXCELLENT',
+  'VERY_GOOD',
+  'POOR',
+] as const;
+
+export type RawCardConditionToken = (typeof RAW_CARD_CONDITION_TOKENS)[number];
+export const LEGACY_RAW_CARD_CONDITION_TOKENS = [
   'MT',
   'MINT',
   'NM-MT',
@@ -18,47 +26,37 @@ export const RAW_CARD_CONDITION_TOKENS = [
   'PR',
 ] as const;
 
-export type RawCardConditionToken = (typeof RAW_CARD_CONDITION_TOKENS)[number];
+export type LegacyRawCardConditionToken = (typeof LEGACY_RAW_CARD_CONDITION_TOKENS)[number];
 
 const RAW_CARD_CONDITION_DISPLAY_LABELS: Record<RawCardConditionToken, string> = {
-  MT: 'Gem Mint',
-  MINT: 'Mint',
-  'NM-MT': 'Near Mint-Mint',
-  NM: 'Near Mint',
-  'EX-MT': 'Excellent-Mint',
-  EX: 'Excellent',
-  'VG-EX': 'Very Good-Excellent',
-  VG: 'Very Good',
-  GOOD: 'Good',
-  FR: 'Fair',
-  PR: 'Poor',
+  NEAR_MINT_OR_BETTER: 'Near mint or better',
+  EXCELLENT: 'Excellent',
+  VERY_GOOD: 'Very good',
+  POOR: 'Poor',
 };
 
-function buildCompoundConditionAliases(label: string): string[] {
-  const parts = label
-    .split('-')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
+const LEGACY_RAW_CARD_CONDITION_TOKEN_NORMALIZATION: Record<
+  LegacyRawCardConditionToken,
+  RawCardConditionToken
+> = {
+  MT: 'NEAR_MINT_OR_BETTER',
+  MINT: 'NEAR_MINT_OR_BETTER',
+  'NM-MT': 'NEAR_MINT_OR_BETTER',
+  NM: 'NEAR_MINT_OR_BETTER',
+  'EX-MT': 'EXCELLENT',
+  EX: 'EXCELLENT',
+  'VG-EX': 'VERY_GOOD',
+  VG: 'VERY_GOOD',
+  GOOD: 'VERY_GOOD',
+  FR: 'POOR',
+  PR: 'POOR',
+};
 
-  if (parts.length < 2) {
-    return [label];
-  }
-
-  return [label, parts.join(' '), parts.join(' / '), parts.join(' to ')];
-}
-
-const RAW_CARD_CONDITION_METADATA_ALIASES: Record<RawCardConditionToken, string[]> = {
-  MT: ['Gem Mint'],
-  MINT: ['Mint'],
-  'NM-MT': [...buildCompoundConditionAliases('Near Mint-Mint'), 'Near Mint or Better'],
-  NM: ['Near Mint', 'Near Mint or Better', 'Near Mint+'],
-  'EX-MT': buildCompoundConditionAliases('Excellent-Mint'),
-  EX: ['Excellent'],
-  'VG-EX': buildCompoundConditionAliases('Very Good-Excellent'),
-  VG: ['Very Good'],
-  GOOD: ['Good'],
-  FR: ['Fair'],
-  PR: ['Poor'],
+const RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS: Record<RawCardConditionToken, string> = {
+  NEAR_MINT_OR_BETTER: '400010',
+  EXCELLENT: '400011',
+  VERY_GOOD: '400012',
+  POOR: '400013',
 };
 
 export const TRADING_CARD_CATEGORY_IDS = new Set(['183050', '183454', '261328']);
@@ -83,12 +81,35 @@ export function isRawCardConditionToken(value: unknown): value is RawCardConditi
   );
 }
 
+export function isLegacyRawCardConditionToken(value: unknown): value is LegacyRawCardConditionToken {
+  return (
+    typeof value === 'string' &&
+    (LEGACY_RAW_CARD_CONDITION_TOKENS as readonly string[]).includes(value.trim())
+  );
+}
+
+export function normalizeRawCardConditionToken(value: unknown): RawCardConditionToken | null {
+  if (isRawCardConditionToken(value)) {
+    return value.trim() as RawCardConditionToken;
+  }
+
+  if (isLegacyRawCardConditionToken(value)) {
+    return LEGACY_RAW_CARD_CONDITION_TOKEN_NORMALIZATION[value.trim() as LegacyRawCardConditionToken];
+  }
+
+  return null;
+}
+
 export function getRawCardConditionDisplayLabel(token: RawCardConditionToken): string {
   return RAW_CARD_CONDITION_DISPLAY_LABELS[token];
 }
 
 export function getRawCardConditionCandidateLabels(token: RawCardConditionToken): string[] {
-  return [...new Set([token, getRawCardConditionDisplayLabel(token), ...RAW_CARD_CONDITION_METADATA_ALIASES[token]])];
+  return [token, getRawCardConditionDisplayLabel(token)];
+}
+
+export function getRawCardConditionDescriptorValueId(token: RawCardConditionToken): string {
+  return RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS[token];
 }
 
 export function getSavedRawCardConditionToken(
@@ -99,5 +120,5 @@ export function getSavedRawCardConditionToken(
   }
 
   const value = itemSpecifics[TRADING_CARD_CONDITION_ASPECT_KEY];
-  return isRawCardConditionToken(value) ? value : null;
+  return normalizeRawCardConditionToken(value);
 }

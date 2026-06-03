@@ -2,6 +2,8 @@ import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { Condition } from '@/types/ebay-enums.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 import {
+  getRawCardConditionDisplayLabel,
+  normalizeRawCardConditionToken,
   isTradingCardCategoryId,
   TRADING_CARD_CONDITION_ASPECT_KEY,
 } from '@/listings/trading-card-conditions.js';
@@ -61,7 +63,14 @@ function normalizeItemSpecifics(
       continue;
     }
 
-    const normalized = normalizeAspectValue(value as Json);
+    const normalizedValue =
+      key === TRADING_CARD_CONDITION_ASPECT_KEY
+        ? (() => {
+            const token = normalizeRawCardConditionToken(value);
+            return token ? getRawCardConditionDisplayLabel(token) : value;
+          })()
+        : value;
+    const normalized = normalizeAspectValue(normalizedValue as Json);
 
     if (normalized && key.trim().length > 0) {
       aspects[key] = normalized;
