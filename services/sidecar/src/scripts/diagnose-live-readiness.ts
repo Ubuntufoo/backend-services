@@ -10,7 +10,7 @@ import {
 
 function withSilencedConsoleError<T>(callback: () => T): T {
   const originalConsoleError = console.error;
-  console.error = () => {};
+  console.error = ((..._args: never[]) => undefined) as typeof console.error;
 
   try {
     return callback();
@@ -19,7 +19,30 @@ function withSilencedConsoleError<T>(callback: () => T): T {
   }
 }
 
+interface StreamCapture {
+  restore(): void;
+}
+
+function createStreamCapture(): StreamCapture {
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+  const swallowStdoutWrite = ((..._args: unknown[]) => true) as typeof process.stdout.write;
+  const swallowStderrWrite = ((..._args: unknown[]) => true) as typeof process.stderr.write;
+
+  process.stdout.write = swallowStdoutWrite;
+  process.stderr.write = swallowStderrWrite;
+
+  return {
+    restore() {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+    },
+  };
+}
+
 export async function runDiagnoseLiveReadinessCli(): Promise<void> {
+  const capture = createStreamCapture();
   loadRootEnvironment();
 
   try {
@@ -40,9 +63,10 @@ export async function runDiagnoseLiveReadinessCli(): Promise<void> {
       runtimeConfig,
     });
 
+    capture.restore();
     console.log(JSON.stringify(report, null, 2));
 
-    if (report.overallStatus === 'not_ready') {
+    if (report.overallStatus === 'blocked') {
       process.exitCode = 1;
     }
   } catch (error) {
@@ -51,6 +75,7 @@ export async function runDiagnoseLiveReadinessCli(): Promise<void> {
       processEnv: process.env,
     });
 
+    capture.restore();
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = 1;
   }

@@ -82,8 +82,8 @@ describe('diagnose live readiness script', () => {
       checks: [],
       environment: 'production',
       marketplaceId: 'EBAY_US',
-      oauthBaseUrl: 'https://api.ebay.com/identity/v1/oauth2/token',
       overallStatus: 'ready',
+      productionPublishEnabled: true,
     };
     getLiveReadinessDiagnosticMock.mockResolvedValue(report);
 
@@ -95,21 +95,62 @@ describe('diagnose live readiness script', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('sets non-zero exit when report is not_ready', async () => {
+  it('leaves zero exit when report is warning', async () => {
     getLiveReadinessDiagnosticMock.mockResolvedValue({
       apiBaseUrl: 'https://api.ebay.com',
       checkedAt: '2026-06-02T00:00:00.000Z',
       checks: [],
       environment: 'production',
       marketplaceId: 'EBAY_US',
-      oauthBaseUrl: 'https://api.ebay.com/identity/v1/oauth2/token',
-      overallStatus: 'not_ready',
+      overallStatus: 'warning',
+      productionPublishEnabled: false,
+    });
+
+    const { runDiagnoseLiveReadinessCli } = await import('@/scripts/diagnose-live-readiness.js');
+    await runDiagnoseLiveReadinessCli();
+
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('sets non-zero exit when report is blocked', async () => {
+    getLiveReadinessDiagnosticMock.mockResolvedValue({
+      apiBaseUrl: 'https://api.ebay.com',
+      checkedAt: '2026-06-02T00:00:00.000Z',
+      checks: [],
+      environment: 'production',
+      marketplaceId: 'EBAY_US',
+      overallStatus: 'blocked',
+      productionPublishEnabled: true,
     });
 
     const { runDiagnoseLiveReadinessCli } = await import('@/scripts/diagnose-live-readiness.js');
     await runDiagnoseLiveReadinessCli();
 
     expect(process.exitCode).toBe(1);
+  });
+
+  it('prints final JSON even if diagnostic internals try to write noise', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const report = {
+      apiBaseUrl: 'https://api.ebay.com',
+      checkedAt: '2026-06-02T00:00:00.000Z',
+      checks: [],
+      environment: 'production',
+      marketplaceId: 'EBAY_US',
+      overallStatus: 'ready',
+      productionPublishEnabled: true,
+    };
+    getLiveReadinessDiagnosticMock.mockImplementation(async () => {
+      process.stdout.write('noisy stdout\n');
+      process.stderr.write('noisy stderr\n');
+      return report;
+    });
+
+    const { runDiagnoseLiveReadinessCli } = await import('@/scripts/diagnose-live-readiness.js');
+    await runDiagnoseLiveReadinessCli();
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify(report, null, 2));
   });
 
   it('prints fallback JSON when config load fails', async () => {
@@ -120,8 +161,8 @@ describe('diagnose live readiness script', () => {
       checks: [],
       environment: 'production',
       marketplaceId: 'EBAY_US',
-      oauthBaseUrl: 'https://api.ebay.com/identity/v1/oauth2/token',
-      overallStatus: 'not_ready',
+      overallStatus: 'blocked',
+      productionPublishEnabled: true,
     };
     createUnexpectedLiveReadinessReportMock.mockReturnValue(fallbackReport);
     getEbayConfigMock.mockImplementation(() => {
