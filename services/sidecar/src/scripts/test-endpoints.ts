@@ -1034,7 +1034,7 @@ class EndpointTester {
         'POST /sell/inventory/v1/offer',
         async () => {
           const result = await this.api.inventory.createOffer(testOffer as any);
-          createdOfferId = result.offerId;
+          createdOfferId = result.offerId ?? undefined;
           return result;
         },
         testOffer

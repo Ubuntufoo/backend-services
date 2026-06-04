@@ -385,11 +385,10 @@ describe('publishListing', () => {
 
   it('treats an existing ebay_listing_id as idempotent success without eBay writes', async () => {
     const dependencies = createDependencies({
-      appSettings: null,
       listing: createListing({
         ebay_listing_id: 'EBAY-EXISTING',
         ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
-        ebay_offer_id: 'OFFER-EXISTING',
+        ebay_offer_id: null,
         exported_at: '2026-05-24T14:55:00.000Z',
         sku: 'SKU-KEEP',
       }),
@@ -400,17 +399,33 @@ describe('publishListing', () => {
     expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
     expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).not.toHaveBeenCalled();
     expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
-    expect(dependencies.dataAccess.appSettings.get).not.toHaveBeenCalled();
+    expect(dependencies.dataAccess.appSettings.get).toHaveBeenCalled();
     expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
-    expect(dependencies.listingUpdates).toEqual([]);
+    expect(dependencies.listingUpdates).toEqual([
+      {
+        changes: {
+          ebay_listing_id: 'EBAY-EXISTING',
+          ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+          exported_at: '2026-05-24T14:55:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: {},
+          last_error_message: null,
+          sku: 'SKU-KEEP',
+          status: 'exported',
+          sub_status: 'idle',
+        },
+        listingId: 'LIST-001',
+      },
+    ]);
     expect(result).toEqual({
       ebayListingId: 'EBAY-EXISTING',
       exportedAt: '2026-05-24T14:55:00.000Z',
       listingId: 'LIST-001',
-      offerId: 'OFFER-EXISTING',
+      offerId: null,
       reusedExistingOffer: true,
       sku: 'SKU-KEEP',
       status: 'exported',
