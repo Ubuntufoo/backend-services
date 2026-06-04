@@ -28,7 +28,11 @@ const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
   '2750': Condition.LIKE_NEW,
   '4000': Condition.USED_VERY_GOOD,
 };
-const INTERNAL_ITEM_SPECIFIC_KEYS = new Set(['CategorySuggestion', 'ConditionSuggestion']);
+const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
+  'CategorySuggestion',
+  'ConditionSuggestion',
+  'skuCategoryCode',
+]);
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];

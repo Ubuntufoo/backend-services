@@ -207,6 +207,7 @@ describe('publish mappers', () => {
         CategorySuggestion:
           'Sports Mem, Cards & Fan Shop > Sports Trading Cards > Basketball Cards',
         ConditionSuggestion: 'Ungraded',
+        skuCategoryCode: 'BSKBL',
       },
     });
     const originalItemSpecifics = JSON.parse(JSON.stringify(listing.item_specifics));
@@ -221,6 +222,7 @@ describe('publish mappers', () => {
     });
     expect(payload.product?.aspects).not.toHaveProperty('CategorySuggestion');
     expect(payload.product?.aspects).not.toHaveProperty('ConditionSuggestion');
+    expect(payload.product?.aspects).not.toHaveProperty('skuCategoryCode');
     expect(listing.item_specifics).toEqual(originalItemSpecifics);
   });
 

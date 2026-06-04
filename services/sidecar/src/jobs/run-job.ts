@@ -46,6 +46,7 @@ const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const JOB_STATUS_RUNNING = 'running';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
+const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
@@ -177,6 +178,7 @@ function buildGeneratedListingAspects(
     ...(draft.conditionSuggestion
       ? { [CONDITION_SUGGESTION_ASPECT_KEY]: draft.conditionSuggestion }
       : {}),
+    [SKU_CATEGORY_CODE_ASPECT_KEY]: draft.skuCategoryCode,
   };
 }
 

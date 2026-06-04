@@ -685,7 +685,13 @@ describe('runSidecarJob', () => {
 
   it('transitions generate_ai listings to needs_review and persists draft fields once', async () => {
     const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
       listing: createListingRow({
+        listing_id: 'Single-000001',
+        sku: 'Single-000001',
         item_specifics: {
           Player: 'Michael Jordan',
           Team: ['Chicago Bulls'],
@@ -703,6 +709,7 @@ describe('runSidecarJob', () => {
       cardConditionNote: 'Visible edge wear and light corner wear.',
       cardConditionToken: 'VERY_GOOD',
       conditionSuggestion: 'Ungraded',
+      skuCategoryCode: 'BSKBL',
       aspects: {
         Franchise: 'Utah Jazz',
         Player: 'Michael Jordan',
@@ -724,7 +731,7 @@ describe('runSidecarJob', () => {
 
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenNthCalledWith(1, {
-      listingId: 'LIST-001',
+      listingId: 'Single-000001',
       status: 'generating',
       subStatus: 'ai_call_in_progress',
     });
@@ -739,7 +746,7 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).toHaveBeenCalledWith(
       {
         imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
-        listingId: 'LIST-001',
+        listingId: 'Single-000001',
         userHints: {
           aspects: {
             Player: 'Michael Jordan',
@@ -753,7 +760,7 @@ describe('runSidecarJob', () => {
       { model: 'gemini-3.1-flash-lite' }
     );
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
-      'LIST-001',
+      'Single-000001',
       expect.objectContaining({
         category_id: '183050',
         condition_id: '4000',
@@ -766,6 +773,7 @@ describe('runSidecarJob', () => {
           Manufacturer: 'Upper Deck',
           CategorySuggestion: 'Sports Trading Cards',
           ConditionSuggestion: 'Ungraded',
+          skuCategoryCode: 'BSKBL',
         },
         last_error_at: null,
         last_error_code: null,
@@ -812,7 +820,7 @@ describe('runSidecarJob', () => {
     expect(dataAccess.aiModelAttempts.create).toHaveBeenCalledWith({
       attempt_order: 1,
       job_id: 'job-generate-ai',
-      listing_id: 'LIST-001',
+      listing_id: 'Single-000001',
       model_name: 'gemini-3.1-flash-lite',
       provider: 'google',
       provider_model_id: 'gemini-3.1-flash-lite',
@@ -828,6 +836,11 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
+    expect(result.listing?.item_specifics).toMatchObject({
+      skuCategoryCode: 'BSKBL',
+    });
+    expect(result.listing?.sku).toBe('Single-000001');
+    expect(result.listing?.listing_id).toBe('Single-000001');
     expect(result.job.status).toBe('completed');
     expect(result.job.gemini_attempt_count).toBe(1);
     expect(result.job.gemini_selected_model).toBe('gemini-3.1-flash-lite');
@@ -838,6 +851,89 @@ describe('runSidecarJob', () => {
         status: 'succeeded',
       }),
     ]);
+  });
+
+  it('persists BSBL skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Single-000001',
+        sku: 'Single-000001',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1989 Upper Deck Ken Griffey Jr.',
+      description: 'Baseball single card.',
+      categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: null,
+      cardConditionToken: null,
+      conditionSuggestion: null,
+      skuCategoryCode: 'BSBL',
+      aspects: {
+        Player: 'Ken Griffey Jr.',
+        Sport: 'Baseball',
+      },
+      priceSuggestion: null,
+      confidence: {},
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-baseball' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.listing?.item_specifics).toMatchObject({
+      skuCategoryCode: 'BSBL',
+    });
+    expect(result.listing?.sku).toBe('Single-000001');
+    expect(result.listing?.listing_id).toBe('Single-000001');
+  });
+
+  it('persists OTHER skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Single-000001',
+        sku: 'Single-000001',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Pokemon lot',
+      description: 'Mixed lot.',
+      categorySuggestion: 'Collectible Card Games',
+      cardConditionNote: null,
+      cardConditionToken: null,
+      conditionSuggestion: null,
+      skuCategoryCode: 'OTHER',
+      aspects: {
+        Franchise: 'Pokémon',
+      },
+      priceSuggestion: null,
+      confidence: {},
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-other' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.listing?.item_specifics).toMatchObject({
+      skuCategoryCode: 'OTHER',
+    });
+    expect(result.listing?.sku).toBe('Single-000001');
+    expect(result.listing?.listing_id).toBe('Single-000001');
   });
 
   it('falls back to a second configured Gemini route and records both attempts', async () => {

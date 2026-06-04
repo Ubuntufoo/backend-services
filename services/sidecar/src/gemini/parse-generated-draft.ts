@@ -3,6 +3,7 @@ import {
   type GeneratedListingDraft,
   generatedListingDraftSchema,
 } from './contracts.js';
+import { normalizeSkuCategoryCode } from '@ebay-inventory/types';
 import { isRawCardConditionToken } from '@/listings/trading-card-conditions.js';
 
 type DraftRecord = Record<string, unknown>;
@@ -136,6 +137,23 @@ function normalizePriceSuggestion(value: unknown, warnings: string[]): number | 
   return null;
 }
 
+function normalizeSkuCategoryCodeSuggestion(
+  value: unknown,
+  warnings: string[]
+): NonNullable<GeneratedListingDraft['skuCategoryCode']> {
+  const normalized = normalizeSkuCategoryCode(value);
+
+  if (normalized) {
+    return normalized;
+  }
+
+  if (value !== undefined && value !== null) {
+    warnings.push('Gemini response field "skuCategoryCode" was invalid and defaulted to OTHER.');
+  }
+
+  return 'OTHER';
+}
+
 function normalizeConfidence(
   value: unknown,
   warnings: string[]
@@ -185,6 +203,7 @@ export function parseGeneratedDraft(
     cardConditionNote: normalizeNullableString(parsed.cardConditionNote),
     cardConditionToken: normalizeCardConditionToken(parsed.cardConditionToken, serviceWarnings),
     conditionSuggestion: normalizeNullableString(parsed.conditionSuggestion),
+    skuCategoryCode: normalizeSkuCategoryCodeSuggestion(parsed.skuCategoryCode, serviceWarnings),
     aspects: normalizeAspects(parsed.aspects, serviceWarnings),
     priceSuggestion: normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings),
     confidence: normalizeConfidence(parsed.confidence, serviceWarnings),

@@ -55,6 +55,7 @@ describe('generateListingDraft', () => {
         cardConditionNote: 'Visible corner wear and light edge wear.',
         cardConditionToken: 'VERY_GOOD',
         conditionSuggestion: 'Ungraded',
+        skuCategoryCode: 'BSKBL',
         aspects: {
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
@@ -168,6 +169,7 @@ describe('generateListingDraft', () => {
         cardConditionNote: 'Soft corners visible; condition estimated from photos.',
         cardConditionToken: 'EXCELLENT',
         conditionSuggestion: 'Ungraded',
+        skuCategoryCode: 'BSKBL',
         aspects: {
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
@@ -232,6 +234,8 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain(
       '"cardConditionToken": "NEAR_MINT_OR_BETTER | EXCELLENT | VERY_GOOD | POOR | null"'
     );
+    expect(request.prompt).toContain('"skuCategoryCode": "BSKBL | BSBL | OTHER"');
+    expect(request.prompt).toContain('Do not generate, infer, or return a full SKU anywhere in the response.');
     expect(request.prompt).toContain('Return strict JSON only with no markdown fences or explanatory prose.');
     expect(request.prompt).toContain('"listingId": "LIST-001"');
     expect(request.prompt).toContain('"https://cdn.example.com/front.jpg"');
@@ -244,6 +248,7 @@ describe('generateListingDraft', () => {
       cardConditionNote: 'Soft corners visible; condition estimated from photos.',
       cardConditionToken: 'EXCELLENT',
       conditionSuggestion: 'Ungraded',
+      skuCategoryCode: 'BSKBL',
       aspects: {
         Franchise: 'Utah Jazz',
         Player: 'Michael Jordan',
@@ -354,6 +359,7 @@ describe('generateListingDraft', () => {
       cardConditionNote: null,
       cardConditionToken: null,
       conditionSuggestion: null,
+      skuCategoryCode: 'OTHER',
       aspects: {
         Sport: 'Baseball',
       },
@@ -412,6 +418,64 @@ describe('generateListingDraft', () => {
     expect(result.warnings).toContain(
       'Gemini response field "cardConditionToken" was invalid and was reset to null.'
     );
+  });
+
+  it('normalizes lowercase and whitespace skuCategoryCode', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Basketball card',
+        description: 'Description',
+        aspects: {},
+        skuCategoryCode: ' bskbl ',
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-005AA',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.skuCategoryCode).toBe('BSKBL');
+  });
+
+  it('defaults missing skuCategoryCode to OTHER', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Unknown card lot',
+        description: 'Description',
+        aspects: {},
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-005AB',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.skuCategoryCode).toBe('OTHER');
+  });
+
+  it('defaults invalid or full-SKU skuCategoryCode values to OTHER', async () => {
+    for (const invalidValue of ['Basketball', 'NBA', 'MLB', 'TCG', 'Pokemon', 'BSKBL-Single-000001']) {
+      setGeminiResponse(
+        JSON.stringify({
+          title: 'Unknown card lot',
+          description: 'Description',
+          aspects: {},
+          skuCategoryCode: invalidValue,
+        })
+      );
+
+      const result = await generateListingDraft({
+        listingId: `LIST-${invalidValue}`,
+        imageUrls: ['https://cdn.example.com/listing.jpg'],
+      });
+
+      expect(result.skuCategoryCode).toBe('OTHER');
+      expect(result.warnings).toContain(
+        'Gemini response field "skuCategoryCode" was invalid and defaulted to OTHER.'
+      );
+    }
   });
 
   it('accepts supported cardConditionToken values only from the new scale', async () => {

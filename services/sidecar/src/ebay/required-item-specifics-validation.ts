@@ -6,7 +6,11 @@ import {
 import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { createLogger } from '@/utils/logger.js';
 
-const INTERNAL_ITEM_SPECIFIC_KEYS = new Set(['CategorySuggestion', 'ConditionSuggestion']);
+const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
+  'CategorySuggestion',
+  'ConditionSuggestion',
+  'skuCategoryCode',
+]);
 const requiredItemSpecificsLogger = createLogger('RequiredItemSpecificsValidation');
 const LOT_ITEM_SPECIFIC_DEFAULT_VALUE = 'Various';
 
