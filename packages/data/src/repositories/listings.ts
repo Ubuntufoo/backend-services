@@ -168,7 +168,12 @@ function validateListingId(listingId: string): void {
   parseBaseSku(listingId);
 }
 
-function validateStructuredSku(sku: string): void {
+function validateSku(sku: string): void {
+  try {
+    parseBaseSku(sku);
+    return;
+  } catch {}
+
   parseStructuredSku(sku);
 }
 
@@ -176,7 +181,7 @@ function validateListingInsert(input: ListingInsert): void {
   validateListingId(input.listing_id);
 
   if (typeof input.sku === 'string') {
-    validateStructuredSku(input.sku);
+    validateSku(input.sku);
   }
 }
 
@@ -186,7 +191,7 @@ function validateListingUpdate(listingId: string, changes: ListingUpdate): void 
   }
 
   if (typeof changes.sku === 'string') {
-    validateStructuredSku(changes.sku);
+    validateSku(changes.sku);
   }
 }
 
