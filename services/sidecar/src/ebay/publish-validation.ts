@@ -2,6 +2,7 @@ import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import type { EbayApiError } from '@/types/ebay.js';
 import type { EbayEnvironment } from '@/ebay/config.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
+import type { PublishImageUrlReadinessIssue } from '@/ebay/image-url-readiness.js';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 import { getPublishAppSettingIssues } from '@/ebay/publish-config.js';
 import {
@@ -35,6 +36,7 @@ export interface PublishListingErrorContext {
   stage?: 'finalize' | 'load' | 'validate' | 'metadata' | 'inventory_item' | 'offer' | 'publish';
   validationCode?:
     | 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING'
+    | 'IMAGE_URL_NOT_READY_FOR_EBAY'
     | 'PUBLISH_REQUIRED_FIELD_MISSING';
 }
 
@@ -103,6 +105,7 @@ export interface PublishRequiredItemSpecificIssue {
 }
 
 export type PublishValidationFieldIssue =
+  | PublishImageUrlReadinessIssue
   | PublishRequiredFieldIssue
   | PublishRequiredItemSpecificIssue;
 

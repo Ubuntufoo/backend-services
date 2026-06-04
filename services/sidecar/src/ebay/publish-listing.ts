@@ -40,6 +40,9 @@ import {
   validatePublishListingReadiness,
 } from '@/ebay/publish-validation.js';
 import {
+  assertListingImageUrlsReadyForEbay,
+} from '@/ebay/image-url-readiness.js';
+import {
   getPublishConfigCandidate,
   resolvePublishConfig,
   type ResolvedPublishConfig,
@@ -61,6 +64,8 @@ const publishLogger = createLogger('PublishListing');
 
 export interface PublishListingDependencies {
   dataAccess: SidecarDataAccess;
+  fetch?: typeof globalThis.fetch;
+  imagePublicBaseUrl?: string | null;
   inventoryApi: PublishInventoryApi;
   metadataApi: PublishMetadataApi;
   taxonomyApi: PublishTaxonomyApi;
@@ -85,6 +90,8 @@ async function createDefaultDependencies(): Promise<PublishListingDependencies> 
 
   return {
     dataAccess: getSidecarDataAccess(),
+    fetch: globalThis.fetch,
+    imagePublicBaseUrl: process.env.R2_PUBLIC_BASE_URL?.trim() || null,
     inventoryApi: api.inventory,
     metadataApi: api.metadata,
     taxonomyApi: api.taxonomy,
@@ -107,6 +114,9 @@ async function resolveDependencies(
   ) {
     return {
       dataAccess: dependencies.dataAccess,
+      fetch: dependencies.fetch ?? globalThis.fetch,
+      imagePublicBaseUrl:
+        dependencies.imagePublicBaseUrl ?? (process.env.R2_PUBLIC_BASE_URL?.trim() || null),
       inventoryApi: dependencies.inventoryApi,
       metadataApi: dependencies.metadataApi,
       taxonomyApi: dependencies.taxonomyApi,
@@ -122,6 +132,8 @@ async function resolveDependencies(
 
   return {
     dataAccess: dependencies.dataAccess ?? defaults.dataAccess,
+    fetch: dependencies.fetch ?? defaults.fetch,
+    imagePublicBaseUrl: dependencies.imagePublicBaseUrl ?? defaults.imagePublicBaseUrl,
     inventoryApi: dependencies.inventoryApi ?? defaults.inventoryApi,
     metadataApi: dependencies.metadataApi ?? defaults.metadataApi,
     taxonomyApi: dependencies.taxonomyApi ?? defaults.taxonomyApi,
@@ -612,15 +624,20 @@ export async function publishListing(
 
   const publishConfig = publishConfigResult.config;
 
+  validateRequiredItemSpecificsForCategory({
+    listing,
+  });
+  await assertListingImageUrlsReadyForEbay(listing, {
+    allowedPublicBaseUrl: resolvedDependencies.imagePublicBaseUrl,
+    fetch: resolvedDependencies.fetch,
+  });
+
   const sku = buildPublishSku(listing);
   const conditionDescriptors = await resolveTradingCardConditionDescriptors(
     listing,
     publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
-  validateRequiredItemSpecificsForCategory({
-    listing,
-  });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
   });
