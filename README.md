@@ -6,18 +6,6 @@ This repository is the backend monorepo for the eBay Inventory Manager. It is in
 - `packages/data` owns the shared Supabase client and typed repository helpers used by that runtime.
 - Future boundaries are documented, but they should stay inside the sidecar or the main app until scale or operational pressure proves a real extraction is needed.
 
-## Current Status
-
-| Service           | Status           | Notes                                                                                                                         |
-| ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `sidecar`         | Implemented      | Canonical MCP/eBay server package with tests and local setup support.                                                         |
-| `watcher-service` | Implemented      | Local filesystem watcher runtime for incoming image batches and listing-row creation; later image/R2/job steps still pending. |
-| `image-service`   | Implemented      | Local-only image processing package for post-watcher copies and EXIF stripping.                                               |
-| `r2-service`      | Planned boundary | Prefer direct cloud storage integration before adding a dedicated service.                                                    |
-| `gemini-service`  | Planned boundary | Prefer in-process orchestration with request guards before extraction.                                                        |
-| `ebay-service`    | Planned boundary | Extract only if eBay workflows outgrow the sidecar package boundary.                                                          |
-| `job-runner`      | Planned boundary | Prefer app- or Supabase-driven background work before adding a worker process.                                                |
-
 ## Canonical Layout
 
 ```text

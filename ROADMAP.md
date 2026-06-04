@@ -4,7 +4,8 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 
 | Phase | Area | Task | Output |
 |---:|---|---|---|
-<!-- | 0 | BE | Set up pnpm workspace scripts | Can run services from root |
+<!--
+| 0 | BE | Set up pnpm workspace scripts | Can run services from root |
 | 0 | BE | Add shared TypeScript config | Consistent TS across services |
 | 0 | BE | Add shared env validation package | Each service can validate required env vars |
 | 0 | BE | Add shared types package | Shared `ListingStatus`, `JobType`, `CaptureMode` types |
@@ -106,12 +107,19 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | BE | Validate category-required item specifics | Missing eBay-required aspects are surfaced before publish | GPT-5.5 | Medium | Important for trading-card categories; can rely on eBay validation details first if Taxonomy integration is deferred | 
 | 8 | FE | Add first-live-listing review checklist | First production publish has explicit manual safety gate | GPT-5.5 mini | Low-Medium | Confirm title, price, category, condition, images, item specifics, policies, and production target | 
 | 8 | BE | Add live publish duplicate-protection check | Re-publishing does not accidentally create dup live listings | GPT-5.5 mini | Medium | Respect existing SKU, `ebay_offer_id`, `ebay_listing_id`; publish should be idempotent/retry-safe | 
-| 8 | BE | Add image URL eBay readiness check | R2-hosted images are verified before publish | GPT-5.5 mini | Low-Medium | Check HTTPS, public access, supported extension, non-empty response, and custom-domain URL | |  -->
+| 8 | BE | Add image URL eBay readiness check | R2-hosted images are verified before publish | GPT-5.5 mini | Low-Medium | Check HTTPS, public access, supported extension, non-empty response, and custom-domain URL | 
 | 8 | Docs | Add controlled live pilot notes | First real listings can be tested safely while admin remains in eBay Seller Hub | GPT-5.5 mini | Low | Minimal notes only; avoid heavy runbook |
-| 9 | BE/DB | Add manual listing status reconciliation tool | Exported listings can later be batch-marked listed/sold after Seller Hub-managed pilot | GPT-5.5 mini | Low-Medium | Defer until after initial live testing; useful before order sync exists |
-
------------------------------------------ READY FOR LIVE PILOT -----------------------------------------
-
+-->
+| 8 | BE | Add structured SKU parser and formatter | SKU format is centralized and validated | GPT-5.5 mini | Medium | Support BSKBL-Single-000002, BSBL-Lot-000002, OTHER-Single-000002; preserve existing numeric sequence; reject malformed category/type/sequence values |
+| 8 | DB | Align listing SKU data for structured SKUs | Listings can store category-prefixed SKUs consistently | GPT-5.5 mini | Low-Medium | Confirm existing SKU/listing_id columns; add only minimal fields if unavoidable; no extra storage-location model; migration may normalize all current local records since no live listings exist |
+| 8 | BE | Add Gemini SKU category suggestion | AI draft returns one controlled SKU prefix | GPT-5.5 mini | Medium | Gemini may suggest only BSKBL, BSBL, or OTHER; backend validates/normalizes; uncertain cards default to OTHER; Gemini must not generate full SKU text |
+| 8 | BE | Finalize structured SKU before export approval | Reviewed listing gets locked category-prefixed SKU before publish | GPT-5.5 mini | Medium | On needs_review → approved_for_export, concatenate reviewed prefix + existing Single/Lot sequence; keep operation idempotent; do not change SKU after exported/listed/sold |
+| 8 | BE | Update publish and duplicate-protection paths for structured SKUs | eBay receives the finalized structured SKU safely | GPT-5.5 mini | Medium | Publish uses BSKBL-Single-000002 style SKU; duplicate checks respect existing sku, ebay_offer_id, ebay_listing_id; retry does not create new SKU or duplicate offer |
+| 8 | FE | Review structured SKU prefix in needs_review | User can verify category prefix before approval | GPT-5.5 mini | Low-Medium | Show SKU preview such as BSKBL-Single-000002; allow prefix selection from BSKBL/BSBL/OTHER only; approval uses backend-derived final SKU, not free-text FE input |
+| 8 | Tests | Add end-to-end SKU workflow coverage | Structured SKU behavior is protected across intake, AI, review, approval, and publish | GPT-5.5 mini | Medium | Cover Single and Lot, all 3 prefixes, Gemini uncertainty → OTHER, manual override, idempotent approval, publish retry, malformed SKU rejection, no mutation after exported/listed/sold |
+| 8 | Docs | Reminder for personal spec in my google sheets
+--------------- READY FOR LIVE PILOT --------------
+| 8 | BE/DB | Add manual listing status reconciliation tool | Exported listings can later be batch-marked listed/sold after Seller Hub-managed pilot | GPT-5.5 mini | Low-Medium | Defer until after initial live testing; useful before order sync exists |
 | 8 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, and `sale_price` are persisted | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
 | 8 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work against eBay API | GPT-5.5 | Medium | Begin post-listing order workflow |
 | 8 | BE | Match order SKU to `listing_id` | Sold listing is identified from order SKU | GPT-5.5 mini | Medium | Required before updating listings to sold |
