@@ -1447,16 +1447,16 @@ describe('shared repositories', () => {
   it('creates and fetches listings', async () => {
     const createClient = createInsertClient('listings', listingRow, (payload) => {
       expect(payload).toEqual({
-        listing_id: 'LIST-001',
-        sku: 'SKU-001',
+        listing_id: 'Single-000001',
+        sku: 'Single-000001',
         status: 'record_created',
         sub_status: 'idle',
       });
     });
 
     const created = await createListing(createClient, {
-      listing_id: 'LIST-001',
-      sku: 'SKU-001',
+      listing_id: 'Single-000001',
+      sku: 'Single-000001',
       status: 'record_created',
       sub_status: 'idle',
     });
@@ -1556,6 +1556,123 @@ describe('shared repositories', () => {
         sub_status: 'idle',
       },
     ]);
+  });
+
+  it('accepts base and structured sku values while keeping listing ids immutable', async () => {
+    const realisticListingRow = {
+      ...listingRow,
+      listing_id: 'Single-000001',
+      sku: 'Single-000001',
+    };
+
+    const baseCreateClient = createInsertClient('listings', realisticListingRow, (payload) => {
+      expect(payload).toEqual({
+        listing_id: 'Single-000001',
+        sku: 'Single-000001',
+        status: 'record_created',
+        sub_status: 'idle',
+      });
+    });
+
+    await expect(
+      createListing(baseCreateClient, {
+        listing_id: 'Single-000001',
+        sku: 'Single-000001',
+        status: 'record_created',
+        sub_status: 'idle',
+      })
+    ).resolves.toEqual(realisticListingRow);
+
+    const structuredCreateClient = createInsertClient('listings', realisticListingRow, (payload) => {
+      expect(payload).toEqual({
+        listing_id: 'Single-000001',
+        sku: 'BSKBL-Single-000001',
+        status: 'record_created',
+        sub_status: 'idle',
+      });
+    });
+
+    await expect(
+      createListing(structuredCreateClient, {
+        listing_id: 'Single-000001',
+        sku: 'BSKBL-Single-000001',
+        status: 'record_created',
+        sub_status: 'idle',
+      })
+    ).resolves.toEqual(realisticListingRow);
+
+    await expect(
+      createListing(structuredCreateClient, {
+        listing_id: 'LIST-001',
+        sku: 'OTHER-Single-000001',
+        status: 'record_created',
+        sub_status: 'idle',
+      })
+    ).rejects.toThrow('Invalid base SKU "LIST-001"');
+
+    await expect(
+      createListing(structuredCreateClient, {
+        listing_id: 'Single-000001',
+        sku: 'BSKBL-Single-000000',
+        status: 'record_created',
+        sub_status: 'idle',
+      })
+    ).rejects.toThrow('Invalid structured SKU "BSKBL-Single-000000"');
+
+    await expect(
+      createListing(structuredCreateClient, {
+        listing_id: 'Single-000001',
+        sku: 'Single-000000',
+        status: 'record_created',
+        sub_status: 'idle',
+      })
+    ).rejects.toThrow('Invalid structured SKU "Single-000000"');
+
+    const updateClient = createUpdateClient(
+      'listings',
+      realisticListingRow,
+      'listing_id',
+      'Single-000001',
+      (payload) => {
+        expect(payload).toEqual({
+          sku: 'BSKBL-Single-000001',
+        });
+      }
+    );
+
+    await expect(
+      updateListing(updateClient, 'Single-000001', { sku: 'BSKBL-Single-000001' })
+    ).resolves.toEqual(
+      realisticListingRow
+    );
+
+    const baseUpdateClient = createUpdateClient(
+      'listings',
+      realisticListingRow,
+      'listing_id',
+      'Single-000001',
+      (payload) => {
+        expect(payload).toEqual({
+          sku: 'Single-000001',
+        });
+      }
+    );
+
+    await expect(updateListing(baseUpdateClient, 'Single-000001', { sku: 'Single-000001' })).resolves.toEqual(
+      realisticListingRow
+    );
+
+    await expect(
+      updateListing(updateClient, 'Single-000001', { sku: 'BSKBL-Single-000000' })
+    ).rejects.toThrow('Invalid structured SKU "BSKBL-Single-000000"');
+
+    await expect(updateListing(updateClient, 'Single-000001', { sku: 'Single-000000' })).rejects.toThrow(
+      'Invalid structured SKU "Single-000000"'
+    );
+
+    await expect(updateListing(updateClient, 'Single-000001', { listing_id: 'Single-000002' })).rejects.toThrow(
+      'Listing ID is immutable and cannot be changed.'
+    );
   });
 
   it('updates listings and persists stateless worker outputs', async () => {

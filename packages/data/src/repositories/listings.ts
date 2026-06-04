@@ -1,6 +1,7 @@
 import type { ListingInsert, ListingRow, ListingUpdate } from '../database.js';
 import type { Json } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
+import { parseBaseSku, parseStructuredSku } from '@ebay-inventory/types';
 import {
   type MultiResult,
   requireOptionalResult,
@@ -163,10 +164,43 @@ function mapPublishedListingUpdate(input: PublishedListingUpdate): ListingUpdate
   };
 }
 
+function validateListingId(listingId: string): void {
+  parseBaseSku(listingId);
+}
+
+function validateSku(sku: string): void {
+  try {
+    parseBaseSku(sku);
+    return;
+  } catch {}
+
+  parseStructuredSku(sku);
+}
+
+function validateListingInsert(input: ListingInsert): void {
+  validateListingId(input.listing_id);
+
+  if (typeof input.sku === 'string') {
+    validateSku(input.sku);
+  }
+}
+
+function validateListingUpdate(listingId: string, changes: ListingUpdate): void {
+  if (typeof changes.listing_id === 'string') {
+    throw new Error('Listing ID is immutable and cannot be changed.');
+  }
+
+  if (typeof changes.sku === 'string') {
+    validateSku(changes.sku);
+  }
+}
+
 export async function createListing(
   client: SupabaseDataClient,
   input: ListingInsert
 ): Promise<ListingRow> {
+  validateListingInsert(input);
+
   const result = (await client
     .from('listings')
     .insert(input)
@@ -280,6 +314,8 @@ export async function updateListing(
   listingId: string,
   changes: ListingUpdate
 ): Promise<ListingRow> {
+  validateListingUpdate(listingId, changes);
+
   const result = (await client
     .from('listings')
     .update(changes)
