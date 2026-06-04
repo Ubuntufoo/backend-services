@@ -721,6 +721,7 @@ describe('publishListing', () => {
   it('allows trading-card lot publish with injected Player/Athlete=Various', async () => {
     const dependencies = createDependencies({
       listing: createListing({
+        capture_mode: 'lot_3_image',
         listing_id: 'Lot-0001',
         category_id: '183050',
         condition_id: '4000',
@@ -753,6 +754,48 @@ describe('publishListing', () => {
     );
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalled();
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalled();
+  });
+
+  it('keeps single-card validation strict when capture_mode is not lot_3_image', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        capture_mode: 'single_2_image',
+        listing_id: 'Lot-0001',
+        category_id: '183050',
+        condition_id: '4000',
+        title: '1990s NBA mixed stars 10-card lot',
+        seller_hints: 'Family bundle from one binder page.',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          Manufacturer: 'Upper Deck',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400010', name: 'Near mint or better' }],
+        { categoryId: '183050' }
+      )
+    );
+
+    await expect(publishListing('Lot-0001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        fields: [
+          {
+            acceptedKeys: ['Player/Athlete', 'Player', 'Athlete'],
+            aspectName: 'Player/Athlete',
+            field: 'item_specifics.Player/Athlete',
+            message: 'Player/Athlete is required for this eBay category before publishing.',
+            scope: 'listing',
+          },
+        ],
+        validationCode: 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING',
+      },
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
   it('aggregates multiple missing local required item specifics', async () => {
@@ -890,6 +933,7 @@ describe('publishListing', () => {
   it('does not overwrite existing Player/Athlete value for lots', async () => {
     const dependencies = createDependencies({
       listing: createListing({
+        capture_mode: 'lot_3_image',
         listing_id: 'Lot-0001',
         category_id: '183050',
         condition_id: '4000',

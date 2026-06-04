@@ -6,7 +6,6 @@ import {
   getRequiredItemSpecificRulesForCategory,
   hasRequiredAspectValue,
   hasRequiredAspectValueForKeys,
-  isLikelyLotListing,
   validateRequiredItemSpecificsForCategory,
 } from '@/ebay/required-item-specifics-validation.js';
 
@@ -121,31 +120,11 @@ describe('required item specifics validation', () => {
     );
   });
 
-  it.each([
-    { label: 'Lot- listing id', listing: createListing({ listing_id: 'Lot-0001' }) },
-    { label: 'lot title', listing: createListing({ title: '1990s NBA mixed stars 10-card lot' }) },
-    { label: 'bundle seller hints', listing: createListing({ seller_hints: 'Family bundle from one binder page.' }) },
-    { label: 'lot marker aspect', listing: createListing({ item_specifics: { Format: 'Lot' } }) },
-  ])('detects conservative lot signal: $label', ({ listing }) => {
-    expect(isLikelyLotListing(listing)).toBe(true);
-  });
-
-  it('does not treat ordinary single-card text as a lot', () => {
-    expect(
-      isLikelyLotListing(
-        createListing({
-          listing_id: 'LIST-001',
-          seller_hints: 'Single card. Check corners.',
-          title: '1991 Upper Deck Michael Jordan',
-        })
-      )
-    ).toBe(false);
-  });
-
-  it('injects Player/Athlete=Various for detected trading-card lots with missing player aspect', () => {
+  it('injects Player/Athlete=Various for lot capture mode with missing player aspect', () => {
     expect(
       getEffectiveItemSpecificsForCategoryValidation(
         createListing({
+          capture_mode: 'lot_3_image',
           listing_id: 'Lot-0001',
           item_specifics: {
             'Card Condition': 'NEAR_MINT_OR_BETTER',
@@ -164,6 +143,7 @@ describe('required item specifics validation', () => {
     expect(
       getEffectiveItemSpecificsForCategoryValidation(
         createListing({
+          capture_mode: 'lot_3_image',
           listing_id: 'Lot-0001',
           item_specifics: {
             Athlete: 'Michael Jordan',
@@ -191,39 +171,32 @@ describe('required item specifics validation', () => {
     });
   });
 
-  it('allows lot listings to satisfy Player/Athlete with injected Various', () => {
-    expect(() =>
-      validateRequiredItemSpecificsForCategory({
-        listing: createListing({
+  it('does not inject Various for single capture mode even if legacy lot heuristics match', () => {
+    expect(
+      getEffectiveItemSpecificsForCategoryValidation(
+        createListing({
+          capture_mode: 'single_2_image',
           listing_id: 'Lot-0001',
-          item_specifics: {
-            'Card Condition': 'NEAR_MINT_OR_BETTER',
-            Manufacturer: 'Upper Deck',
-          },
-        }),
-      })
-    ).not.toThrow();
-  });
-
-  it('allows lot title listings to satisfy Player/Athlete with injected Various', () => {
-    expect(() =>
-      validateRequiredItemSpecificsForCategory({
-        listing: createListing({
+          seller_hints: 'Family bundle from one binder page.',
           title: '1990s NBA mixed stars 10-card lot',
           item_specifics: {
             'Card Condition': 'NEAR_MINT_OR_BETTER',
             Manufacturer: 'Upper Deck',
           },
-        }),
-      })
-    ).not.toThrow();
+        })
+      )
+    ).toEqual({
+      'Card Condition': 'NEAR_MINT_OR_BETTER',
+      Manufacturer: 'Upper Deck',
+    });
   });
 
-  it('allows lot seller hints to satisfy Player/Athlete with injected Various', () => {
+  it('allows lot capture mode listings to satisfy Player/Athlete with injected Various', () => {
     expect(() =>
       validateRequiredItemSpecificsForCategory({
         listing: createListing({
-          seller_hints: 'Assorted bundle from one collection.',
+          capture_mode: 'lot_3_image',
+          listing_id: 'Lot-0001',
           item_specifics: {
             'Card Condition': 'NEAR_MINT_OR_BETTER',
             Manufacturer: 'Upper Deck',
@@ -291,6 +264,7 @@ describe('required item specifics validation', () => {
     expect(() =>
       validateRequiredItemSpecificsForCategory({
         listing: createListing({
+          capture_mode: 'single_2_image',
           item_specifics: {
             'Card Condition': 'NEAR_MINT_OR_BETTER',
             Manufacturer: 'Upper Deck',
@@ -305,6 +279,7 @@ describe('required item specifics validation', () => {
     expect(() =>
       validateRequiredItemSpecificsForCategory({
         listing: createListing({
+          capture_mode: 'lot_3_image',
           listing_id: 'Lot-0001',
           item_specifics: {
             Manufacturer: 'Upper Deck',
@@ -318,6 +293,7 @@ describe('required item specifics validation', () => {
     expect(() =>
       validateRequiredItemSpecificsForCategory({
         listing: createListing({
+          capture_mode: 'lot_3_image',
           listing_id: 'Lot-0001',
           item_specifics: {
             'Card Condition': 'NEAR_MINT_OR_BETTER',
@@ -325,5 +301,22 @@ describe('required item specifics validation', () => {
         }),
       })
     ).toThrowError(/Manufacturer is required/);
+  });
+
+  it('still fails single capture mode listings with lot-like text when Player/Athlete is missing', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          capture_mode: 'single_2_image',
+          listing_id: 'Lot-0001',
+          seller_hints: 'Assorted bundle from one collection.',
+          title: '1990s NBA mixed stars 10-card lot',
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+            Manufacturer: 'Upper Deck',
+          },
+        }),
+      })
+    ).toThrowError(/Player\/Athlete is required/);
   });
 });
