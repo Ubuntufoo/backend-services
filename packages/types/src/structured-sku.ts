@@ -33,6 +33,7 @@ const BASE_SKU_PATTERN = new RegExp(
 const STRUCTURED_SKU_PATTERN = new RegExp(
   `^(${SKU_CATEGORY_CODES.join('|')})-(${SKU_LISTING_TYPES.join('|')})-(${SKU_SEQUENCE_PATTERN})$`
 );
+const ZERO_SKU_SEQUENCE = '0'.repeat(SKU_SEQUENCE_WIDTH);
 
 function assertNonEmptyString(input: string, label: string): string {
   if (input.length === 0) {
@@ -40,6 +41,10 @@ function assertNonEmptyString(input: string, label: string): string {
   }
 
   return input;
+}
+
+function isValidSkuSequence(sequence: string): boolean {
+  return /^\d{6}$/.test(sequence) && sequence !== ZERO_SKU_SEQUENCE;
 }
 
 export function isSkuCategoryCode(input: string): input is SkuCategoryCode {
@@ -64,7 +69,7 @@ export function parseBaseSku(input: string): ParsedBaseSku {
   const value = assertNonEmptyString(input, 'Base SKU');
   const match = BASE_SKU_PATTERN.exec(value);
 
-  if (!match) {
+  if (!match || !isValidSkuSequence(match[2])) {
     throw new Error(
       `Invalid base SKU "${value}". Expected format: <${SKU_LISTING_TYPES.join('|')}>-${'0'.repeat(
         SKU_SEQUENCE_WIDTH
@@ -92,7 +97,7 @@ export function formatBaseSku(listingType: SkuListingType, sequence: number | st
         : null
       : sequence;
 
-  if (typeof sequenceText !== 'string' || !new RegExp(`^${SKU_SEQUENCE_PATTERN}$`).test(sequenceText)) {
+  if (typeof sequenceText !== 'string' || !isValidSkuSequence(sequenceText)) {
     throw new Error(
       `Invalid SKU sequence "${String(sequence)}". Expected exactly ${SKU_SEQUENCE_WIDTH} digits.`
     );
@@ -105,7 +110,7 @@ export function parseStructuredSku(input: string): ParsedStructuredSku {
   const value = assertNonEmptyString(input, 'Structured SKU');
   const match = STRUCTURED_SKU_PATTERN.exec(value);
 
-  if (!match) {
+  if (!match || !isValidSkuSequence(match[3])) {
     throw new Error(
       `Invalid structured SKU "${value}". Expected format: <${SKU_CATEGORY_CODES.join(
         '|'

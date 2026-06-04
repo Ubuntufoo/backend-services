@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SKU_CATEGORY_CODES,
   SKU_LISTING_TYPES,
+  formatBaseSku,
   formatStructuredSku,
   normalizeSkuCategoryCode,
   parseBaseSku,
@@ -61,6 +62,14 @@ describe('structured SKU helpers', () => {
     );
   });
 
+  it('rejects zero sequence formatting', () => {
+    expect(() => formatBaseSku('Single', '000000')).toThrow();
+    expect(() => formatBaseSku('Lot', '000000')).toThrow();
+    expect(() =>
+      formatStructuredSku({ categoryCode: 'OTHER', baseSku: 'Single-000000' })
+    ).toThrow();
+  });
+
   it('normalizes category codes from whitespace and lowercase input', () => {
     expect(normalizeSkuCategoryCode(' bskbl ')).toBe('BSKBL');
     expect(normalizeSkuCategoryCode(' bsbl')).toBe('BSBL');
@@ -73,6 +82,7 @@ describe('structured SKU helpers', () => {
     'Single-1',
     'Single-00001',
     'Single-000001-extra',
+    'Single-000000',
   ])('rejects invalid base SKU %s', (value) => {
     expect(() => parseBaseSku(value)).toThrow();
   });
@@ -82,6 +92,7 @@ describe('structured SKU helpers', () => {
     'BSKBL-Single',
     'BSKBL-Single-1',
     'BSKBL-single-000001',
+    'BSKBL-Single-000000',
     'BASKETBALL-Single-000001',
     'TCG-Single-000001',
     'OTHER-Bundle-000001',
