@@ -520,25 +520,9 @@ export async function publishListing(
     publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
-  try {
-    await validateRequiredItemSpecificsForCategory({
-      listing,
-      marketplaceId: publishConfig.marketplaceId,
-      taxonomyApi: resolvedDependencies.taxonomyApi,
-    });
-  } catch (error) {
-    if (error instanceof PublishListingValidationError) {
-      throw error;
-    }
-
-    throw wrapPublishStageError(
-      'INVENTORY_ITEM_UPSERT_FAILED',
-      'metadata',
-      listing.listing_id,
-      `Failed to fetch required item-specific metadata for listing "${getListingLabel(listing)}" in category "${listing.category_id}".`,
-      error
-    );
-  }
+  await validateRequiredItemSpecificsForCategory({
+    listing,
+  });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
   });

@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   PublishListingError,
+  PublishRequiredItemSpecificsValidationError,
   PublishListingValidationError,
   PublishRequiredFieldValidationError,
 } from '@/ebay/publish-validation.js';
@@ -1612,6 +1613,91 @@ describe('runSidecarJob', () => {
         ],
         validation_code: 'PUBLISH_REQUIRED_FIELD_MISSING',
         validation_scope: 'app_settings',
+      }),
+      price: 24.5,
+      sku: 'LIST-001',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Vintage puzzle',
+    });
+  });
+
+  it('returns structured category-required item-specific validation errors to needs_review/review_pending', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        category_id: '183050',
+        condition_id: '4000',
+        description: 'Detailed listing description.',
+        image_urls: ['https://cdn.example.com/front.jpg'],
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          Player: 'Michael Jordan',
+        },
+        price: 24.5,
+        sku: 'LIST-001',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+        title: 'Vintage puzzle',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishRequiredItemSpecificsValidationError('LIST-001', [
+        {
+          acceptedKeys: ['Manufacturer', 'Card Manufacturer'],
+          aspectName: 'Manufacturer',
+          field: 'item_specifics.Manufacturer',
+          message: 'Manufacturer is required for this eBay category before publishing.',
+          scope: 'listing',
+        },
+        {
+          acceptedKeys: ['Player/Athlete', 'Player', 'Athlete'],
+          aspectName: 'Player/Athlete',
+          field: 'item_specifics.Player/Athlete',
+          message: 'Player/Athlete is required for this eBay category before publishing.',
+          scope: 'listing',
+        },
+      ]);
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_listing_not_ready');
+    expect(result.listing).toMatchObject({
+      category_id: '183050',
+      condition_id: '4000',
+      description: 'Detailed listing description.',
+      image_urls: ['https://cdn.example.com/front.jpg'],
+      item_specifics: {
+        'Card Condition': 'NEAR_MINT_OR_BETTER',
+        Player: 'Michael Jordan',
+      },
+      last_error_code: 'publish_listing_not_ready',
+      last_error_context: expect.objectContaining({
+        category: 'user_fixable',
+        fields: [
+          {
+            acceptedKeys: ['Manufacturer', 'Card Manufacturer'],
+            aspectName: 'Manufacturer',
+            field: 'item_specifics.Manufacturer',
+            message: 'Manufacturer is required for this eBay category before publishing.',
+            scope: 'listing',
+          },
+          {
+            acceptedKeys: ['Player/Athlete', 'Player', 'Athlete'],
+            aspectName: 'Player/Athlete',
+            field: 'item_specifics.Player/Athlete',
+            message: 'Player/Athlete is required for this eBay category before publishing.',
+            scope: 'listing',
+          },
+        ],
+        validation_code: 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING',
+        validation_scope: 'listing',
       }),
       price: 24.5,
       sku: 'LIST-001',

@@ -26,14 +26,16 @@ export interface PublishListingErrorContext {
   attemptedFields?: string[];
   causeMessage?: string;
   ebayErrors?: EbayApiError['errors'];
-  fields?: PublishRequiredFieldIssue[];
+  fields?: PublishValidationFieldIssue[];
   kind?: 'user_fixable';
   listingId?: string | null;
   offerId?: string;
   publishOfferListingId?: string | null;
   issues?: string[];
   stage?: 'finalize' | 'load' | 'validate' | 'metadata' | 'inventory_item' | 'offer' | 'publish';
-  validationCode?: 'PUBLISH_REQUIRED_FIELD_MISSING';
+  validationCode?:
+    | 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING'
+    | 'PUBLISH_REQUIRED_FIELD_MISSING';
 }
 
 export class PublishListingError extends Error {
@@ -92,6 +94,18 @@ export interface PublishRequiredFieldIssue {
   scope: 'listing' | 'publish_config';
 }
 
+export interface PublishRequiredItemSpecificIssue {
+  acceptedKeys: string[];
+  aspectName: string;
+  field: `item_specifics.${string}`;
+  message: string;
+  scope: 'listing';
+}
+
+export type PublishValidationFieldIssue =
+  | PublishRequiredFieldIssue
+  | PublishRequiredItemSpecificIssue;
+
 export interface PublishReadyValidationSuccess {
   ok: true;
 }
@@ -132,6 +146,29 @@ export class PublishRequiredFieldValidationError extends PublishListingError {
       }
     );
     this.name = 'PublishRequiredFieldValidationError';
+    this.fields = fields;
+  }
+}
+
+export class PublishRequiredItemSpecificsValidationError extends PublishListingError {
+  readonly fields: PublishRequiredItemSpecificIssue[];
+  readonly kind = 'user_fixable' as const;
+  readonly validationCode = 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING' as const;
+
+  constructor(listingId: string | null, fields: PublishRequiredItemSpecificIssue[]) {
+    super(
+      'LISTING_NOT_READY',
+      fields.map((field) => field.message).join('; '),
+      {
+        fields,
+        issues: fields.map((field) => field.message),
+        kind: 'user_fixable',
+        listingId,
+        stage: 'validate',
+        validationCode: 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING',
+      }
+    );
+    this.name = 'PublishRequiredItemSpecificsValidationError';
     this.fields = fields;
   }
 }
