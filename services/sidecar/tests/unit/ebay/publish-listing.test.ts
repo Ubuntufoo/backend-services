@@ -383,6 +383,55 @@ describe('publishListing', () => {
     });
   });
 
+  it('treats an existing ebay_listing_id as idempotent success without eBay writes', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        ebay_listing_id: 'EBAY-EXISTING',
+        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+        ebay_offer_id: null,
+        exported_at: '2026-05-24T14:55:00.000Z',
+        sku: 'SKU-KEEP',
+      }),
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
+    expect(dependencies.dataAccess.appSettings.get).toHaveBeenCalled();
+    expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    expect(dependencies.listingUpdates).toEqual([
+      {
+        changes: {
+          ebay_listing_id: 'EBAY-EXISTING',
+          ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+          exported_at: '2026-05-24T14:55:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: {},
+          last_error_message: null,
+          sku: 'SKU-KEEP',
+          status: 'exported',
+          sub_status: 'idle',
+        },
+        listingId: 'LIST-001',
+      },
+    ]);
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-EXISTING',
+      exportedAt: '2026-05-24T14:55:00.000Z',
+      listingId: 'LIST-001',
+      offerId: null,
+      reusedExistingOffer: true,
+      sku: 'SKU-KEEP',
+      status: 'exported',
+    });
+  });
+
   it('uses production publish config when production runtime active', async () => {
     const dependencies = createDependencies({
       runtimeConfig: {
@@ -1747,12 +1796,56 @@ describe('publishListing', () => {
     expect(result.offerId).toBe('OFFER-EXISTING');
   });
 
-  it('does not overwrite existing listing identifiers when publish response omits them', async () => {
+  it('finalizes stored-offer publish with returned listing id and url', async () => {
     const dependencies = createDependencies({
       listing: createListing({
-        ebay_listing_id: 'EBAY-EXISTING',
-        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+        ebay_listing_id: null,
+        ebay_listing_url: null,
         ebay_offer_id: 'OFFER-EXISTING',
+        sku: 'SKU-001',
+      }),
+      publishOfferResult: {
+        listingId: 'EBAY-REUSED',
+      },
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-EXISTING');
+    expect(dependencies.listingUpdates).toContainEqual({
+      listingId: 'LIST-001',
+      changes: {
+        ebay_listing_id: 'EBAY-REUSED',
+        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-REUSED',
+        ebay_offer_id: 'OFFER-EXISTING',
+        exported_at: '2026-05-24T15:30:00.000Z',
+        last_error_at: null,
+        last_error_code: null,
+        last_error_context: {},
+        last_error_message: null,
+        sku: 'SKU-001',
+        status: 'exported',
+        sub_status: 'idle',
+      },
+    });
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-REUSED',
+      exportedAt: '2026-05-24T15:30:00.000Z',
+      listingId: 'LIST-001',
+      offerId: 'OFFER-EXISTING',
+      reusedExistingOffer: true,
+      sku: 'SKU-001',
+      status: 'exported',
+    });
+  });
+
+  it('does not invent a listing id when publish response omits it', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        ebay_offer_id: 'OFFER-EXISTING',
+        ebay_listing_id: null,
+        ebay_listing_url: null,
       }),
       publishOfferResult: {},
     });
@@ -1781,7 +1874,7 @@ describe('publishListing', () => {
         },
       },
     ]);
-    expect(result.ebayListingId).toBe('EBAY-EXISTING');
+    expect(result.ebayListingId).toBeNull();
   });
 
   it('raises not found errors when listing is missing', async () => {

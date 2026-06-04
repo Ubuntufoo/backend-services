@@ -72,7 +72,7 @@ export interface PublishListingResult {
   ebayListingId: string | null;
   exportedAt: string;
   listingId: string;
-  offerId: string;
+  offerId: string | null;
   reusedExistingOffer: boolean;
   sku: string;
   status: 'exported';
@@ -322,6 +322,53 @@ function getTrimmedString(value: string | null | undefined): string | undefined 
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function hasPublishedListingTrace(listing: Pick<ListingRow, 'ebay_listing_id'>): boolean {
+  return getTrimmedString(listing.ebay_listing_id) !== undefined;
+}
+
+function buildTraceBackedListingRepairUpdate(
+  listing: ListingRow,
+  exportedAt: string
+): Partial<ListingRow> {
+  const changes: Partial<ListingRow> = {
+    exported_at: getTrimmedString(listing.exported_at) ?? exportedAt,
+    last_error_at: null,
+    last_error_code: null,
+    last_error_context: {},
+    last_error_message: null,
+    status: 'exported',
+    sub_status: 'idle',
+  };
+
+  const ebayListingId = getTrimmedString(listing.ebay_listing_id);
+  const ebayOfferId = getTrimmedString(listing.ebay_offer_id);
+  const ebayListingUrl = getTrimmedString(listing.ebay_listing_url);
+  const ebayListingStatus = getTrimmedString(listing.ebay_listing_status);
+  const sku = getTrimmedString(listing.sku);
+
+  if (ebayListingId) {
+    changes.ebay_listing_id = ebayListingId;
+  }
+
+  if (ebayOfferId !== undefined) {
+    changes.ebay_offer_id = ebayOfferId;
+  }
+
+  if (ebayListingUrl !== undefined) {
+    changes.ebay_listing_url = ebayListingUrl;
+  }
+
+  if (ebayListingStatus !== undefined) {
+    changes.ebay_listing_status = ebayListingStatus;
+  }
+
+  if (sku !== undefined) {
+    changes.sku = sku;
+  }
+
+  return changes;
+}
+
 function getEbayErrorText(error: EbayApiError['errors'][number]): string {
   return [error.message, error.longMessage, ...(error.parameters ?? []).flatMap((parameter) => [
     parameter.name,
@@ -395,17 +442,11 @@ async function resolveExistingOfferForSku(
   return pickLookupOffer(response.offers ?? [], preferredOfferId);
 }
 
-async function loadPublishContext(
+async function loadPublishListing(
   listingId: string,
   dataAccess: SidecarDataAccess
-): Promise<{
-  appSettings: AppSettingsRow;
-  listing: ListingRow;
-}> {
-  const [listing, appSettings] = await Promise.all([
-    dataAccess.listings.getByListingId(listingId),
-    dataAccess.appSettings.get(),
-  ]);
+): Promise<ListingRow> {
+  const listing = await dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
     throw new PublishListingError(
@@ -418,6 +459,15 @@ async function loadPublishContext(
     );
   }
 
+  return listing;
+}
+
+async function loadPublishAppSettings(
+  listingId: string,
+  dataAccess: SidecarDataAccess
+): Promise<AppSettingsRow> {
+  const appSettings = await dataAccess.appSettings.get();
+
   if (!appSettings) {
     throw new PublishListingError(
       'APP_SETTINGS_NOT_FOUND',
@@ -429,10 +479,7 @@ async function loadPublishContext(
     );
   }
 
-  return {
-    appSettings,
-    listing,
-  };
+  return appSettings;
 }
 
 function wrapPublishStageError(
@@ -486,7 +533,8 @@ export async function publishListing(
   dependencies: Partial<PublishListingDependencies> = {}
 ): Promise<PublishListingResult> {
   const resolvedDependencies = await resolveDependencies(dependencies);
-  const { appSettings, listing } = await loadPublishContext(listingId, resolvedDependencies.dataAccess);
+  const listing = await loadPublishListing(listingId, resolvedDependencies.dataAccess);
+  const appSettings = await loadPublishAppSettings(listingId, resolvedDependencies.dataAccess);
   const runtimeMarketplaceId = resolvedDependencies.runtimeConfig.marketplaceId ?? 'EBAY_US';
   const publishConfigResult = resolvePublishConfig(appSettings, {
     environment: resolvedDependencies.runtimeConfig.environment,
@@ -496,6 +544,56 @@ export async function publishListing(
     environment: resolvedDependencies.runtimeConfig.environment,
     runtimeMarketplaceId,
   });
+
+  if (hasPublishedListingTrace(listing)) {
+    if (!publishConfigResult.config) {
+      throw new PublishListingValidationError(listing.listing_id, publishConfigResult.issues);
+    }
+
+    const ebayListingId = getTrimmedString(listing.ebay_listing_id)!;
+    const offerId = getTrimmedString(listing.ebay_offer_id) ?? null;
+    const exportedAt = getTrimmedString(listing.exported_at) ?? resolvedDependencies.now().toISOString();
+    const sku = buildPublishSku(listing);
+
+    // TODO: add explicit environment tagging before treating stored publish trace as cross-env safe.
+    publishLogger.info('Listing already has published trace; repairing exported state and skipping eBay write path.', {
+      ebayListingId,
+      listingId,
+      offerId,
+      sku,
+    });
+
+    try {
+      await resolvedDependencies.dataAccess.listings.update(
+        listingId,
+        buildTraceBackedListingRepairUpdate(listing, exportedAt)
+      );
+    } catch (error) {
+      throw new PublishListingError(
+        'EXPORT_STATE_PERSIST_FAILED',
+        `Published listing "${listingId}" already has trace data but failed to repair exported state.`,
+        {
+          attemptedFields: [...PUBLISHED_LISTING_ATTEMPTED_FIELDS],
+          causeMessage: getCauseMessage(error),
+          listingId,
+          offerId: offerId ?? undefined,
+          publishOfferListingId: ebayListingId,
+          stage: 'finalize',
+        },
+        { cause: error instanceof Error ? error : undefined }
+      );
+    }
+
+    return {
+      ebayListingId,
+      exportedAt,
+      listingId,
+      offerId,
+      reusedExistingOffer: true,
+      sku,
+      status: 'exported',
+    };
+  }
 
   assertPublishReady({
     listing,
@@ -520,7 +618,7 @@ export async function publishListing(
     publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
-  await validateRequiredItemSpecificsForCategory({
+  validateRequiredItemSpecificsForCategory({
     listing,
   });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
