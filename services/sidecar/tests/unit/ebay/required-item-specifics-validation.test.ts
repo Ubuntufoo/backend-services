@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ListingRow } from '@ebay-inventory/data';
 import {
-  getRequiredAspectNamesFromMetadata,
+  getEffectiveItemSpecificsForCategoryValidation,
+  getCoveredCategoryIds,
+  getRequiredItemSpecificRulesForCategory,
   hasRequiredAspectValue,
+  hasRequiredAspectValueForKeys,
+  isLikelyLotListing,
   validateRequiredItemSpecificsForCategory,
 } from '@/ebay/required-item-specifics-validation.js';
-import { PublishListingValidationError } from '@/ebay/publish-validation.js';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -54,29 +57,23 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
 }
 
 describe('required item specifics validation', () => {
-  it('extracts required aspect names from taxonomy metadata', () => {
-    expect(
-      getRequiredAspectNamesFromMetadata({
-        aspects: [
-          {
-            localizedAspectName: ' Franchise ',
-            aspectConstraint: { aspectRequired: true },
-          },
-          {
-            localizedAspectName: 'Player/Athlete',
-            aspectConstraint: { aspectUsage: 'REQUIRED' },
-          },
-          {
-            localizedAspectName: 'Team',
-            aspectConstraint: { aspectUsage: 'RECOMMENDED' },
-          },
-          {
-            localizedAspectName: '   ',
-            aspectConstraint: { aspectRequired: true },
-          },
-        ],
-      })
-    ).toEqual(['Franchise', 'Player/Athlete']);
+  it('covers only local trading-card category rules', () => {
+    expect(getCoveredCategoryIds()).toEqual(['183050']);
+    expect(getRequiredItemSpecificRulesForCategory('183050')).toEqual([
+      {
+        acceptedKeys: ['Card Condition'],
+        aspectName: 'Card Condition',
+      },
+      {
+        acceptedKeys: ['Manufacturer', 'Card Manufacturer'],
+        aspectName: 'Manufacturer',
+      },
+      {
+        acceptedKeys: ['Player/Athlete', 'Player', 'Athlete'],
+        aspectName: 'Player/Athlete',
+      },
+    ]);
+    expect(getRequiredItemSpecificRulesForCategory('9999')).toEqual([]);
   });
 
   it.each([
@@ -91,9 +88,28 @@ describe('required item specifics validation', () => {
     expect(hasRequiredAspectValue(itemSpecifics, 'Franchise')).toBe(false);
   });
 
-  it('accepts exact-match-after-trim string and array values', () => {
+  it('accepts trimmed string and array values', () => {
     expect(hasRequiredAspectValue({ ' Franchise ': 'Utah Jazz' }, 'Franchise')).toBe(true);
     expect(hasRequiredAspectValue({ Franchise: [' ', 'Utah Jazz'] }, 'Franchise')).toBe(true);
+  });
+
+  it('accepts alias keys for local required aspect rules', () => {
+    expect(
+      hasRequiredAspectValueForKeys(
+        {
+          ' Card Manufacturer ': 'Upper Deck',
+        },
+        ['Manufacturer', 'Card Manufacturer']
+      )
+    ).toBe(true);
+    expect(
+      hasRequiredAspectValueForKeys(
+        {
+          Player: 'Michael Jordan',
+        },
+        ['Player/Athlete', 'Player', 'Athlete']
+      )
+    ).toBe(true);
   });
 
   it('does not allow internal keys to satisfy required aspects', () => {
@@ -105,27 +121,209 @@ describe('required item specifics validation', () => {
     );
   });
 
-  it('throws listing validation error for missing required aspects', async () => {
-    await expect(
+  it.each([
+    { label: 'Lot- listing id', listing: createListing({ listing_id: 'Lot-0001' }) },
+    { label: 'lot title', listing: createListing({ title: '1990s NBA mixed stars 10-card lot' }) },
+    { label: 'bundle seller hints', listing: createListing({ seller_hints: 'Family bundle from one binder page.' }) },
+    { label: 'lot marker aspect', listing: createListing({ item_specifics: { Format: 'Lot' } }) },
+  ])('detects conservative lot signal: $label', ({ listing }) => {
+    expect(isLikelyLotListing(listing)).toBe(true);
+  });
+
+  it('does not treat ordinary single-card text as a lot', () => {
+    expect(
+      isLikelyLotListing(
+        createListing({
+          listing_id: 'LIST-001',
+          seller_hints: 'Single card. Check corners.',
+          title: '1991 Upper Deck Michael Jordan',
+        })
+      )
+    ).toBe(false);
+  });
+
+  it('injects Player/Athlete=Various for detected trading-card lots with missing player aspect', () => {
+    expect(
+      getEffectiveItemSpecificsForCategoryValidation(
+        createListing({
+          listing_id: 'Lot-0001',
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+            Manufacturer: 'Upper Deck',
+          },
+        })
+      )
+    ).toMatchObject({
+      'Card Condition': 'NEAR_MINT_OR_BETTER',
+      Manufacturer: 'Upper Deck',
+      'Player/Athlete': 'Various',
+    });
+  });
+
+  it('does not overwrite existing player aliases for lots', () => {
+    expect(
+      getEffectiveItemSpecificsForCategoryValidation(
+        createListing({
+          listing_id: 'Lot-0001',
+          item_specifics: {
+            Athlete: 'Michael Jordan',
+          },
+        })
+      )
+    ).toEqual({
+      Athlete: 'Michael Jordan',
+    });
+  });
+
+  it('does not inject Various for unknown categories', () => {
+    expect(
+      getEffectiveItemSpecificsForCategoryValidation(
+        createListing({
+          category_id: '9999',
+          listing_id: 'Lot-0001',
+          item_specifics: {
+            Brand: 'Acme',
+          },
+        })
+      )
+    ).toEqual({
+      Brand: 'Acme',
+    });
+  });
+
+  it('allows lot listings to satisfy Player/Athlete with injected Various', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          listing_id: 'Lot-0001',
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+            Manufacturer: 'Upper Deck',
+          },
+        }),
+      })
+    ).not.toThrow();
+  });
+
+  it('allows lot title listings to satisfy Player/Athlete with injected Various', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          title: '1990s NBA mixed stars 10-card lot',
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+            Manufacturer: 'Upper Deck',
+          },
+        }),
+      })
+    ).not.toThrow();
+  });
+
+  it('allows lot seller hints to satisfy Player/Athlete with injected Various', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          seller_hints: 'Assorted bundle from one collection.',
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+            Manufacturer: 'Upper Deck',
+          },
+        }),
+      })
+    ).not.toThrow();
+  });
+
+  it('throws structured listing validation error for missing required aspects', () => {
+    try {
       validateRequiredItemSpecificsForCategory({
         listing: createListing({
           item_specifics: {
             Player: 'Karl Malone',
           },
         }),
-        marketplaceId: 'EBAY_US',
-        taxonomyApi: {
-          getDefaultCategoryTreeId: vi.fn(async () => ({ categoryTreeId: '0' })),
-          getItemAspectsForCategory: vi.fn(async () => ({
-            aspects: [
-              {
-                localizedAspectName: 'Franchise',
-                aspectConstraint: { aspectRequired: true },
-              },
-            ],
-          })),
+      });
+      throw new Error('Expected validation error.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'LISTING_NOT_READY',
+        context: {
+          fields: [
+            {
+              acceptedKeys: ['Card Condition'],
+              aspectName: 'Card Condition',
+              field: 'item_specifics.Card Condition',
+              message: 'Card Condition is required for this eBay category before publishing.',
+              scope: 'listing',
+            },
+            {
+              acceptedKeys: ['Manufacturer', 'Card Manufacturer'],
+              aspectName: 'Manufacturer',
+              field: 'item_specifics.Manufacturer',
+              message: 'Manufacturer is required for this eBay category before publishing.',
+              scope: 'listing',
+            },
+          ],
+          issues: [
+            'Card Condition is required for this eBay category before publishing.',
+            'Manufacturer is required for this eBay category before publishing.',
+          ],
+          kind: 'user_fixable',
+          listingId: 'LIST-001',
+          stage: 'validate',
+          validationCode: 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING',
         },
+      });
+    }
+  });
+
+  it('passes unknown categories without blocking publish', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          category_id: '9999',
+          item_specifics: {},
+        }),
       })
-    ).rejects.toThrow(PublishListingValidationError);
+    ).not.toThrow();
+  });
+
+  it('still fails non-lot single-card listings with missing Player/Athlete', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+            Manufacturer: 'Upper Deck',
+          },
+          title: '1991 Upper Deck Michael Jordan',
+        }),
+      })
+    ).toThrowError(/Player\/Athlete is required/);
+  });
+
+  it('still fails lots missing Card Condition', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          listing_id: 'Lot-0001',
+          item_specifics: {
+            Manufacturer: 'Upper Deck',
+          },
+        }),
+      })
+    ).toThrowError(/Card Condition is required/);
+  });
+
+  it('still fails lots missing Manufacturer', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          listing_id: 'Lot-0001',
+          item_specifics: {
+            'Card Condition': 'NEAR_MINT_OR_BETTER',
+          },
+        }),
+      })
+    ).toThrowError(/Manufacturer is required/);
   });
 });

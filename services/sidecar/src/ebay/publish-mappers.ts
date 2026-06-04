@@ -1,11 +1,12 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { Condition } from '@/types/ebay-enums.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
+import { getEffectiveItemSpecificsForCategoryValidation } from '@/ebay/required-item-specifics-validation.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 import {
   getRawCardConditionDisplayLabel,
-  normalizeRawCardConditionToken,
   isTradingCardCategoryId,
+  normalizeRawCardConditionToken,
   TRADING_CARD_CONDITION_ASPECT_KEY,
 } from '@/listings/trading-card-conditions.js';
 
@@ -138,12 +139,13 @@ export function mapListingToInventoryItemPayload(
   options: InventoryItemPayloadOptions = {}
 ): InventoryItem {
   const ignoredKeys = new Set(INTERNAL_ITEM_SPECIFIC_KEYS);
+  const effectiveItemSpecifics = getEffectiveItemSpecificsForCategoryValidation(listing);
 
   if (options.conditionDescriptors && isTradingCardCategoryId(listing.category_id)) {
     ignoredKeys.add(TRADING_CARD_CONDITION_ASPECT_KEY);
   }
 
-  const aspects = normalizeItemSpecifics(listing.item_specifics, ignoredKeys);
+  const aspects = normalizeItemSpecifics(effectiveItemSpecifics, ignoredKeys);
 
   return {
     availability: {
