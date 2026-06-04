@@ -1796,6 +1796,50 @@ describe('publishListing', () => {
     expect(result.offerId).toBe('OFFER-EXISTING');
   });
 
+  it('finalizes stored-offer publish with returned listing id and url', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        ebay_listing_id: null,
+        ebay_listing_url: null,
+        ebay_offer_id: 'OFFER-EXISTING',
+        sku: 'SKU-001',
+      }),
+      publishOfferResult: {
+        listingId: 'EBAY-REUSED',
+      },
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-EXISTING');
+    expect(dependencies.listingUpdates).toContainEqual({
+      listingId: 'LIST-001',
+      changes: {
+        ebay_listing_id: 'EBAY-REUSED',
+        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-REUSED',
+        ebay_offer_id: 'OFFER-EXISTING',
+        exported_at: '2026-05-24T15:30:00.000Z',
+        last_error_at: null,
+        last_error_code: null,
+        last_error_context: {},
+        last_error_message: null,
+        sku: 'SKU-001',
+        status: 'exported',
+        sub_status: 'idle',
+      },
+    });
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-REUSED',
+      exportedAt: '2026-05-24T15:30:00.000Z',
+      listingId: 'LIST-001',
+      offerId: 'OFFER-EXISTING',
+      reusedExistingOffer: true,
+      sku: 'SKU-001',
+      status: 'exported',
+    });
+  });
+
   it('does not invent a listing id when publish response omits it', async () => {
     const dependencies = createDependencies({
       listing: createListing({
