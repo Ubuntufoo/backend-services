@@ -13,6 +13,7 @@ import {
   PublishListingValidationError,
   PublishRequiredFieldValidationError,
 } from '@/ebay/publish-validation.js';
+import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import { runSidecarJob } from '@/jobs/index.js';
 
 const queuedGenerateAiJob: JobRow = {
@@ -1765,6 +1766,61 @@ describe('runSidecarJob', () => {
       status: 'needs_review',
       sub_status: 'review_pending',
       title: 'Vintage puzzle',
+    });
+  });
+
+  it('persists structured image URL readiness validation errors through the job failure path', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        category_id: '1234',
+        condition_id: '4000',
+        description: 'Detailed listing description.',
+        image_urls: ['https://cdn.example.com/front.jpg'],
+        item_specifics: { Brand: 'Acme' },
+        price: 24.5,
+        sku: 'LIST-001',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+        title: 'Vintage puzzle',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishImageUrlReadinessValidationError('LIST-001', [
+        {
+          field: 'image_urls[0]',
+          message: 'Image URL must use HTTPS before publishing.',
+          scope: 'listing',
+          url: 'http://cdn.example.com/front.jpg',
+        },
+      ]);
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_listing_not_ready');
+    expect(result.listing).toMatchObject({
+      last_error_code: 'publish_listing_not_ready',
+      last_error_context: expect.objectContaining({
+        category: 'user_fixable',
+        fields: [
+          {
+            field: 'image_urls[0]',
+            message: 'Image URL must use HTTPS before publishing.',
+            scope: 'listing',
+            url: 'http://cdn.example.com/front.jpg',
+          },
+        ],
+        validation_code: 'IMAGE_URL_NOT_READY_FOR_EBAY',
+        validation_scope: 'listing',
+      }),
+      status: 'needs_review',
+      sub_status: 'review_pending',
     });
   });
 

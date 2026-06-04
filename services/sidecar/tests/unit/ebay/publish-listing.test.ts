@@ -132,6 +132,79 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
   return appSettings;
 }
 
+type FetchResponse = Awaited<ReturnType<typeof globalThis.fetch>>;
+
+function createFetchResponse(
+  body: Uint8Array | null,
+  init: { headers?: Record<string, string>; status?: number } = {}
+): FetchResponse {
+  const status = init.status ?? 200;
+  const headers = new Map(
+    Object.entries(init.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value])
+  );
+
+  return {
+    body:
+      body === null
+        ? null
+        : ({
+            getReader() {
+              let read = false;
+
+              return {
+                async cancel() {
+                  return undefined;
+                },
+                async read() {
+                  if (read) {
+                    return {
+                      done: true,
+                      value: undefined,
+                    };
+                  }
+
+                  read = true;
+                  return {
+                    done: false,
+                    value: body,
+                  };
+                },
+              };
+            },
+          } as FetchResponse['body']),
+    headers: {
+      get(name: string) {
+        return headers.get(name.toLowerCase()) ?? null;
+      },
+    },
+    ok: status >= 200 && status < 300,
+    status,
+  } as FetchResponse;
+}
+
+function createSuccessfulImageFetchMock() {
+  return vi.fn(async (_input: string | URL, init?: RequestInit) => {
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (method === 'HEAD') {
+      return createFetchResponse(null, {
+        headers: {
+          'content-length': '12',
+          'content-type': 'image/jpeg',
+        },
+        status: 200,
+      });
+    }
+
+    return createFetchResponse(new Uint8Array([1, 2, 3]), {
+      headers: {
+        'content-type': 'image/jpeg',
+      },
+      status: 200,
+    });
+  });
+}
+
 function createOfferAlreadyExistsError(options: {
   offerId?: string;
   includeOfferIdParameter?: boolean;
@@ -159,7 +232,9 @@ function createDependencies({
   createOfferResult = { offerId: 'OFFER-001' },
   getOffersResult = { offers: [] },
   listing = createListing(),
+  fetch = createSuccessfulImageFetchMock(),
   publishOfferResult = { listingId: 'EBAY-001' },
+  imagePublicBaseUrl = 'https://cdn.example.com',
   runtimeConfig = {
     environment: 'sandbox',
     marketplaceId: 'EBAY_US',
@@ -168,11 +243,14 @@ function createDependencies({
   appSettings?: AppSettingsRow | null;
   createOfferResult?: { offerId?: string };
   getOffersResult?: { offers?: Record<string, unknown>[] };
+  fetch?: typeof globalThis.fetch;
+  imagePublicBaseUrl?: string | null;
   listing?: ListingRow | null;
   publishOfferResult?: { listingId?: string };
   runtimeConfig?: Pick<EbayConfig, 'environment' | 'marketplaceId'>;
 } = {}): {
   dataAccess: SidecarDataAccess;
+  fetch: typeof globalThis.fetch;
   inventoryApi: {
     createOffer: ReturnType<typeof vi.fn>;
     createOrReplaceInventoryItem: ReturnType<typeof vi.fn>;
@@ -188,6 +266,7 @@ function createDependencies({
     getItemAspectsForCategory: ReturnType<typeof vi.fn>;
   };
   listingUpdates: { listingId: string; changes: Partial<ListingRow> }[];
+  imagePublicBaseUrl: string | null;
   now: () => Date;
   runtimeConfig: Pick<EbayConfig, 'environment' | 'marketplaceId'>;
 } {
@@ -306,6 +385,8 @@ function createDependencies({
 
   return {
     dataAccess,
+    fetch,
+    imagePublicBaseUrl,
     inventoryApi,
     metadataApi,
     taxonomyApi,
@@ -340,6 +421,13 @@ describe('publishListing', () => {
       })
     );
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-001');
+    expect(dependencies.fetch).toHaveBeenCalledTimes(1);
+    expect(dependencies.fetch).toHaveBeenCalledWith(
+      'https://cdn.example.com/front.jpg',
+      expect.objectContaining({
+        method: 'HEAD',
+      })
+    );
     expect(dependencies.dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     expect(dependencies.listingUpdates).toEqual([
       {
@@ -404,6 +492,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    expect(dependencies.fetch).not.toHaveBeenCalled();
     expect(dependencies.listingUpdates).toEqual([
       {
         changes: {
@@ -430,6 +519,72 @@ describe('publishListing', () => {
       sku: 'SKU-KEEP',
       status: 'exported',
     });
+  });
+
+  it('blocks invalid image URLs before eBay writes', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        image_urls: ['http://cdn.example.com/front.jpg'],
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        fields: [
+          {
+            field: 'image_urls[0]',
+            message: 'Image URL must use HTTPS before publishing.',
+            scope: 'listing',
+            url: 'http://cdn.example.com/front.jpg',
+          },
+        ],
+        issues: ['Image URL must use HTTPS before publishing.'],
+        kind: 'user_fixable',
+        listingId: 'LIST-001',
+        stage: 'validate',
+        validationCode: 'IMAGE_URL_NOT_READY_FOR_EBAY',
+      },
+    });
+    expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    expect(dependencies.fetch).not.toHaveBeenCalled();
+  });
+
+  it('blocks unreachable image URLs before eBay writes', async () => {
+    const dependencies = createDependencies({
+      fetch: vi.fn(async () => createFetchResponse(null, { status: 404 })),
+      listing: createListing({
+        image_urls: ['https://cdn.example.com/front.jpg'],
+      }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        fields: [
+          {
+            field: 'image_urls[0]',
+            message: 'Image URL returned HTTP 404 when checked for eBay publish.',
+            scope: 'listing',
+            url: 'https://cdn.example.com/front.jpg',
+          },
+        ],
+        issues: ['Image URL returned HTTP 404 when checked for eBay publish.'],
+        kind: 'user_fixable',
+        listingId: 'LIST-001',
+        stage: 'validate',
+        validationCode: 'IMAGE_URL_NOT_READY_FOR_EBAY',
+      },
+    });
+    expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
   it('uses production publish config when production runtime active', async () => {
