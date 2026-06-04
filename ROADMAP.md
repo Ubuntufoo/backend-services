@@ -103,8 +103,8 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | BE | Simplify raw card condition scale to eBay-supported values | Gemini and publish mapper only use eBay-compatible card condition values | GPT-5.5 mini | Low-Medium | Replace over-granular raw grading tokens with category-supported values: Near mint or better, Excellent, Very good, Poor; prevents publish failures like unsupported `EX-MT` | 
 | 8 | FE | Update card condition UI to eBay-supported condition scale | Review form only displays and saves backend-supported raw card condition tokens | GPT-5.5 mini | Low-Medium | Replace legacy `EX - Excellent` style options with `Near mint or better`, `Excellent`, `Very good`, `Poor`; normalize old saved values in the UI so existing drafts can be corrected |
 | 8 | BE | Harden pre-publish required-field validation | Bad listings are blocked before eBay API calls with user-fixable errors | GPT-5.5 mini | Medium | Foundation added: centralized validator now checks title, description, price, category ID, condition ID, image URLs, SKU, quantity, policy IDs, merchant location key, marketplace; live publish wiring still pending |
-| 8 | BE | Validate category-required item specifics | Missing eBay-required aspects are surfaced before publish | GPT-5.5 | Medium | Important for trading-card categories; can rely on eBay validation details first if Taxonomy integration is deferred | |  -->
-| 8 | FE | Add first-live-listing review checklist | First production publish has explicit manual safety gate | GPT-5.5 mini | Low-Medium | Confirm title, price, category, condition, images, item specifics, policies, and production target |
+| 8 | BE | Validate category-required item specifics | Missing eBay-required aspects are surfaced before publish | GPT-5.5 | Medium | Important for trading-card categories; can rely on eBay validation details first if Taxonomy integration is deferred | 
+| 8 | FE | Add first-live-listing review checklist | First production publish has explicit manual safety gate | GPT-5.5 mini | Low-Medium | Confirm title, price, category, condition, images, item specifics, policies, and production target | |  -->
 | 8 | BE | Add live publish duplicate-protection check | Re-publishing does not accidentally create duplicate live listings | GPT-5.5 mini | Medium | Respect existing SKU, `ebay_offer_id`, `ebay_listing_id`; publish should be idempotent/retry-safe |
 | 8 | BE | Add image URL eBay readiness check | R2-hosted images are verified before publish | GPT-5.5 mini | Low-Medium | Check HTTPS, public access, supported extension, non-empty response, and custom-domain URL |
 | 8 | Docs | Add controlled live pilot notes | First real listings can be tested safely while admin remains in eBay Seller Hub | GPT-5.5 mini | Low | Minimal notes only; avoid heavy runbook |
@@ -117,7 +117,6 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | BE | Match order SKU to `listing_id` | Sold listing is identified from order SKU | GPT-5.5 mini | Medium | Required before updating listings to sold |
 | 8 | DB/BE | Update listing status to `sold` | Sale is tracked and listing status moves to `sold` when matched order data confirms sale | GPT-5.5 mini | Medium | Enables cleanup and fulfillment workflows |
 | 8 | BE | `job-runner`: schedule 4 order checks/day | Controlled order sync runs 4 times per day | GPT-5.5 mini | Medium | Schedule only after order storage and matching exist |
-
 | 8 | FE | Show due today/overdue warnings | 1-day handling risks are visible | GPT-5.5 mini | Low-Medium | Operational guardrail for fulfillment |
 | 8 | FE | Improve listing image preview gallery | All listing images are visible at usable review size | GPT-5.5 mini | Low-Medium | Deferred QOL/review usability |
 | 8 | BE | Normalize image orientation during asset processing | R2 images display with correct orientation | GPT-5.5 mini | Low-Medium | Defer unless EXIF issue is confirmed |
@@ -150,5 +149,5 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 12 | BE | Add tests for assistant routing and guardrails | Unsafe or unsupported assistant actions are blocked |
 | 12 | BE | BE audit: clean up and review for refactoring | Eliminate checklist scripts, stale tests, other development artifacts |
 | 12 | Docs | Document Read-only eBay Assistant contract | Future assistant architecture is clear |
-| 12 | Cleanup | Pare down tests | Remove unnecessary or redundant test cases, and high-confidence/hardened test scenarios |
-13 | Marketing/SEO | Explore marketing options | Google search, social media, and other channels for potential traffic and user acquisition |
+| 12 | Cleanup | Pare down tests | Remove unnecessary or redundant test cases for high-confidence/hardened test scenarios |
+| 13 | Marketing/SEO | Explore marketing options | Google search, social media, and other channels for potential traffic and user acquisition |

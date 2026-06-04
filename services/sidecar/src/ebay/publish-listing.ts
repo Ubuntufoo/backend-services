@@ -322,6 +322,10 @@ function getTrimmedString(value: string | null | undefined): string | undefined 
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function hasPublishedListingTrace(listing: Pick<ListingRow, 'ebay_listing_id'>): boolean {
+  return getTrimmedString(listing.ebay_listing_id) !== undefined;
+}
+
 function getEbayErrorText(error: EbayApiError['errors'][number]): string {
   return [error.message, error.longMessage, ...(error.parameters ?? []).flatMap((parameter) => [
     parameter.name,
@@ -395,17 +399,11 @@ async function resolveExistingOfferForSku(
   return pickLookupOffer(response.offers ?? [], preferredOfferId);
 }
 
-async function loadPublishContext(
+async function loadPublishListing(
   listingId: string,
   dataAccess: SidecarDataAccess
-): Promise<{
-  appSettings: AppSettingsRow;
-  listing: ListingRow;
-}> {
-  const [listing, appSettings] = await Promise.all([
-    dataAccess.listings.getByListingId(listingId),
-    dataAccess.appSettings.get(),
-  ]);
+): Promise<ListingRow> {
+  const listing = await dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
     throw new PublishListingError(
@@ -418,6 +416,15 @@ async function loadPublishContext(
     );
   }
 
+  return listing;
+}
+
+async function loadPublishAppSettings(
+  listingId: string,
+  dataAccess: SidecarDataAccess
+): Promise<AppSettingsRow> {
+  const appSettings = await dataAccess.appSettings.get();
+
   if (!appSettings) {
     throw new PublishListingError(
       'APP_SETTINGS_NOT_FOUND',
@@ -429,10 +436,7 @@ async function loadPublishContext(
     );
   }
 
-  return {
-    appSettings,
-    listing,
-  };
+  return appSettings;
 }
 
 function wrapPublishStageError(
@@ -486,7 +490,34 @@ export async function publishListing(
   dependencies: Partial<PublishListingDependencies> = {}
 ): Promise<PublishListingResult> {
   const resolvedDependencies = await resolveDependencies(dependencies);
-  const { appSettings, listing } = await loadPublishContext(listingId, resolvedDependencies.dataAccess);
+  const listing = await loadPublishListing(listingId, resolvedDependencies.dataAccess);
+
+  if (hasPublishedListingTrace(listing)) {
+    const ebayListingId = getTrimmedString(listing.ebay_listing_id)!;
+    const offerId = getTrimmedString(listing.ebay_offer_id) ?? listingId;
+    const exportedAt = getTrimmedString(listing.exported_at) ?? resolvedDependencies.now().toISOString();
+    const sku = buildPublishSku(listing);
+
+    // TODO: add explicit environment tagging before treating stored publish trace as cross-env safe.
+    publishLogger.info('Listing already has published trace; skipping eBay write path.', {
+      ebayListingId,
+      listingId,
+      offerId,
+      sku,
+    });
+
+    return {
+      ebayListingId,
+      exportedAt,
+      listingId,
+      offerId,
+      reusedExistingOffer: true,
+      sku,
+      status: 'exported',
+    };
+  }
+
+  const appSettings = await loadPublishAppSettings(listingId, resolvedDependencies.dataAccess);
   const runtimeMarketplaceId = resolvedDependencies.runtimeConfig.marketplaceId ?? 'EBAY_US';
   const publishConfigResult = resolvePublishConfig(appSettings, {
     environment: resolvedDependencies.runtimeConfig.environment,
@@ -520,7 +551,7 @@ export async function publishListing(
     publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
-  await validateRequiredItemSpecificsForCategory({
+  validateRequiredItemSpecificsForCategory({
     listing,
   });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {

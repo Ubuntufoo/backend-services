@@ -383,6 +383,40 @@ describe('publishListing', () => {
     });
   });
 
+  it('treats an existing ebay_listing_id as idempotent success without eBay writes', async () => {
+    const dependencies = createDependencies({
+      appSettings: null,
+      listing: createListing({
+        ebay_listing_id: 'EBAY-EXISTING',
+        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+        ebay_offer_id: 'OFFER-EXISTING',
+        exported_at: '2026-05-24T14:55:00.000Z',
+        sku: 'SKU-KEEP',
+      }),
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
+    expect(dependencies.dataAccess.appSettings.get).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    expect(dependencies.listingUpdates).toEqual([]);
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-EXISTING',
+      exportedAt: '2026-05-24T14:55:00.000Z',
+      listingId: 'LIST-001',
+      offerId: 'OFFER-EXISTING',
+      reusedExistingOffer: true,
+      sku: 'SKU-KEEP',
+      status: 'exported',
+    });
+  });
+
   it('uses production publish config when production runtime active', async () => {
     const dependencies = createDependencies({
       runtimeConfig: {
@@ -1747,12 +1781,12 @@ describe('publishListing', () => {
     expect(result.offerId).toBe('OFFER-EXISTING');
   });
 
-  it('does not overwrite existing listing identifiers when publish response omits them', async () => {
+  it('does not invent a listing id when publish response omits it', async () => {
     const dependencies = createDependencies({
       listing: createListing({
-        ebay_listing_id: 'EBAY-EXISTING',
-        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
         ebay_offer_id: 'OFFER-EXISTING',
+        ebay_listing_id: null,
+        ebay_listing_url: null,
       }),
       publishOfferResult: {},
     });
@@ -1781,7 +1815,7 @@ describe('publishListing', () => {
         },
       },
     ]);
-    expect(result.ebayListingId).toBe('EBAY-EXISTING');
+    expect(result.ebayListingId).toBeNull();
   });
 
   it('raises not found errors when listing is missing', async () => {

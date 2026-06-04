@@ -1475,6 +1475,67 @@ describe('runSidecarJob', () => {
     });
   });
 
+  it('completes publish retries without duplicating trace-backed listings', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        ebay_listing_id: 'EBAY-EXISTING',
+        ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
+        ebay_offer_id: 'OFFER-EXISTING',
+        exported_at: '2026-05-20T12:59:00.000Z',
+        sku: 'SKU-KEEP',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
+      const listing = await dependencies?.dataAccess?.listings.getByListingId(listingId);
+
+      expect(listing).toMatchObject({
+        ebay_listing_id: 'EBAY-EXISTING',
+        ebay_offer_id: 'OFFER-EXISTING',
+        sku: 'SKU-KEEP',
+      });
+
+      await dependencies?.dataAccess?.listings.update(listingId, {
+        status: 'exported',
+        sub_status: 'idle',
+      });
+
+      return {
+        ebayListingId: 'EBAY-EXISTING',
+        exportedAt: '2026-05-20T12:59:00.000Z',
+        listingId,
+        offerId: 'OFFER-EXISTING',
+        reusedExistingOffer: true,
+        sku: 'SKU-KEEP',
+        status: 'exported' as const,
+      };
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(dataAccess.listings.claimApprovedForPublish).toHaveBeenCalledWith('LIST-001');
+    expect(publishListingMock).toHaveBeenCalledWith(
+      'LIST-001',
+      expect.objectContaining({
+        dataAccess,
+        now: expect.any(Function),
+      })
+    );
+    expect(result.job.status).toBe('completed');
+    expect(result.listing).toMatchObject({
+      ebay_listing_id: 'EBAY-EXISTING',
+      ebay_offer_id: 'OFFER-EXISTING',
+      status: 'exported',
+      sub_status: 'idle',
+    });
+  });
+
   it('requeues recoverable publish failures and restores listing to publish_queued', async () => {
     const dataAccess = createDataAccess({
       job: queuedPublishJob,
