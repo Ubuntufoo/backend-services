@@ -9,16 +9,6 @@ import { createLogger } from '@/utils/logger.js';
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set(['CategorySuggestion', 'ConditionSuggestion']);
 const requiredItemSpecificsLogger = createLogger('RequiredItemSpecificsValidation');
 const LOT_ITEM_SPECIFIC_DEFAULT_VALUE = 'Various';
-const LOT_MARKER_FIELDS = ['Listing Type', 'Format', 'Type'];
-const LOT_MARKER_VALUE = 'lot';
-const LOT_TEXT_PATTERNS = [
-  /\blot\b/i,
-  /\bbundle\b/i,
-  /\bassortment\b/i,
-  /\bmixed\b/i,
-  /\bmulti-card\b/i,
-  /\bmulti card\b/i,
-];
 
 export interface RequiredItemSpecificRule {
   acceptedKeys: string[];
@@ -57,14 +47,6 @@ function normalizeAspectKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function hasLotText(value: string | null | undefined): boolean {
-  if (typeof value !== 'string') {
-    return false;
-  }
-
-  return LOT_TEXT_PATTERNS.some((pattern) => pattern.test(value));
-}
-
 function hasMeaningfulAspectValue(value: Json): boolean {
   if (typeof value === 'string') {
     return value.trim().length > 0;
@@ -75,29 +57,6 @@ function hasMeaningfulAspectValue(value: Json): boolean {
   }
 
   return false;
-}
-
-function getNormalizedTextAspectValue(
-  itemSpecifics: ListingRow['item_specifics'],
-  acceptedKeys: readonly string[]
-): string | null {
-  const normalizedAcceptedKeys = new Set(acceptedKeys.map((key) => normalizeAspectKey(key)));
-
-  if (!isRecord(itemSpecifics)) {
-    return null;
-  }
-
-  for (const [key, value] of Object.entries(itemSpecifics)) {
-    if (!normalizedAcceptedKeys.has(normalizeAspectKey(key))) {
-      continue;
-    }
-
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-
-  return null;
 }
 
 export function getRequiredItemSpecificRulesForCategory(
@@ -147,26 +106,17 @@ export function hasRequiredAspectValueForKeys(
   return false;
 }
 
-export function isLikelyLotListing(listing: Pick<ListingRow, 'item_specifics' | 'listing_id' | 'seller_hints' | 'title'>): boolean {
-  if (listing.listing_id?.startsWith('Lot-')) {
-    return true;
-  }
-
-  if (hasLotText(listing.title) || hasLotText(listing.seller_hints)) {
-    return true;
-  }
-
-  const markerValue = getNormalizedTextAspectValue(listing.item_specifics, LOT_MARKER_FIELDS);
-  return markerValue?.toLowerCase() === LOT_MARKER_VALUE;
+function isLotCaptureMode(captureMode: ListingRow['capture_mode']): boolean {
+  return captureMode === 'lot_3_image';
 }
 
 export function getEffectiveItemSpecificsForCategoryValidation(
-  listing: Pick<ListingRow, 'category_id' | 'item_specifics' | 'listing_id' | 'seller_hints' | 'title'>
+  listing: Pick<ListingRow, 'capture_mode' | 'category_id' | 'item_specifics'>
 ): ListingRow['item_specifics'] {
   const categoryId = listing.category_id?.trim();
   const lotPlayerRule = categoryId ? LOT_PLAYER_RULE_BY_CATEGORY_ID[categoryId] : undefined;
 
-  if (!lotPlayerRule || !isLikelyLotListing(listing)) {
+  if (!lotPlayerRule || !isLotCaptureMode(listing.capture_mode)) {
     return listing.item_specifics;
   }
 
