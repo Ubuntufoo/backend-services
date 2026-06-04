@@ -1,4 +1,5 @@
 import { z, type ZodIssue } from 'zod';
+import { SKU_CATEGORY_CODES } from '@ebay-inventory/types';
 import { RAW_CARD_CONDITION_TOKENS } from '@/listings/trading-card-conditions.js';
 
 const listingIdSchema = z
@@ -35,6 +36,8 @@ const confidenceSchema = z.object({
   aspects: z.number().min(0).max(1).optional(),
 });
 
+const skuCategoryCodeSchema = z.enum(SKU_CATEGORY_CODES);
+
 export const generateListingDraftInputSchema = z.object({
   listingId: listingIdSchema,
   imageUrls: z
@@ -53,6 +56,7 @@ export const generatedListingDraftSchema = z.object({
   cardConditionNote: z.string().nullable().optional(),
   cardConditionToken: rawCardConditionTokenSchema.nullable().optional(),
   conditionSuggestion: z.string().nullable().optional(),
+  skuCategoryCode: skuCategoryCodeSchema.optional(),
   aspects: z.record(aspectValueSchema),
   priceSuggestion: z.number().finite().nullable().optional(),
   confidence: confidenceSchema.optional(),
