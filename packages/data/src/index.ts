@@ -141,6 +141,8 @@ export {
 } from './repositories/listings.js';
 export { createOrder, getOrderByOrderId, updateOrder } from './repositories/orders.js';
 export {
+  finalizeListingSkuForExportApproval,
+  ListingWorkflowTransitionConflictError,
   ListingWorkflowStateError,
   assertValidListingWorkflowStateInput,
   updateListingWorkflowState,

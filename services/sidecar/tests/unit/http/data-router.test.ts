@@ -6,6 +6,7 @@ import type {
   ListingUpdate,
   ListingWorkflowTransitionInput,
 } from '@ebay-inventory/data';
+import { ListingWorkflowTransitionConflictError } from '@ebay-inventory/data';
 import { createDataApiRouter } from '@/http/data-router.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 
@@ -585,6 +586,45 @@ describe('data API router', () => {
       subStatus: 'publish_queued',
     });
     expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-001');
+  });
+
+  it('rejects workflow-state requests with extra fields such as FE-provided sku text', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001/workflow-state').send({
+      status: 'approved_for_export',
+      subStatus: 'publish_queued',
+      sku: 'ARBITRARY-FE-SKU',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('invalid_request');
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
+  });
+
+  it('returns listing_state_stale when approval no longer targets needs_review', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.updateWorkflowState = vi.fn(async () => {
+      throw new ListingWorkflowTransitionConflictError(
+        'Listing "LIST-001" must be in needs_review before approval for export. Current status: "exported".'
+      );
+    });
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001/workflow-state').send({
+      status: 'approved_for_export',
+      subStatus: 'publish_queued',
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: 'listing_state_stale',
+      message:
+        'Listing "LIST-001" must be in needs_review before approval for export. Current status: "exported".',
+    });
+    expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
   });
 
   it('enqueues generate_ai from assets_ready and persists optional seller hints', async () => {
