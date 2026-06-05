@@ -488,6 +488,52 @@ describe('data API router', () => {
     });
   });
 
+  it('passes manual skuCategoryCode review overrides through itemSpecifics without dropping sibling keys', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
+      itemSpecifics: {
+        Brand: 'Topps',
+        Manufacturer: 'Topps',
+        skuCategoryCode: 'BSKBL',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Brand: 'Topps',
+        Manufacturer: 'Topps',
+        skuCategoryCode: 'BSKBL',
+      },
+    });
+  });
+
+  it('rejects review patch attempts that try to authoritatively set a full sku', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
+      itemSpecifics: {
+        skuCategoryCode: 'BSKBL',
+      },
+      sku: 'BSKBL-Single-000001',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      details: [
+        {
+          message: "Unrecognized key(s) in object: 'sku'",
+          path: '',
+        },
+      ],
+      error: 'invalid_request',
+    });
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
   it('returns immediately when listing params are invalid before body validation', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
