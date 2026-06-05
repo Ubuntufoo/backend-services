@@ -117,6 +117,13 @@ function createDataAccess(): SidecarDataAccess {
       incrementOrderSyncCount: vi.fn(),
     },
     listings: {
+      approveForExport: vi.fn(async (listingId: string) => ({
+        ...listingRow,
+        listing_id: listingId,
+        sku: `OTHER-${listingId}`,
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      })),
       claimApprovedForPublish: vi.fn(async () => null),
       create: vi.fn(async (input: ListingInsert) => ({
         ...listingRow,
@@ -580,11 +587,8 @@ describe('data API router', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledWith({
-      listingId: 'LIST-001',
-      status: 'approved_for_export',
-      subStatus: 'publish_queued',
-    });
+    expect(dataAccess.listings.approveForExport).toHaveBeenCalledWith('LIST-001');
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-001');
   });
 
@@ -601,12 +605,13 @@ describe('data API router', () => {
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('invalid_request');
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    expect(dataAccess.listings.approveForExport).not.toHaveBeenCalled();
     expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
   });
 
   it('returns listing_state_stale when approval no longer targets needs_review', async () => {
     const dataAccess = createDataAccess();
-    dataAccess.listings.updateWorkflowState = vi.fn(async () => {
+    dataAccess.listings.approveForExport = vi.fn(async () => {
       throw new ListingWorkflowTransitionConflictError(
         'Listing "LIST-001" must be in needs_review before approval for export. Current status: "exported".'
       );
@@ -624,6 +629,7 @@ describe('data API router', () => {
       message:
         'Listing "LIST-001" must be in needs_review before approval for export. Current status: "exported".',
     });
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
   });
 

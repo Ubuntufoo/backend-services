@@ -117,6 +117,7 @@ export {
   type ListDueQueuedJobsOptions,
 } from './repositories/jobs.js';
 export {
+  approveListingForExport,
   claimApprovedListingForPublish,
   createListing,
   getListingByOfferId,
@@ -139,10 +140,12 @@ export {
   type ListingImageMetadataUpdate,
   type PublishedListingUpdate,
 } from './repositories/listings.js';
-export { createOrder, getOrderByOrderId, updateOrder } from './repositories/orders.js';
 export {
   finalizeListingSkuForExportApproval,
   ListingWorkflowTransitionConflictError,
+} from './listing-approval.js';
+export { createOrder, getOrderByOrderId, updateOrder } from './repositories/orders.js';
+export {
   ListingWorkflowStateError,
   assertValidListingWorkflowStateInput,
   updateListingWorkflowState,

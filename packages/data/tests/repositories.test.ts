@@ -9,6 +9,7 @@ import type {
   SupabaseDataClient,
 } from '../src/index.js';
 import {
+  approveListingForExport,
   createAiModelAttempt,
   getLatestGeminiUsageAttempt,
   claimApprovedListingForPublish,
@@ -664,6 +665,64 @@ function createUpdateClient<TTable extends string, TRow>(
                     error: null,
                   })),
                 })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createApprovalForExportClient(
+  listing: ListingRow,
+  updatedListing: ListingRow | null,
+  onUpdate: (payload: unknown) => void
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listings');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('listing_id');
+              expect(value).toBe(listing.listing_id);
+
+              return {
+                maybeSingle: vi.fn(async () => ({
+                  data: listing,
+                  error: null,
+                })),
+              };
+            }),
+          };
+        }),
+        update: vi.fn((payload: unknown) => {
+          onUpdate(payload);
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('listing_id');
+              expect(value).toBe(listing.listing_id);
+
+              return {
+                eq: vi.fn((statusColumn: string, statusValue: string) => {
+                  expect(statusColumn).toBe('status');
+                  expect(statusValue).toBe('needs_review');
+
+                  return {
+                    select: vi.fn(() => ({
+                      maybeSingle: vi.fn(async () => ({
+                        data: updatedListing,
+                        error: null,
+                      })),
+                    })),
+                  };
+                }),
               };
             }),
           };
@@ -1672,6 +1731,122 @@ describe('shared repositories', () => {
 
     await expect(updateListing(updateClient, 'Single-000001', { listing_id: 'Single-000002' })).rejects.toThrow(
       'Listing ID is immutable and cannot be changed.'
+    );
+  });
+
+  it.each([
+    ['BSKBL single', 'Single-000001', 'BSKBL', 'BSKBL-Single-000001'],
+    ['BSBL lot', 'Lot-000002', 'BSBL', 'BSBL-Lot-000002'],
+    ['OTHER explicit', 'Single-000003', 'OTHER', 'OTHER-Single-000003'],
+    ['missing category', 'Single-000004', undefined, 'OTHER-Single-000004'],
+    ['invalid category Basketball', 'Single-000005', 'Basketball', 'OTHER-Single-000005'],
+    ['invalid category TCG', 'Single-000006', 'TCG', 'OTHER-Single-000006'],
+    [
+      'invalid full sku category',
+      'Single-000007',
+      'BSKBL-Single-000001',
+      'OTHER-Single-000007',
+    ],
+    ['normalized lowercase category', 'Single-000008', ' bskbl ', 'BSKBL-Single-000008'],
+  ])('finalizes SKU on export approval for %s', async (_label, listingId, skuCategoryCode, expectedSku) => {
+    const approvalListing: ListingRow = {
+      ...listingRow,
+      ebay_listing_id: 'EBAY-LISTING',
+      ebay_offer_id: 'EBAY-OFFER',
+      item_specifics:
+        skuCategoryCode === undefined
+          ? {}
+          : {
+              skuCategoryCode,
+            },
+      listing_id: listingId,
+      sku: listingId,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    };
+    const updatedListing: ListingRow = {
+      ...approvalListing,
+      sku: expectedSku,
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    };
+    const client = createApprovalForExportClient(approvalListing, updatedListing, (payload) => {
+      expect(payload).toEqual({
+        sku: expectedSku,
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      });
+    });
+
+    await expect(approveListingForExport(client, listingId)).resolves.toEqual(updatedListing);
+  });
+
+  it('overwrites mismatched structured sku on needs_review approval', async () => {
+    const approvalListing: ListingRow = {
+      ...listingRow,
+      item_specifics: {
+        skuCategoryCode: 'BSBL',
+      },
+      listing_id: 'Single-000009',
+      sku: 'BSKBL-Single-000009',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    };
+    const updatedListing: ListingRow = {
+      ...approvalListing,
+      sku: 'BSBL-Single-000009',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    };
+    const client = createApprovalForExportClient(approvalListing, updatedListing, (payload) => {
+      expect(payload).toEqual({
+        sku: 'BSBL-Single-000009',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      });
+    });
+
+    await expect(approveListingForExport(client, approvalListing.listing_id)).resolves.toEqual(
+      updatedListing
+    );
+  });
+
+  it.each(['exported', 'listed', 'sold'] as const)(
+    'does not mutate %s listings during export approval',
+    async (status) => {
+      const approvalListing: ListingRow = {
+        ...listingRow,
+        ebay_listing_id: 'EBAY-LISTING',
+        ebay_offer_id: 'EBAY-OFFER',
+        listing_id: 'Single-000010',
+        sku: 'BSKBL-Single-000010',
+        status,
+      };
+      const client = createApprovalForExportClient(approvalListing, null, () => {
+        throw new Error('approval update should not run');
+      });
+
+      await expect(approveListingForExport(client, approvalListing.listing_id)).rejects.toThrow(
+        `Listing "${approvalListing.listing_id}" must be in needs_review before approval for export. Current status: "${status}".`
+      );
+    }
+  );
+
+  it('preserves stale-status protection when approval update loses race', async () => {
+    const approvalListing: ListingRow = {
+      ...listingRow,
+      item_specifics: {
+        skuCategoryCode: 'BSKBL',
+      },
+      listing_id: 'Single-000011',
+      sku: 'Single-000011',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    };
+    const client = createApprovalForExportClient(approvalListing, null, () => {});
+
+    await expect(approveListingForExport(client, approvalListing.listing_id)).rejects.toThrow(
+      'changed before approval for export could be saved'
     );
   });
 

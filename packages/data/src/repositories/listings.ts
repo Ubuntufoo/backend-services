@@ -3,6 +3,10 @@ import type { Json } from '../database.js';
 import type { SupabaseDataClient } from '../client.js';
 import { parseBaseSku, parseStructuredSku } from '@ebay-inventory/types';
 import {
+  finalizeListingSkuForExportApproval,
+  ListingWorkflowTransitionConflictError,
+} from '../listing-approval.js';
+import {
   type MultiResult,
   requireOptionalResult,
   requireSingleResult,
@@ -69,6 +73,41 @@ export interface PublishedListingUpdate {
   ebayOfferId?: ListingUpdate['ebay_offer_id'];
   exportedAt?: ListingUpdate['exported_at'];
   listingId: string;
+}
+
+export async function approveListingForExport(
+  client: SupabaseDataClient,
+  listingId: string
+): Promise<ListingRow> {
+  const listing = await getListingByListingId(client, listingId);
+
+  if (!listing) {
+    throw new Error(`Listing "${listingId}" was not found.`);
+  }
+
+  if (listing.status !== 'needs_review') {
+    throw new ListingWorkflowTransitionConflictError(
+      `Listing "${listingId}" must be in needs_review before approval for export. Current status: "${listing.status}".`
+    );
+  }
+
+  const result = (await client
+    .from('listings')
+    .update({
+      sku: finalizeListingSkuForExportApproval(listing),
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    })
+    .eq('listing_id', listingId)
+    .eq('status', 'needs_review')
+    .select()
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  return requireOptionalResult(result) ?? (() => {
+    throw new ListingWorkflowTransitionConflictError(
+      `Listing "${listingId}" changed before approval for export could be saved. Refresh and retry.`
+    );
+  })();
 }
 
 interface ErrorWithCode {

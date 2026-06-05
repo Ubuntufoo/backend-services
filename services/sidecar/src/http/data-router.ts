@@ -367,11 +367,14 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
-      const listing = await getDataAccess().listings.updateWorkflowState({
-        listingId: params.listingId,
-        status: body.status,
-        subStatus: body.subStatus,
-      });
+      const listing =
+        body.status === 'approved_for_export' && body.subStatus === 'publish_queued'
+          ? await getDataAccess().listings.approveForExport(params.listingId)
+          : await getDataAccess().listings.updateWorkflowState({
+              listingId: params.listingId,
+              status: body.status,
+              subStatus: body.subStatus,
+            });
 
       if (listing.status === 'approved_for_export' && listing.sub_status === 'publish_queued') {
         await getDataAccess().jobs.enqueuePublish(params.listingId);
