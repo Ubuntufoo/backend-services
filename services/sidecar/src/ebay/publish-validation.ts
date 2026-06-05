@@ -1,4 +1,5 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
+import { parseStructuredSku } from '@ebay-inventory/types';
 import type { EbayApiError } from '@/types/ebay.js';
 import type { EbayEnvironment } from '@/ebay/config.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
@@ -237,6 +238,19 @@ function hasPositiveNumber(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function isStructuredPublishSku(value: string | null | undefined): boolean {
+  if (!hasText(value)) {
+    return false;
+  }
+
+  try {
+    parseStructuredSku(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validatePublishReady({
   listing,
   publishConfig,
@@ -277,6 +291,14 @@ export function validatePublishReady({
   if (!hasText(listing.sku)) {
     fields.push(
       createFieldIssue('sku', 'listing', 'SKU or custom label is required before publishing.')
+    );
+  } else if (!isStructuredPublishSku(listing.sku)) {
+    fields.push(
+      createFieldIssue(
+        'sku',
+        'listing',
+        'SKU must be a finalized structured SKU like BSKBL-Single-000001 before publishing.'
+      )
     );
   }
 
@@ -381,6 +403,24 @@ export function assertPublishReady(input: ValidatePublishReadyInput): void {
 
   if (!result.ok) {
     throw new PublishRequiredFieldValidationError(input.listing.listing_id, result.fields);
+  }
+}
+
+export function assertStructuredPublishSkuReady(listing: Pick<ListingRow, 'listing_id' | 'sku'>): void {
+  if (!hasText(listing.sku)) {
+    throw new PublishRequiredFieldValidationError(listing.listing_id, [
+      createFieldIssue('sku', 'listing', 'SKU or custom label is required before publishing.'),
+    ]);
+  }
+
+  if (!isStructuredPublishSku(listing.sku)) {
+    throw new PublishRequiredFieldValidationError(listing.listing_id, [
+      createFieldIssue(
+        'sku',
+        'listing',
+        'SKU must be a finalized structured SKU like BSKBL-Single-000001 before publishing.'
+      ),
+    ]);
   }
 }
 

@@ -35,6 +35,7 @@ import {
 } from '@/ebay/published-listing-state.js';
 import {
   assertPublishReady,
+  assertStructuredPublishSkuReady,
   PublishListingError,
   PublishListingValidationError,
   validatePublishListingReadiness,
@@ -558,6 +559,8 @@ export async function publishListing(
   });
 
   if (hasPublishedListingTrace(listing)) {
+    assertStructuredPublishSkuReady(listing);
+
     if (!publishConfigResult.config) {
       throw new PublishListingValidationError(listing.listing_id, publishConfigResult.issues);
     }
