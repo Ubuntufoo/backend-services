@@ -106,6 +106,7 @@ describe('structured SKU helpers', () => {
     expect(normalizeSkuCategoryCode('')).toBeNull();
     expect(normalizeSkuCategoryCode('mlb')).toBeNull();
     expect(normalizeSkuCategoryCode('basketball')).toBeNull();
+    expect(normalizeSkuCategoryCode('BSKBL-Single-000001')).toBeNull();
     expect(normalizeSkuCategoryCode(null)).toBeNull();
   });
 });

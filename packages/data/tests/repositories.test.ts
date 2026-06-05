@@ -1811,6 +1811,48 @@ describe('shared repositories', () => {
     );
   });
 
+  it('respects manual skuCategoryCode override while preserving sibling item_specifics on approval', async () => {
+    const approvalListing: ListingRow = {
+      ...listingRow,
+      ebay_listing_id: 'EBAY-LISTING-004',
+      ebay_offer_id: 'EBAY-OFFER-004',
+      item_specifics: {
+        Brand: 'Topps',
+        Player: 'Michael Jordan',
+        skuCategoryCode: 'BSKBL',
+      },
+      listing_id: 'Single-000004',
+      sku: 'OTHER-Single-000004',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    };
+    const updatedListing: ListingRow = {
+      ...approvalListing,
+      sku: 'BSKBL-Single-000004',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    };
+    const client = createApprovalForExportClient(approvalListing, updatedListing, (payload) => {
+      expect(payload).toEqual({
+        sku: 'BSKBL-Single-000004',
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      });
+    });
+
+    const result = await approveListingForExport(client, approvalListing.listing_id);
+
+    expect(result.item_specifics).toEqual({
+      Brand: 'Topps',
+      Player: 'Michael Jordan',
+      skuCategoryCode: 'BSKBL',
+    });
+    expect(result.listing_id).toBe('Single-000004');
+    expect(result.ebay_offer_id).toBe('EBAY-OFFER-004');
+    expect(result.ebay_listing_id).toBe('EBAY-LISTING-004');
+    expect(result.sku).toBe('BSKBL-Single-000004');
+  });
+
   it.each(['exported', 'listed', 'sold'] as const)(
     'does not mutate %s listings during export approval',
     async (status) => {

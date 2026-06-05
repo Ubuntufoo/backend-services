@@ -1799,6 +1799,61 @@ describe('publishListing', () => {
     });
   });
 
+  it('recovers duplicate offers by querying eBay with stored structured sku only', async () => {
+    const dependencies = createDependencies({
+      getOffersResult: {
+        offers: [
+          {
+            format: 'FIXED_PRICE',
+            listing: {
+              listingId: 'EBAY-RECOVERED-STRUCTURED',
+            },
+            offerId: 'OFFER-RECOVERED-STRUCTURED',
+            status: 'UNPUBLISHED',
+          },
+        ],
+      },
+      listing: createListing({
+        listing_id: 'Single-000005',
+        item_specifics: {
+          Brand: 'Acme',
+          skuCategoryCode: 'OTHER',
+        },
+        sku: 'BSKBL-Single-000005',
+      }),
+    });
+    dependencies.inventoryApi.createOffer = vi.fn(async () => {
+      throw createOfferAlreadyExistsError({ offerId: 'OFFER-RECOVERED-STRUCTURED' });
+    });
+
+    const result = await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledWith(
+      'BSKBL-Single-000005',
+      'EBAY_US',
+      25
+    );
+    expect(dependencies.inventoryApi.getOffers).not.toHaveBeenCalledWith(
+      'OTHER-Single-000005',
+      'EBAY_US',
+      25
+    );
+    expect(dependencies.inventoryApi.getOffers).not.toHaveBeenCalledWith(
+      'Single-000005',
+      'EBAY_US',
+      25
+    );
+    expect(result).toEqual({
+      ebayListingId: 'EBAY-001',
+      exportedAt: '2026-05-24T15:30:00.000Z',
+      listingId: 'LIST-001',
+      offerId: 'OFFER-RECOVERED-STRUCTURED',
+      reusedExistingOffer: true,
+      sku: 'BSKBL-Single-000005',
+      status: 'exported',
+    });
+  });
+
   it('skips duplicate live listing creation when the recovered offer is already published', async () => {
     const dependencies = createDependencies({
       getOffersResult: {
