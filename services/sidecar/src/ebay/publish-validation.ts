@@ -1,4 +1,5 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
+import { parseStructuredSku } from '@ebay-inventory/types';
 import type { EbayApiError } from '@/types/ebay.js';
 import type { EbayEnvironment } from '@/ebay/config.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
@@ -237,6 +238,19 @@ function hasPositiveNumber(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function isStructuredPublishSku(value: string | null | undefined): boolean {
+  if (!hasText(value)) {
+    return false;
+  }
+
+  try {
+    parseStructuredSku(value.trim());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validatePublishReady({
   listing,
   publishConfig,
@@ -277,6 +291,14 @@ export function validatePublishReady({
   if (!hasText(listing.sku)) {
     fields.push(
       createFieldIssue('sku', 'listing', 'SKU or custom label is required before publishing.')
+    );
+  } else if (!isStructuredPublishSku(listing.sku)) {
+    fields.push(
+      createFieldIssue(
+        'sku',
+        'listing',
+        'SKU must be a finalized structured SKU like BSKBL-Single-000001 before publishing.'
+      )
     );
   }
 
@@ -403,6 +425,14 @@ export function validatePublishListingReadiness(
 
   if (!hasText(listing.listing_id)) {
     issues.push('Listing is missing listing_id required for publish SKU.');
+  }
+
+  if (!hasText(listing.sku)) {
+    issues.push(`Listing "${listingLabel}" is missing SKU required for publish.`);
+  } else if (!isStructuredPublishSku(listing.sku)) {
+    issues.push(
+      `Listing "${listingLabel}" must use a finalized structured SKU like BSKBL-Single-000001 before publish.`
+    );
   }
 
   if (!hasText(listing.title)) {

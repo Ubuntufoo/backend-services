@@ -1,4 +1,5 @@
 import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
+import { parseStructuredSku } from '@ebay-inventory/types';
 import { Condition } from '@/types/ebay-enums.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 import { getEffectiveItemSpecificsForCategoryValidation } from '@/ebay/required-item-specifics-validation.js';
@@ -109,10 +110,14 @@ function buildPackageWeightAndSize(
   };
 }
 
-export function buildPublishSku(listing: Pick<ListingRow, 'listing_id' | 'sku'>): string {
+export function buildPublishSku(listing: Pick<ListingRow, 'sku'>): string {
   const sku = listing.sku?.trim();
 
-  return sku && sku.length > 0 ? sku : listing.listing_id;
+  if (!sku) {
+    throw new Error('Listing SKU must be present before publish.');
+  }
+
+  return parseStructuredSku(sku).structuredSku;
 }
 
 export function getMarketplaceCurrency(marketplaceId: string): string {

@@ -7,6 +7,9 @@ import { PublishListingValidationError } from '@/ebay/publish-validation.js';
 import type { PublishListingError } from '@/ebay/publish-validation.js';
 import type { EbayConfig } from '@/types/ebay.js';
 
+const STRUCTURED_SINGLE_SKU = 'BSKBL-Single-000001';
+const STRUCTURED_LOT_SKU = 'BSBL-Lot-000002';
+
 function createTradingCardConditionPoliciesResponse(
   values: { id: string; name: string }[],
   options: { categoryId?: string; includeCardConditionDescriptor?: boolean } = {}
@@ -77,7 +80,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
     r2_retention_policy: null,
     seller_hints: null,
     shipping_profile: null,
-    sku: 'LIST-001',
+    sku: STRUCTURED_SINGLE_SKU,
     sold_at: null,
     status: 'approved_for_export',
     sub_status: 'publish_queued',
@@ -407,7 +410,7 @@ describe('publishListing', () => {
     expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
     expect(dependencies.inventoryApi.getInventoryLocation).toHaveBeenCalledWith('warehouse-1');
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
           title: 'Vintage puzzle',
@@ -417,7 +420,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
       expect.objectContaining({
         merchantLocationKey: 'warehouse-1',
-        sku: 'LIST-001',
+        sku: STRUCTURED_SINGLE_SKU,
       })
     );
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-001');
@@ -433,14 +436,14 @@ describe('publishListing', () => {
       {
         listingId: 'LIST-001',
         changes: {
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
         listingId: 'LIST-001',
         changes: {
           ebay_offer_id: 'OFFER-001',
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
@@ -454,7 +457,7 @@ describe('publishListing', () => {
           last_error_code: null,
           last_error_context: {},
           last_error_message: null,
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
           status: 'exported',
           sub_status: 'idle',
         },
@@ -466,9 +469,39 @@ describe('publishListing', () => {
       listingId: 'LIST-001',
       offerId: 'OFFER-001',
       reusedExistingOffer: false,
-      sku: 'LIST-001',
+      sku: STRUCTURED_SINGLE_SKU,
       status: 'exported',
     });
+  });
+
+  it('uses stored structured sku for eBay writes and ignores listing_id plus skuCategoryCode hints', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        listing_id: 'Single-000099',
+        item_specifics: {
+          Brand: 'Acme',
+          skuCategoryCode: 'OTHER',
+        },
+        sku: STRUCTURED_SINGLE_SKU,
+      }),
+    });
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.anything()
+    );
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sku: STRUCTURED_SINGLE_SKU,
+      })
+    );
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        sku: 'Single-000099',
+      })
+    );
   });
 
   it('treats an existing ebay_listing_id as idempotent success without eBay writes', async () => {
@@ -478,7 +511,7 @@ describe('publishListing', () => {
         ebay_listing_url: 'https://www.ebay.com/itm/EBAY-EXISTING',
         ebay_offer_id: null,
         exported_at: '2026-05-24T14:55:00.000Z',
-        sku: 'SKU-KEEP',
+        sku: 'OTHER-Single-000003',
       }),
     });
 
@@ -503,7 +536,7 @@ describe('publishListing', () => {
           last_error_code: null,
           last_error_context: {},
           last_error_message: null,
-          sku: 'SKU-KEEP',
+          sku: 'OTHER-Single-000003',
           status: 'exported',
           sub_status: 'idle',
         },
@@ -516,7 +549,7 @@ describe('publishListing', () => {
       listingId: 'LIST-001',
       offerId: null,
       reusedExistingOffer: true,
-      sku: 'SKU-KEEP',
+      sku: 'OTHER-Single-000003',
       status: 'exported',
     });
   });
@@ -668,7 +701,7 @@ describe('publishListing', () => {
       'categoryIds:{261328}'
     );
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         condition: 'USED_VERY_GOOD',
         conditionDescription: 'Visible corner wear.',
@@ -709,7 +742,7 @@ describe('publishListing', () => {
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         conditionDescriptors: [
           {
@@ -750,7 +783,7 @@ describe('publishListing', () => {
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         conditionDescriptors: [
           {
@@ -775,7 +808,7 @@ describe('publishListing', () => {
         listing_id: 'Single-000004',
         category_id: '183050',
         condition_id: '4000',
-        sku: 'Single-000004',
+        sku: 'BSKBL-Single-000004',
         item_specifics: {
           'Card Condition': 'EX-MT',
           Franchise: 'Utah Jazz',
@@ -799,7 +832,7 @@ describe('publishListing', () => {
     await publishListing('Single-000004', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'Single-000004',
+      'BSKBL-Single-000004',
       expect.objectContaining({
         conditionDescriptors: [
           {
@@ -831,7 +864,7 @@ describe('publishListing', () => {
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         conditionDescriptors: undefined,
         product: expect.objectContaining({
@@ -909,7 +942,7 @@ describe('publishListing', () => {
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
           aspects: {
@@ -929,6 +962,7 @@ describe('publishListing', () => {
         listing_id: 'Lot-0001',
         category_id: '183050',
         condition_id: '4000',
+        sku: STRUCTURED_LOT_SKU,
         title: '1990s NBA mixed stars 10-card lot',
         item_specifics: {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
@@ -946,7 +980,7 @@ describe('publishListing', () => {
     await publishListing('Lot-0001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_LOT_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
           aspects: {
@@ -967,6 +1001,7 @@ describe('publishListing', () => {
         listing_id: 'Lot-0001',
         category_id: '183050',
         condition_id: '4000',
+        sku: STRUCTURED_LOT_SKU,
         title: '1990s NBA mixed stars 10-card lot',
         seller_hints: 'Family bundle from one binder page.',
         item_specifics: {
@@ -1122,7 +1157,7 @@ describe('publishListing', () => {
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
           aspects: {
@@ -1141,6 +1176,7 @@ describe('publishListing', () => {
         listing_id: 'Lot-0001',
         category_id: '183050',
         condition_id: '4000',
+        sku: STRUCTURED_LOT_SKU,
         title: 'Boston Celtics 8-card lot',
         item_specifics: {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
@@ -1159,7 +1195,7 @@ describe('publishListing', () => {
     await publishListing('Lot-0001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      'LIST-001',
+      STRUCTURED_LOT_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
           aspects: {
@@ -1533,6 +1569,35 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
   });
 
+  it.each(['Single-000001', 'NOPE', 'BSKBL-Single-000000'])(
+    'rejects non-finalized publish sku before eBay calls: %s',
+    async (sku) => {
+      const dependencies = createDependencies({
+        listing: createListing({
+          sku,
+        }),
+      });
+
+      await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+        context: {
+          fields: [
+            {
+              field: 'sku',
+              message:
+                'SKU must be a finalized structured SKU like BSKBL-Single-000001 before publishing.',
+              scope: 'listing',
+            },
+          ],
+          listingId: 'LIST-001',
+          validationCode: 'PUBLISH_REQUIRED_FIELD_MISSING',
+        },
+      });
+      expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects listings outside approved_for_export status', async () => {
     const dependencies = createDependencies({
       listing: createListing({
@@ -1661,7 +1726,7 @@ describe('publishListing', () => {
       {
         listingId: 'LIST-001',
         changes: {
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
     ]);
@@ -1690,20 +1755,20 @@ describe('publishListing', () => {
     const result = await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
-    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledWith('LIST-001', 'EBAY_US', 25);
+    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledWith(STRUCTURED_SINGLE_SKU, 'EBAY_US', 25);
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-RECOVERED');
     expect(dependencies.listingUpdates).toEqual([
       {
         listingId: 'LIST-001',
         changes: {
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
         listingId: 'LIST-001',
         changes: {
           ebay_offer_id: 'OFFER-RECOVERED',
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
@@ -1717,7 +1782,7 @@ describe('publishListing', () => {
           last_error_code: null,
           last_error_context: {},
           last_error_message: null,
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
           status: 'exported',
           sub_status: 'idle',
         },
@@ -1729,7 +1794,7 @@ describe('publishListing', () => {
       listingId: 'LIST-001',
       offerId: 'OFFER-RECOVERED',
       reusedExistingOffer: true,
-      sku: 'LIST-001',
+      sku: STRUCTURED_SINGLE_SKU,
       status: 'exported',
     });
   });
@@ -1764,7 +1829,7 @@ describe('publishListing', () => {
       listingId: 'LIST-001',
       offerId: 'OFFER-PUBLISHED',
       reusedExistingOffer: true,
-      sku: 'LIST-001',
+      sku: STRUCTURED_SINGLE_SKU,
       status: 'exported',
     });
   });
@@ -1786,7 +1851,7 @@ describe('publishListing', () => {
         stage: 'offer',
       },
       message:
-        'eBay reported an existing offer for SKU "LIST-001" but no offerId could be resolved.',
+        `eBay reported an existing offer for SKU "${STRUCTURED_SINGLE_SKU}" but no offerId could be resolved.`,
     } satisfies Partial<PublishListingError>);
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
     expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledTimes(1);
@@ -1810,14 +1875,14 @@ describe('publishListing', () => {
       {
         listingId: 'LIST-001',
         changes: {
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
         listingId: 'LIST-001',
         changes: {
           ebay_offer_id: 'OFFER-001',
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
     ]);
@@ -1906,14 +1971,14 @@ describe('publishListing', () => {
       {
         listingId: 'LIST-001',
         changes: {
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
         listingId: 'LIST-001',
         changes: {
           ebay_offer_id: 'OFFER-001',
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
@@ -1927,7 +1992,7 @@ describe('publishListing', () => {
           last_error_code: null,
           last_error_context: {},
           last_error_message: null,
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
           status: 'exported',
           sub_status: 'idle',
         },
@@ -1939,7 +2004,7 @@ describe('publishListing', () => {
     const dependencies = createDependencies({
       listing: createListing({
         ebay_offer_id: 'OFFER-EXISTING',
-        sku: 'SKU-001',
+        sku: STRUCTURED_SINGLE_SKU,
       }),
     });
 
@@ -1957,7 +2022,7 @@ describe('publishListing', () => {
         ebay_listing_id: null,
         ebay_listing_url: null,
         ebay_offer_id: 'OFFER-EXISTING',
-        sku: 'SKU-001',
+        sku: STRUCTURED_SINGLE_SKU,
       }),
       publishOfferResult: {
         listingId: 'EBAY-REUSED',
@@ -1979,7 +2044,7 @@ describe('publishListing', () => {
         last_error_code: null,
         last_error_context: {},
         last_error_message: null,
-        sku: 'SKU-001',
+        sku: STRUCTURED_SINGLE_SKU,
         status: 'exported',
         sub_status: 'idle',
       },
@@ -1990,7 +2055,7 @@ describe('publishListing', () => {
       listingId: 'LIST-001',
       offerId: 'OFFER-EXISTING',
       reusedExistingOffer: true,
-      sku: 'SKU-001',
+      sku: STRUCTURED_SINGLE_SKU,
       status: 'exported',
     });
   });
@@ -2011,7 +2076,7 @@ describe('publishListing', () => {
       {
         listingId: 'LIST-001',
         changes: {
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
         },
       },
       {
@@ -2023,7 +2088,7 @@ describe('publishListing', () => {
           last_error_code: null,
           last_error_context: {},
           last_error_message: null,
-          sku: 'LIST-001',
+          sku: STRUCTURED_SINGLE_SKU,
           status: 'exported',
           sub_status: 'idle',
         },

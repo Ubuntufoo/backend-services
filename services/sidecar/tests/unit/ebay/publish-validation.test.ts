@@ -10,6 +10,8 @@ import {
 } from '@/ebay/publish-validation.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 
+const STRUCTURED_SKU = 'BSKBL-Single-000001';
+
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
@@ -46,7 +48,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
     r2_retention_policy: null,
     seller_hints: null,
     shipping_profile: null,
-    sku: null,
+    sku: STRUCTURED_SKU,
     sold_at: null,
     status: 'approved_for_export',
     sub_status: 'publish_queued',
@@ -114,7 +116,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -126,7 +128,7 @@ describe('validatePublishReady', () => {
     expect(() =>
       assertPublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
           title: '   ',
         }),
         publishConfig: createPublishConfig(),
@@ -139,7 +141,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
           title: null,
         }),
         publishConfig: createPublishConfig(),
@@ -157,7 +159,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
           title: '   ',
         }),
         publishConfig: createPublishConfig(),
@@ -174,7 +176,7 @@ describe('validatePublishReady', () => {
       validatePublishReady({
         listing: createListing({
           description: '  ',
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -194,7 +196,7 @@ describe('validatePublishReady', () => {
       validatePublishReady({
         listing: createListing({
           price,
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -210,7 +212,7 @@ describe('validatePublishReady', () => {
       validatePublishReady({
         listing: createListing({
           category_id: '  ',
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -226,7 +228,7 @@ describe('validatePublishReady', () => {
       validatePublishReady({
         listing: createListing({
           condition_id: null,
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -242,7 +244,7 @@ describe('validatePublishReady', () => {
       validatePublishReady({
         listing: createListing({
           image_urls: [],
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -263,7 +265,7 @@ describe('validatePublishReady', () => {
       validatePublishReady({
         listing: createListing({
           image_urls: ['ftp://cdn.example.com/front.jpg'],
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity: 1,
@@ -294,6 +296,31 @@ describe('validatePublishReady', () => {
     });
   });
 
+  it.each(['Single-000001', 'NOT-A-SKU', 'BSKBL-Single-000000'])(
+    'reports non-finalized structured SKU: %s',
+    (sku) => {
+      expect(
+        validatePublishReady({
+          listing: createListing({
+            sku,
+          }),
+          publishConfig: createPublishConfig(),
+          quantity: 1,
+        })
+      ).toMatchObject({
+        fields: [
+          {
+            field: 'sku',
+            message:
+              'SKU must be a finalized structured SKU like BSKBL-Single-000001 before publishing.',
+            scope: 'listing',
+          },
+        ],
+        ok: false,
+      });
+    }
+  );
+
   it.each([
     { label: 'missing', quantity: null },
     { label: 'zero', quantity: 0 },
@@ -302,7 +329,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig(),
         quantity,
@@ -317,7 +344,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig({
           marketplaceId: '   ',
@@ -334,7 +361,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig({
           paymentPolicyId: '',
@@ -353,7 +380,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig({
           fulfillmentPolicyId: ' ',
@@ -375,7 +402,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig({
           returnPolicyId: null as unknown as string,
@@ -392,7 +419,7 @@ describe('validatePublishReady', () => {
     expect(
       validatePublishReady({
         listing: createListing({
-          sku: 'SKU-001',
+          sku: STRUCTURED_SKU,
         }),
         publishConfig: createPublishConfig({
           merchantLocationKey: '  ',

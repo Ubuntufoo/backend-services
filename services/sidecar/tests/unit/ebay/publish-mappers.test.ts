@@ -8,6 +8,8 @@ import {
   mapListingToOfferPayload,
 } from '@/ebay/publish-mappers.js';
 
+const STRUCTURED_SKU = 'BSKBL-Single-000001';
+
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
@@ -48,7 +50,7 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
     r2_retention_policy: null,
     seller_hints: null,
     shipping_profile: null,
-    sku: null,
+    sku: STRUCTURED_SKU,
     sold_at: null,
     status: 'approved_for_export',
     sub_status: 'publish_queued',
@@ -97,10 +99,15 @@ function createResolvedPublishConfig(
 }
 
 describe('publish mappers', () => {
-  it('builds a stable publish sku from stored sku or listing id', () => {
-    expect(buildPublishSku(createListing({ sku: 'SKU-001' }))).toBe('SKU-001');
-    expect(buildPublishSku(createListing({ sku: '   ' }))).toBe('LIST-001');
-    expect(buildPublishSku(createListing({ sku: null }))).toBe('LIST-001');
+  it('builds a stable publish sku from stored structured sku only', () => {
+    expect(buildPublishSku(createListing({ sku: STRUCTURED_SKU }))).toBe(STRUCTURED_SKU);
+    expect(buildPublishSku(createListing({ sku: ` ${STRUCTURED_SKU} ` }))).toBe(STRUCTURED_SKU);
+    expect(() => buildPublishSku(createListing({ sku: 'Single-000001' }))).toThrow(
+      'Invalid structured SKU "Single-000001".'
+    );
+    expect(() => buildPublishSku(createListing({ sku: '   ' }))).toThrow(
+      'Listing SKU must be present before publish.'
+    );
   });
 
   it('maps supported listing condition ids to inventory api condition enums', () => {
@@ -227,7 +234,11 @@ describe('publish mappers', () => {
   });
 
   it('maps listing data to an offer payload using stored policies and location key', () => {
-    const payload = mapListingToOfferPayload(createListing(), createResolvedPublishConfig(), 'SKU-001');
+    const payload = mapListingToOfferPayload(
+      createListing(),
+      createResolvedPublishConfig(),
+      'BSBL-Lot-000002'
+    );
 
     expect(payload).toEqual({
       availableQuantity: 1,
@@ -247,7 +258,7 @@ describe('publish mappers', () => {
           value: '24.50',
         },
       },
-      sku: 'SKU-001',
+      sku: 'BSBL-Lot-000002',
     });
   });
 });
