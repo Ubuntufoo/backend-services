@@ -406,24 +406,6 @@ export function assertPublishReady(input: ValidatePublishReadyInput): void {
   }
 }
 
-export function assertStructuredPublishSkuReady(listing: Pick<ListingRow, 'listing_id' | 'sku'>): void {
-  if (!hasText(listing.sku)) {
-    throw new PublishRequiredFieldValidationError(listing.listing_id, [
-      createFieldIssue('sku', 'listing', 'SKU or custom label is required before publishing.'),
-    ]);
-  }
-
-  if (!isStructuredPublishSku(listing.sku)) {
-    throw new PublishRequiredFieldValidationError(listing.listing_id, [
-      createFieldIssue(
-        'sku',
-        'listing',
-        'SKU must be a finalized structured SKU like BSKBL-Single-000001 before publishing.'
-      ),
-    ]);
-  }
-}
-
 export function validatePublishListingReadiness(
   listing: ListingRow,
   appSettings: AppSettingsRow,
@@ -443,6 +425,14 @@ export function validatePublishListingReadiness(
 
   if (!hasText(listing.listing_id)) {
     issues.push('Listing is missing listing_id required for publish SKU.');
+  }
+
+  if (!hasText(listing.sku)) {
+    issues.push(`Listing "${listingLabel}" is missing SKU required for publish.`);
+  } else if (!isStructuredPublishSku(listing.sku)) {
+    issues.push(
+      `Listing "${listingLabel}" must use a finalized structured SKU like BSKBL-Single-000001 before publish.`
+    );
   }
 
   if (!hasText(listing.title)) {
