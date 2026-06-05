@@ -39,6 +39,7 @@ export const listingWorkflowStateSchema = z
     status: listingStatusSchema,
     subStatus: listingSubStatusSchema,
   })
+  .strict()
   .superRefine(assertValidWorkflowState);
 
 export const watcherWorkflowUpdateSchema = z

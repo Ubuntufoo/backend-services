@@ -1,5 +1,10 @@
 import { randomUUID } from 'crypto';
-import { DEFAULT_APP_SETTINGS_ID, type ListingInsert, type ListingUpdate } from '@ebay-inventory/data';
+import {
+  DEFAULT_APP_SETTINGS_ID,
+  ListingWorkflowTransitionConflictError,
+  type ListingInsert,
+  type ListingUpdate,
+} from '@ebay-inventory/data';
 import type { GeminiUsageLastAttempt } from '@ebay-inventory/data';
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
@@ -61,6 +66,14 @@ function toStatusCode(error: unknown): number {
 }
 
 function sendRouteError(res: Response, error: unknown): void {
+  if (error instanceof ListingWorkflowTransitionConflictError) {
+    res.status(409).json({
+      error: 'listing_state_stale',
+      message: error.message,
+    });
+    return;
+  }
+
   const statusCode = toStatusCode(error);
   const errorMessage = error instanceof Error ? error.message : 'Unknown error';
   const responseMessage =
@@ -354,11 +367,14 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
-      const listing = await getDataAccess().listings.updateWorkflowState({
-        listingId: params.listingId,
-        status: body.status,
-        subStatus: body.subStatus,
-      });
+      const listing =
+        body.status === 'approved_for_export' && body.subStatus === 'publish_queued'
+          ? await getDataAccess().listings.approveForExport(params.listingId)
+          : await getDataAccess().listings.updateWorkflowState({
+              listingId: params.listingId,
+              status: body.status,
+              subStatus: body.subStatus,
+            });
 
       if (listing.status === 'approved_for_export' && listing.sub_status === 'publish_queued') {
         await getDataAccess().jobs.enqueuePublish(params.listingId);

@@ -21,6 +21,7 @@ const getListingByListingIdMock = vi.fn();
 const markAiModelAttemptFailedMock = vi.fn();
 const markAiModelAttemptSucceededMock = vi.fn();
 const createListingMock = vi.fn();
+const approveListingForExportMock = vi.fn();
 const updateListingMock = vi.fn();
 const claimApprovedListingForPublishMock = vi.fn();
 const markListingPublishFailedMock = vi.fn();
@@ -67,6 +68,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createAppSettings: createAppSettingsMock,
   createJob: createJobMock,
   createListing: createListingMock,
+  approveListingForExport: approveListingForExportMock,
   createOrder: createOrderMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
   enqueueGenerateAiJob: enqueueGenerateAiJobMock,
@@ -187,7 +189,7 @@ describe('sidecar data access', () => {
     });
   });
 
-  it('delegates create, update, workflow, and app-settings calls to shared repository helpers', async () => {
+  it('delegates create, approval, update, workflow, and app-settings calls to shared repository helpers', async () => {
     const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
     const dataAccess = createSidecarDataAccess();
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -211,6 +213,7 @@ describe('sidecar data access', () => {
     } as ListingWorkflowTransitionInput;
 
     await dataAccess.listings.create(listingInsert);
+    await dataAccess.listings.approveForExport('LIST-001');
     await dataAccess.listings.claimApprovedForPublish('LIST-001');
     await dataAccess.listings.update('LIST-001', listingUpdate);
     await dataAccess.listings.markPublishFailed('LIST-001', '2026-05-25T12:00:00.000Z', new Error('boom'));
@@ -219,6 +222,7 @@ describe('sidecar data access', () => {
     await dataAccess.appSettings.get();
 
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
+    expect(approveListingForExportMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(claimApprovedListingForPublishMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(updateListingMock).toHaveBeenCalledWith(client, 'LIST-001', listingUpdate);
     expect(markListingPublishFailedMock).toHaveBeenCalledWith(

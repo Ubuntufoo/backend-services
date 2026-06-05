@@ -1,4 +1,5 @@
 import {
+  approveListingForExport,
   createAiModelAttempt,
   resolveAiModelRoutesForTask,
   resolvePrimaryAiModelRouteForTask,
@@ -133,6 +134,7 @@ export interface SidecarDataAccess {
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
   listings: {
+    approveForExport(listingId: string): Promise<ListingRow>;
     claimApprovedForPublish(listingId: string): Promise<ListingRow | null>;
     create(input: ListingInsert): Promise<ListingRow>;
     getByOfferId(offerId: string): Promise<ListingRow | null>;
@@ -193,6 +195,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       markSucceeded: async (input) => await markAiModelAttemptSucceeded(client, input),
     },
     listings: {
+      approveForExport: async (listingId) => await approveListingForExport(client, listingId),
       claimApprovedForPublish: async (listingId) =>
         await claimApprovedListingForPublish(client, listingId),
       create: async (input) => await createListing(client, input),

@@ -1,11 +1,8 @@
-import {
-  isValidListingWorkflowState,
-  type ListingStatus,
-  type ListingSubStatus,
-} from '@ebay-inventory/types';
+import { isValidListingWorkflowState, type ListingStatus, type ListingSubStatus } from '@ebay-inventory/types';
 import type { ListingRow } from './database.js';
 import type { SupabaseDataClient } from './client.js';
 import { updateListing } from './repositories/listings.js';
+export { ListingWorkflowTransitionConflictError } from './listing-approval.js';
 
 export class ListingWorkflowStateError extends Error {
   constructor(status: string, subStatus: string) {
@@ -33,7 +30,6 @@ export async function updateListingWorkflowState(
   input: ListingWorkflowTransitionInput
 ): Promise<ListingRow> {
   assertValidListingWorkflowStateInput(input);
-
   return await updateListing(client, input.listingId, {
     status: input.status,
     sub_status: input.subStatus,

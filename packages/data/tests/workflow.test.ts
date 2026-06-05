@@ -21,16 +21,16 @@ const listingRow: ListingRow = {
   ese_eligible: null,
   estimated_weight_oz: null,
   exported_at: null,
+  generated_at: null,
   handling_days: null,
   id: 'listing-row-id',
-  generated_at: null,
   image_urls: [],
   item_specifics: {},
   last_error_at: null,
   last_error_code: null,
   last_error_context: {},
   last_error_message: null,
-  listing_id: 'LIST-001',
+  listing_id: 'Single-000001',
   listing_type: null,
   merchant_location_key: null,
   package_type: null,
@@ -41,15 +41,15 @@ const listingRow: ListingRow = {
   r2_retention_policy: null,
   seller_hints: null,
   shipping_profile: null,
-  sku: 'SKU-001',
+  sku: 'Single-000001',
   sold_at: null,
-  status: 'approved_for_export',
-  sub_status: 'publish_queued',
+  status: 'needs_review',
+  sub_status: 'review_pending',
   title: null,
   updated_at: '2026-05-17T00:00:00.000Z',
 };
 
-function createWorkflowUpdateClient(): SupabaseDataClient {
+function createWorkflowUpdateClient(expectedRow: ListingRow): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
       expect(name).toBe('listings');
@@ -57,19 +57,19 @@ function createWorkflowUpdateClient(): SupabaseDataClient {
       return {
         update: vi.fn((payload: unknown) => {
           expect(payload).toEqual({
-            status: 'approved_for_export',
-            sub_status: 'publish_queued',
+            status: 'needs_review',
+            sub_status: 'review_pending',
           });
 
           return {
             eq: vi.fn((column: string, value: string) => {
               expect(column).toBe('listing_id');
-              expect(value).toBe('LIST-001');
+              expect(value).toBe('Single-000001');
 
               return {
                 select: vi.fn(() => ({
                   single: vi.fn(async () => ({
-                    data: listingRow,
+                    data: expectedRow,
                     error: null,
                   })),
                 })),
@@ -92,7 +92,7 @@ describe('workflow helpers', () => {
     ).not.toThrow();
   });
 
-  it('rejects invalid workflow states before the repository call', () => {
+  it('rejects invalid workflow states before repository call', () => {
     expect(() =>
       assertValidListingWorkflowStateInput({
         status: 'record_created',
@@ -101,14 +101,14 @@ describe('workflow helpers', () => {
     ).toThrow(ListingWorkflowStateError);
   });
 
-  it('updates listing workflow state after validation', async () => {
-    const client = createWorkflowUpdateClient();
+  it('updates generic workflow state after validation', async () => {
+    const client = createWorkflowUpdateClient(listingRow);
 
     await expect(
       updateListingWorkflowState(client, {
-        listingId: 'LIST-001',
-        status: 'approved_for_export',
-        subStatus: 'publish_queued',
+        listingId: 'Single-000001',
+        status: 'needs_review',
+        subStatus: 'review_pending',
       })
     ).resolves.toEqual(listingRow);
   });
