@@ -22,12 +22,25 @@ const requiredNonEmptyString = (name: string) =>
     .trim()
     .min(1, `${name} is required`);
 
-const optionalNonEmptyString = () => z.string().trim().min(1).optional();
-const optionalTrimmedString = () => z.string().trim().optional();
+function normalizeOptionalEnvValue(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return value.trim() === '' ? undefined : value;
+}
+
+const optionalNonEmptyString = () =>
+  z.preprocess(normalizeOptionalEnvValue, z.string().trim().min(1).optional());
+const optionalTrimmedString = () =>
+  z.preprocess(normalizeOptionalEnvValue, z.string().trim().optional());
 const requiredUrlString = (name: string) =>
   requiredNonEmptyString(name).url(`${name} must be a valid URL`);
 const optionalUrlString = (name: string) =>
-  z.string().trim().url(`${name} must be a valid URL`).optional();
+  z.preprocess(
+    normalizeOptionalEnvValue,
+    z.string().trim().url(`${name} must be a valid URL`).optional()
+  );
 
 export const supabaseEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: requiredUrlString('NEXT_PUBLIC_SUPABASE_URL'),

@@ -72,6 +72,16 @@ describe('loadEbayOAuthValidationConfig', () => {
     expect(config.refreshToken).toBe('v^1.1#legacy-refresh-token');
   });
 
+  it('accepts blank preferred refresh token when legacy fallback is set', () => {
+    const config = loadEbayOAuthValidationConfig({
+      ...createBaseEnv(),
+      EBAY_REFRESH_TOKEN: '   ',
+      EBAY_USER_REFRESH_TOKEN: 'v^1.1#legacy-refresh-token',
+    });
+
+    expect(config.refreshToken).toBe('v^1.1#legacy-refresh-token');
+  });
+
   it('prefers EBAY_REFRESH_TOKEN when both exist', () => {
     const config = loadEbayOAuthValidationConfig({
       ...createBaseEnv(),
@@ -80,6 +90,16 @@ describe('loadEbayOAuthValidationConfig', () => {
     });
 
     expect(config.refreshToken).toBe('v^1.1#preferred-refresh-token');
+  });
+
+  it('rejects blank refresh token values when no refresh token is configured', () => {
+    expect(() =>
+      loadEbayOAuthValidationConfig({
+        ...createBaseEnv(),
+        EBAY_REFRESH_TOKEN: '',
+        EBAY_USER_REFRESH_TOKEN: '   ',
+      })
+    ).toThrow(/EBAY_REFRESH_TOKEN or EBAY_USER_REFRESH_TOKEN is required/);
   });
 
   it('rejects obvious callback authorization-code values', () => {

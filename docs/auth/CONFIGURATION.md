@@ -87,29 +87,36 @@ These credentials are obtained from the [eBay Developer Portal](https://develope
 - **Default:** `en-US`
 - **Behavior:** Sent on all requests; defaults to `en-US` if unset. Per-tool overrides are not currently exposed.
 
-### Required: User Refresh Token (For OAuth Flow)
+### Preferred: User Refresh Token (For OAuth Flow, Live Readiness, and Publish)
 
-#### `EBAY_USER_REFRESH_TOKEN`
+#### `EBAY_REFRESH_TOKEN`
 
-- **Description:** Long-lived refresh token obtained through the OAuth 2.0 authorization code flow
+- **Description:** Preferred long-lived refresh token obtained through the OAuth 2.0 authorization code flow
 - **How to Obtain:** See [OAuth 2.0 Flow](#oauth-20-flow-user-tokens) section below
 - **Example:** `v^1.1#r^1#i^1#p^3#I^3#f^0#t^H4sIAAAAAAAAAOVXa2...`
-- **Required:** No (only needed for higher rate limits via user token authentication)
+- **Required:** Required for OAuth validation, live readiness diagnostics, and production publish flows
 - **Lifespan:** Typically 18 months (varies by eBay account)
 - **Security:** ⚠️ **KEEP THIS SECRET** - This token provides long-term access to your eBay account
 - **Note:** Once set, the server automatically uses this to refresh access tokens when they expire
 
+#### `EBAY_USER_REFRESH_TOKEN`
+
+- **Description:** Legacy compatibility alias for the same long-lived refresh token
+- **Required:** No, if `EBAY_REFRESH_TOKEN` is already set
+- **Recommendation:** Prefer `EBAY_REFRESH_TOKEN` for new configuration. Keep this only for older setup flows until migrated.
+
 ### Auto-Generated (Do Not Set Manually)
 
-These variables are automatically managed by the server. You should **NOT** set them manually in your `.env` file unless you have a specific reason.
+These variables are automatically managed by the server. They are optional cache values only. You should **NOT** set them manually in your `.env` file unless you have a specific troubleshooting reason.
 
 #### `EBAY_USER_ACCESS_TOKEN`
 
 - **Description:** Short-lived access token used for making API calls
-- **Auto-Generated:** Yes - Automatically created and refreshed by the server using `EBAY_USER_REFRESH_TOKEN`
+- **Auto-Generated:** Yes - Automatically created and refreshed by the server using `EBAY_REFRESH_TOKEN` or `EBAY_USER_REFRESH_TOKEN`
 - **Lifespan:** Typically 2 hours
 - **Management:** The server automatically refreshes this token when it expires (using the refresh token)
-- **When to Set Manually:** Only if you're manually managing tokens (not recommended)
+- **Startup Requirement:** No
+- **When to Set Manually:** Normally never. Leave unset and let the server manage it.
 
 #### `EBAY_APP_ACCESS_TOKEN`
 
@@ -117,7 +124,8 @@ These variables are automatically managed by the server. You should **NOT** set 
 - **Auto-Generated:** Yes - Automatically created when using client credentials authentication
 - **Lifespan:** Typically 2 hours
 - **Management:** The server automatically refreshes this token when it expires
-- **When to Set Manually:** Only if you're manually managing tokens (not recommended)
+- **Startup Requirement:** No
+- **When to Set Manually:** Normally never. Leave unset and let the server manage it.
 
 ## Getting eBay Credentials
 
@@ -149,7 +157,7 @@ These variables are automatically managed by the server. You should **NOT** set 
 
 ## Authentication Methods
 
-### Client Credentials Flow (Default)
+### Client Credentials Flow (Default Startup Fallback)
 
 **Best For:** Development, testing, low-volume operations
 
@@ -166,6 +174,8 @@ These variables are automatically managed by the server. You should **NOT** set 
 1. Server automatically requests an app-level access token using client credentials
 2. Token is cached and automatically refreshed when expired
 3. No user interaction required
+
+**Important:** This flow is enough for sidecar startup and lower-scope API usage. It is **not** source of truth for live publish readiness, which must validate refresh-token OAuth separately.
 
 **Advantages:**
 
@@ -190,7 +200,8 @@ These variables are automatically managed by the server. You should **NOT** set 
 - `EBAY_CLIENT_SECRET`
 - `EBAY_REDIRECT_URI` (RuName)
 - `EBAY_ENVIRONMENT`
-- `EBAY_USER_REFRESH_TOKEN` (obtained through OAuth flow)
+- `EBAY_REFRESH_TOKEN` (preferred, obtained through OAuth flow)
+- `EBAY_USER_REFRESH_TOKEN` (legacy compatibility fallback)
 
 **How It Works:**
 
