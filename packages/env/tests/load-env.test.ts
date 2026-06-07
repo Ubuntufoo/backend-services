@@ -115,6 +115,25 @@ describe('loadEnv', () => {
     expect(env.EBAY_CLIENT_ID).toBe('client-id');
   });
 
+  it('normalizes blank optional legacy ebay token values to undefined', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        EBAY_ENABLED: 'true',
+        EBAY_CLIENT_ID: 'client-id',
+        EBAY_CLIENT_SECRET: 'client-secret',
+        EBAY_USER_ACCESS_TOKEN: '   ',
+        EBAY_APP_ACCESS_TOKEN: '',
+      },
+    });
+
+    expect(env.EBAY_USER_ACCESS_TOKEN).toBeUndefined();
+    expect(env.EBAY_APP_ACCESS_TOKEN).toBeUndefined();
+  });
+
   it('loads required R2 configuration with the explicit S3 endpoint', () => {
     const env = loadR2Env({
       env: {

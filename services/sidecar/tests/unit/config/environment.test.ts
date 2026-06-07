@@ -204,6 +204,22 @@ describe('Environment Configuration', () => {
       expect(result.errors).toHaveLength(0);
     });
 
+    it('should pass validation when legacy access token vars are blank', () => {
+      process.env.EBAY_ENABLED = 'true';
+      process.env.EBAY_CLIENT_ID = 'test_client_id';
+      process.env.EBAY_CLIENT_SECRET = 'test_client_secret';
+      process.env.EBAY_ENVIRONMENT = 'production';
+      process.env.EBAY_USER_ACCESS_TOKEN = '   ';
+      process.env.EBAY_APP_ACCESS_TOKEN = '';
+      delete process.env.EBAY_REFRESH_TOKEN;
+      delete process.env.EBAY_USER_REFRESH_TOKEN;
+
+      const result = validateEnvironmentConfig();
+
+      expect(result.isValid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+
     it('should fail validation when CLIENT_ID is missing', () => {
       process.env.EBAY_ENABLED = 'true';
       delete process.env.EBAY_CLIENT_ID;

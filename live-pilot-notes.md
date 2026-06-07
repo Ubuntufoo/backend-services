@@ -1,14 +1,17 @@
 # Controlled Live Pilot Notes
 
 ## Purpose
+
 Minimal notes for safely testing the first real eBay listings while fulfillment/admin remains in eBay Seller Hub.
 
 ## Scope
+
 - App handles intake, draft generation, review, and publish.
 - eBay Seller Hub remains source of truth for shipping labels, order handling, buyer messages, and manual admin.
 - Use only a small number of low-risk listings.
 
 ## Before First Live Publish
+
 - Confirm `EBAY_ENVIRONMENT=production`.
 - Confirm production OAuth is valid.
 - Confirm production policy IDs are configured.
@@ -17,7 +20,32 @@ Minimal notes for safely testing the first real eBay listings while fulfillment/
 - Confirm listing has title, price, category, condition, images, and required item specifics.
 - Confirm the item is physically available and easy to ship.
 
+
+
+For Prod:
+update public.app_settings
+set
+ebay_marketplace_id = 'EBAY_US',
+default_payment_policy_id = '260524452013',
+default_fulfillment_policy_id = '260524990013',
+default_return_policy_id = '260524680013',
+merchant_location_key = 'mfh-main-location'
+where id = 'default';
+
+For Sandbox:
+update public.app_settings
+set
+ebay_marketplace_id = 'EBAY_US',
+default_payment_policy_id = '6227962000',
+default_fulfillment_policy_id = '6227963000',
+default_return_policy_id = '6227964000',
+merchant_location_key = 'default-main-location'
+where id = 'default';
+
+
+
 ## Pilot Rules
+
 - Start with 1 listing.
 - Prefer a low-value single card.
 - Do not batch publish.
@@ -26,19 +54,23 @@ Minimal notes for safely testing the first real eBay listings while fulfillment/
 - Handle shipping and buyer/admin workflows in Seller Hub.
 
 ## After Publish
+
 - Verify listing is live.
 - Verify title, price, images, condition, item specifics, shipping, and return policy.
 - Save/confirm `ebay_listing_id`, `ebay_offer_id`, and listing URL are present locally.
 - If anything looks wrong, revise/end the listing in Seller Hub first.
 
 ## Known Boundaries
+
 - App does not yet manage shipping labels.
 - App does not yet fully own order fulfillment.
 - Sold status and cleanup automation are future tasks.
 - Seller Hub remains the operational fallback.
 
 ## Stop Conditions
+
 Stop live publishing if:
+
 - duplicate listing is created
 - images are wrong or inaccessible
 - policy/location config is wrong

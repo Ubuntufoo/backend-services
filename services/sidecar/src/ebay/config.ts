@@ -24,9 +24,21 @@ const requiredNonEmptyString = (name: string) =>
     .trim()
     .min(1, `${name} is required`);
 
-const optionalNonEmptyString = () => z.string().trim().min(1).optional();
+function normalizeOptionalEnvValue(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return value.trim() === '' ? undefined : value;
+}
+
+const optionalNonEmptyString = () =>
+  z.preprocess(normalizeOptionalEnvValue, z.string().trim().min(1).optional());
 const optionalUrlString = (name: string) =>
-  z.string().trim().url(`${name} must be a valid URL`).optional();
+  z.preprocess(
+    normalizeOptionalEnvValue,
+    z.string().trim().url(`${name} must be a valid URL`).optional()
+  );
 
 function looksLikeAuthorizationCodeValue(value: string): boolean {
   const trimmed = value.trim();
