@@ -4,6 +4,7 @@ import type {
   AiModelAttemptRow,
   DailyUsageRow,
   JobRow,
+  ListingPriceResearchRow,
   ListingRow,
   OrderRow,
   SupabaseDataClient,
@@ -24,14 +25,17 @@ import {
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
   enqueuePublishJob,
+  enqueueResearchPriceJob,
   failJob,
   getEffectiveGeminiDailyLimit,
   getGeminiDailyUsageSummary,
   getEffectiveOrderSyncDailyLimit,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
+  getActiveResearchPriceJobByListingId,
   getListingByOfferId,
   getJobById,
+  getLatestListingPriceResearchByListingId,
   getOrCreateDailyUsage,
   getListingByListingId,
   getOrderByOrderId,
@@ -46,6 +50,8 @@ import {
   listJobsByListingId,
   listJobsByListingIds,
   listStaleRunningJobs,
+  markListingPriceResearchFailed,
+  markListingPriceResearchSucceeded,
   markAiModelAttemptFailed,
   markAiModelAttemptSucceeded,
   prepareListingForGenerateAi,
@@ -58,6 +64,7 @@ import {
   saveGeneratedListingFields,
   savePublishedListing,
   setGeminiJobAttemptAudit,
+  createListingPriceResearch,
   updateListing,
   updateAppSettings,
   updateJob,
@@ -137,6 +144,36 @@ const publishJobRow: JobRow = {
   id: 'job-publish-row-id',
   job_type: 'publish',
   max_attempts: 3,
+};
+
+const researchPriceJobRow: JobRow = {
+  ...jobRow,
+  id: 'job-research-price-row-id',
+  job_type: 'research_price',
+  max_attempts: 1,
+};
+
+const listingPriceResearchRow: ListingPriceResearchRow = {
+  comps: [],
+  confidence: null,
+  created_at: '2026-06-09T12:00:00.000Z',
+  error_code: null,
+  error_message: null,
+  id: 'listing-price-research-row-id',
+  listing_id: 'LIST-001',
+  llm_price_explanation: null,
+  llm_reasoning_json: {},
+  llm_rejected_comp_ids: [],
+  llm_selected_comp_ids: [],
+  median_sold_price: null,
+  pricing_model_name: null,
+  provider: 'apify',
+  query: null,
+  raw_result_json: {},
+  sold_count: null,
+  status: 'pending',
+  suggested_price: null,
+  updated_at: '2026-06-09T12:00:00.000Z',
 };
 
 const orderRow: OrderRow = {
@@ -452,6 +489,61 @@ function createActivePublishLookupClient(expectedRow: JobRow | null): SupabaseDa
   } as unknown as SupabaseDataClient;
 }
 
+function createActiveResearchPriceLookupClient(expectedRow: JobRow | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('jobs');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((firstColumn: string, firstValue: string) => {
+              expect(firstColumn).toBe('listing_id');
+              expect(firstValue).toBe('LIST-001');
+
+              return {
+                eq: vi.fn((secondColumn: string, secondValue: string) => {
+                  expect(secondColumn).toBe('job_type');
+                  expect(secondValue).toBe('research_price');
+
+                  return {
+                    in: vi.fn((statusColumn: string, statuses: string[]) => {
+                      expect(statusColumn).toBe('status');
+                      expect(statuses).toEqual(['queued', 'running']);
+
+                      return {
+                        order: vi.fn((orderColumn: string, options: { ascending: boolean }) => {
+                          expect(orderColumn).toBe('created_at');
+                          expect(options).toEqual({ ascending: false });
+
+                          return {
+                            limit: vi.fn((value: number) => {
+                              expect(value).toBe(1);
+
+                              return {
+                                maybeSingle: vi.fn(async () => ({
+                                  data: expectedRow,
+                                  error: null,
+                                })),
+                              };
+                            }),
+                          };
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 function createActiveProcessImagesLookupClient(expectedRow: JobRow | null): SupabaseDataClient {
   return {
     from: vi.fn((name: string) => {
@@ -665,6 +757,58 @@ function createUpdateClient<TTable extends string, TRow>(
                     error: null,
                   })),
                 })),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createLatestListingPriceResearchLookupClient(
+  expectedRow: ListingPriceResearchRow | null
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listing_price_research');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('listing_id');
+              expect(value).toBe('LIST-001');
+
+              return {
+                order: vi.fn((firstOrderColumn: string, firstOptions: { ascending: boolean }) => {
+                  expect(firstOrderColumn).toBe('created_at');
+                  expect(firstOptions).toEqual({ ascending: false });
+
+                  return {
+                    order: vi.fn(
+                      (secondOrderColumn: string, secondOptions: { ascending: boolean }) => {
+                        expect(secondOrderColumn).toBe('id');
+                        expect(secondOptions).toEqual({ ascending: false });
+
+                        return {
+                          limit: vi.fn((limit: number) => {
+                            expect(limit).toBe(1);
+
+                            return {
+                              maybeSingle: vi.fn(async () => ({
+                                data: expectedRow,
+                                error: null,
+                              })),
+                            };
+                          }),
+                        };
+                      }
+                    ),
+                  };
+                }),
               };
             }),
           };
@@ -2962,6 +3106,14 @@ describe('shared repositories', () => {
     );
   });
 
+  it('looks up the newest active research_price job by listing id', async () => {
+    const lookupClient = createActiveResearchPriceLookupClient(researchPriceJobRow);
+
+    await expect(getActiveResearchPriceJobByListingId(lookupClient, 'LIST-001')).resolves.toEqual(
+      researchPriceJobRow
+    );
+  });
+
   it('enqueues generate_ai jobs and reports fresh create vs already queued', async () => {
     const createClient = createInsertClient('jobs', generateAiJobRow, (payload) => {
       expect(payload).toEqual({
@@ -2975,6 +3127,160 @@ describe('shared repositories', () => {
     await expect(enqueueGenerateAiJob(createClient, 'LIST-001')).resolves.toEqual({
       alreadyQueued: false,
       job: generateAiJobRow,
+    });
+  });
+
+  it('enqueues research_price jobs with default max attempts 1', async () => {
+    const createClient = createInsertClient('jobs', researchPriceJobRow, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'research_price',
+        listing_id: 'LIST-001',
+        max_attempts: 1,
+        status: 'queued',
+      });
+    });
+
+    await expect(enqueueResearchPriceJob(createClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: false,
+      job: researchPriceJobRow,
+    });
+  });
+
+  it('returns existing active research_price job when duplicate insert hits DB protection', async () => {
+    const lookupClient = createActiveResearchPriceLookupClient(researchPriceJobRow);
+    const duplicateClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'research_price',
+              listing_id: 'LIST-001',
+              max_attempts: 1,
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => ({
+                  data: null,
+                  error: {
+                    code: '23505',
+                    message:
+                      'duplicate key value violates unique constraint "jobs_research_price_active_listing_idx"',
+                  },
+                })),
+              })),
+            };
+          }),
+          select: lookupClient.from('jobs').select,
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(enqueueResearchPriceJob(duplicateClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: true,
+      job: researchPriceJobRow,
+    });
+  });
+
+  it('respects explicit research_price max attempts override', async () => {
+    const overrideRow: JobRow = {
+      ...researchPriceJobRow,
+      id: 'job-research-price-row-id-override',
+      max_attempts: 4,
+    };
+    const createClient = createInsertClient('jobs', overrideRow, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'research_price',
+        listing_id: 'LIST-001',
+        max_attempts: 4,
+        status: 'queued',
+      });
+    });
+
+    await expect(enqueueResearchPriceJob(createClient, 'LIST-001', 4)).resolves.toEqual({
+      alreadyQueued: false,
+      job: overrideRow,
+    });
+  });
+
+  it('makes concurrent research_price enqueue idempotent under duplicate constraint race', async () => {
+    let createdJob: JobRow | null = null;
+
+    const concurrentClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'research_price',
+              listing_id: 'LIST-001',
+              max_attempts: 1,
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => {
+                  if (!createdJob) {
+                    createdJob = {
+                      ...researchPriceJobRow,
+                      id: 'job-research-price-concurrent-create',
+                    };
+
+                    return {
+                      data: createdJob,
+                      error: null,
+                    };
+                  }
+
+                  return {
+                    data: null,
+                    error: {
+                      code: '23505',
+                      message:
+                        'duplicate key value violates unique constraint "jobs_research_price_active_listing_idx"',
+                    },
+                  };
+                }),
+              })),
+            };
+          }),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                in: vi.fn(() => ({
+                  order: vi.fn(() => ({
+                    limit: vi.fn(() => ({
+                      maybeSingle: vi.fn(async () => ({
+                        data: createdJob,
+                        error: null,
+                      })),
+                    })),
+                  })),
+                })),
+              })),
+            })),
+          })),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    const [firstResult, secondResult] = await Promise.all([
+      enqueueResearchPriceJob(concurrentClient, 'LIST-001'),
+      enqueueResearchPriceJob(concurrentClient, 'LIST-001'),
+    ]);
+
+    expect(firstResult).toEqual({
+      alreadyQueued: false,
+      job: expect.objectContaining({ id: 'job-research-price-concurrent-create' }),
+    });
+    expect(secondResult).toEqual({
+      alreadyQueued: true,
+      job: expect.objectContaining({ id: 'job-research-price-concurrent-create' }),
     });
   });
 
@@ -3337,6 +3643,114 @@ describe('shared repositories', () => {
       alreadyQueued: true,
       job: expect.objectContaining({ id: 'job-concurrent-create' }),
     });
+  });
+
+  it('creates, fetches latest, and marks listing price research rows terminal', async () => {
+    const createClient = createInsertClient('listing_price_research', listingPriceResearchRow, (payload) => {
+      expect(payload).toEqual({
+        listing_id: 'LIST-001',
+        provider: 'apify',
+        status: 'pending',
+      });
+    });
+
+    await expect(
+      createListingPriceResearch(createClient, {
+        listing_id: 'LIST-001',
+        provider: 'apify',
+        status: 'pending',
+      })
+    ).resolves.toEqual(listingPriceResearchRow);
+
+    const latestClient = createLatestListingPriceResearchLookupClient(listingPriceResearchRow);
+    await expect(getLatestListingPriceResearchByListingId(latestClient, 'LIST-001')).resolves.toEqual(
+      listingPriceResearchRow
+    );
+
+    const succeededRow: ListingPriceResearchRow = {
+      ...listingPriceResearchRow,
+      confidence: 'high',
+      comps: [{ id: 'comp-1' }],
+      llm_price_explanation: 'Median sold supports range.',
+      median_sold_price: 41.5,
+      pricing_model_name: 'median-v1',
+      query: 'vintage fisher price camera',
+      raw_result_json: { source: 'apify' },
+      sold_count: 18,
+      status: 'succeeded',
+      suggested_price: 44,
+    };
+    const succeededClient = createUpdateClient(
+      'listing_price_research',
+      succeededRow,
+      'id',
+      'listing-price-research-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          comps: [{ id: 'comp-1' }],
+          confidence: 'high',
+          error_code: null,
+          error_message: null,
+          llm_price_explanation: 'Median sold supports range.',
+          median_sold_price: 41.5,
+          pricing_model_name: 'median-v1',
+          query: 'vintage fisher price camera',
+          raw_result_json: { source: 'apify' },
+          sold_count: 18,
+          status: 'succeeded',
+          suggested_price: 44,
+        });
+      }
+    );
+
+    await expect(
+      markListingPriceResearchSucceeded(succeededClient, {
+        id: 'listing-price-research-row-id',
+        comps: [{ id: 'comp-1' }],
+        confidence: 'high',
+        llm_price_explanation: 'Median sold supports range.',
+        median_sold_price: 41.5,
+        pricing_model_name: 'median-v1',
+        query: 'vintage fisher price camera',
+        raw_result_json: { source: 'apify' },
+        sold_count: 18,
+        suggested_price: 44,
+      })
+    ).resolves.toEqual(succeededRow);
+
+    const failedRow: ListingPriceResearchRow = {
+      ...listingPriceResearchRow,
+      error_code: 'apify_timeout',
+      error_message: 'Actor timed out',
+      pricing_model_name: 'median-v1',
+      raw_result_json: { runId: 'run-123' },
+      status: 'failed',
+    };
+    const failedClient = createUpdateClient(
+      'listing_price_research',
+      failedRow,
+      'id',
+      'listing-price-research-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          error_code: 'apify_timeout',
+          error_message: 'Actor timed out',
+          pricing_model_name: 'median-v1',
+          raw_result_json: { runId: 'run-123' },
+          status: 'failed',
+        });
+      }
+    );
+
+    await expect(
+      markListingPriceResearchFailed(failedClient, {
+        id: 'listing-price-research-row-id',
+        error_code: 'apify_timeout',
+        error_message: 'Actor timed out',
+        pricing_model_name: 'median-v1',
+        raw_result_json: { runId: 'run-123' },
+      })
+    ).resolves.toEqual(failedRow);
   });
 
   it('creates, fetches, and updates orders', async () => {

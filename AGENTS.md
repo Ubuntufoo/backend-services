@@ -1,7 +1,7 @@
 ## Repo Overview
 
 Murphy Family Hobby's eBay Inventory Manager — a local-first desktop/web app for creating and managing eBay listings.
-This repository provides the server-side components for the eBay Inventory Manager. The backend holds long-running, platform-level responsibilities that are intentionally separated from the UI.
+This repository provides the server-side components for the eBay Inventory Manager. The backend holds long-running, platform-level responsibilities that are intentionally separated from the UI. ROADMAP.md is a rolling plan for the project's dev. When altered, commit the changes to new feature branches.
 
 ## Responsibilities and Contract
 

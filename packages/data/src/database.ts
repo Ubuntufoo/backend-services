@@ -97,6 +97,10 @@ export type JobRow = TableRow<'jobs'>;
 export type JobInsert = TableInsert<'jobs'>;
 export type JobUpdate = TableUpdate<'jobs'>;
 
+export type ListingPriceResearchRow = TableRow<'listing_price_research'>;
+export type ListingPriceResearchInsert = TableInsert<'listing_price_research'>;
+export type ListingPriceResearchUpdate = TableUpdate<'listing_price_research'>;
+
 export type ListingRow = TableRow<'listings'>;
 export type ListingInsert = TableInsert<'listings'>;
 export type ListingUpdate = TableUpdate<'listings'>;

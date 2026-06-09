@@ -214,4 +214,57 @@ describe('loadEnv', () => {
       })
     ).toThrow(/EBAY_CLIENT_ID is required/);
   });
+
+  it('allows blank Apify values when disabled and applies defaults', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        EBAY_ENABLED: 'false',
+        APIFY_ENABLED: 'false',
+        APIFY_TOKEN: '   ',
+        APIFY_PRICE_ACTOR_ID: '',
+      },
+    });
+
+    expect(env.APIFY_ENABLED).toBe('false');
+    expect(env.APIFY_TOKEN).toBeUndefined();
+    expect(env.APIFY_PRICE_ACTOR_ID).toBeUndefined();
+    expect(env.APIFY_MIN_SOLD_COMPS).toBe('12');
+    expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('120');
+  });
+
+  it('requires Apify token and actor id when enabled', () => {
+    expect(() =>
+      loadSidecarRootEnv({
+        env: {
+          NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+          SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+          SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+          EBAY_ENABLED: 'false',
+          APIFY_ENABLED: 'true',
+        },
+      })
+    ).toThrow(/APIFY_TOKEN is required/);
+  });
+
+  it('rejects invalid positive integer string Apify values', () => {
+    for (const invalidValue of ['0', '-1', '1.5', 'abc']) {
+      expect(() =>
+        loadSidecarRootEnv({
+          env: {
+            NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+            SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+            SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+            EBAY_ENABLED: 'false',
+            APIFY_MIN_SOLD_COMPS: invalidValue,
+          },
+        })
+      ).toThrow(/APIFY_MIN_SOLD_COMPS must be a positive integer string/);
+    }
+  });
 });

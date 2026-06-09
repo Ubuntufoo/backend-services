@@ -34,6 +34,11 @@ const optionalNonEmptyString = () =>
   z.preprocess(normalizeOptionalEnvValue, z.string().trim().min(1).optional());
 const optionalTrimmedString = () =>
   z.preprocess(normalizeOptionalEnvValue, z.string().trim().optional());
+const positiveIntegerString = (name: string) =>
+  z.preprocess(
+    normalizeOptionalEnvValue,
+    z.string().trim().regex(/^[1-9]\d*$/, `${name} must be a positive integer string`)
+  );
 const requiredUrlString = (name: string) =>
   requiredNonEmptyString(name).url(`${name} must be a valid URL`);
 const optionalUrlString = (name: string) =>
@@ -90,6 +95,13 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     SIDECAR_API_URL: optionalNonEmptyString(),
     GEMINI_API_KEY: optionalNonEmptyString(),
     GEMINI_MODEL: optionalNonEmptyString(),
+    APIFY_ENABLED: z.enum(['true', 'false']).default('false'),
+    APIFY_TOKEN: optionalNonEmptyString(),
+    APIFY_PRICE_ACTOR_ID: optionalNonEmptyString(),
+    APIFY_MIN_SOLD_COMPS: positiveIntegerString('APIFY_MIN_SOLD_COMPS').default('12'),
+    APIFY_PRICE_TIMEOUT_SECONDS: positiveIntegerString('APIFY_PRICE_TIMEOUT_SECONDS').default(
+      '120'
+    ),
     EBAY_ENABLED: z.enum(['true', 'false']).default('true'),
     EBAY_CLIENT_ID: optionalNonEmptyString(),
     EBAY_CLIENT_SECRET: optionalNonEmptyString(),
@@ -111,6 +123,24 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     R2_PUBLIC_BASE_URL: optionalTrimmedString(),
   })
   .superRefine((env, ctx) => {
+    if (env.APIFY_ENABLED === 'true') {
+      if (!env.APIFY_TOKEN) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'APIFY_TOKEN is required',
+          path: ['APIFY_TOKEN'],
+        });
+      }
+
+      if (!env.APIFY_PRICE_ACTOR_ID) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'APIFY_PRICE_ACTOR_ID is required',
+          path: ['APIFY_PRICE_ACTOR_ID'],
+        });
+      }
+    }
+
     if (env.EBAY_ENABLED === 'false') {
       return;
     }
