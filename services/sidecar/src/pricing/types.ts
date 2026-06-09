@@ -49,6 +49,21 @@ export interface NormalizeSoldCompsResult {
   rejected: NormalizeSoldCompsRejectedRow[];
 }
 
+export interface PricingStatsIgnoredComp {
+  id: string;
+  reason: 'invalid_total_price' | 'currency_mismatch';
+}
+
+export interface PricingStatsResult {
+  soldCount: number;
+  medianSoldPrice: number | null;
+  lowSoldPrice: number | null;
+  highSoldPrice: number | null;
+  deterministicSuggestedPrice: number | null;
+  currency: string | null;
+  ignored: PricingStatsIgnoredComp[];
+}
+
 export interface PricingProviderResult {
   provider: string;
   query: string;
