@@ -86,6 +86,7 @@ export const JOB_TYPES = [
   'process_images',
   'upload_r2',
   'generate_ai',
+  'research_price',
   'publish',
   'sync_orders',
   'cleanup_r2',

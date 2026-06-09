@@ -365,6 +365,83 @@ export type Database = {
           },
         ];
       };
+      listing_price_research: {
+        Row: {
+          comps: Json;
+          confidence: string | null;
+          created_at: string;
+          error_code: string | null;
+          error_message: string | null;
+          id: string;
+          listing_id: string;
+          llm_price_explanation: string | null;
+          llm_reasoning_json: Json;
+          llm_rejected_comp_ids: Json;
+          llm_selected_comp_ids: Json;
+          median_sold_price: number | null;
+          pricing_model_name: string | null;
+          provider: string;
+          query: string | null;
+          raw_result_json: Json;
+          sold_count: number | null;
+          status: string;
+          suggested_price: number | null;
+          updated_at: string;
+        };
+        Insert: {
+          comps?: Json;
+          confidence?: string | null;
+          created_at?: string;
+          error_code?: string | null;
+          error_message?: string | null;
+          id?: string;
+          listing_id: string;
+          llm_price_explanation?: string | null;
+          llm_reasoning_json?: Json;
+          llm_rejected_comp_ids?: Json;
+          llm_selected_comp_ids?: Json;
+          median_sold_price?: number | null;
+          pricing_model_name?: string | null;
+          provider: string;
+          query?: string | null;
+          raw_result_json?: Json;
+          sold_count?: number | null;
+          status: string;
+          suggested_price?: number | null;
+          updated_at?: string;
+        };
+        Update: {
+          comps?: Json;
+          confidence?: string | null;
+          created_at?: string;
+          error_code?: string | null;
+          error_message?: string | null;
+          id?: string;
+          listing_id?: string;
+          llm_price_explanation?: string | null;
+          llm_reasoning_json?: Json;
+          llm_rejected_comp_ids?: Json;
+          llm_selected_comp_ids?: Json;
+          median_sold_price?: number | null;
+          pricing_model_name?: string | null;
+          provider?: string;
+          query?: string | null;
+          raw_result_json?: Json;
+          sold_count?: number | null;
+          status?: string;
+          suggested_price?: number | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'listing_price_research_listing_id_fkey';
+            columns: ['listing_id'];
+            isOneToOne: false;
+            referencedRelation: 'listings';
+            referencedColumns: ['listing_id'];
+          },
+        ];
+      };
       listings: {
         Row: {
           approved_for_export_at: string | null;

@@ -9,12 +9,15 @@ import {
 } from './shared.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
+export const RESEARCH_PRICE_JOB_TYPE = 'research_price';
 const PUBLISH_JOB_TYPE = 'publish';
 const PROCESS_IMAGES_JOB_TYPE = 'process_images';
 const GENERATE_AI_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
+const RESEARCH_PRICE_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
 const PUBLISH_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
 const PROCESS_IMAGES_ACTIVE_JOB_STATUSES = ['queued', 'running'] as const;
 const ACTIVE_GENERATE_AI_JOB_UNIQUE_INDEX = 'jobs_generate_ai_active_listing_idx';
+const ACTIVE_RESEARCH_PRICE_JOB_UNIQUE_INDEX = 'jobs_research_price_active_listing_idx';
 const ACTIVE_PUBLISH_JOB_UNIQUE_INDEX = 'jobs_publish_active_listing_idx';
 const ACTIVE_PROCESS_IMAGES_JOB_UNIQUE_INDEX = 'jobs_process_images_active_batch_idx';
 const POSTGRES_UNIQUE_VIOLATION_CODE = '23505';
@@ -35,6 +38,11 @@ export interface EnqueueProcessImagesJobResult {
 }
 
 export interface EnqueuePublishJobResult {
+  alreadyQueued: boolean;
+  job: JobRow;
+}
+
+export interface EnqueueResearchPriceJobResult {
   alreadyQueued: boolean;
   job: JobRow;
 }
@@ -88,6 +96,14 @@ function isActiveProcessImagesConflict(error: unknown): error is SupabaseErrorWi
   );
 }
 
+function isActiveResearchPriceConflict(error: unknown): error is SupabaseErrorWithCode {
+  return (
+    isSupabaseErrorWithCode(error) &&
+    error.code === POSTGRES_UNIQUE_VIOLATION_CODE &&
+    error.message.includes(ACTIVE_RESEARCH_PRICE_JOB_UNIQUE_INDEX)
+  );
+}
+
 function isActivePublishConflict(error: unknown): error is SupabaseErrorWithCode {
   return (
     isSupabaseErrorWithCode(error) &&
@@ -123,6 +139,23 @@ export async function getActiveGenerateAiJobByListingId(
   return requireOptionalResult(result);
 }
 
+export async function getActiveResearchPriceJobByListingId(
+  client: SupabaseDataClient,
+  listingId: string
+): Promise<JobRow | null> {
+  const result = (await client
+    .from('jobs')
+    .select('*')
+    .eq('listing_id', listingId)
+    .eq('job_type', RESEARCH_PRICE_JOB_TYPE)
+    .in('status', [...RESEARCH_PRICE_ACTIVE_JOB_STATUSES])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()) as SingleResult<JobRow>;
+
+  return requireOptionalResult(result);
+}
+
 export async function enqueueGenerateAiJob(
   client: SupabaseDataClient,
   listingId: string,
@@ -148,6 +181,43 @@ export async function enqueueGenerateAiJob(
 
   if (isActiveGenerateAiConflict(insertResult.error)) {
     const existingJob = await getActiveGenerateAiJobByListingId(client, listingId);
+
+    if (existingJob) {
+      return {
+        alreadyQueued: true,
+        job: existingJob,
+      };
+    }
+  }
+
+  throw new Error(insertResult.error.message);
+}
+
+export async function enqueueResearchPriceJob(
+  client: SupabaseDataClient,
+  listingId: string,
+  maxAttempts = 1
+): Promise<EnqueueResearchPriceJobResult> {
+  const insertResult = (await client
+    .from('jobs')
+    .insert({
+      job_type: RESEARCH_PRICE_JOB_TYPE,
+      listing_id: listingId,
+      max_attempts: maxAttempts,
+      status: 'queued',
+    })
+    .select()
+    .single()) as SingleResult<JobRow>;
+
+  if (!insertResult.error) {
+    return {
+      alreadyQueued: false,
+      job: requireSingleResult(insertResult, 'research_price job was not created.'),
+    };
+  }
+
+  if (isActiveResearchPriceConflict(insertResult.error)) {
+    const existingJob = await getActiveResearchPriceJobByListingId(client, listingId);
 
     if (existingJob) {
       return {
@@ -324,6 +394,8 @@ export async function resetJobForManualRetry(
 
   if (
     (current.job_type === GENERATE_AI_JOB_TYPE && isActiveGenerateAiConflict(result.error)) ||
+    (current.job_type === RESEARCH_PRICE_JOB_TYPE &&
+      isActiveResearchPriceConflict(result.error)) ||
     (current.job_type === PUBLISH_JOB_TYPE && isActivePublishConflict(result.error))
   ) {
     return null;
