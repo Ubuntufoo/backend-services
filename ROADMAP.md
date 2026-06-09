@@ -117,17 +117,18 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 8 | FE | Review structured SKU prefix in needs_review | User can verify category prefix before approval | GPT-5.5 mini | Low-Medium | Show SKU preview such as BSKBL-Single-000002; allow prefix selection from BSKBL/BSBL/OTHER only; approval uses backend-derived final SKU, not free-text FE input | 
 | 8 | Tests | Add end-to-end SKU workflow coverage | Structured SKU behavior is protected across intake, AI, review, approval, and publish | GPT-5.5 mini | Medium | Cover Single and Lot, all 3 prefixes, Gemini uncertainty → OTHER, manual override, idempotent approval, publish retry, malformed SKU rejection, no mutation after exported/listed/sold | 
 | 8 | Docs | Reminder for personal spec in my google sheets
-| 8 | BE | Remove legacy required eBay access-token env vars | Server startup relies on refresh-token flow only | GPT-5.5 mini | Low | EBAY_USER_ACCESS_TOKEN and EBAY_APP_ACCESS_TOKEN should not be required if refresh-token OAuth is configured; update env validation and docs | -->
+| 8 | BE | Remove legacy required eBay access-token env vars | Server startup relies on refresh-token flow only | GPT-5.5 mini | Low | EBAY_USER_ACCESS_TOKEN and EBAY_APP_ACCESS_TOKEN should not be required if refresh-token OAuth is configured; update env validation and docs |
 |  9A.1 | BE/Types   | Add `research_price` job type                       | `packages/types` recognizes pricing jobs; no runtime behavior yet                                                    |
 |  9A.2 | DB         | Add pricing research table                          | `listing_price_research` stores deterministic stats, normalized comps, raw provider output, and LLM reasoning fields |
 |  9A.3 | BE/Data    | Add pricing research repository                     | Data package can create, read, mark succeeded, and mark failed pricing research rows                                 |
 |  9A.4 | BE/Data    | Add `research_price` enqueue helper                 | One active pricing job per listing is idempotent; default `maxAttempts=1`                                            |
 |  9A.5 | BE/Env     | Add disabled-by-default Apify config                | Blank Apify env values do not block startup; token/actor required only when enabled; `APIFY_MIN_SOLD_COMPS=12`       |
-|  9B.1 | BE/Pricing | Add pricing provider interface and fixture provider | Pricing tests can run without Apify or live network calls; fixture returns at least 12 sold comps                    |
+|  9B.1 | BE/Pricing | Add pricing provider interface and fixture provider | Pricing tests can run without Apify or live network calls; fixture returns at least 12 sold comps     -->               |
 |  9B.2 | BE/Pricing | Add sold-comps normalizer                           | Raw provider records normalize into stable comp objects with price, shipping, total, sold date, title, and URL       |
 |  9B.3 | BE/Pricing | Add deterministic pricing stats                     | Service computes sold count, median, low, high, and deterministic fallback price                                     |
 |  9B.4 | BE/Pricing | Add confidence scoring                              | Pricing output includes confidence only; no single/lot recommendation logic                                          |
-|  9B.5 | BE/Tests   | Add normalizer fixture tests                        | Noisy Apify-like records are parsed, filtered, and priced predictably                                                |
+|  9B.5 | BE/Tests   | Add normalizer fixture tests                        | Noisy Apify-like records are parsed, filtered, and priced predictably    
+|  9B.6 | DOCS   | Update docs to reflect new pricing service              |
 |  9C.1 | BE/Jobs    | Add `runResearchPriceJob` fixture path              | A `needs_review` single listing can run pricing and complete                                                         |
 |  9C.2 | BE/Jobs    | Keep pricing workflow-safe                          | Pricing failures do not alter listing workflow, block review, or write to `listing.last_error_*`                     |
 |  9C.3 | BE/Jobs    | Update listing price on pricing success             | `listings.price` is overwritten only from a valid suggested price; listing stays `needs_review/review_pending`       |

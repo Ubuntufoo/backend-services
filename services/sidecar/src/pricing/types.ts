@@ -22,6 +22,33 @@ export interface RawSoldComp {
   listingUrl?: string | null;
 }
 
+export interface NormalizedMoneyValue {
+  value: number;
+  currency: string;
+}
+
+export interface NormalizedSoldComp {
+  id: string;
+  title: string;
+  price: NormalizedMoneyValue;
+  shippingPrice: NormalizedMoneyValue | null;
+  totalPrice: NormalizedMoneyValue;
+  soldDate: string;
+  condition: string | null;
+  listingUrl: string | null;
+  source: 'provider';
+}
+
+export interface NormalizeSoldCompsRejectedRow {
+  index: number;
+  reason: string;
+}
+
+export interface NormalizeSoldCompsResult {
+  comps: NormalizedSoldComp[];
+  rejected: NormalizeSoldCompsRejectedRow[];
+}
+
 export interface PricingProviderResult {
   provider: string;
   query: string;
