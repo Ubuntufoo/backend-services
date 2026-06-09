@@ -64,6 +64,18 @@ export interface PricingStatsResult {
   ignored: PricingStatsIgnoredComp[];
 }
 
+export type PricingConfidence = 'low' | 'medium' | 'high';
+
+export interface PricingConfidenceInput {
+  comps: NormalizedSoldComp[];
+  stats: PricingStatsResult;
+}
+
+export interface PricingConfidenceResult {
+  confidence: PricingConfidence;
+  reasons: string[];
+}
+
 export interface PricingProviderResult {
   provider: string;
   query: string;
