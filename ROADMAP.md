@@ -127,9 +127,9 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9B.2 | BE/Pricing | Add sold-comps normalizer | Raw provider records normalize into stable comp objects with price, shipping, total, sold date, title, and URL | 
 | 9B.3 | BE/Pricing | Add deterministic pricing stats| Service computes sold count, median, low, high, and deterministic fallback price   |
 | 9B.4 | BE/Pricing | Add confidence scoring  | Pricing output includes confidence only; no single/lot recommendation logic |
--->
+
 | 9B.5 | BE/Tests | Add normalizer fixture tests | Noisy Apify-like records are parsed, filtered, and priced predictably |
-| 9B.6 | DOCS | Update docs to reflect new pricing service | |
+-->
 | 9C.1 | BE/Jobs | Add `runResearchPriceJob` fixture path | A `needs_review` single listing can run pricing and complete |
 | 9C.2 | BE/Jobs | Keep pricing workflow-safe | Pricing failures do not alter listing workflow, block review, or write to `listing.last_error_*` |
 | 9C.3 | BE/Jobs | Update listing price on pricing success | `listings.price` is overwritten only from a valid suggested price; listing stays `needs_review/review_pending` |

@@ -3,6 +3,7 @@ import type { JobRow } from '@ebay-inventory/data';
 const DEFAULT_GENERATE_AI_MAX_ATTEMPTS = 3;
 const DEFAULT_PUBLISH_MAX_ATTEMPTS = 3;
 const DEFAULT_PROCESS_IMAGES_MAX_ATTEMPTS = 2;
+const DEFAULT_RESEARCH_PRICE_MAX_ATTEMPTS = 1;
 const DEFAULT_STALE_LEASE_MS = 15 * 60 * 1000;
 const DEFAULT_RETRY_DELAY_FIRST_MS = 60 * 1000;
 const DEFAULT_RETRY_DELAY_NEXT_MS = 5 * 60 * 1000;
@@ -47,6 +48,14 @@ export function getDefaultMaxAttempts(
       env,
       'SIDECAR_JOB_MAX_ATTEMPTS_PUBLISH',
       DEFAULT_PUBLISH_MAX_ATTEMPTS
+    );
+  }
+
+  if (jobType === 'research_price') {
+    return readPositiveIntegerEnv(
+      env,
+      'SIDECAR_JOB_MAX_ATTEMPTS_RESEARCH_PRICE',
+      DEFAULT_RESEARCH_PRICE_MAX_ATTEMPTS
     );
   }
 

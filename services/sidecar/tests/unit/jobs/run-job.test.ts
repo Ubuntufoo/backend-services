@@ -1,6 +1,7 @@
 import type {
   AiModelAttemptRow,
   JobRow,
+  ListingPriceResearchRow,
   ListingRow,
   ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
@@ -70,6 +71,24 @@ const queuedPublishJob: JobRow = {
   last_error_code: null,
   listing_id: 'LIST-001',
   max_attempts: 3,
+  next_run_at: null,
+  status: 'queued',
+  updated_at: '2026-05-20T12:00:00.000Z',
+};
+
+const queuedResearchPriceJob: JobRow = {
+  attempts: 0,
+  created_at: '2026-05-20T12:00:00.000Z',
+  gemini_attempt_count: 0,
+  gemini_attempts: [],
+  gemini_selected_model: null,
+  id: 'job-research-price',
+  job_type: 'research_price',
+  last_error: null,
+  last_error_at: null,
+  last_error_code: null,
+  listing_id: 'LIST-001',
+  max_attempts: 1,
   next_run_at: null,
   status: 'queued',
   updated_at: '2026-05-20T12:00:00.000Z',
@@ -164,6 +183,34 @@ function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   };
 }
 
+function createListingPriceResearchRow(
+  overrides: Partial<ListingPriceResearchRow> = {}
+): ListingPriceResearchRow {
+  return {
+    comps: [],
+    confidence: null,
+    created_at: '2026-05-20T13:00:00.000Z',
+    error_code: null,
+    error_message: null,
+    id: 'listing-price-research-1',
+    listing_id: 'LIST-001',
+    llm_price_explanation: null,
+    llm_reasoning_json: {},
+    llm_rejected_comp_ids: [],
+    llm_selected_comp_ids: [],
+    median_sold_price: null,
+    pricing_model_name: null,
+    provider: 'fixture',
+    query: null,
+    raw_result_json: {},
+    sold_count: null,
+    status: 'pending',
+    suggested_price: null,
+    updated_at: '2026-05-20T13:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
@@ -192,7 +239,9 @@ function createDataAccess({
   const listingStates = workflowStates.length > 0 ? [...workflowStates] : listing ? [listing] : [];
   let jobState = job ? { ...job } : null;
   const aiModelAttemptStates: AiModelAttemptRow[] = [];
+  const listingPriceResearchStates: ListingPriceResearchRow[] = [];
   let aiModelAttemptIdCounter = 0;
+  let listingPriceResearchIdCounter = 0;
   const dailyUsageErrors = [...(dailyUsageIncrementErrors ?? [])];
 
   const jobsGetById = vi.fn(async () => (jobState ? { ...jobState } : null));
@@ -251,6 +300,45 @@ function createDataAccess({
     } as ListingRow;
     listingStates.push(nextState);
     return nextState;
+  });
+  const listingPriceResearchCreate = vi.fn(async (input) => {
+    listingPriceResearchIdCounter += 1;
+    const state = createListingPriceResearchRow({
+      ...input,
+      id: `listing-price-research-${listingPriceResearchIdCounter}`,
+    });
+    listingPriceResearchStates.push(state);
+    return { ...state };
+  });
+  const listingPriceResearchMarkFailed = vi.fn(async (input) => {
+    const current = listingPriceResearchStates.find((candidate) => candidate.id === input.id);
+    if (!current) {
+      throw new Error('listing price research missing');
+    }
+
+    const nextState = {
+      ...current,
+      ...input,
+      status: 'failed',
+    } as ListingPriceResearchRow;
+    listingPriceResearchStates[listingPriceResearchStates.indexOf(current)] = nextState;
+    return { ...nextState };
+  });
+  const listingPriceResearchMarkSucceeded = vi.fn(async (input) => {
+    const current = listingPriceResearchStates.find((candidate) => candidate.id === input.id);
+    if (!current) {
+      throw new Error('listing price research missing');
+    }
+
+    const nextState = {
+      ...current,
+      ...input,
+      error_code: null,
+      error_message: null,
+      status: 'succeeded',
+    } as ListingPriceResearchRow;
+    listingPriceResearchStates[listingPriceResearchStates.indexOf(current)] = nextState;
+    return { ...nextState };
   });
   const ordersCreate = vi.fn();
   const ordersGetByOrderId = vi.fn();
@@ -562,6 +650,11 @@ function createDataAccess({
       saveImageMetadata: listingsSaveImageMetadata,
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
+    },
+    listingPriceResearch: {
+      create: listingPriceResearchCreate,
+      markFailed: listingPriceResearchMarkFailed,
+      markSucceeded: listingPriceResearchMarkSucceeded,
     },
     orders: {
       create: ordersCreate,
@@ -2242,6 +2335,253 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('completed');
     expect(dataAccess.jobs.complete).toHaveBeenCalledWith('job-process-images');
+  });
+
+  it('runs fixture pricing for a needs_review single listing and stores succeeded research', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing: createListingRow({
+        category_id: '261328',
+        condition_id: '2750',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+      }),
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing).toMatchObject({
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
+      listing_id: 'LIST-001',
+      provider: 'fixture',
+      status: 'pending',
+    });
+    expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confidence: expect.stringMatching(/^(low|medium|high)$/),
+        comps: expect.arrayContaining([
+          expect.objectContaining({
+            id: expect.any(String),
+            source: 'provider',
+          }),
+        ]),
+        llm_price_explanation: null,
+        llm_reasoning_json: {},
+        llm_rejected_comp_ids: [],
+        llm_selected_comp_ids: [],
+        median_sold_price: expect.any(Number),
+        pricing_model_name: 'deterministic-fixture-v1',
+        raw_result_json: expect.objectContaining({
+          provider: 'fixture',
+        }),
+        sold_count: expect.any(Number),
+        suggested_price: expect.any(Number),
+      })
+    );
+
+    const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+      .calls[0]?.[0];
+    expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
+    expect(markSucceededInput?.query).toContain('category:');
+    expect(markSucceededInput?.query).toContain('condition:');
+    expect(markSucceededInput?.raw_result_json).toMatchObject({
+      listingId: 'LIST-001',
+      returnedSoldComps: expect.any(Number),
+    });
+    expect(markSucceededInput?.comps).not.toHaveLength(0);
+    expect(markSucceededInput).not.toHaveProperty('recommendation');
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      price: markSucceededInput?.suggested_price,
+    });
+  });
+
+  it('fails research_price for lot listings without changing listing state', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      listing_type: 'lot',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Mixed card lot',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      listing_type: 'lot',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('fails research_price for non-needs_review listings without changing listing state', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+      title: 'Already approved listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    });
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('fails research_price when listing is missing', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing: null,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_listing_not_found');
+    expect(result.listing).toBeNull();
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+  });
+
+  it('marks listing price research failed when deterministic suggested price is missing', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Price me',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        computeStats: vi.fn(() => ({
+          currency: 'USD',
+          deterministicSuggestedPrice: null,
+          highSoldPrice: 20,
+          ignored: [],
+          lowSoldPrice: 10,
+          medianSoldPrice: 15,
+          soldCount: 12,
+        })),
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_suggested_price_invalid');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      price: listing.price,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: 'research_price_suggested_price_invalid',
+        llm_reasoning_json: {},
+        pricing_model_name: 'deterministic-fixture-v1',
+      })
+    );
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Broken provider listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingProvider: {
+          fetchSoldComps: vi.fn(async () => {
+            throw new Error('fixture exploded');
+          }),
+          name: 'fixture',
+        },
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_failed');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: 'research_price_failed',
+        error_message: 'fixture exploded',
+      })
+    );
+    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 
   it('fails unsupported job types without touching listing workflow', async () => {
