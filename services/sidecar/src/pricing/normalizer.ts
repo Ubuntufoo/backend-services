@@ -8,6 +8,8 @@ import type {
 } from './types.js';
 
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
+const ISO_SOLD_DATE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const REJECTION_REASONS = {
   blankTitle: 'blank_title',
@@ -60,8 +62,8 @@ function normalizeSoldComp(rawComp: RawSoldComp):
     }
   }
 
-  const soldDate = new Date(rawComp.soldDate);
-  if (Number.isNaN(soldDate.getTime())) {
+  const soldDate = normalizeSoldDate(rawComp.soldDate);
+  if (!soldDate) {
     return { reason: REJECTION_REASONS.invalidSoldDate };
   }
 
@@ -103,6 +105,19 @@ function normalizeMoneyValue(value: { value: number; currency: string }): Normal
 function normalizeOptionalTrimmedString(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeSoldDate(value: string): Date | null {
+  if (!ISO_SOLD_DATE_PATTERN.test(value)) {
+    return null;
+  }
+
+  const soldDate = new Date(value);
+  if (Number.isNaN(soldDate.getTime())) {
+    return null;
+  }
+
+  return soldDate;
 }
 
 function tryParseUrl(value: string): URL | null {

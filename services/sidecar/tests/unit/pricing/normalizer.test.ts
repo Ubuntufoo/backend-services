@@ -95,9 +95,15 @@ describe('normalizeSoldComps', () => {
   });
 
   it('rejects invalid soldDate', () => {
-    const normalized = normalizeSoldComps([buildRawComp({ soldDate: 'not-a-date' })]);
-
-    expect(normalized.rejected).toEqual([{ index: 0, reason: 'invalid_sold_date' }]);
+    expect(normalizeSoldComps([buildRawComp({ soldDate: 'not-a-date' })]).rejected).toEqual([
+      { index: 0, reason: 'invalid_sold_date' },
+    ]);
+    expect(normalizeSoldComps([buildRawComp({ soldDate: '2026-01-15' })]).rejected).toEqual([
+      { index: 0, reason: 'invalid_sold_date' },
+    ]);
+    expect(normalizeSoldComps([buildRawComp({ soldDate: '01/15/2026 12:34:56' })]).rejected).toEqual([
+      { index: 0, reason: 'invalid_sold_date' },
+    ]);
   });
 
   it('normalizes blank condition to null', () => {
