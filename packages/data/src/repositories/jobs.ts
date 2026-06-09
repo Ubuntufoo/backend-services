@@ -394,8 +394,6 @@ export async function resetJobForManualRetry(
 
   if (
     (current.job_type === GENERATE_AI_JOB_TYPE && isActiveGenerateAiConflict(result.error)) ||
-    (current.job_type === RESEARCH_PRICE_JOB_TYPE &&
-      isActiveResearchPriceConflict(result.error)) ||
     (current.job_type === PUBLISH_JOB_TYPE && isActivePublishConflict(result.error))
   ) {
     return null;
