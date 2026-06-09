@@ -2537,6 +2537,48 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 
+  it('does not update listing price when markSucceeded fails and preserves listing last_error fields', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      price: 9.99,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Mark succeeded failure listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+    vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(async () => {
+      throw new Error('write succeeded row failed');
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_failed');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      price: listing.price,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: 'research_price_failed',
+        error_message: 'write succeeded row failed',
+      })
+    );
+  });
+
   it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
     const listing = createListingRow({
       last_error_at: '2026-05-19T12:00:00.000Z',

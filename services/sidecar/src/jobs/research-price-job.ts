@@ -248,10 +248,6 @@ export async function runResearchPriceJob(
       stats,
     });
 
-    const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
-      price: stats.deterministicSuggestedPrice,
-    });
-
     await dependencies.dataAccess.listingPriceResearch.markSucceeded({
       comps: asJson(normalized.comps),
       confidence: confidence.confidence,
@@ -266,6 +262,10 @@ export async function runResearchPriceJob(
       raw_result_json: asJson(providerResult.rawResult),
       sold_count: stats.soldCount,
       suggested_price: stats.deterministicSuggestedPrice,
+    });
+
+    const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
+      price: stats.deterministicSuggestedPrice,
     });
 
     const completedJob = await dependencies.dataAccess.jobs.complete(job.id);
