@@ -125,8 +125,9 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9A.5 | BE/Env | Add disabled-by-default Apify config | Blank Apify env values do not block startup; token/actor required only when enabled; `APIFY_MIN_SOLD_COMPS=12` |
 | 9B.1 | BE/Pricing | Add pricing provider interface and fixture provider | Pricing tests can run without Apify or live network calls; fixture returns at least 12 sold comps |
 | 9B.2 | BE/Pricing | Add sold-comps normalizer | Raw provider records normalize into stable comp objects with price, shipping, total, sold date, title, and URL | 
-| 9B.3 | BE/Pricing | Add deterministic pricing stats| Service computes sold count, median, low, high, and deterministic fallback price   |-->
+| 9B.3 | BE/Pricing | Add deterministic pricing stats| Service computes sold count, median, low, high, and deterministic fallback price   |
 | 9B.4 | BE/Pricing | Add confidence scoring  | Pricing output includes confidence only; no single/lot recommendation logic |
+-->
 | 9B.5 | BE/Tests | Add normalizer fixture tests | Noisy Apify-like records are parsed, filtered, and priced predictably |
 | 9B.6 | DOCS | Update docs to reflect new pricing service | |
 | 9C.1 | BE/Jobs | Add `runResearchPriceJob` fixture path | A `needs_review` single listing can run pricing and complete |
