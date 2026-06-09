@@ -37,12 +37,17 @@ import {
   prepareRecordCreatedListings,
   type PrepareRecordCreatedListingsResult,
 } from './prepare-record-created-listings.js';
+import {
+  runResearchPriceJob,
+  type ResearchPriceJobDependencies,
+} from './research-price-job.js';
 import { getNextRetryAt, hasAttemptsRemaining } from './retry-policy.js';
 import { createLogger } from '@/utils/logger.js';
 
 const GENERATE_AI_JOB_TYPE = 'generate_ai';
 const PUBLISH_JOB_TYPE = 'publish';
 const PROCESS_IMAGES_JOB_TYPE = 'process_images';
+const RESEARCH_PRICE_JOB_TYPE = 'research_price';
 const JOB_STATUS_RUNNING = 'running';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
@@ -74,6 +79,7 @@ export interface RunSidecarJobOptions {
   prepareListingDraft?: PrepareListingDraftFn;
   publishListing?: PublishListingFn;
   prepareRecordCreatedListings?: PrepareRecordCreatedListingsFn;
+  researchPrice?: Partial<Omit<ResearchPriceJobDependencies, 'dataAccess' | 'now'>>;
 }
 
 export interface AssetPrepSummary {
@@ -1062,6 +1068,12 @@ export async function runSidecarJob(
         dataAccess,
         now,
         prepareRecordCreatedListings: runPrepareRecordCreatedListings,
+      });
+    case RESEARCH_PRICE_JOB_TYPE:
+      return await runResearchPriceJob(runnableJob, {
+        ...options.researchPrice,
+        dataAccess,
+        now,
       });
     default: {
       const errorAt = asIsoTimestamp(now);

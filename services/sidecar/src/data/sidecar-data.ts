@@ -14,6 +14,7 @@ import {
   DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   createJob,
+  createListingPriceResearch,
   createListing,
   createOrder,
   enqueueGenerateAiJob,
@@ -40,6 +41,8 @@ import {
   listStaleRunningJobs,
   listListings,
   listListingsByStatus,
+  markListingPriceResearchFailed,
+  markListingPriceResearchSucceeded,
   prepareListingForGenerateAi,
   markListingPublishFailed,
   resetJobForManualRetry,
@@ -73,6 +76,8 @@ import {
   type ListApprovedForExportListingsOptions,
   type ListDueQueuedJobsOptions,
   type ListListingsByStatusOptions,
+  type ListingPriceResearchInsert,
+  type ListingPriceResearchRow,
   type ListingInsert,
   type ListingImageMetadataUpdate,
   type ListingRow,
@@ -155,6 +160,15 @@ export interface SidecarDataAccess {
     update(listingId: string, changes: ListingUpdate): Promise<ListingRow>;
     updateWorkflowState(input: ListingWorkflowTransitionInput): Promise<ListingRow>;
   };
+  listingPriceResearch: {
+    create(input: ListingPriceResearchInsert): Promise<ListingPriceResearchRow>;
+    markFailed(
+      input: Parameters<typeof markListingPriceResearchFailed>[1]
+    ): Promise<ListingPriceResearchRow>;
+    markSucceeded(
+      input: Parameters<typeof markListingPriceResearchSucceeded>[1]
+    ): Promise<ListingPriceResearchRow>;
+  };
   orders: {
     create(input: OrderInsert): Promise<OrderRow>;
     getByOrderId(orderId: string): Promise<OrderRow | null>;
@@ -211,6 +225,11 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       saveImageMetadata: async (input) => await saveListingImageMetadata(client, input),
       update: async (listingId, changes) => await updateListing(client, listingId, changes),
       updateWorkflowState: async (input) => await updateListingWorkflowState(client, input),
+    },
+    listingPriceResearch: {
+      create: async (input) => await createListingPriceResearch(client, input),
+      markFailed: async (input) => await markListingPriceResearchFailed(client, input),
+      markSucceeded: async (input) => await markListingPriceResearchSucceeded(client, input),
     },
     jobs: {
       claimDueQueued: async (jobId, now) => await claimDueQueuedJob(client, jobId, now),

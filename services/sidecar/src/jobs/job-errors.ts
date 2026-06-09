@@ -42,6 +42,11 @@ export const JOB_ERROR_CODES = {
   PUBLISH_LISTING_NOT_ELIGIBLE: 'publish_listing_not_eligible',
   PUBLISH_MISSING_LISTING_ID: 'publish_missing_listing_id',
   PROCESS_IMAGES_FAILED: 'process_images_failed',
+  RESEARCH_PRICE_FAILED: 'research_price_failed',
+  RESEARCH_PRICE_LISTING_NOT_ELIGIBLE: 'research_price_listing_not_eligible',
+  RESEARCH_PRICE_LISTING_NOT_FOUND: 'research_price_listing_not_found',
+  RESEARCH_PRICE_MISSING_LISTING_ID: 'research_price_missing_listing_id',
+  RESEARCH_PRICE_SUGGESTED_PRICE_INVALID: 'research_price_suggested_price_invalid',
   RETRY_EXHAUSTED: 'retry_exhausted',
   STALE_WORKER: 'stale_worker',
   UNSUPPORTED_JOB_TYPE: 'unsupported_job_type',
@@ -144,6 +149,7 @@ function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCatego
     case JOB_ERROR_CODES.PUBLISH_APP_SETTINGS_NOT_FOUND:
     case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_ELIGIBLE:
     case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_READY:
+    case JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE:
       return 'user_fixable';
     case JOB_ERROR_CODES.GENERATE_AI_LISTING_NOT_FOUND:
     case JOB_ERROR_CODES.GENERATE_AI_MISSING_LISTING_ID:
@@ -155,6 +161,10 @@ function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCatego
     case JOB_ERROR_CODES.PUBLISH_INVENTORY_ITEM_UPSERT_FAILED:
     case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_FOUND:
     case JOB_ERROR_CODES.PUBLISH_MISSING_LISTING_ID:
+    case JOB_ERROR_CODES.RESEARCH_PRICE_FAILED:
+    case JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND:
+    case JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID:
+    case JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID:
     case JOB_ERROR_CODES.RETRY_EXHAUSTED:
     case JOB_ERROR_CODES.UNSUPPORTED_JOB_TYPE:
       return 'terminal';
@@ -415,6 +425,18 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
     return new SidecarJobError(
       JOB_ERROR_CODES.GENERATE_AI_FAILED,
       'recoverable',
+      asErrorMessage(error),
+      buildBaseContext(error),
+      {
+        cause: error instanceof Error ? error : undefined,
+      }
+    );
+  }
+
+  if (jobType === 'research_price') {
+    return new SidecarJobError(
+      JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      'terminal',
       asErrorMessage(error),
       buildBaseContext(error),
       {
