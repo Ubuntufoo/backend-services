@@ -23,6 +23,8 @@ export interface ResolvedAiModelRoute {
   isFreeTierEligible: boolean;
   modelName: string;
   provider: string;
+  requestsPerDay: number | null;
+  requestsPerMinute: number | null;
   routeOrder: number;
   supportsImages: boolean;
   supportsJsonOutput: boolean;
@@ -50,6 +52,8 @@ interface JoinedCatalogRow extends Pick<
   | 'free_tier_status'
   | 'is_enabled'
   | 'is_free_tier_eligible'
+  | 'requests_per_day'
+  | 'requests_per_minute'
   | 'supports_images'
   | 'supports_json_output'
   | 'supports_structured_output'
@@ -135,6 +139,8 @@ function mapResolvedRoute(
     isFreeTierEligible: catalog.is_free_tier_eligible,
     modelName: row.model_name,
     provider: row.provider,
+    requestsPerDay: catalog.requests_per_day,
+    requestsPerMinute: catalog.requests_per_minute,
     routeOrder: row.route_order,
     supportsImages: catalog.supports_images,
     supportsJsonOutput: catalog.supports_json_output,
@@ -151,7 +157,7 @@ export async function resolveAiModelRoutesForTask(
   let query = client
     .from('ai_model_task_routes')
     .select(
-      `task_type, provider, model_name, route_order, is_enabled, require_images, require_json_output, require_structured_output, fallback_on_rate_limit, fallback_on_quota_exceeded, fallback_on_unavailable, catalog:ai_model_catalog!inner(display_name, free_tier_status, is_enabled, is_free_tier_eligible, supports_text, supports_images, supports_json_output, supports_structured_output)`
+      `task_type, provider, model_name, route_order, is_enabled, require_images, require_json_output, require_structured_output, fallback_on_rate_limit, fallback_on_quota_exceeded, fallback_on_unavailable, catalog:ai_model_catalog!inner(display_name, free_tier_status, is_enabled, is_free_tier_eligible, requests_per_minute, requests_per_day, supports_text, supports_images, supports_json_output, supports_structured_output)`
     )
     .eq('task_type', input.taskType)
     .eq('is_enabled', true);

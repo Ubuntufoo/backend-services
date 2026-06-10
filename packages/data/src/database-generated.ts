@@ -103,6 +103,8 @@ export type Database = {
           notes: string | null;
           output_token_limit: number | null;
           provider: string;
+          requests_per_day: number | null;
+          requests_per_minute: number | null;
           supports_images: boolean;
           supports_json_output: boolean;
           supports_structured_output: boolean;
@@ -125,6 +127,8 @@ export type Database = {
           notes?: string | null;
           output_token_limit?: number | null;
           provider: string;
+          requests_per_day?: number | null;
+          requests_per_minute?: number | null;
           supports_images?: boolean;
           supports_json_output?: boolean;
           supports_structured_output?: boolean;
@@ -147,6 +151,8 @@ export type Database = {
           notes?: string | null;
           output_token_limit?: number | null;
           provider?: string;
+          requests_per_day?: number | null;
+          requests_per_minute?: number | null;
           supports_images?: boolean;
           supports_json_output?: boolean;
           supports_structured_output?: boolean;
