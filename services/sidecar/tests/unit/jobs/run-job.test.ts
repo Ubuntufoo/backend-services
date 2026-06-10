@@ -2338,16 +2338,35 @@ describe('runSidecarJob', () => {
   });
 
   it('runs fixture pricing for a needs_review single listing and stores succeeded research', async () => {
+    const writeOrder: string[] = [];
     const dataAccess = createDataAccess({
       job: queuedResearchPriceJob,
       listing: createListingRow({
         category_id: '261328',
         condition_id: '2750',
+        item_specifics: {
+          'Card Number': '136',
+          Manufacturer: 'Panini',
+          Player: 'Victor Wembanyama',
+          Set: 'Prizm',
+          Year: '2023',
+        },
         price: 9.99,
         status: 'needs_review',
         sub_status: 'review_pending',
         title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
       }),
+      onListingsUpdate: () => {
+        writeOrder.push('listing_update');
+      },
+    });
+    vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(async (input) => {
+      writeOrder.push('research_success');
+      return createListingPriceResearchRow({
+        ...input,
+        id: input.id,
+        status: 'succeeded',
+      });
     });
 
     const result = await runSidecarJob('job-research-price', {
@@ -2393,6 +2412,10 @@ describe('runSidecarJob', () => {
     expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
     expect(markSucceededInput?.query).toContain('category:');
     expect(markSucceededInput?.query).toContain('condition:');
+    expect(markSucceededInput?.query).toContain('player:Victor Wembanyama');
+    expect(markSucceededInput?.query).toContain('year:2023');
+    expect(markSucceededInput?.query).toContain('manufacturer:Panini');
+    expect(markSucceededInput?.query).toContain('card_number:136');
     expect(markSucceededInput?.raw_result_json).toMatchObject({
       listingId: 'LIST-001',
       returnedSoldComps: expect.any(Number),
@@ -2402,6 +2425,7 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
       price: markSucceededInput?.suggested_price,
     });
+    expect(writeOrder).toEqual(['research_success', 'listing_update']);
   });
 
   it('fails research_price for lot listings without changing listing state', async () => {
@@ -2623,6 +2647,92 @@ describe('runSidecarJob', () => {
       })
     );
     expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('marks listing price research failed on normalizer errors without writing listing workflow errors', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Broken normalizer listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        normalizeComps: vi.fn(() => {
+          throw new Error('normalize exploded');
+        }),
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_failed');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: 'research_price_failed',
+        error_message: 'normalize exploded',
+      })
+    );
+    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
+  it('fails unsupported pricing providers clearly before mutating research or listing state', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Unsupported provider listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingProvider: {
+          fetchSoldComps: vi.fn(async () => {
+            throw new Error('should not run');
+          }),
+          name: 'apify',
+        },
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_failed');
+    expect(result.job.last_error).toContain('Unsupported pricing provider "apify"');
+    expect(result.listing).toMatchObject({
+      last_error_at: listing.last_error_at,
+      last_error_code: listing.last_error_code,
+      last_error_message: listing.last_error_message,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
   });
 

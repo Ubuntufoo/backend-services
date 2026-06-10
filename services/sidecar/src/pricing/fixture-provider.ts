@@ -9,6 +9,14 @@ const DEFAULT_MIN_SOLD_COMPS = 12;
 const FIXTURE_FETCHED_AT = '2026-01-01T00:00:00.000Z';
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const FIXTURE_CURRENCY = 'USD';
+const FIXTURE_QUERY_ITEM_SPECIFIC_KEYS = [
+  'Player',
+  'Year',
+  'Manufacturer',
+  'Card Number',
+  'Set',
+  'Parallel/Variety',
+] as const;
 
 const BASE_FIXTURE_SOLD_COMPS: RawSoldComp[] = [
   {
@@ -177,6 +185,17 @@ function buildFixtureQuery(input: PricingProviderInput): string {
     queryParts.push(`condition:${input.conditionId}`);
   }
 
+  for (const key of FIXTURE_QUERY_ITEM_SPECIFIC_KEYS) {
+    const value = input.itemSpecifics?.[key];
+    const normalizedValue = Array.isArray(value)
+      ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0).join(', ')
+      : value?.trim();
+
+    if (normalizedValue) {
+      queryParts.push(`${normalizeQueryKey(key)}:${normalizedValue}`);
+    }
+  }
+
   return queryParts.join(' | ');
 }
 
@@ -184,4 +203,8 @@ function shiftIsoDate(isoDate: string, cycle: number): string {
   const date = new Date(isoDate);
   date.setUTCDate(date.getUTCDate() - cycle);
   return date.toISOString();
+}
+
+function normalizeQueryKey(key: string): string {
+  return key.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replaceAll(/^_|_$/g, '');
 }

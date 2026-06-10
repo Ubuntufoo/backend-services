@@ -19,7 +19,9 @@ describe('FixturePricingProvider', () => {
     const result = await provider.fetchSoldComps(baseInput);
 
     expect(result.provider).toBe('fixture');
-    expect(result.query).toBe('Victor Wembanyama rookie card | category:261328 | condition:3000');
+    expect(result.query).toBe(
+      'Victor Wembanyama rookie card | category:261328 | condition:3000 | player:Victor Wembanyama | set:Prizm'
+    );
     expect(result.fetchedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(result.soldComps).toHaveLength(12);
     expect(result.rawResult).toMatchObject({

@@ -89,6 +89,59 @@ function asJson(value: unknown): Json {
   return value as Json;
 }
 
+function buildPricingProviderInput(listing: ListingRow, listingId: string): PricingProviderInput {
+  const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
+  const title = asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId;
+
+  return {
+    categoryId: listing.category_id,
+    conditionId: listing.condition_id,
+    itemSpecifics,
+    listingId,
+    minSoldComps: DEFAULT_MIN_SOLD_COMPS,
+    title,
+  };
+}
+
+function buildPricingTitleFromItemSpecifics(
+  itemSpecifics: PricingProviderInput['itemSpecifics']
+): string | undefined {
+  if (!itemSpecifics) {
+    return undefined;
+  }
+
+  const titleParts = [
+    itemSpecifics.Player,
+    itemSpecifics.Year,
+    itemSpecifics.Manufacturer,
+    itemSpecifics.Set,
+    itemSpecifics['Card Number'],
+  ]
+    .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return titleParts.length > 0 ? titleParts.join(' ') : undefined;
+}
+
+function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): PricingProvider {
+  const pricingProvider = dependencies.pricingProvider ?? createFixturePricingProvider();
+
+  if (pricingProvider.name !== FIXTURE_PROVIDER_NAME) {
+    throw new SidecarJobError(
+      JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      'terminal',
+      `Unsupported pricing provider "${pricingProvider.name}" for research_price. Only "${FIXTURE_PROVIDER_NAME}" is supported.`,
+      {
+        provider: pricingProvider.name,
+        supported_provider: FIXTURE_PROVIDER_NAME,
+      }
+    );
+  }
+
+  return pricingProvider;
+}
+
 async function getListingSafely(
   dataAccess: SidecarDataAccess,
   listingId: string
@@ -209,7 +262,6 @@ export async function runResearchPriceJob(
     };
   }
 
-  const pricingProvider = dependencies.pricingProvider ?? createFixturePricingProvider();
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
@@ -217,20 +269,14 @@ export async function runResearchPriceJob(
   let providerResult: PricingProviderResult | undefined;
 
   try {
+    const pricingProvider = resolvePricingProvider(dependencies);
     research = await dependencies.dataAccess.listingPriceResearch.create({
       listing_id: listingId,
       provider: FIXTURE_PROVIDER_NAME,
       status: 'pending',
     });
 
-    providerResult = await pricingProvider.fetchSoldComps({
-      categoryId: listing.category_id,
-      conditionId: listing.condition_id,
-      itemSpecifics: getListingItemSpecifics(listing.item_specifics),
-      listingId,
-      minSoldComps: DEFAULT_MIN_SOLD_COMPS,
-      title: listing.title ?? listingId,
-    });
+    providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
 
     const normalized = runNormalizeComps(providerResult.soldComps);
     const stats = runComputeStats(normalized.comps);
