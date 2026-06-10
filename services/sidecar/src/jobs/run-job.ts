@@ -38,6 +38,7 @@ import {
   type PrepareRecordCreatedListingsResult,
 } from './prepare-record-created-listings.js';
 import {
+  isResearchPriceListingEligible,
   runResearchPriceJob,
   type ResearchPriceJobDependencies,
 } from './research-price-job.js';
@@ -467,6 +468,25 @@ async function hasOtherPublishJobsForListing(
   );
 }
 
+async function enqueueResearchPriceAfterGenerate(
+  dataAccess: SidecarDataAccess,
+  listing: ListingRow
+): Promise<void> {
+  if (!isResearchPriceListingEligible(listing)) {
+    return;
+  }
+
+  try {
+    await dataAccess.jobs.enqueueResearchPrice(listing.listing_id);
+  } catch (error) {
+    jobLogger.warn('Failed to enqueue research_price after generate_ai success.', {
+      error: error instanceof Error ? error.message : String(error),
+      listingId: listing.listing_id,
+      phase: 'post_generate_ai_enqueue',
+    });
+  }
+}
+
 async function runGenerateAiJob(
   job: JobRow,
   options: Required<
@@ -732,6 +752,7 @@ async function runGenerateAiJob(
       listingId,
       buildGeneratedListingReviewUpdate(listing, routerResult.draft)
     );
+    await enqueueResearchPriceAfterGenerate(options.dataAccess, reviewListing);
     const completedJob = await options.dataAccess.jobs.complete(job.id);
 
     return {
