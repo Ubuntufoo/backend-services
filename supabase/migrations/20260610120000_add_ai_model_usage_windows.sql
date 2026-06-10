@@ -332,7 +332,7 @@ begin
       else null::integer
     end,
     case
-      when coalesce(p_requests_per_minute, 0) > 0 then v_minute_result.request_limit
+      when coalesce(p_requests_per_minute, 0) > 0 then p_requests_per_minute
       else null::integer
     end,
     case
@@ -341,7 +341,7 @@ begin
       else null::integer
     end,
     case
-      when coalesce(p_requests_per_minute, 0) > 0 then v_minute_result.window_start
+      when coalesce(p_requests_per_minute, 0) > 0 then v_minute_window_start
       else null::timestamptz
     end,
     case
@@ -349,7 +349,7 @@ begin
       else null::integer
     end,
     case
-      when coalesce(p_requests_per_day, 0) > 0 then v_day_result.request_limit
+      when coalesce(p_requests_per_day, 0) > 0 then p_requests_per_day
       else null::integer
     end,
     case
