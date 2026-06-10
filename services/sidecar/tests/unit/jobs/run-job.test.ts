@@ -258,6 +258,55 @@ function expectPriceOnlyUpdateWrites(
   }
 }
 
+function expectDeterministicLlmFallbackPersistence(params: {
+  dataAccess: SidecarDataAccess;
+  listing: ListingRow;
+  result: Awaited<ReturnType<typeof runSidecarJob>>;
+}): void {
+  const { dataAccess, listing, result } = params;
+  const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock.calls[0]?.[0];
+
+  expect(result.job.status).toBe('completed');
+  expect(result.listing).toMatchObject({
+    last_error_at: listing.last_error_at,
+    last_error_code: listing.last_error_code,
+    last_error_context: listing.last_error_context,
+    last_error_message: listing.last_error_message,
+    status: 'needs_review',
+    sub_status: 'review_pending',
+  });
+  expect(markSucceededInput).toMatchObject({
+    confidence: 'medium',
+    llm_price_explanation: null,
+    llm_reasoning_json: {
+      analyst: 'fixture',
+      error: expect.any(String),
+      fallback: 'llm_analysis_failed',
+      status: 'failed',
+    },
+    llm_rejected_comp_ids: [],
+    llm_selected_comp_ids: [],
+    pricing_model_name: 'deterministic-fixture-v1',
+    suggested_price: result.listing?.price,
+  });
+  expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
+  expect(markSucceededInput?.confidence).toBe('medium');
+  expect(markSucceededInput?.llm_reasoning_json).not.toMatchObject({
+    reasoning: expect.objectContaining({
+      confidence: expect.anything(),
+      priceExplanation: expect.anything(),
+      selectedCompIds: expect.anything(),
+      rejectedCompIds: expect.anything(),
+      suggestedPrice: expect.anything(),
+    }),
+  });
+  expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+  expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  expectNoWorkflowErrorFieldsWritten(
+    vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+  );
+}
+
 function expectNoPricingPreflightWrites(dataAccess: SidecarDataAccess): void {
   expect(dataAccess.listings.update).not.toHaveBeenCalled();
   expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
@@ -2569,6 +2618,7 @@ describe('runSidecarJob', () => {
       const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
         .calls[0]?.[0];
       expect(markSucceededInput).toMatchObject({
+        confidence: 'medium',
         llm_price_explanation: 'Selected comps support tighter midpoint.',
         llm_reasoning_json: {
           fallback: null,
@@ -2582,6 +2632,12 @@ describe('runSidecarJob', () => {
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
         suggested_price: 14.44,
+      });
+      expect(markSucceededInput?.confidence).toBe('medium');
+      expect(markSucceededInput?.llm_reasoning_json).toMatchObject({
+        reasoning: {
+          confidence: 'medium',
+        },
       });
       expect(markSucceededInput?.llm_selected_comp_ids).toHaveLength(2);
       expect(markSucceededInput?.llm_selected_comp_ids).toEqual(
@@ -2651,21 +2707,27 @@ describe('runSidecarJob', () => {
       const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
         .calls[0]?.[0];
       expect(markSucceededInput).toMatchObject({
+        confidence: 'medium',
         llm_price_explanation: 'Comps useful, but no safe override.',
         llm_reasoning_json: {
           fallback: 'llm_suggested_price_null',
           modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
           reasoning: {
+            confidence: 'medium',
             priceExplanation: 'Comps useful, but no safe override.',
+            rejectedCompIds: expect.arrayContaining([expect.any(String)]),
+            selectedCompIds: expect.arrayContaining([expect.any(String)]),
             suggestedPrice: null,
           },
           status: 'succeeded',
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
       });
+      expect(markSucceededInput?.confidence).toBe('medium');
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
-      expect(markSucceededInput?.suggested_price).not.toBeNull();
+      expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
       expect(markSucceededInput?.llm_selected_comp_ids).toEqual([expect.any(String)]);
+      expect(markSucceededInput?.llm_rejected_comp_ids).toHaveLength(11);
     });
 
     it.each([
@@ -2697,6 +2759,132 @@ describe('runSidecarJob', () => {
           },
         }),
       ],
+      [
+        'overlapping comp ids',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Selected comp duplicated in rejected list.',
+            rejectedCompIds: ['comp-1'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'duplicate comp ids',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Duplicate comp ids.',
+            rejectedCompIds: ['comp-2', 'comp-2'],
+            selectedCompIds: ['comp-1', 'comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'invalid confidence',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'certain',
+            priceExplanation: 'Invalid confidence.',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'overlong explanation',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'x'.repeat(501),
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'recommendation language',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Sell as single based on comps.',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'suggestedPrice string',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'String price.',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: '15.13',
+          },
+        }),
+      ],
+      [
+        'missing selectedCompIds',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Missing selected ids.',
+            rejectedCompIds: ['comp-2'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'missing rejectedCompIds',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Missing rejected ids.',
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'missing confidence',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            priceExplanation: 'Missing confidence.',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+      [
+        'missing priceExplanation',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
     ])(
       'falls back to deterministic price for %s without mutating listing workflow errors',
       async (_label, pricingAnalyst) => {
@@ -2723,38 +2911,71 @@ describe('runSidecarJob', () => {
           },
         });
 
-        expect(result.job.status).toBe('completed');
-        expect(result.listing).toMatchObject({
-          last_error_at: listing.last_error_at,
-          last_error_code: listing.last_error_code,
-          last_error_context: listing.last_error_context,
-          last_error_message: listing.last_error_message,
-          status: 'needs_review',
-          sub_status: 'review_pending',
+        expectDeterministicLlmFallbackPersistence({
+          dataAccess,
+          listing,
+          result,
         });
-
-        const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-          .calls[0]?.[0];
-        expect(markSucceededInput).toMatchObject({
-          llm_price_explanation: null,
-          llm_reasoning_json: {
-            analyst: 'fixture',
-            error: expect.any(String),
-            fallback: 'llm_analysis_failed',
-            status: 'failed',
-          },
-          llm_rejected_comp_ids: [],
-          llm_selected_comp_ids: [],
-          pricing_model_name: 'deterministic-fixture-v1',
-        });
-        expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
-        expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
-        expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-        expectNoWorkflowErrorFieldsWritten(
-          vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-        );
       }
     );
+
+    it('does not let valid llm confidence override deterministic confidence', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Confidence isolation listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const pricingAnalyst = {
+        analyze: vi.fn(async (input: { comps: Array<{ id: string }> }) => ({
+          modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+          prompt: {
+            systemInstruction: 'test',
+            userPrompt: 'test',
+          },
+          rawOutput: {},
+          reasoning: {
+            confidence: 'high' as const,
+            priceExplanation: 'Validated comps support tighter midpoint.',
+            rejectedCompIds: input.comps.slice(2).map((comp) => comp.id),
+            selectedCompIds: input.comps.slice(0, 2).map((comp) => comp.id),
+            suggestedPrice: 14.44,
+          },
+        })),
+        name: 'fixture',
+      };
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingAnalyst,
+        },
+      });
+
+      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock.calls[0]?.[0];
+      expect(result.job.status).toBe('completed');
+      expect(markSucceededInput).toMatchObject({
+        confidence: 'medium',
+        llm_reasoning_json: {
+          reasoning: {
+            confidence: 'high',
+            suggestedPrice: 14.44,
+          },
+        },
+        pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+        suggested_price: 14.44,
+      });
+      expect(markSucceededInput?.confidence).not.toBe(markSucceededInput?.llm_reasoning_json?.reasoning?.confidence);
+    });
 
     it('fails research_price for lot listings without changing listing state', async () => {
       const listing = createListingRow({

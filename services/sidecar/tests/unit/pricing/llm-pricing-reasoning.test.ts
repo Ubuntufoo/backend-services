@@ -61,104 +61,33 @@ describe('parseLlmPricingReasoningOutput', () => {
     expect(() => parseLlmPricingReasoningOutput('{', context)).toThrow(LlmPricingReasoningValidationError);
   });
 
-  it('rejects non-object output', () => {
-    expect(() => parseLlmPricingReasoningOutput([], context)).toThrow(/Expected object, received array/);
-  });
-
-  it('rejects missing required fields', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          selectedCompIds: ['comp-1'],
-        },
-        context,
-      ),
-    ).toThrow(/rejectedCompIds|confidence|priceExplanation/);
-  });
-
-  it('rejects invalid confidence', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          confidence: 'certain',
-        },
-        context,
-      ),
-    ).toThrow(/confidence/);
-  });
-
-  it('rejects unknown selected comp id', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          selectedCompIds: ['comp-1', 'unknown'],
-        },
-        context,
-      ),
-    ).toThrow(/selectedCompIds.*unknown compId/);
-  });
-
-  it('rejects unknown rejected comp id', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          rejectedCompIds: ['unknown'],
-        },
-        context,
-      ),
-    ).toThrow(/rejectedCompIds.*unknown compId/);
-  });
-
-  it('rejects selected and rejected overlap', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          selectedCompIds: ['comp-1'],
-          rejectedCompIds: ['comp-1'],
-        },
-        context,
-      ),
-    ).toThrow(/overlaps rejectedCompIds/);
-  });
-
-  it('rejects duplicate selected and rejected comp ids', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          selectedCompIds: ['comp-1', 'comp-1'],
-        },
-        context,
-      ),
-    ).toThrow(/duplicate compId/);
-
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          rejectedCompIds: ['comp-2', 'comp-2'],
-        },
-        context,
-      ),
-    ).toThrow(/duplicate compId/);
-  });
-
-  it('rejects invalid suggested prices', () => {
-    for (const suggestedPrice of ['12.50', Number.NaN, 0, -1, 0.001] as const) {
-      expect(() =>
-        parseLlmPricingReasoningOutput(
-          {
-            ...buildValidPayload(),
-            suggestedPrice,
-          },
-          context,
-        ),
-      ).toThrow(/suggestedPrice/);
-    }
+  it.each([
+    ['non-object output', [], /Expected object, received array/],
+    ['missing required fields', { selectedCompIds: ['comp-1'] }, /rejectedCompIds|confidence|priceExplanation/],
+    ['extra output field', { ...buildValidPayload(), extra: true }, /Unrecognized key\(s\) in object: 'extra'/],
+    ['invalid confidence', { ...buildValidPayload(), confidence: 'certain' }, /confidence/],
+    ['selectedCompIds not array', { ...buildValidPayload(), selectedCompIds: 'comp-1' }, /selectedCompIds/],
+    ['rejectedCompIds not array', { ...buildValidPayload(), rejectedCompIds: 'comp-2' }, /rejectedCompIds/],
+    ['selected unknown comp id', { ...buildValidPayload(), selectedCompIds: ['comp-1', 'unknown'] }, /selectedCompIds.*unknown compId/],
+    ['rejected unknown comp id', { ...buildValidPayload(), rejectedCompIds: ['unknown'] }, /rejectedCompIds.*unknown compId/],
+    ['selected duplicate comp id', { ...buildValidPayload(), selectedCompIds: ['comp-1', 'comp-1'] }, /duplicate compId/],
+    ['rejected duplicate comp id', { ...buildValidPayload(), rejectedCompIds: ['comp-2', 'comp-2'] }, /duplicate compId/],
+    ['selected rejected overlap', { ...buildValidPayload(), selectedCompIds: ['comp-1'], rejectedCompIds: ['comp-1'] }, /overlaps rejectedCompIds/],
+    ['selected non-string comp id', { ...buildValidPayload(), selectedCompIds: [123] }, /compId must be a string/],
+    ['rejected non-string comp id', { ...buildValidPayload(), rejectedCompIds: [123] }, /compId must be a string/],
+    ['suggestedPrice string', { ...buildValidPayload(), suggestedPrice: '12.50' }, /suggestedPrice/],
+    ['suggestedPrice NaN', { ...buildValidPayload(), suggestedPrice: Number.NaN }, /suggestedPrice/],
+    ['suggestedPrice Infinity', { ...buildValidPayload(), suggestedPrice: Number.POSITIVE_INFINITY }, /suggestedPrice/],
+    ['suggestedPrice zero', { ...buildValidPayload(), suggestedPrice: 0 }, /suggestedPrice/],
+    ['suggestedPrice negative', { ...buildValidPayload(), suggestedPrice: -1 }, /suggestedPrice/],
+    ['suggestedPrice rounds to zero', { ...buildValidPayload(), suggestedPrice: 0.001 }, /suggestedPrice/],
+    ['oversized explanation', { ...buildValidPayload(), priceExplanation: 'x'.repeat(501) }, /priceExplanation/],
+    ['recommendation language', { ...buildValidPayload(), priceExplanation: 'Sell as lot based on grouped demand.' }, /disallowed lot\/single recommendation language/],
+    ['compNotes unknown comp id', { ...buildValidPayload(), compNotes: [{ compId: 'unknown', note: 'Outlier comp.' }] }, /compNotes.*unknown/],
+    ['compNotes note too long', { ...buildValidPayload(), compNotes: [{ compId: 'comp-1', note: 'x'.repeat(241) }] }, /compNotes.*at most 240 characters/],
+    ['compNotes note non-string', { ...buildValidPayload(), compNotes: [{ compId: 'comp-1', note: 123 }] }, /compNotes\.0\.note/],
+  ])('rejects %s', (_label, payload, message) => {
+    expect(() => parseLlmPricingReasoningOutput(payload, context)).toThrow(message);
   });
 
   it('rejects suggested price below low guardrail', () => {
@@ -201,42 +130,6 @@ describe('parseLlmPricingReasoningOutput', () => {
         },
       ),
     ).toThrow(/requires deterministic low\/high sold price guardrails/);
-  });
-
-  it('rejects oversized explanation', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          priceExplanation: 'x'.repeat(501),
-        },
-        context,
-      ),
-    ).toThrow(/priceExplanation/);
-  });
-
-  it('rejects recommendation language', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          priceExplanation: 'Sell as lot based on grouped demand.',
-        },
-        context,
-      ),
-    ).toThrow(/disallowed lot\/single recommendation language/);
-  });
-
-  it('rejects comp notes for unknown comp ids', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          compNotes: [{ compId: 'unknown', note: 'Outlier comp.' }],
-        },
-        context,
-      ),
-    ).toThrow(/compNotes.*unknown/);
   });
 });
 
