@@ -6,6 +6,11 @@ import {
   computePricingStats,
   createFixturePricingProvider,
   normalizeSoldComps,
+  type LlmPricingPromptFactKey,
+  type LlmPricingPromptFacts,
+  type PricingAnalyst,
+  type PricingAnalystInput,
+  type PricingAnalystResult,
   type PricingConfidenceResult,
   type PricingProvider,
   type PricingProviderInput,
@@ -22,6 +27,15 @@ import {
 const DEFAULT_MIN_SOLD_COMPS = 12;
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
+const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
+  'Player',
+  'Year',
+  'Manufacturer',
+  'Set',
+  'Card Number',
+  'Parallel/Variety',
+  'Team/Franchise',
+] as const;
 
 export interface ResearchPriceJobDependencies {
   computeConfidence?: (input: {
@@ -32,6 +46,7 @@ export interface ResearchPriceJobDependencies {
   dataAccess: SidecarDataAccess;
   normalizeComps?: typeof normalizeSoldComps;
   now: () => Date;
+  pricingAnalyst?: PricingAnalyst;
   pricingProvider?: PricingProvider;
 }
 
@@ -101,6 +116,17 @@ function asJson(value: unknown): Json {
   return value as Json;
 }
 
+function asCompactErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.replace(/\s+/g, ' ').trim();
+
+  if (normalized.length <= 240) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 237)}...`;
+}
+
 function buildPricingProviderInput(listing: ListingRow, listingId: string): PricingProviderInput {
   const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
   const title = asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId;
@@ -134,6 +160,69 @@ function buildPricingTitleFromItemSpecifics(
     .filter((value) => value.length > 0);
 
   return titleParts.length > 0 ? titleParts.join(' ') : undefined;
+}
+
+function buildLlmPricingFacts(itemSpecifics: PricingProviderInput['itemSpecifics']): LlmPricingPromptFacts | undefined {
+  if (!itemSpecifics) {
+    return undefined;
+  }
+
+  const facts = Object.fromEntries(
+    LLM_PRICING_FACT_KEYS.flatMap((key) => {
+      const value = itemSpecifics[key];
+      const normalized = Array.isArray(value)
+        ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0).join(' / ')
+        : value?.trim() ?? '';
+
+      return normalized.length > 0 ? [[key, normalized] as const] : [];
+    })
+  );
+
+  return Object.keys(facts).length > 0 ? facts : undefined;
+}
+
+function buildPricingAnalystInput(
+  listing: ListingRow,
+  listingId: string,
+  comps: Parameters<typeof computePricingStats>[0],
+  stats: PricingStatsResult
+): PricingAnalystInput {
+  const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
+
+  return {
+    listing: {
+      title:
+        asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId,
+      facts: buildLlmPricingFacts(itemSpecifics),
+    },
+    stats,
+    comps: [...comps],
+  };
+}
+
+function buildSucceededLlmReasoningJson(
+  result: PricingAnalystResult,
+  fallbackReason: string | null
+): Json {
+  return asJson({
+    fallback: fallbackReason,
+    modelName: result.modelName,
+    reasoning: result.reasoning,
+    status: 'succeeded',
+  });
+}
+
+function buildFailedLlmReasoningJson(
+  analyst: PricingAnalyst,
+  fallbackReason: string,
+  error: unknown
+): Json {
+  return asJson({
+    analyst: analyst.name,
+    error: asCompactErrorMessage(error),
+    fallback: fallbackReason,
+    status: 'failed',
+  });
 }
 
 function buildResearchPriceError(
@@ -310,9 +399,9 @@ export async function runResearchPriceJob(
 
     const normalized = runNormalizeComps(providerResult.soldComps);
     const stats = runComputeStats(normalized.comps);
-    const suggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
+    const deterministicSuggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
 
-    if (suggestedPrice === null) {
+    if (deterministicSuggestedPrice === null) {
       throw buildResearchPriceError(
         JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
         `Listing "${listingId}" did not produce a deterministic suggested price.`
@@ -324,25 +413,67 @@ export async function runResearchPriceJob(
       stats,
     });
 
+    let llmReasoningJson: Json = {};
+    let llmSelectedCompIds: Json = [];
+    let llmRejectedCompIds: Json = [];
+    let llmPriceExplanation: string | null = null;
+    let pricingModelName: string | null = PRICING_MODEL_NAME;
+    let llmSuggestedPrice: number | null = null;
+    let fallbackReason: string | null = null;
+
+    if (dependencies.pricingAnalyst) {
+      try {
+        const analystResult = await dependencies.pricingAnalyst.analyze(
+          buildPricingAnalystInput(listing, listingId, normalized.comps, stats)
+        );
+
+        llmSuggestedPrice = normalizeSuggestedPrice(analystResult.reasoning.suggestedPrice);
+        fallbackReason = llmSuggestedPrice === null ? 'llm_suggested_price_null' : null;
+        llmReasoningJson = buildSucceededLlmReasoningJson(analystResult, fallbackReason);
+        llmSelectedCompIds = asJson(analystResult.reasoning.selectedCompIds);
+        llmRejectedCompIds = asJson(analystResult.reasoning.rejectedCompIds);
+        llmPriceExplanation = analystResult.reasoning.priceExplanation;
+        pricingModelName = analystResult.modelName;
+      } catch (error) {
+        fallbackReason = 'llm_analysis_failed';
+        llmReasoningJson = buildFailedLlmReasoningJson(
+          dependencies.pricingAnalyst,
+          fallbackReason,
+          error
+        );
+      }
+    }
+
+    const finalSuggestedPrice = normalizeSuggestedPrice(
+      llmSuggestedPrice ?? deterministicSuggestedPrice
+    );
+
+    if (finalSuggestedPrice === null) {
+      throw buildResearchPriceError(
+        JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+        `Listing "${listingId}" did not produce a valid final suggested price.`
+      );
+    }
+
     await dependencies.dataAccess.listingPriceResearch.markSucceeded({
       comps: asJson(normalized.comps),
       confidence: confidence.confidence,
       id: research.id,
-      llm_price_explanation: null,
-      llm_reasoning_json: {},
-      llm_rejected_comp_ids: [],
-      llm_selected_comp_ids: [],
+      llm_price_explanation: llmPriceExplanation,
+      llm_reasoning_json: llmReasoningJson,
+      llm_rejected_comp_ids: llmRejectedCompIds,
+      llm_selected_comp_ids: llmSelectedCompIds,
       median_sold_price: stats.medianSoldPrice,
-      pricing_model_name: PRICING_MODEL_NAME,
+      pricing_model_name: pricingModelName,
       query: providerResult.query,
       raw_result_json: asJson(providerResult.rawResult),
       sold_count: stats.soldCount,
-      suggested_price: suggestedPrice,
+      suggested_price: finalSuggestedPrice,
     });
     researchSucceeded = true;
 
     const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
-      price: suggestedPrice,
+      price: finalSuggestedPrice,
     });
 
     const completedJob = await dependencies.dataAccess.jobs.complete(job.id);
