@@ -15,6 +15,7 @@ Minimal notes for safely testing first real eBay listings while fulfillment/admi
 - Confirm `EBAY_ENVIRONMENT=production`.
 - Confirm production OAuth is valid.
 - Confirm production policy/location config is correct in `public.app_settings`.
+- Current env-specific values live under `public.app_settings.ebay_publish_config.production`.
 - Confirm image URLs are public and load correctly.
 - Confirm listing has title, price, category, condition, images, and required item specifics.
 - Confirm item is physically available and easy to ship.

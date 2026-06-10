@@ -43,6 +43,37 @@ Before live publish:
 
 Live-pilot checklist: [../live-pilot-notes.md](../live-pilot-notes.md)
 
+## `app_settings` Environment Config
+
+Current live project keeps environment-specific publish defaults in `public.app_settings.ebay_publish_config`:
+
+```json
+{
+  "sandbox": {
+    "marketplaceId": "EBAY_US",
+    "paymentPolicyId": "6227962000",
+    "fulfillmentPolicyId": "6227963000",
+    "returnPolicyId": "6227964000",
+    "merchantLocationKey": "default-main-location"
+  },
+  "production": {
+    "marketplaceId": "EBAY_US",
+    "paymentPolicyId": "260524452013",
+    "fulfillmentPolicyId": "260524990013",
+    "returnPolicyId": "260524680013",
+    "merchantLocationKey": "mfh-main-location"
+  }
+}
+```
+
+The same row currently also carries active/default top-level values for production:
+
+- `ebay_marketplace_id`
+- `default_payment_policy_id`
+- `default_fulfillment_policy_id`
+- `default_return_policy_id`
+- `merchant_location_key`
+
 ## Sandbox Notes
 
 - `pnpm ebay:diagnose-sandbox` and `pnpm ebay:diagnose-sandbox-config` are read-only.

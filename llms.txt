@@ -10,6 +10,20 @@
 - [eBay Integration](https://github.com/Ubuntufoo/backend-services/blob/main/docs/ebay-integration.md): OAuth, readiness, sandbox, publish notes
 - [Pricing](https://github.com/Ubuntufoo/backend-services/blob/main/docs/pricing.md): Current pricing implementation status
 
+## Task Routing Matrix
+
+| Task | Open First | Then | Validate |
+| --- | --- | --- | --- |
+| Env/config | `packages/env/src/` | `services/sidecar/src/ebay/config.ts` | `pnpm validate:env` |
+| Listing workflow | `packages/types/src/index.ts` | `packages/data/src/repositories/listings.ts` | `pnpm --filter @ebay-inventory/types check` |
+| Jobs/job runner | `services/sidecar/src/jobs/` | `packages/data/src/repositories/jobs.ts` | `pnpm --filter sidecar test` |
+| Pricing | `services/sidecar/src/pricing/` | `services/sidecar/src/jobs/research-price-job.ts` | `pnpm --filter sidecar test` |
+| eBay publish | `services/sidecar/src/ebay/` | `services/sidecar/src/scripts/` | `pnpm --filter sidecar test` |
+| HTTP/API | `services/sidecar/src/http/` | `services/sidecar/src/api/` | `pnpm --filter sidecar typecheck` |
+| Watcher intake | `services/watcher-service/src/` | `packages/data/src/repositories/` | `pnpm --filter @ebay-inventory/watcher-service check` |
+| Image processing | `services/image-service/src/` | `services/watcher-service/src/` | `pnpm --filter @ebay-inventory/image-service check` |
+| DB schema | `SCHEMA_SPEC.md` | `supabase/migrations/` | inspect live Supabase project |
+
 ## Active Runtime Surface
 
 - [Account](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/src/tools/definitions/account.ts)
