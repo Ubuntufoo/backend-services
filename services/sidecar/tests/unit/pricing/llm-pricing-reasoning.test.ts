@@ -29,7 +29,7 @@ describe('parseLlmPricingReasoningOutput', () => {
     ).toEqual({
       selectedCompIds: ['comp-1', 'comp-2'],
       rejectedCompIds: ['comp-3'],
-      suggestedPrice: 15.129,
+      suggestedPrice: 15.13,
       confidence: 'medium',
       priceExplanation: 'Median sold comps support mid-range pricing.',
       compNotes: [{ compId: 'comp-1', note: 'Recent sale near median.' }],

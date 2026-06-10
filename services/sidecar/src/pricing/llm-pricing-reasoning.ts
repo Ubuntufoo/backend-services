@@ -162,7 +162,13 @@ export function parseLlmPricingReasoningOutput(
     throw new LlmPricingReasoningValidationError(result.error.issues);
   }
 
-  return result.data;
+  return {
+    ...result.data,
+    suggestedPrice:
+      result.data.suggestedPrice === null
+        ? null
+        : normalizeSuggestedPrice(result.data.suggestedPrice),
+  };
 }
 
 function parseReasoningPayload(raw: string | unknown): unknown {
