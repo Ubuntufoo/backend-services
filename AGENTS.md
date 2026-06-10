@@ -1,98 +1,63 @@
-## Repo Overview
+# Agent Routing Guide
 
-Murphy Family Hobby's eBay Inventory Manager — a local-first desktop/web app for creating and managing eBay listings.
-This repository provides the server-side components for the eBay Inventory Manager. The backend holds long-running, platform-level responsibilities that are intentionally separated from the UI. ROADMAP.md is a rolling plan for the project's dev. When altered, commit the changes to new feature branches.
+## Purpose
 
-## Responsibilities and Contract
+Backend monorepo for eBay Inventory Manager. Current runtime center: `services/sidecar`. Use this file to decide where to inspect. Do not treat roadmap or historical plans as implementation truth.
 
-- `watcher-service`: consumes local or Supabase-driven events about new assets, stores records in Supabase, and enqueues jobs for `image-service` and `r2-service`.
-- `image-service`: performs safe image operations (resize, strip EXIF, generate thumbnails), writes derivatives to local storage and/or forwards to `r2-service` for upload.
-- `r2-service`: encapsulates Cloudflare R2 interactions and returns signed URLs or serves proxied assets when required.
-- `gemini-service`: wraps calls to Gemini with request/response validation, caching, and rate-limiting; produces structured JSON used to populate listing drafts.
-- `ebay-service`: centralizes eBay OAuth token management, publish and inventory endpoints, error handling, and sandbox/test mode toggles.
-- `job-runner`: executes background jobs (publish, sync, retry) and exposes HTTP endpoints for enqueueing and monitoring.
+## Current Architecture
 
-## Assessment of Current Repo Structure
+- `services/sidecar`: canonical backend runtime; HTTP sidecar, MCP stdio, eBay auth/publish, workflow APIs, job execution, pricing job.
+- `services/watcher-service`: local filesystem intake for incoming listing images.
+- `services/image-service`: local image processing library/runtime package.
+- `packages/data`: Supabase repositories, workflow persistence, shared DB types.
+- `packages/env`: shared env loading/validation.
+- `packages/types`: shared workflow/domain contracts.
+- Pricing currently lives inside sidecar; no dedicated pricing service.
+- eBay publish path and readiness checks already live inside sidecar.
 
-- The repository already contains `src/api`, `src/auth`, `src/mcp`, `src/utils` and a `server-http.ts` entrypoint — these map well to a sidecar-style service. Splitting into the proposed micro-services can be implemented as:
-  - A single-process sidecar with modular folders (current codebase), or
-  - A small monorepo with each service under `services/` (recommended for separation and independent scaling).
-- For local development, a monorepo with `docker-compose` or `pnpm` workspaces simplifies running the UI + backend-services together.
+## Agent File Routing
 
-## MCP Usage Contract
+| Task | Start here |
+| --- | --- |
+| Env/config | `packages/env/src/`, `services/sidecar/src/ebay/config.ts` |
+| Data repositories | `packages/data/src/repositories/` |
+| Job runner/jobs | `services/sidecar/src/jobs/` |
+| Pricing | `services/sidecar/src/pricing/`, `services/sidecar/src/jobs/research-price-job.ts` |
+| eBay publishing/readiness | `services/sidecar/src/ebay/`, `services/sidecar/src/scripts/` |
+| HTTP/API workflow | `services/sidecar/src/http/`, `services/sidecar/src/api/` |
+| Watcher intake | `services/watcher-service/src/` |
+| Image processing | `services/image-service/src/` |
+| Shared contracts | `packages/types/src/` |
+| Supabase schema/migrations | `supabase/migrations/` |
 
-The sidecar is the canonical local runtime for eBay API access and MCP tool exposure.
+## Validation Commands
 
-### Purpose
+- Repo: `pnpm check`, `pnpm typecheck`, `pnpm lint`
+- Sidecar: `pnpm --filter sidecar typecheck`, `pnpm --filter sidecar test`
+- Watcher: `pnpm --filter @ebay-inventory/watcher-service check`
+- Image service: `pnpm --filter @ebay-inventory/image-service check`
+- Data/env/types: `pnpm --filter @ebay-inventory/data test`, `pnpm --filter @ebay-inventory/env test`, `pnpm --filter @ebay-inventory/types check`
 
-Use `services/sidecar` when an assistant or local tool needs to:
+## Scope Control
 
-- access eBay APIs
-- expose eBay-related MCP tools
-- run local HTTP endpoints for development/testing
-- centralize eBay auth, env loading, and API behavior
+- Doc-only tasks: do not change runtime code, tests, or package scripts unless a doc reference is provably broken by script naming.
+- Prefer targeted reads over sweeping repo exploration.
+- Treat `ROADMAP.md` and `docs/archive/` as context only, not source of truth.
+- Keep sidecar as canonical backend entrypoint; do not invent extracted services unless code exists.
 
-Do not duplicate eBay API logic in the UI package.
+## Current Pricing Status
 
-### Transport Modes
+- Implemented: fixture-backed `research_price` job, comp normalization, deterministic median-based stats, confidence scoring, `listing_price_research` persistence.
+- Workflow-safe: successful research may update `listings.price` while listing remains `needs_review` / `review_pending`.
+- Pricing failures should stay job-scoped and `listing_price_research`-scoped; they should not block review/export and should not write listing `last_error_*`.
+- Do not document live Apify pricing as active unless code exists beyond fixture/test scaffolding.
+- Do not document LLM pricing reasoning as implemented.
 
-The sidecar supports two local modes:
+## Do Not Open Unless Needed
 
-| Mode         | Command                          | Use case                               |
-| ------------ | -------------------------------- | -------------------------------------- |
-| MCP stdio    | `pnpm dev:stdio`                 | Local assistant/MCP client integration |
-| HTTP sidecar | `pnpm dev` or `pnpm dev:sidecar` | Browser/UI/API testing                 |
-
-Use stdio for MCP clients. Use HTTP when the frontend or local scripts need REST-style access.
-
-### Startup Contract
-
-Start the sidecar from the repo root using the documented package scripts.
-
-Do not invoke TypeScript entry files directly unless debugging. Use the package scripts so env loading, tsx/runtime behavior, and workspace resolution stay consistent.
-
-### Environment Contract
-
-The sidecar owns eBay runtime configuration, including:
-
-- eBay credentials
-- marketplace settings
-- auth/token behavior
-- local runtime mode settings
-
-The UI should call the sidecar or database contract; it should not own eBay credentials.
-
-### Assistant Connection Contract
-
-Local assistants should connect to the sidecar MCP server over stdio.
-
-The assistant should:
-
-- start the sidecar using the repo-root command
-- treat the sidecar as the canonical eBay tool provider
-- avoid bypassing the sidecar with direct eBay SDK/API calls
-- use HTTP mode only for local app/runtime integration, not MCP tool transport
-
-### Source of Truth
-
-For sidecar usage:
-
-1. `AGENTS.md` defines the assistant/contributor contract.
-2. `services/sidecar/README.md` defines operational setup.
-3. `README.md` only points readers to the correct docs.
-
-## Run & Local Dev
-
-- Example: run the sidecar locally from the repo root:
-
-```bash
-pnpm install
-pnpm dev
-```
-
-- Or run individual services via workspaces / `node ./services/<service>/index.js` after splitting into `services/`.
-
-## Security
-
-- Keep service credentials out of source control and restrict sidecar endpoints to localhost in development.
-- Use service-level API keys or mTLS for production communication between UI and backend services.
+- `ROADMAP.md`
+- `docs/archive/`
+- `docs/archive/sidecar-rest-contract.md`
+- `docs/API_STATUS.md` unless checking generated eBay status snapshot
+- `services/sidecar/src/types/` generated API types
+- `services/sidecar/src/schemas/README.md`
