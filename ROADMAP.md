@@ -16,13 +16,13 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9B.4 | BE/Pricing | Add confidence scoring  | Pricing output includes confidence only; no single/lot recommendation logic |
 
 | 9B.5 | BE/Tests | Add normalizer fixture tests | Noisy Apify-like records are parsed, filtered, and priced predictably |
--->
+
 | 9C.1 | BE/Jobs | Add `runResearchPriceJob` fixture path | A `needs_review` single listing can run pricing and complete |
-| 9C.2 | BE/Jobs | Keep pricing workflow-safe | Pricing failures do not alter listing workflow, block review, or write to `listing.last_error_*` |
+| 9C.2 | BE/Jobs | Keep pricing workflow-safe | Pricing failures do not alter listing workflow, block review, or write to `listing.last_error_*` | -->
 | 9C.3 | BE/Jobs | Update listing price on pricing success | `listings.price` is overwritten only from a valid suggested price; listing stays `needs_review/review_pending` |
 | 9C.4 | BE/Jobs | Reject unsupported pricing inputs safely | Lot and non-review listings fail pricing job without disrupting listing state |
 | 9C.5 | BE/Tests | Add job-runner pricing tests | Success, lot reject, non-review reject, provider failure, and price update behavior are covered |
-| 9D.1 | BE/Pricing | Add LLM pricing reasoning schema | LLM output is structured and validated before it can affect price |
+| 9D.1 | BE/Pricing | Add LLM pricing reasoning schema with Gemma 4 31B | LLM output is structured and validated before it can affect price |
 | 9D.2 | BE/Pricing | Add compact LLM pricing prompt builder | LLM receives listing facts and normalized comps, not raw Apify output |
 | 9D.3 | BE/Pricing | Add fixture LLM pricing analyst | Tests can cover LLM-assisted pricing without provider calls |
 | 9D.4 | BE/Pricing | Add LLM fallback behavior | If LLM reasoning fails, deterministic pricing result is used |

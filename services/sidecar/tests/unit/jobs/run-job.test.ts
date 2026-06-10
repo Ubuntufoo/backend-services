@@ -211,6 +211,34 @@ function createListingPriceResearchRow(
   };
 }
 
+function expectPricingFailureToPreserveListingWorkflow(
+  listing: ListingRow,
+  resultListing: ListingRow | null
+): void {
+  expect(resultListing).toMatchObject({
+    last_error_at: listing.last_error_at,
+    last_error_code: listing.last_error_code,
+    last_error_context: listing.last_error_context,
+    last_error_message: listing.last_error_message,
+    price: listing.price,
+    status: listing.status,
+    sub_status: listing.sub_status,
+  });
+}
+
+function expectNoWorkflowErrorFieldsWritten(
+  updates: Array<[string, Partial<ListingRow>]>
+): void {
+  for (const [, changes] of updates) {
+    expect(changes).not.toHaveProperty('last_error_at');
+    expect(changes).not.toHaveProperty('last_error_code');
+    expect(changes).not.toHaveProperty('last_error_context');
+    expect(changes).not.toHaveProperty('last_error_message');
+    expect(changes).not.toHaveProperty('status');
+    expect(changes).not.toHaveProperty('sub_status');
+  }
+}
+
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
@@ -2450,16 +2478,11 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      listing_type: 'lot',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+    expect(result.listing?.listing_type).toBe('lot');
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('fails research_price for non-needs_review listings without changing listing state', async () => {
@@ -2483,15 +2506,10 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      status: 'approved_for_export',
-      sub_status: 'publish_queued',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('fails research_price when listing is missing', async () => {
@@ -2543,14 +2561,7 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_suggested_price_invalid');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      price: listing.price,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
       expect.objectContaining({
         error_code: 'research_price_suggested_price_invalid',
@@ -2559,6 +2570,7 @@ describe('runSidecarJob', () => {
       })
     );
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('does not update listing price when markSucceeded fails and preserves listing last_error fields', async () => {
@@ -2586,14 +2598,7 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_failed');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      price: listing.price,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2601,6 +2606,7 @@ describe('runSidecarJob', () => {
         error_message: 'write succeeded row failed',
       })
     );
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
@@ -2632,13 +2638,7 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_failed');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
     expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2648,6 +2648,7 @@ describe('runSidecarJob', () => {
     );
     expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('marks listing price research failed on normalizer errors without writing listing workflow errors', async () => {
@@ -2676,13 +2677,7 @@ describe('runSidecarJob', () => {
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_failed');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
     expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2692,6 +2687,87 @@ describe('runSidecarJob', () => {
     );
     expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
+  it('marks listing price research failed on stats errors without writing workflow fields', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_context: { source: 'publish' },
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Broken stats listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        computeStats: vi.fn(() => {
+          throw new Error('stats exploded');
+        }),
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_failed');
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: 'research_price_failed',
+        error_message: 'stats exploded',
+      })
+    );
+    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
+  it('marks listing price research failed on confidence errors without writing workflow fields', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_context: { source: 'publish' },
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Broken confidence listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        computeConfidence: vi.fn(() => {
+          throw new Error('confidence exploded');
+        }),
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_failed');
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: 'research_price_failed',
+        error_message: 'confidence exploded',
+      })
+    );
+    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
   it('fails unsupported pricing providers clearly before mutating research or listing state', async () => {
@@ -2724,16 +2800,41 @@ describe('runSidecarJob', () => {
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_failed');
     expect(result.job.last_error).toContain('Unsupported pricing provider "apify"');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_message: listing.last_error_message,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  });
+
+  it('pricing failure never writes workflow or listing error fields through listings.update', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_context: { preserved: true },
+      last_error_message: 'keep me',
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: 'Mutation guard listing',
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        computeConfidence: vi.fn(() => {
+          throw new Error('confidence exploded');
+        }),
+      },
+    });
+
+    expectNoWorkflowErrorFieldsWritten(
+      vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+    );
   });
 
   it('fails unsupported job types without touching listing workflow', async () => {
