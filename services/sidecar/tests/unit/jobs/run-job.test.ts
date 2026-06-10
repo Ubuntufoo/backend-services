@@ -16,6 +16,7 @@ import {
 } from '@/ebay/publish-validation.js';
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import { runSidecarJob } from '@/jobs/index.js';
+import { createFixturePricingProvider } from '@/pricing/index.js';
 
 const queuedGenerateAiJob: JobRow = {
   attempts: 0,
@@ -236,6 +237,18 @@ function expectNoWorkflowErrorFieldsWritten(
     expect(changes).not.toHaveProperty('last_error_message');
     expect(changes).not.toHaveProperty('status');
     expect(changes).not.toHaveProperty('sub_status');
+  }
+}
+
+function expectPriceOnlyUpdateWrites(
+  updates: Array<[string, Partial<ListingRow>]>
+): void {
+  expect(updates).not.toHaveLength(0);
+
+  for (const [, changes] of updates) {
+    expect(changes).toEqual({
+      price: expect.any(Number),
+    });
   }
 }
 
@@ -2373,635 +2386,649 @@ describe('runSidecarJob', () => {
     expect(dataAccess.jobs.complete).toHaveBeenCalledWith('job-process-images');
   });
 
-  it('runs fixture pricing for a needs_review single listing and stores succeeded research', async () => {
-    const writeOrder: string[] = [];
-    const listing = createListingRow({
-      category_id: '261328',
-      condition_id: '2750',
-      item_specifics: {
-        'Card Number': '136',
-        Manufacturer: 'Panini',
-        Player: 'Victor Wembanyama',
-        Set: 'Prizm',
-        Year: '2023',
-      },
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { source: 'publish' },
-      last_error_message: 'keep me',
-      price: 9.99,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-      onListingsUpdate: () => {
-        writeOrder.push('listing_update');
-      },
-    });
-    vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(async (input) => {
-      writeOrder.push('research_success');
-      return createListingPriceResearchRow({
-        ...input,
-        id: input.id,
-        status: 'succeeded',
+  describe('research_price jobs', () => {
+    it('runs fixture pricing for a needs_review single listing and stores succeeded research', async () => {
+      const writeOrder: string[] = [];
+      const fixtureProvider = createFixturePricingProvider();
+      const fetchSoldComps = vi.spyOn(fixtureProvider, 'fetchSoldComps');
+      const listing = createListingRow({
+        category_id: '261328',
+        condition_id: '2750',
+        item_specifics: {
+          'Card Number': '136',
+          Manufacturer: 'Panini',
+          Player: 'Victor Wembanyama',
+          Set: 'Prizm',
+          Year: '2023',
+        },
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
       });
-    });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+        onListingsUpdate: () => {
+          writeOrder.push('listing_update');
+        },
+      });
+      vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(
+        async (input) => {
+          writeOrder.push('research_success');
+          return createListingPriceResearchRow({
+            ...input,
+            id: input.id,
+            status: 'succeeded',
+          });
+        }
+      );
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-    });
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: fixtureProvider,
+        },
+      });
 
-    expect(result.job.status).toBe('completed');
-    expect(result.listing).toMatchObject({
-      last_error_at: listing.last_error_at,
-      last_error_code: listing.last_error_code,
-      last_error_context: listing.last_error_context,
-      last_error_message: listing.last_error_message,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-    });
-    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
-      listing_id: 'LIST-001',
-      provider: 'fixture',
-      status: 'pending',
-    });
-    expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        confidence: expect.stringMatching(/^(low|medium|high)$/),
-        comps: expect.arrayContaining([
-          expect.objectContaining({
-            id: expect.any(String),
-            source: 'provider',
+      expect(result.job.status).toBe('completed');
+      expect(result.listing).toMatchObject({
+        last_error_at: listing.last_error_at,
+        last_error_code: listing.last_error_code,
+        last_error_context: listing.last_error_context,
+        last_error_message: listing.last_error_message,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+      });
+      expect(fetchSoldComps).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
+        listing_id: 'LIST-001',
+        provider: 'fixture',
+        status: 'pending',
+      });
+      expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          confidence: expect.stringMatching(/^(low|medium|high)$/),
+          comps: expect.arrayContaining([
+            expect.objectContaining({
+              id: expect.any(String),
+              source: 'provider',
+            }),
+          ]),
+          llm_price_explanation: null,
+          llm_reasoning_json: {},
+          llm_rejected_comp_ids: [],
+          llm_selected_comp_ids: [],
+          median_sold_price: expect.any(Number),
+          pricing_model_name: 'deterministic-fixture-v1',
+          query: expect.any(String),
+          raw_result_json: expect.objectContaining({
+            provider: 'fixture',
           }),
-        ]),
-        llm_price_explanation: null,
-        llm_reasoning_json: {},
-        llm_rejected_comp_ids: [],
-        llm_selected_comp_ids: [],
-        median_sold_price: expect.any(Number),
-        pricing_model_name: 'deterministic-fixture-v1',
-        raw_result_json: expect.objectContaining({
-          provider: 'fixture',
-        }),
-        sold_count: expect.any(Number),
-        suggested_price: expect.any(Number),
-      })
-    );
+          sold_count: expect.any(Number),
+          suggested_price: expect.any(Number),
+        })
+      );
 
-    const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-      .calls[0]?.[0];
-    expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
-    expect(markSucceededInput?.query).toContain('category:');
-    expect(markSucceededInput?.query).toContain('condition:');
-    expect(markSucceededInput?.query).toContain('player:Victor Wembanyama');
-    expect(markSucceededInput?.query).toContain('year:2023');
-    expect(markSucceededInput?.query).toContain('manufacturer:Panini');
-    expect(markSucceededInput?.query).toContain('card_number:136');
-    expect(markSucceededInput?.raw_result_json).toMatchObject({
-      listingId: 'LIST-001',
-      returnedSoldComps: expect.any(Number),
-    });
-    expect(markSucceededInput?.comps).not.toHaveLength(0);
-    expect(markSucceededInput).not.toHaveProperty('recommendation');
-    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
-      price: markSucceededInput?.suggested_price,
-    });
-    expect(vi.mocked(dataAccess.listings.update).mock.calls[0]?.[1]).toEqual({
-      price: markSucceededInput?.suggested_price,
-    });
-    expect(result.listing?.price).not.toBe(listing.price);
-    expect(writeOrder).toEqual(['research_success', 'listing_update']);
-  });
-
-  it('fails research_price for lot listings without changing listing state', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { source: 'publish' },
-      last_error_message: 'keep me',
-      price: 42.5,
-      listing_type: 'lot',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Mixed card lot',
-    });
-    const fetchSoldComps = vi.fn(async () => {
-      throw new Error('should not run');
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
+      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+        .calls[0]?.[0];
+      expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
+      expect(markSucceededInput?.query).toContain('category:261328');
+      expect(markSucceededInput?.query).toContain('condition:2750');
+      expect(markSucceededInput?.query).toContain('player:Victor Wembanyama');
+      expect(markSucceededInput?.raw_result_json).toMatchObject({
+        listingId: 'LIST-001',
+        provider: 'fixture',
+        returnedSoldComps: 12,
+      });
+      expect(markSucceededInput?.comps).not.toHaveLength(0);
+      expect(markSucceededInput).not.toHaveProperty('recommendation');
+      expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+        price: markSucceededInput?.suggested_price,
+      });
+      expectPriceOnlyUpdateWrites(
+        vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+      );
+      expect(result.listing?.price).not.toBe(listing.price);
+      expect(writeOrder).toEqual(['research_success', 'listing_update']);
     });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        pricingProvider: {
-          fetchSoldComps,
-          name: 'fixture',
+    it('fails research_price for lot listings without changing listing state', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 42.5,
+        listing_type: 'lot',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Mixed card lot',
+      });
+      const fetchSoldComps = vi.fn(async () => {
+        throw new Error('should not run');
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'fixture',
+          },
         },
-      },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(result.listing?.listing_type).toBe('lot');
+      expect(fetchSoldComps).not.toHaveBeenCalled();
+      expectNoPricingPreflightWrites(dataAccess);
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(result.listing?.listing_type).toBe('lot');
-    expect(fetchSoldComps).not.toHaveBeenCalled();
-    expectNoPricingPreflightWrites(dataAccess);
-  });
+    it.each([
+      ['assets_ready', 'ready_to_generate'],
+      ['generating', 'idle'],
+      ['approved_for_export', 'publish_queued'],
+      ['exported', 'idle'],
+      ['listed', 'idle'],
+      ['sold', 'idle'],
+    ] as const)(
+      'fails research_price for non-needs_review listing state %s/%s without changing listing state',
+      async (status, subStatus) => {
+        const listing = createListingRow({
+          last_error_at: '2026-05-19T12:00:00.000Z',
+          last_error_code: 'existing_error',
+          last_error_context: { preserved: true },
+          last_error_message: 'keep me',
+          price: 19.99,
+          status,
+          sub_status: subStatus,
+          title: 'Already approved listing',
+        });
+        const fetchSoldComps = vi.fn(async () => {
+          throw new Error('should not run');
+        });
+        const dataAccess = createDataAccess({
+          job: queuedResearchPriceJob,
+          listing,
+        });
 
-  it.each([
-    ['assets_ready', 'ready_to_generate'],
-    ['generating', 'idle'],
-    ['approved_for_export', 'publish_queued'],
-    ['exported', 'idle'],
-    ['listed', 'idle'],
-    ['sold', 'idle'],
-  ] as const)(
-    'fails research_price for non-needs_review listing state %s/%s without changing listing state',
-    async (status, subStatus) => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { preserved: true },
-      last_error_message: 'keep me',
-      price: 19.99,
-      status,
-      sub_status: subStatus,
-      title: 'Already approved listing',
-    });
-    const fetchSoldComps = vi.fn(async () => {
-      throw new Error('should not run');
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
+        const result = await runSidecarJob('job-research-price', {
+          dataAccess,
+          now: () => new Date('2026-05-20T13:00:00.000Z'),
+          researchPrice: {
+            pricingProvider: {
+              fetchSoldComps,
+              name: 'fixture',
+            },
+          },
+        });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        pricingProvider: {
-          fetchSoldComps,
-          name: 'fixture',
+        expect(result.job.status).toBe('failed');
+        expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
+        expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+        expect(fetchSoldComps).not.toHaveBeenCalled();
+        expectNoPricingPreflightWrites(dataAccess);
+      }
+    );
+
+    it('fails research_price for needs_review listings outside review_pending without changing listing state', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { preserved: true },
+        last_error_message: 'keep me',
+        price: 19.99,
+        status: 'needs_review',
+        sub_status: 'awaiting_manual_review',
+        title: 'Needs review but not pending',
+      });
+      const fetchSoldComps = vi.fn(async () => {
+        throw new Error('should not run');
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'fixture',
+          },
         },
-      },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(fetchSoldComps).not.toHaveBeenCalled();
+      expectNoPricingPreflightWrites(dataAccess);
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(fetchSoldComps).not.toHaveBeenCalled();
-    expectNoPricingPreflightWrites(dataAccess);
-  });
+    it('fails research_price when listing is missing', async () => {
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing: null,
+      });
 
-  it('fails research_price for needs_review listings outside review_pending without changing listing state', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { preserved: true },
-      last_error_message: 'keep me',
-      price: 19.99,
-      status: 'needs_review',
-      sub_status: 'idle',
-      title: 'Needs review but not pending',
-    });
-    const fetchSoldComps = vi.fn(async () => {
-      throw new Error('should not run');
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_listing_not_found');
+      expect(result.listing).toBeNull();
+      expectNoPricingPreflightWrites(dataAccess);
     });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        pricingProvider: {
-          fetchSoldComps,
-          name: 'fixture',
+    it('marks listing price research failed when deterministic suggested price is missing', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_message: 'keep me',
+        price: 17.25,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Price me',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          computeStats: vi.fn(() => ({
+            currency: 'USD',
+            deterministicSuggestedPrice: null,
+            highSoldPrice: 20,
+            ignored: [],
+            lowSoldPrice: 10,
+            medianSoldPrice: 15,
+            soldCount: 12,
+          })),
         },
-      },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_suggested_price_invalid');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_suggested_price_invalid',
+          llm_reasoning_json: {},
+          pricing_model_name: 'deterministic-fixture-v1',
+        })
+      );
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(fetchSoldComps).not.toHaveBeenCalled();
-    expectNoPricingPreflightWrites(dataAccess);
-  });
+    it('marks listing price research failed when suggested price normalizes to zero', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Too small suggested price',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
 
-  it('fails research_price when listing is missing', async () => {
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing: null,
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          computeStats: vi.fn(() => ({
+            currency: 'USD',
+            deterministicSuggestedPrice: 0.004,
+            highSoldPrice: 20,
+            ignored: [],
+            lowSoldPrice: 10,
+            medianSoldPrice: 15,
+            soldCount: 12,
+          })),
+        },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_suggested_price_invalid');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_suggested_price_invalid',
+        })
+      );
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    it('does not update listing price when markSucceeded fails and preserves listing last_error fields', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Mark succeeded failure listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(async () => {
+        throw new Error('write succeeded row failed');
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_failed',
+          error_message: 'write succeeded row failed',
+        })
+      );
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_listing_not_found');
-    expect(result.listing).toBeNull();
-    expectNoPricingPreflightWrites(dataAccess);
-  });
+    it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_message: 'keep me',
+        price: 13.25,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Broken provider listing',
+      });
+      const fetchSoldComps = vi.fn(async () => {
+        throw new Error('fixture exploded');
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
 
-  it('marks listing price research failed when deterministic suggested price is missing', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Price me',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'fixture',
+          },
+        },
+      });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        computeStats: vi.fn(() => ({
-          currency: 'USD',
-          deterministicSuggestedPrice: null,
-          highSoldPrice: 20,
-          ignored: [],
-          lowSoldPrice: 10,
-          medianSoldPrice: 15,
-          soldCount: 12,
-        })),
-      },
-    });
-
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_suggested_price_invalid');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_suggested_price_invalid',
-        llm_reasoning_json: {},
-        pricing_model_name: 'deterministic-fixture-v1',
-      })
-    );
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
-
-  it('marks listing price research failed when suggested price normalizes to zero', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { source: 'publish' },
-      last_error_message: 'keep me',
-      price: 9.99,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Too small suggested price',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(fetchSoldComps).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_failed',
+          error_message: 'fixture exploded',
+        })
+      );
+      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        computeStats: vi.fn(() => ({
-          currency: 'USD',
-          deterministicSuggestedPrice: 0.004,
-          highSoldPrice: 20,
-          ignored: [],
-          lowSoldPrice: 10,
-          medianSoldPrice: 15,
-          soldCount: 12,
-        })),
-      },
-    });
+    it('marks listing price research failed on normalizer errors without writing listing workflow errors', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_message: 'keep me',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Broken normalizer listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_suggested_price_invalid');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_suggested_price_invalid',
-      })
-    );
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
-
-  it('does not update listing price when markSucceeded fails and preserves listing last_error fields', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_message: 'keep me',
-      price: 9.99,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Mark succeeded failure listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-    vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(async () => {
-      throw new Error('write succeeded row failed');
-    });
-
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-    });
-
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_failed',
-        error_message: 'write succeeded row failed',
-      })
-    );
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
-
-  it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Broken provider listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        pricingProvider: {
-          fetchSoldComps: vi.fn(async () => {
-            throw new Error('fixture exploded');
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          normalizeComps: vi.fn(() => {
+            throw new Error('normalize exploded');
           }),
-          name: 'fixture',
         },
-      },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_failed',
+          error_message: 'normalize exploded',
+        })
+      );
+      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_failed',
-        error_message: 'fixture exploded',
-      })
-    );
-    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
+    it('marks listing price research failed on stats errors without writing workflow fields', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Broken stats listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
 
-  it('marks listing price research failed on normalizer errors without writing listing workflow errors', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Broken normalizer listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        normalizeComps: vi.fn(() => {
-          throw new Error('normalize exploded');
-        }),
-      },
-    });
-
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_failed',
-        error_message: 'normalize exploded',
-      })
-    );
-    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
-
-  it('marks listing price research failed on stats errors without writing workflow fields', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { source: 'publish' },
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Broken stats listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        computeStats: vi.fn(() => {
-          throw new Error('stats exploded');
-        }),
-      },
-    });
-
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_failed',
-        error_message: 'stats exploded',
-      })
-    );
-    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
-
-  it('marks listing price research failed on confidence errors without writing workflow fields', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { source: 'publish' },
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Broken confidence listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        computeConfidence: vi.fn(() => {
-          throw new Error('confidence exploded');
-        }),
-      },
-    });
-
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
-    expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: 'research_price_failed',
-        error_message: 'confidence exploded',
-      })
-    );
-    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
-
-  it('fails unsupported pricing providers clearly before mutating research or listing state', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Unsupported provider listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        pricingProvider: {
-          fetchSoldComps: vi.fn(async () => {
-            throw new Error('should not run');
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          computeStats: vi.fn(() => {
+            throw new Error('stats exploded');
           }),
-          name: 'apify',
         },
-      },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_failed',
+          error_message: 'stats exploded',
+        })
+      );
+      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expect(result.job.last_error).toContain('Unsupported pricing provider "apify"');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
-    expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
-    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  });
+    it('marks listing price research failed on confidence errors without writing workflow fields', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Broken confidence listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
 
-  it('pricing failure never writes workflow or listing error fields through listings.update', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { preserved: true },
-      last_error_message: 'keep me',
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Mutation guard listing',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          computeConfidence: vi.fn(() => {
+            throw new Error('confidence exploded');
+          }),
+        },
+      });
 
-    await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
-      researchPrice: {
-        computeConfidence: vi.fn(() => {
-          throw new Error('confidence exploded');
-        }),
-      },
-    });
-
-    expectNoWorkflowErrorFieldsWritten(
-      vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-    );
-  });
-
-  it('fails research_price when listing price update fails after research success without mutating workflow errors', async () => {
-    const listing = createListingRow({
-      last_error_at: '2026-05-19T12:00:00.000Z',
-      last_error_code: 'existing_error',
-      last_error_context: { source: 'publish' },
-      last_error_message: 'keep me',
-      price: 9.99,
-      status: 'needs_review',
-      sub_status: 'review_pending',
-      title: 'Listing update failure after research success',
-    });
-    const dataAccess = createDataAccess({
-      job: queuedResearchPriceJob,
-      listing,
-    });
-    vi.mocked(dataAccess.listings.update).mockImplementationOnce(async () => {
-      throw new Error('listing price update failed');
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_failed',
+          error_message: 'confidence exploded',
+        })
+      );
+      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    const result = await runSidecarJob('job-research-price', {
-      dataAccess,
-      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    it('fails unsupported pricing providers clearly before mutating research or listing state', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_message: 'keep me',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Unsupported provider listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps: vi.fn(async () => {
+              throw new Error('should not run');
+            }),
+            name: 'apify',
+          },
+        },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expect(result.job.last_error).toContain('Unsupported pricing provider "apify"');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+      expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    expect(result.job.status).toBe('failed');
-    expect(result.job.last_error_code).toBe('research_price_failed');
-    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledTimes(1);
-    expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-    expectNoWorkflowErrorFieldsWritten(
-      vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-    );
+    it('pricing failure never writes workflow or listing error fields through listings.update', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { preserved: true },
+        last_error_message: 'keep me',
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Mutation guard listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          computeConfidence: vi.fn(() => {
+            throw new Error('confidence exploded');
+          }),
+        },
+      });
+
+      expectNoWorkflowErrorFieldsWritten(
+        vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+      );
+    });
+
+    it('fails research_price when listing price update fails after research success without mutating workflow errors', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Listing update failure after research success',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      vi.mocked(dataAccess.listings.update).mockImplementationOnce(async () => {
+        throw new Error('listing price update failed');
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+      expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+      expectPriceOnlyUpdateWrites(
+        vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+      );
+    });
   });
 
   it('fails unsupported job types without touching listing workflow', async () => {
