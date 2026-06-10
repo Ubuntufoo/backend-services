@@ -239,6 +239,14 @@ function expectNoWorkflowErrorFieldsWritten(
   }
 }
 
+function expectNoPricingPreflightWrites(dataAccess: SidecarDataAccess): void {
+  expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+  expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+  expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+  expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+}
+
 function createDataAccess({
   job = queuedGenerateAiJob,
   listing = createListingRow(),
@@ -2473,11 +2481,16 @@ describe('runSidecarJob', () => {
     const listing = createListingRow({
       last_error_at: '2026-05-19T12:00:00.000Z',
       last_error_code: 'existing_error',
+      last_error_context: { source: 'publish' },
       last_error_message: 'keep me',
+      price: 42.5,
       listing_type: 'lot',
       status: 'needs_review',
       sub_status: 'review_pending',
       title: 'Mixed card lot',
+    });
+    const fetchSoldComps = vi.fn(async () => {
+      throw new Error('should not run');
     });
     const dataAccess = createDataAccess({
       job: queuedResearchPriceJob,
@@ -2487,25 +2500,44 @@ describe('runSidecarJob', () => {
     const result = await runSidecarJob('job-research-price', {
       dataAccess,
       now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingProvider: {
+          fetchSoldComps,
+          name: 'fixture',
+        },
+      },
     });
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
     expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(result.listing?.listing_type).toBe('lot');
-    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    expect(fetchSoldComps).not.toHaveBeenCalled();
+    expectNoPricingPreflightWrites(dataAccess);
   });
 
-  it('fails research_price for non-needs_review listings without changing listing state', async () => {
+  it.each([
+    ['assets_ready', 'ready_to_generate'],
+    ['generating', 'idle'],
+    ['approved_for_export', 'publish_queued'],
+    ['exported', 'idle'],
+    ['listed', 'idle'],
+    ['sold', 'idle'],
+  ] as const)(
+    'fails research_price for non-needs_review listing state %s/%s without changing listing state',
+    async (status, subStatus) => {
     const listing = createListingRow({
       last_error_at: '2026-05-19T12:00:00.000Z',
       last_error_code: 'existing_error',
+      last_error_context: { preserved: true },
       last_error_message: 'keep me',
-      status: 'approved_for_export',
-      sub_status: 'publish_queued',
+      price: 19.99,
+      status,
+      sub_status: subStatus,
       title: 'Already approved listing',
+    });
+    const fetchSoldComps = vi.fn(async () => {
+      throw new Error('should not run');
     });
     const dataAccess = createDataAccess({
       job: queuedResearchPriceJob,
@@ -2515,14 +2547,56 @@ describe('runSidecarJob', () => {
     const result = await runSidecarJob('job-research-price', {
       dataAccess,
       now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingProvider: {
+          fetchSoldComps,
+          name: 'fixture',
+        },
+      },
     });
 
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
     expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
-    expect(dataAccess.listings.update).not.toHaveBeenCalled();
-    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    expect(fetchSoldComps).not.toHaveBeenCalled();
+    expectNoPricingPreflightWrites(dataAccess);
+  });
+
+  it('fails research_price for needs_review listings outside review_pending without changing listing state', async () => {
+    const listing = createListingRow({
+      last_error_at: '2026-05-19T12:00:00.000Z',
+      last_error_code: 'existing_error',
+      last_error_context: { preserved: true },
+      last_error_message: 'keep me',
+      price: 19.99,
+      status: 'needs_review',
+      sub_status: 'idle',
+      title: 'Needs review but not pending',
+    });
+    const fetchSoldComps = vi.fn(async () => {
+      throw new Error('should not run');
+    });
+    const dataAccess = createDataAccess({
+      job: queuedResearchPriceJob,
+      listing,
+    });
+
+    const result = await runSidecarJob('job-research-price', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingProvider: {
+          fetchSoldComps,
+          name: 'fixture',
+        },
+      },
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('research_price_listing_not_eligible');
+    expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+    expect(fetchSoldComps).not.toHaveBeenCalled();
+    expectNoPricingPreflightWrites(dataAccess);
   });
 
   it('fails research_price when listing is missing', async () => {
@@ -2539,7 +2613,7 @@ describe('runSidecarJob', () => {
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('research_price_listing_not_found');
     expect(result.listing).toBeNull();
-    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expectNoPricingPreflightWrites(dataAccess);
   });
 
   it('marks listing price research failed when deterministic suggested price is missing', async () => {
@@ -2860,6 +2934,7 @@ describe('runSidecarJob', () => {
     expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
