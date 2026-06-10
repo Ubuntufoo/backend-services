@@ -22,11 +22,14 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9C.3 | BE/Jobs | Update listing price on pricing success | `listings.price` is overwritten only from a valid suggested price; listing stays `needs_review/review_pending` |
 | 9C.4 | BE/Jobs | Reject unsupported pricing inputs safely | Lot and non-review listings fail pricing job without disrupting listing state |
 | 9C.5 | BE/Tests | Add job-runner pricing tests | Success, lot reject, non-review reject, provider failure, and price update behavior are covered |
-| 9D.1 | BE/Pricing | Add LLM pricing reasoning schema with Gemma 4 31B | LLM output is structured and validated before it can affect price |
-| 9D.2 | BE/Pricing | Add compact LLM pricing prompt builder | LLM receives listing facts and normalized comps, not raw Apify output |
-| 9D.3 | BE/Pricing | Add fixture LLM pricing analyst | Tests can cover LLM-assisted pricing without provider calls |
-| 9D.4 | BE/Pricing | Add LLM fallback behavior | If LLM reasoning fails, deterministic pricing result is used |
-| 9D.5 | BE/Tests | Add LLM pricing validation tests | Bad LLM output cannot corrupt price, confidence, or selected/rejected comp IDs |
+| 9D.1 | BE/Pricing | Audit LLM pricing architecture | Confirm Gemma 4 31B can plug into existing model/task routing safely; document seams, config impact, and risks |
+| 9D.2 | BE/Pricing | Add LLM pricing reasoning schema | Pricing analyst output is strictly validated before it can affect price |
+| 9D.3 | BE/Pricing | Add compact LLM pricing prompt builder | LLM receives listing facts, deterministic stats, and normalized comps; never raw provider output |
+| 9D.4 | BE/Pricing | Add fixture LLM pricing analyst | Tests can exercise LLM-assisted pricing without provider calls |
+| 9D.5 | BE/Models | Add per-model usage windows | Pricing model limits can enforce 15 RPM and 1.5k RPD safely across workers |
+| 9D.6 | BE/Models | Add Gemma 4 31B pricing route config | Pricing reasoning has explicit `pricing_reasoning` route config for `gemma-4-31b-it` |
+| 9D.7 | BE/Jobs | Wire validated LLM pricing behind deterministic fallback | Valid LLM output can affect suggested price; invalid/failing LLM falls back to deterministic pricing |
+| 9D.8 | BE/Tests | Harden LLM pricing validation coverage | Bad LLM output cannot corrupt price, confidence, selected/rejected comps, or listing workflow |
 | 9E.1 | BE/Jobs | Enqueue pricing after successful Gemini generation | `generate_ai` completion creates or ensures one `research_price` job for single listings |
 | 9E.2 | BE/Jobs | Make pricing enqueue failure non-blocking | Gemini job still completes if pricing enqueue fails |
 | 9E.3 | BE/Jobs | Add pricing job observability logs | Logs show listing ID, comp count, confidence, suggested price, and provider failure details |
