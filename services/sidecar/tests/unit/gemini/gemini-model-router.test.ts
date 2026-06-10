@@ -18,6 +18,8 @@ function createRoute(overrides: Partial<ResolvedAiModelRoute> = {}): ResolvedAiM
     isFreeTierEligible: true,
     modelName: 'gemini-3.1-flash-lite',
     provider: 'google',
+    requestsPerDay: null,
+    requestsPerMinute: null,
     routeOrder: 1,
     supportsImages: true,
     supportsJsonOutput: true,

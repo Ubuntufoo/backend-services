@@ -8,9 +8,12 @@ import {
 
 interface JoinedCatalogRow {
   display_name: string | null;
+  free_tier_daily_request_limit?: number | null;
   free_tier_status: string;
   is_enabled: boolean;
   is_free_tier_eligible: boolean;
+  requests_per_day: number | null;
+  requests_per_minute: number | null;
   supports_images: boolean;
   supports_json_output: boolean;
   supports_structured_output: boolean;
@@ -37,6 +40,8 @@ const baseCatalogRow: JoinedCatalogRow = {
   free_tier_status: 'confirmed',
   is_enabled: true,
   is_free_tier_eligible: true,
+  requests_per_day: null,
+  requests_per_minute: null,
   supports_images: true,
   supports_json_output: true,
   supports_structured_output: true,
@@ -61,7 +66,18 @@ function createJoinedRouteRow(overrides: Partial<JoinedRouteRow> = {}): JoinedRo
   };
 }
 
-function createAiModelRouteResolverClient(expectedRows: JoinedRouteRow[]): SupabaseDataClient {
+function createAiModelRouteResolverClient(
+  expectedRows: JoinedRouteRow[],
+  options: {
+    provider?: string;
+    taskType?: string;
+  } = {}
+): SupabaseDataClient {
+  const {
+    provider = 'google',
+    taskType = 'listing_draft_generation',
+  } = options;
+
   return {
     from: vi.fn((name: string) => {
       expect(name).toBe('ai_model_task_routes');
@@ -76,7 +92,7 @@ function createAiModelRouteResolverClient(expectedRows: JoinedRouteRow[]): Supab
           return {
             eq: vi.fn((taskColumn: string, taskValue: string) => {
               expect(taskColumn).toBe('task_type');
-              expect(taskValue).toBe('listing_draft_generation');
+              expect(taskValue).toBe(taskType);
 
               return {
                 eq: vi.fn((secondColumn: string, secondValue: boolean | string) => {
@@ -86,7 +102,7 @@ function createAiModelRouteResolverClient(expectedRows: JoinedRouteRow[]): Supab
                     return {
                       eq: vi.fn((providerColumn: string, providerValue: string) => {
                         expect(providerColumn).toBe('provider');
-                        expect(providerValue).toBe('google');
+                        expect(providerValue).toBe(provider);
 
                         return {
                           order: vi.fn(async (orderColumn: string, options: { ascending: boolean }) => {
@@ -98,15 +114,6 @@ function createAiModelRouteResolverClient(expectedRows: JoinedRouteRow[]): Supab
                               error: null,
                             };
                           }),
-                        };
-                      }),
-                      order: vi.fn(async (orderColumn: string, options: { ascending: boolean }) => {
-                        expect(orderColumn).toBe('route_order');
-                        expect(options).toEqual({ ascending: true });
-
-                        return {
-                          data: expectedRows,
-                          error: null,
                         };
                       }),
                     };
@@ -174,19 +181,73 @@ describe('ai model routes repository', () => {
         displayName: 'Gemini 3.5 Flash',
         modelName: 'gemini-3.5-flash',
         provider: 'google',
+        requestsPerDay: null,
+        requestsPerMinute: null,
         routeOrder: 1,
       }),
       expect.objectContaining({
         displayName: 'Gemini 3 Flash Preview',
         modelName: 'gemini-3-flash-preview',
         provider: 'google',
+        requestsPerDay: null,
+        requestsPerMinute: null,
         routeOrder: 2,
       }),
       expect.objectContaining({
         displayName: 'Gemini 3.1 Flash Lite',
         modelName: 'gemini-3.1-flash-lite',
         provider: 'google',
+        requestsPerDay: null,
+        requestsPerMinute: null,
         routeOrder: 3,
+      }),
+    ]);
+  });
+
+  it('returns Gemma pricing route with per-model limits', async () => {
+    const client = createAiModelRouteResolverClient(
+      [
+        createJoinedRouteRow({
+          catalog: {
+            ...baseCatalogRow,
+            display_name: 'Gemma 4 31B IT',
+            free_tier_status: 'verified_paid_only',
+            is_free_tier_eligible: false,
+            requests_per_day: 1500,
+            requests_per_minute: 15,
+            supports_images: false,
+          },
+          model_name: 'gemma-4-31b-it',
+          require_images: false,
+          route_order: 1,
+          task_type: 'pricing_reasoning',
+        }),
+      ],
+      {
+        provider: 'google',
+        taskType: 'pricing_reasoning',
+      }
+    );
+
+    const routes = await resolveAiModelRoutesForTask(client, {
+      provider: 'google',
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'pricing_reasoning',
+    });
+
+    expect(routes).toEqual([
+      expect.objectContaining({
+        displayName: 'Gemma 4 31B IT',
+        freeTierStatus: 'verified_paid_only',
+        isFreeTierEligible: false,
+        modelName: 'gemma-4-31b-it',
+        provider: 'google',
+        requestsPerDay: 1500,
+        requestsPerMinute: 15,
+        routeOrder: 1,
+        supportsImages: false,
+        taskType: 'pricing_reasoning',
       }),
     ]);
   });
@@ -219,6 +280,60 @@ describe('ai model routes repository', () => {
     const routes = await resolveAiModelRoutesForTask(client, {
       provider: 'google',
       taskType: 'listing_draft_generation',
+    });
+
+    expect(routes).toEqual([]);
+  });
+
+  it('excludes disabled pricing task routes', async () => {
+    const client = createAiModelRouteResolverClient(
+      [
+        createJoinedRouteRow({
+          is_enabled: false,
+          model_name: 'gemma-4-31b-it',
+          require_images: false,
+          task_type: 'pricing_reasoning',
+        }),
+      ],
+      {
+        provider: 'google',
+        taskType: 'pricing_reasoning',
+      }
+    );
+
+    const routes = await resolveAiModelRoutesForTask(client, {
+      provider: 'google',
+      taskType: 'pricing_reasoning',
+    });
+
+    expect(routes).toEqual([]);
+  });
+
+  it('excludes disabled pricing catalog models', async () => {
+    const client = createAiModelRouteResolverClient(
+      [
+        createJoinedRouteRow({
+          catalog: {
+            ...baseCatalogRow,
+            is_enabled: false,
+            requests_per_day: 1500,
+            requests_per_minute: 15,
+            supports_images: false,
+          },
+          model_name: 'gemma-4-31b-it',
+          require_images: false,
+          task_type: 'pricing_reasoning',
+        }),
+      ],
+      {
+        provider: 'google',
+        taskType: 'pricing_reasoning',
+      }
+    );
+
+    const routes = await resolveAiModelRoutesForTask(client, {
+      provider: 'google',
+      taskType: 'pricing_reasoning',
     });
 
     expect(routes).toEqual([]);
@@ -399,6 +514,49 @@ describe('ai model routes repository', () => {
       expect.objectContaining({
         modelName: 'gemini-3.5-flash',
         routeOrder: 1,
+      })
+    );
+  });
+
+  it('returns pricing route as primary for pricing_reasoning', async () => {
+    const client = createAiModelRouteResolverClient(
+      [
+        createJoinedRouteRow({
+          catalog: {
+            ...baseCatalogRow,
+            display_name: 'Gemma 4 31B IT',
+            free_tier_status: 'verified_paid_only',
+            is_free_tier_eligible: false,
+            requests_per_day: 1500,
+            requests_per_minute: 15,
+            supports_images: false,
+          },
+          model_name: 'gemma-4-31b-it',
+          require_images: false,
+          route_order: 1,
+          task_type: 'pricing_reasoning',
+        }),
+      ],
+      {
+        provider: 'google',
+        taskType: 'pricing_reasoning',
+      }
+    );
+
+    const route = await resolvePrimaryAiModelRouteForTask(client, {
+      provider: 'google',
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'pricing_reasoning',
+    });
+
+    expect(route).toEqual(
+      expect.objectContaining({
+        modelName: 'gemma-4-31b-it',
+        requestsPerDay: 1500,
+        requestsPerMinute: 15,
+        routeOrder: 1,
+        taskType: 'pricing_reasoning',
       })
     );
   });
