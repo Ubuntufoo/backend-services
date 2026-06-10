@@ -109,11 +109,19 @@ function buildCompsPayload(
   comps: readonly LlmPricingPromptComp[],
   maxComps: number | undefined
 ): Record<string, unknown>[] {
-  return comps.slice(0, normalizeMaxComps(maxComps)).map((comp) => {
+  const normalizedMaxComps = normalizeMaxComps(maxComps);
+  const payloads: Record<string, unknown>[] = [];
+
+  for (const comp of comps) {
+    const price = normalizePrice(comp.price);
+    if (price === undefined || price <= 0) {
+      continue;
+    }
+
     const payload: Record<string, unknown> = {
       id: normalizeRequiredText(comp.id),
       title: truncateText(comp.title, MAX_TITLE_LENGTH),
-      price: normalizePrice(comp.price) ?? 0,
+      price,
       soldAt: normalizeRequiredText(comp.soldAt),
     };
 
@@ -122,8 +130,14 @@ function buildCompsPayload(
       payload.condition = condition;
     }
 
-    return payload;
-  });
+    payloads.push(payload);
+
+    if (payloads.length >= normalizedMaxComps) {
+      break;
+    }
+  }
+
+  return payloads;
 }
 
 function normalizeSoldCount(value: number): number {

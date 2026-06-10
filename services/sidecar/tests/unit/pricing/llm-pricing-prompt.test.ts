@@ -169,6 +169,44 @@ describe('buildLlmPricingPrompt', () => {
     ]);
   });
 
+  it('omits comps with invalid or non-positive prices and applies cap after filtering', () => {
+    const payload = extractPayload(
+      buildLlmPricingPrompt({
+        ...buildInput(),
+        comps: [
+          { id: 'bad-nan', title: 'Bad NaN', price: Number.NaN, soldAt: '2026-05-01' },
+          { id: 'good-1', title: 'Good 1', price: 11.11, soldAt: '2026-05-02' },
+          { id: 'bad-inf', title: 'Bad Infinity', price: Number.POSITIVE_INFINITY, soldAt: '2026-05-03' },
+          { id: 'bad-neg-inf', title: 'Bad Neg Infinity', price: Number.NEGATIVE_INFINITY, soldAt: '2026-05-04' },
+          { id: 'bad-zero', title: 'Bad Zero', price: 0, soldAt: '2026-05-05' },
+          { id: 'good-2', title: 'Good 2', price: 22.22, soldAt: '2026-05-06' },
+          { id: 'good-3', title: 'Good 3', price: 33.33, soldAt: '2026-05-07' },
+        ],
+        options: { maxComps: 2 },
+      }).userPrompt,
+    );
+
+    expect(payload.comps).toEqual([
+      {
+        id: 'good-1',
+        title: 'Good 1',
+        price: 11.11,
+        soldAt: '2026-05-02',
+      },
+      {
+        id: 'good-2',
+        title: 'Good 2',
+        price: 22.22,
+        soldAt: '2026-05-06',
+      },
+    ]);
+    expect(payload.comps).not.toContainEqual(
+      expect.objectContaining({
+        price: 0,
+      }),
+    );
+  });
+
   it('normalizes numbers, omits null/empty fields, and keeps prompt deterministic', () => {
     const input: LlmPricingPromptInput = {
       listing: {
