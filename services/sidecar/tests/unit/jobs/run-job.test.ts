@@ -16,7 +16,11 @@ import {
 } from '@/ebay/publish-validation.js';
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import { runSidecarJob } from '@/jobs/index.js';
-import { createFixturePricingProvider } from '@/pricing/index.js';
+import {
+  FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+  createFixtureLlmPricingAnalyst,
+  createFixturePricingProvider,
+} from '@/pricing/index.js';
 
 const queuedGenerateAiJob: JobRow = {
   attempts: 0,
@@ -2499,6 +2503,258 @@ describe('runSidecarJob', () => {
       expect(result.listing?.price).not.toBe(listing.price);
       expect(writeOrder).toEqual(['research_success', 'listing_update']);
     });
+
+    it('uses valid analyst suggested price as final price and persists llm fields', async () => {
+      const listing = createListingRow({
+        category_id: '261328',
+        condition_id: '2750',
+        item_specifics: {
+          'Card Number': '136',
+          Manufacturer: 'Panini',
+          Player: 'Victor Wembanyama',
+          Set: 'Prizm',
+          Year: '2023',
+        },
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const pricingAnalyst = {
+        analyze: vi.fn(async (input: { comps: Array<{ id: string }> }) => ({
+          modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+          prompt: {
+            systemInstruction: 'test',
+            userPrompt: 'test',
+          },
+          rawOutput: {},
+          reasoning: {
+            confidence: 'medium' as const,
+            priceExplanation: 'Selected comps support tighter midpoint.',
+            rejectedCompIds: input.comps.slice(2).map((comp) => comp.id),
+            selectedCompIds: input.comps.slice(0, 2).map((comp) => comp.id),
+            suggestedPrice: 14.44,
+          },
+        })),
+        name: 'fixture',
+      };
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingAnalyst,
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(result.listing).toMatchObject({
+        last_error_at: listing.last_error_at,
+        last_error_code: listing.last_error_code,
+        last_error_context: listing.last_error_context,
+        last_error_message: listing.last_error_message,
+        price: 14.44,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+      });
+
+      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+        .calls[0]?.[0];
+      expect(markSucceededInput).toMatchObject({
+        llm_price_explanation: 'Selected comps support tighter midpoint.',
+        llm_reasoning_json: {
+          fallback: null,
+          modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+          reasoning: {
+            confidence: 'medium',
+            priceExplanation: 'Selected comps support tighter midpoint.',
+            suggestedPrice: 14.44,
+          },
+          status: 'succeeded',
+        },
+        pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+        suggested_price: 14.44,
+      });
+      expect(markSucceededInput?.llm_selected_comp_ids).toHaveLength(2);
+      expect(markSucceededInput?.llm_selected_comp_ids).toEqual(
+        expect.arrayContaining([expect.any(String)])
+      );
+      expect(markSucceededInput?.llm_rejected_comp_ids).toEqual(
+        expect.arrayContaining([expect.any(String)])
+      );
+      expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+        price: 14.44,
+      });
+      expect(pricingAnalyst.analyze).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to deterministic price when analyst returns suggestedPrice null and still persists reasoning', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Null llm suggested price listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const pricingAnalyst = {
+        analyze: vi.fn(async (input: { comps: Array<{ id: string }> }) => ({
+          modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+          prompt: {
+            systemInstruction: 'test',
+            userPrompt: 'test',
+          },
+          rawOutput: {},
+          reasoning: {
+            confidence: 'medium' as const,
+            priceExplanation: 'Comps useful, but no safe override.',
+            rejectedCompIds: input.comps.slice(1).map((comp) => comp.id),
+            selectedCompIds: input.comps.slice(0, 1).map((comp) => comp.id),
+            suggestedPrice: null,
+          },
+        })),
+        name: 'fixture',
+      };
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingAnalyst,
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(result.listing).toMatchObject({
+        last_error_at: listing.last_error_at,
+        last_error_code: listing.last_error_code,
+        last_error_context: listing.last_error_context,
+        last_error_message: listing.last_error_message,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+      });
+
+      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+        .calls[0]?.[0];
+      expect(markSucceededInput).toMatchObject({
+        llm_price_explanation: 'Comps useful, but no safe override.',
+        llm_reasoning_json: {
+          fallback: 'llm_suggested_price_null',
+          modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+          reasoning: {
+            priceExplanation: 'Comps useful, but no safe override.',
+            suggestedPrice: null,
+          },
+          status: 'succeeded',
+        },
+        pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+      });
+      expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
+      expect(markSucceededInput?.suggested_price).not.toBeNull();
+      expect(markSucceededInput?.llm_selected_comp_ids).toEqual([expect.any(String)]);
+    });
+
+    it.each([
+      ['invalid analyst json', createFixtureLlmPricingAnalyst({ mode: 'invalid_json' })],
+      ['throwing analyst', createFixtureLlmPricingAnalyst({ mode: 'throws' })],
+      [
+        'out-of-range analyst price',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Below deterministic floor.',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['comp-1'],
+            suggestedPrice: 9.99,
+          },
+        }),
+      ],
+      [
+        'unknown comp ids',
+        createFixtureLlmPricingAnalyst({
+          mode: 'custom',
+          rawOutput: {
+            confidence: 'medium',
+            priceExplanation: 'Invented comp ids.',
+            rejectedCompIds: ['comp-2'],
+            selectedCompIds: ['missing-comp'],
+            suggestedPrice: 15.13,
+          },
+        }),
+      ],
+    ])(
+      'falls back to deterministic price for %s without mutating listing workflow errors',
+      async (_label, pricingAnalyst) => {
+        const listing = createListingRow({
+          last_error_at: '2026-05-19T12:00:00.000Z',
+          last_error_code: 'existing_error',
+          last_error_context: { source: 'publish' },
+          last_error_message: 'keep me',
+          price: 9.99,
+          status: 'needs_review',
+          sub_status: 'review_pending',
+          title: 'Fallback listing',
+        });
+        const dataAccess = createDataAccess({
+          job: queuedResearchPriceJob,
+          listing,
+        });
+
+        const result = await runSidecarJob('job-research-price', {
+          dataAccess,
+          now: () => new Date('2026-05-20T13:00:00.000Z'),
+          researchPrice: {
+            pricingAnalyst,
+          },
+        });
+
+        expect(result.job.status).toBe('completed');
+        expect(result.listing).toMatchObject({
+          last_error_at: listing.last_error_at,
+          last_error_code: listing.last_error_code,
+          last_error_context: listing.last_error_context,
+          last_error_message: listing.last_error_message,
+          status: 'needs_review',
+          sub_status: 'review_pending',
+        });
+
+        const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+          .calls[0]?.[0];
+        expect(markSucceededInput).toMatchObject({
+          llm_price_explanation: null,
+          llm_reasoning_json: {
+            analyst: 'fixture',
+            error: expect.any(String),
+            fallback: 'llm_analysis_failed',
+            status: 'failed',
+          },
+          llm_rejected_comp_ids: [],
+          llm_selected_comp_ids: [],
+          pricing_model_name: 'deterministic-fixture-v1',
+        });
+        expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
+        expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+        expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+        expectNoWorkflowErrorFieldsWritten(
+          vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+        );
+      }
+    );
 
     it('fails research_price for lot listings without changing listing state', async () => {
       const listing = createListingRow({
