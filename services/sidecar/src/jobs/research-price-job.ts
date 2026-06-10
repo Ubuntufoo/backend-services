@@ -17,6 +17,7 @@ import {
   type PricingProviderResult,
   type PricingStatsResult,
 } from '@/pricing/index.js';
+import { createLogger } from '@/utils/logger.js';
 import {
   classifyJobError,
   JOB_ERROR_CODES,
@@ -27,6 +28,7 @@ import {
 const DEFAULT_MIN_SOLD_COMPS = 12;
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
+const jobLogger = createLogger('Job');
 const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
   'Player',
   'Year',
@@ -125,6 +127,41 @@ function asCompactErrorMessage(error: unknown): string {
   }
 
   return `${normalized.slice(0, 237)}...`;
+}
+
+function getPricingMode(
+  pricingProvider: PricingProvider,
+  pricingAnalyst?: PricingAnalyst
+): 'fixture' | 'deterministic' | 'llm_assisted' {
+  if (pricingAnalyst) {
+    return 'llm_assisted';
+  }
+
+  return pricingProvider.name === FIXTURE_PROVIDER_NAME ? 'fixture' : 'deterministic';
+}
+
+function getProviderFailureDetails(error: unknown): {
+  providerFailureCode?: string;
+  providerFailureMessage: string;
+  provider?: string;
+  query?: string;
+} {
+  const providerFailureMessage = asCompactErrorMessage(error);
+
+  if (!isRecord(error)) {
+    return { providerFailureMessage };
+  }
+
+  return {
+    provider: asNonEmptyString(error.provider) ?? asNonEmptyString(error.providerName),
+    providerFailureCode: asNonEmptyString(error.code) ?? asNonEmptyString(error.errorCode),
+    providerFailureMessage:
+      asNonEmptyString(error.providerFailureMessage) ??
+      asNonEmptyString(error.errorMessage) ??
+      asNonEmptyString(error.message) ??
+      providerFailureMessage,
+    query: asNonEmptyString(error.query),
+  };
 }
 
 function buildPricingProviderInput(listing: ListingRow, listingId: string): PricingProviderInput {
@@ -396,8 +433,18 @@ export async function runResearchPriceJob(
   let research: ListingPriceResearchRow | null = null;
   let researchSucceeded = false;
   let providerResult: PricingProviderResult | undefined;
+  let rawCompCount: number | undefined;
+  let normalizedCompCount: number | undefined;
 
   try {
+    jobLogger.info('Started research_price job.', {
+      event: 'research_price_started',
+      jobId: job.id,
+      listingId,
+      pricingMode: getPricingMode(pricingProvider, dependencies.pricingAnalyst),
+      provider: pricingProvider.name,
+    });
+
     research = await dependencies.dataAccess.listingPriceResearch.create({
       listing_id: listingId,
       provider: FIXTURE_PROVIDER_NAME,
@@ -405,9 +452,20 @@ export async function runResearchPriceJob(
     });
 
     providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
+    rawCompCount = providerResult.soldComps.length;
 
     const normalized = runNormalizeComps(providerResult.soldComps);
+    normalizedCompCount = normalized.comps.length;
     const stats = runComputeStats(normalized.comps);
+    jobLogger.info('Completed research_price provider fetch.', {
+      event: 'research_price_provider_result',
+      jobId: job.id,
+      listingId,
+      normalizedCompCount,
+      provider: providerResult.provider,
+      query: providerResult.query,
+      rawCompCount,
+    });
     const deterministicSuggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
 
     if (deterministicSuggestedPrice === null) {
@@ -450,7 +508,27 @@ export async function runResearchPriceJob(
           fallbackReason,
           error
         );
+        jobLogger.warn('Fell back to deterministic research_price after LLM failure.', {
+          analyst: dependencies.pricingAnalyst.name,
+          compactErrorMessage: asCompactErrorMessage(error),
+          deterministicSuggestedPrice,
+          event: 'research_price_llm_fallback',
+          fallbackReason,
+          jobId: job.id,
+          listingId,
+        });
       }
+    }
+
+    if (fallbackReason === 'llm_suggested_price_null' && pricingModelName) {
+      jobLogger.info('Fell back to deterministic research_price after null LLM price.', {
+        deterministicSuggestedPrice,
+        event: 'research_price_llm_fallback',
+        fallbackReason,
+        jobId: job.id,
+        listingId,
+        pricingModelName,
+      });
     }
 
     const finalSuggestedPrice = normalizeSuggestedPrice(
@@ -485,6 +563,25 @@ export async function runResearchPriceJob(
       price: finalSuggestedPrice,
     });
 
+    jobLogger.info('Succeeded research_price job.', {
+      confidence: confidence.confidence,
+      deterministicSuggestedPrice,
+      event: 'research_price_succeeded',
+      finalSuggestedPrice,
+      jobId: job.id,
+      listingId,
+      listingPriceUpdated: pricedListing.price === finalSuggestedPrice,
+      llmFallbackReason: fallbackReason ?? undefined,
+      llmStatus: dependencies.pricingAnalyst
+        ? fallbackReason === 'llm_analysis_failed'
+          ? 'failed'
+          : 'succeeded'
+        : 'not_attempted',
+      normalizedCompCount,
+      pricingModelName,
+      soldCount: stats.soldCount,
+    });
+
     const completedJob = await dependencies.dataAccess.jobs.complete(job.id);
 
     return {
@@ -493,6 +590,19 @@ export async function runResearchPriceJob(
     };
   } catch (error) {
     let jobError = classifyJobError(job.job_type, error);
+    const providerFailure = getProviderFailureDetails(error);
+    const provider =
+      providerResult?.provider ??
+      providerFailure.provider ??
+      (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider) : undefined) ??
+      pricingProvider.name;
+    const providerFailureCode =
+      providerFailure.providerFailureCode ??
+      (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider_failure_code) : undefined);
+    const query =
+      providerResult?.query ??
+      providerFailure.query ??
+      (error instanceof SidecarJobError ? asNonEmptyString(error.context.query) : undefined);
 
     try {
       if (!researchSucceeded) {
@@ -512,6 +622,20 @@ export async function runResearchPriceJob(
         { cause: jobError }
       );
     }
+
+    jobLogger.warn('Failed research_price job.', {
+      event: 'research_price_failed',
+      failureCode: jobError.code,
+      jobId: job.id,
+      listingId,
+      normalizedCompCount,
+      provider,
+      providerFailureCode,
+      providerFailureMessage: providerFailure.providerFailureMessage,
+      query,
+      rawCompCount,
+      workflowSafe: true,
+    });
 
     const failedJob = await dependencies.dataAccess.jobs.fail(
       job.id,
