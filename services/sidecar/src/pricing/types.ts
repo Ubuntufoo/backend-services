@@ -66,6 +66,25 @@ export interface PricingStatsResult {
 
 export type PricingConfidence = 'low' | 'medium' | 'high';
 
+export interface LlmPricingReasoningCompNote {
+  compId: string;
+  note: string;
+}
+
+export interface LlmPricingReasoning {
+  selectedCompIds: string[];
+  rejectedCompIds: string[];
+  suggestedPrice: number | null;
+  confidence: PricingConfidence;
+  priceExplanation: string;
+  compNotes?: LlmPricingReasoningCompNote[];
+}
+
+export interface LlmPricingReasoningValidationContext {
+  validCompIds: readonly string[];
+  stats: Pick<PricingStatsResult, 'lowSoldPrice' | 'highSoldPrice'>;
+}
+
 export interface PricingConfidenceInput {
   comps: NormalizedSoldComp[];
   stats: PricingStatsResult;
