@@ -5,8 +5,10 @@
 ## Getting Started
 
 - [Root README](https://github.com/Ubuntufoo/backend-services/blob/main/README.md): Monorepo overview and workspace commands
-- [Sidecar README](https://github.com/Ubuntufoo/backend-services/blob/main/services/sidecar/README.md): Setup, usage, and development guide for the active package
-- [AGENTS.md](https://github.com/Ubuntufoo/backend-services/blob/main/AGENTS.md): Architecture intent and service boundaries
+- [AGENTS.md](https://github.com/Ubuntufoo/backend-services/blob/main/AGENTS.md): Agent routing guide and file map
+- [Local Development](https://github.com/Ubuntufoo/backend-services/blob/main/docs/local-development.md): Setup and validation commands
+- [eBay Integration](https://github.com/Ubuntufoo/backend-services/blob/main/docs/ebay-integration.md): OAuth, readiness, sandbox, publish notes
+- [Pricing](https://github.com/Ubuntufoo/backend-services/blob/main/docs/pricing.md): Current pricing implementation status
 
 ## Active Runtime Surface
 
@@ -25,4 +27,5 @@
 ## Shared References
 
 - [docs/API_STATUS.md](https://github.com/Ubuntufoo/backend-services/blob/main/docs/API_STATUS.md)
-- [docs/auth/CONFIGURATION.md](https://github.com/Ubuntufoo/backend-services/blob/main/docs/auth/CONFIGURATION.md)
+- [docs/architecture.md](https://github.com/Ubuntufoo/backend-services/blob/main/docs/architecture.md)
+- [docs/operations.md](https://github.com/Ubuntufoo/backend-services/blob/main/docs/operations.md)
