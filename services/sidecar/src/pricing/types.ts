@@ -135,6 +135,25 @@ export interface LlmPricingReasoningValidationContext {
   stats: Pick<PricingStatsResult, 'lowSoldPrice' | 'highSoldPrice'>;
 }
 
+export interface PricingAnalystInput {
+  listing: LlmPricingPromptListing;
+  stats: PricingStatsResult;
+  comps: NormalizedSoldComp[];
+  promptOptions?: LlmPricingPromptOptions;
+}
+
+export interface PricingAnalystResult {
+  modelName: string;
+  reasoning: LlmPricingReasoning;
+  prompt: LlmPricingPrompt;
+  rawOutput: unknown;
+}
+
+export interface PricingAnalyst {
+  readonly name: string;
+  analyze(input: PricingAnalystInput): Promise<PricingAnalystResult>;
+}
+
 export interface PricingConfidenceInput {
   comps: NormalizedSoldComp[];
   stats: PricingStatsResult;
