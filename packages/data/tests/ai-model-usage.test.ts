@@ -377,7 +377,7 @@ describe('ai-model-usage repository', () => {
     });
   });
 
-  it('does not reserve day if minute denied and does not leave minute consumed if day denied', async () => {
+  it('does not reserve day if minute denied and reports prior minute usage unchanged when day denied', async () => {
     const harness = createUsageClient();
 
     await reserveAiModelUsage(harness.client, {
@@ -451,6 +451,8 @@ describe('ai-model-usage repository', () => {
       reason: 'day_limit_reached',
     });
 
+    // Day denial must not consume or compensate minute usage; caller sees
+    // unchanged preexisting minute usage for that window.
     expect(
       dayDeniedHarness.getWindow({
         modelName: 'gemma-4-31b-it',

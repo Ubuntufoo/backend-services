@@ -164,11 +164,12 @@ returns table (
 language plpgsql
 as $$
 declare
-  v_minute_result record;
-  v_day_result record;
   v_minute_window_start timestamptz;
   v_day_window_start timestamptz;
-  v_minute_used_after_rollback integer;
+  v_minute_existing public.ai_model_usage_windows%rowtype;
+  v_day_existing public.ai_model_usage_windows%rowtype;
+  v_minute_requests_used integer;
+  v_day_requests_used integer;
 begin
   if p_amount is null or p_amount <= 0 then
     raise exception 'reserve_ai_model_usage amount must be positive';
@@ -177,28 +178,36 @@ begin
   v_minute_window_start := date_trunc('minute', timezone('utc', p_now)) at time zone 'utc';
   v_day_window_start := date_trunc('day', timezone('utc', p_now)) at time zone 'utc';
 
+  -- Serialize reservations per provider/model/task so minute/day capacity checks
+  -- and increments happen against a stable view. This avoids compensating
+  -- decrements that can race and consume another worker's minute reservation.
+  perform pg_advisory_xact_lock(hashtextextended(
+    concat_ws('|', p_provider, p_model_name, p_task_type),
+    0
+  ));
+
   if coalesce(p_requests_per_minute, 0) > 0 then
     select *
-    into v_minute_result
-    from public.reserve_ai_model_usage_window(
-      p_provider,
-      p_model_name,
-      p_task_type,
-      'minute',
-      v_minute_window_start,
-      p_requests_per_minute,
-      p_amount
-    );
+    into v_minute_existing
+    from public.ai_model_usage_windows
+    where provider = p_provider
+      and model_name = p_model_name
+      and task_type = p_task_type
+      and window_type = 'minute'
+      and window_start = v_minute_window_start
+    for update;
 
-    if not coalesce(v_minute_result.allowed, false) then
+    v_minute_requests_used := coalesce(v_minute_existing.requests_used, 0);
+
+    if v_minute_requests_used + p_amount > p_requests_per_minute then
       return query
       select
         false,
         'minute_limit_reached',
-        v_minute_result.requests_used,
-        v_minute_result.request_limit,
-        v_minute_result.remaining,
-        v_minute_result.window_start,
+        v_minute_requests_used,
+        p_requests_per_minute,
+        greatest(p_requests_per_minute - v_minute_requests_used, 0),
+        v_minute_window_start,
         null::integer,
         null::integer,
         null::integer,
@@ -209,39 +218,24 @@ begin
 
   if coalesce(p_requests_per_day, 0) > 0 then
     select *
-    into v_day_result
-    from public.reserve_ai_model_usage_window(
-      p_provider,
-      p_model_name,
-      p_task_type,
-      'day',
-      v_day_window_start,
-      p_requests_per_day,
-      p_amount
-    );
+    into v_day_existing
+    from public.ai_model_usage_windows
+    where provider = p_provider
+      and model_name = p_model_name
+      and task_type = p_task_type
+      and window_type = 'day'
+      and window_start = v_day_window_start
+    for update;
 
-    if not coalesce(v_day_result.allowed, false) then
-      if coalesce(p_requests_per_minute, 0) > 0 then
-        update public.ai_model_usage_windows
-        set
-          requests_used = public.ai_model_usage_windows.requests_used - p_amount,
-          updated_at = now()
-        where provider = p_provider
-          and model_name = p_model_name
-          and task_type = p_task_type
-          and window_type = 'minute'
-          and window_start = v_minute_window_start
-          and public.ai_model_usage_windows.requests_used >= p_amount
-        returning public.ai_model_usage_windows.requests_used
-        into v_minute_used_after_rollback;
-      end if;
+    v_day_requests_used := coalesce(v_day_existing.requests_used, 0);
 
+    if v_day_requests_used + p_amount > p_requests_per_day then
       return query
       select
         false,
         'day_limit_reached',
         case
-          when coalesce(p_requests_per_minute, 0) > 0 then coalesce(v_minute_used_after_rollback, 0)
+          when coalesce(p_requests_per_minute, 0) > 0 then coalesce(v_minute_requests_used, 0)
           else null::integer
         end,
         case
@@ -250,19 +244,83 @@ begin
         end,
         case
           when coalesce(p_requests_per_minute, 0) > 0
-            then greatest(p_requests_per_minute - coalesce(v_minute_used_after_rollback, 0), 0)
+            then greatest(p_requests_per_minute - coalesce(v_minute_requests_used, 0), 0)
           else null::integer
         end,
         case
           when coalesce(p_requests_per_minute, 0) > 0 then v_minute_window_start
           else null::timestamptz
         end,
-        v_day_result.requests_used,
-        v_day_result.request_limit,
-        v_day_result.remaining,
-        v_day_result.window_start;
+        v_day_requests_used,
+        p_requests_per_day,
+        greatest(p_requests_per_day - v_day_requests_used, 0),
+        v_day_window_start;
       return;
     end if;
+  end if;
+
+  if coalesce(p_requests_per_minute, 0) > 0 then
+    insert into public.ai_model_usage_windows (
+      provider,
+      model_name,
+      task_type,
+      window_type,
+      window_start,
+      requests_used
+    )
+    values (
+      p_provider,
+      p_model_name,
+      p_task_type,
+      'minute',
+      v_minute_window_start,
+      p_amount
+    )
+    on conflict (
+      provider,
+      model_name,
+      task_type,
+      window_type,
+      window_start
+    )
+    do update
+    set
+      requests_used = public.ai_model_usage_windows.requests_used + p_amount,
+      updated_at = now()
+    returning public.ai_model_usage_windows.requests_used
+    into v_minute_requests_used;
+  end if;
+
+  if coalesce(p_requests_per_day, 0) > 0 then
+    insert into public.ai_model_usage_windows (
+      provider,
+      model_name,
+      task_type,
+      window_type,
+      window_start,
+      requests_used
+    )
+    values (
+      p_provider,
+      p_model_name,
+      p_task_type,
+      'day',
+      v_day_window_start,
+      p_amount
+    )
+    on conflict (
+      provider,
+      model_name,
+      task_type,
+      window_type,
+      window_start
+    )
+    do update
+    set
+      requests_used = public.ai_model_usage_windows.requests_used + p_amount,
+      updated_at = now()
+    returning public.ai_model_usage_windows.requests_used
+    into v_day_requests_used;
   end if;
 
   return query
@@ -270,7 +328,7 @@ begin
     true,
     null::text,
     case
-      when coalesce(p_requests_per_minute, 0) > 0 then v_minute_result.requests_used
+      when coalesce(p_requests_per_minute, 0) > 0 then v_minute_requests_used
       else null::integer
     end,
     case
@@ -278,7 +336,8 @@ begin
       else null::integer
     end,
     case
-      when coalesce(p_requests_per_minute, 0) > 0 then v_minute_result.remaining
+      when coalesce(p_requests_per_minute, 0) > 0
+        then greatest(p_requests_per_minute - coalesce(v_minute_requests_used, 0), 0)
       else null::integer
     end,
     case
@@ -286,7 +345,7 @@ begin
       else null::timestamptz
     end,
     case
-      when coalesce(p_requests_per_day, 0) > 0 then v_day_result.requests_used
+      when coalesce(p_requests_per_day, 0) > 0 then v_day_requests_used
       else null::integer
     end,
     case
@@ -294,11 +353,12 @@ begin
       else null::integer
     end,
     case
-      when coalesce(p_requests_per_day, 0) > 0 then v_day_result.remaining
+      when coalesce(p_requests_per_day, 0) > 0
+        then greatest(p_requests_per_day - coalesce(v_day_requests_used, 0), 0)
       else null::integer
     end,
     case
-      when coalesce(p_requests_per_day, 0) > 0 then v_day_result.window_start
+      when coalesce(p_requests_per_day, 0) > 0 then v_day_window_start
       else null::timestamptz
     end;
 end;
