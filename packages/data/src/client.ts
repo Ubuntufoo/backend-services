@@ -9,7 +9,7 @@ export interface SupabaseServiceClientConfig {
   url: string;
 }
 
-export type SupabaseDataClient = Pick<SupabaseClient<Database>, 'from'>;
+export type SupabaseDataClient = Pick<SupabaseClient<Database>, 'from' | 'rpc'>;
 
 export function loadSupabaseServiceClientConfig(
   env: NodeJS.ProcessEnv = process.env

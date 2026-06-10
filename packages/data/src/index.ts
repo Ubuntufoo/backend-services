@@ -11,6 +11,9 @@ export type {
   AiModelTaskRouteInsert,
   AiModelTaskRouteRow,
   AiModelTaskRouteUpdate,
+  AiModelUsageWindowInsert,
+  AiModelUsageWindowRow,
+  AiModelUsageWindowUpdate,
   Database,
   DailyUsageInsert,
   DailyUsageRow,
@@ -54,6 +57,18 @@ export {
   type MarkAiModelAttemptFailedInput,
   type MarkAiModelAttemptSucceededInput,
 } from './repositories/ai-model-attempts.js';
+export {
+  reserveAiModelUsage,
+  reserveAiModelUsageWindow,
+  resolveAiModelUsageWindowStart,
+  type AiModelUsageDeniedReason,
+  type AiModelUsageWindowReservation,
+  type AiModelUsageWindowType,
+  type ReserveAiModelUsageInput,
+  type ReserveAiModelUsageResult,
+  type ReserveAiModelUsageWindowInput,
+  type ReserveAiModelUsageWindowResult,
+} from './repositories/ai-model-usage.js';
 export {
   buildR2ImageObjectKey,
   buildPublicImageUrl,
