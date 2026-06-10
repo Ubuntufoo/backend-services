@@ -81,8 +81,20 @@ function getListingItemSpecifics(
   return Object.keys(itemSpecifics).length > 0 ? itemSpecifics : undefined;
 }
 
-function isPositiveFiniteNumber(value: number | null): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+function normalizeSuggestedPrice(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  const normalized = Number(value.toFixed(2));
+
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    return null;
+  }
+
+  const cents = Math.round(normalized * 100);
+
+  return Number.isSafeInteger(cents) ? normalized : null;
 }
 
 function asJson(value: unknown): Json {
@@ -266,6 +278,7 @@ export async function runResearchPriceJob(
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
   let research: ListingPriceResearchRow | null = null;
+  let researchSucceeded = false;
   let providerResult: PricingProviderResult | undefined;
 
   try {
@@ -280,8 +293,9 @@ export async function runResearchPriceJob(
 
     const normalized = runNormalizeComps(providerResult.soldComps);
     const stats = runComputeStats(normalized.comps);
+    const suggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
 
-    if (!isPositiveFiniteNumber(stats.deterministicSuggestedPrice)) {
+    if (suggestedPrice === null) {
       throw buildResearchPriceEligibilityError(
         JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
         'terminal',
@@ -307,11 +321,12 @@ export async function runResearchPriceJob(
       query: providerResult.query,
       raw_result_json: asJson(providerResult.rawResult),
       sold_count: stats.soldCount,
-      suggested_price: stats.deterministicSuggestedPrice,
+      suggested_price: suggestedPrice,
     });
+    researchSucceeded = true;
 
     const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
-      price: stats.deterministicSuggestedPrice,
+      price: suggestedPrice,
     });
 
     const completedJob = await dependencies.dataAccess.jobs.complete(job.id);
@@ -324,12 +339,14 @@ export async function runResearchPriceJob(
     let jobError = classifyJobError(job.job_type, error);
 
     try {
-      await markResearchFailedSafely(
-        dependencies.dataAccess,
-        research,
-        jobError,
-        providerResult
-      );
+      if (!researchSucceeded) {
+        await markResearchFailedSafely(
+          dependencies.dataAccess,
+          research,
+          jobError,
+          providerResult
+        );
+      }
     } catch (cleanupError) {
       jobError = new SidecarJobError(
         jobError.code,
