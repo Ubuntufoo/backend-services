@@ -292,6 +292,15 @@ function assertResearchPriceListingEligible(listing: ListingRow): void {
   }
 }
 
+export function isResearchPriceListingEligible(listing: ListingRow): boolean {
+  try {
+    assertResearchPriceListingEligible(listing);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function getListingSafely(
   dataAccess: SidecarDataAccess,
   listingId: string

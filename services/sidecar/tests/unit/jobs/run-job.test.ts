@@ -324,6 +324,8 @@ function createDataAccess({
   aiModelRouteError,
   dailyUsageIncrementError,
   dailyUsageIncrementErrors,
+  enqueueResearchPriceError,
+  enqueueResearchPriceResult,
   geminiAttemptAuditError,
   onListingsUpdate,
   workflowStates = [],
@@ -336,6 +338,11 @@ function createDataAccess({
   aiModelRouteError?: Error;
   dailyUsageIncrementError?: Error;
   dailyUsageIncrementErrors?: (Error | undefined)[];
+  enqueueResearchPriceError?: Error;
+  enqueueResearchPriceResult?: {
+    alreadyQueued: boolean;
+    job: JobRow;
+  };
   geminiAttemptAuditError?: Error;
   onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
   workflowStates?: ListingRow[];
@@ -665,6 +672,19 @@ function createDataAccess({
           max_attempts: 3,
         },
       })),
+      enqueueResearchPrice: vi.fn(async (listingId: string) => {
+        if (enqueueResearchPriceError) {
+          throw enqueueResearchPriceError;
+        }
+
+        return enqueueResearchPriceResult ?? {
+          alreadyQueued: false,
+          job: {
+            ...queuedResearchPriceJob,
+            listing_id: listingId,
+          },
+        };
+      }),
       fail: vi.fn(async (_jobId: string, error) => {
         if (!jobState) {
           throw new Error('job missing');
@@ -787,6 +807,7 @@ describe('runSidecarJob', () => {
     expect(result.job.status).toBe('failed');
     expect(result.job.last_error_code).toBe('generate_ai_listing_not_eligible');
     expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   });
 
@@ -814,6 +835,7 @@ describe('runSidecarJob', () => {
       })
     );
     expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
   });
 
   it('fails generate_ai jobs when no eligible AI model route is configured', async () => {
@@ -982,6 +1004,13 @@ describe('runSidecarJob', () => {
         title: '1991 Upper Deck Michael Jordan',
       })
     );
+    expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
+    expect(
+      vi.mocked(dataAccess.listings.update).mock.invocationCallOrder[0]
+    ).toBeLessThan(vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]);
+    expect(
+      vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]
+    ).toBeLessThan(vi.mocked(dataAccess.jobs.complete).mock.invocationCallOrder[0]);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
       gemini_attempt_count: 1,
       gemini_attempts: [
@@ -1038,6 +1067,7 @@ describe('runSidecarJob', () => {
     });
     expect(result.listing?.sku).toBe('Single-000001');
     expect(result.listing?.listing_id).toBe('Single-000001');
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(result.job.status).toBe('completed');
     expect(result.job.gemini_attempt_count).toBe(1);
     expect(result.job.gemini_selected_model).toBe('gemini-3.1-flash-lite');
@@ -1090,6 +1120,167 @@ describe('runSidecarJob', () => {
     });
     expect(result.listing?.sku).toBe('Single-000001');
     expect(result.listing?.listing_id).toBe('Single-000001');
+  });
+
+  it('keeps generate_ai success when research_price enqueue finds active queued work', async () => {
+    const dataAccess = createDataAccess({
+      enqueueResearchPriceResult: {
+        alreadyQueued: true,
+        job: queuedResearchPriceJob,
+      },
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Single-000001',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+        Manufacturer: 'Upper Deck',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+    expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+  });
+
+  it('skips research_price enqueue after generate_ai success for lot listings', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Lot-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Lot-000001',
+        listing_type: 'lot',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Vintage basketball card lot',
+      description: 'Mixed lot.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {},
+      priceSuggestion: 49.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+  });
+
+  it('skips research_price enqueue after generate_ai success when listing_type is missing', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-UNKNOWN',
+      },
+      listing: createListingRow({
+        listing_id: 'LIST-UNKNOWN',
+        listing_type: null,
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Unknown listing type card',
+      description: 'Ungraded card.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {},
+      priceSuggestion: 19.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+  });
+
+  it('keeps generate_ai success when research_price enqueue fails after review transition', async () => {
+    const dataAccess = createDataAccess({
+      enqueueResearchPriceError: new Error('research enqueue failed'),
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Single-000001',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+        Manufacturer: 'Upper Deck',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-1' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.job.last_error_code).toBeNull();
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+    expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
+    expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
   it('persists OTHER skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
