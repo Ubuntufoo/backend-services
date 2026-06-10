@@ -219,6 +219,42 @@ export type Database = {
           },
         ];
       };
+      ai_model_usage_windows: {
+        Row: {
+          created_at: string;
+          id: string;
+          model_name: string;
+          provider: string;
+          requests_used: number;
+          task_type: string;
+          updated_at: string;
+          window_start: string;
+          window_type: string;
+        };
+        Insert: {
+          created_at?: string;
+          id?: string;
+          model_name: string;
+          provider: string;
+          requests_used?: number;
+          task_type: string;
+          updated_at?: string;
+          window_start: string;
+          window_type: string;
+        };
+        Update: {
+          created_at?: string;
+          id?: string;
+          model_name?: string;
+          provider?: string;
+          requests_used?: number;
+          task_type?: string;
+          updated_at?: string;
+          window_start?: string;
+          window_type?: string;
+        };
+        Relationships: [];
+      };
       app_settings: {
         Row: {
           capture_mode: string | null;
@@ -629,7 +665,48 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
-      [_ in never]: never;
+      reserve_ai_model_usage: {
+        Args: {
+          p_amount?: number;
+          p_model_name: string;
+          p_now: string;
+          p_provider: string;
+          p_requests_per_day?: number | null;
+          p_requests_per_minute?: number | null;
+          p_task_type: string;
+        };
+        Returns: {
+          allowed: boolean;
+          day_remaining: number | null;
+          day_request_limit: number | null;
+          day_requests_used: number | null;
+          day_window_start: string | null;
+          denied_reason: string | null;
+          minute_remaining: number | null;
+          minute_request_limit: number | null;
+          minute_requests_used: number | null;
+          minute_window_start: string | null;
+        }[];
+      };
+      reserve_ai_model_usage_window: {
+        Args: {
+          p_amount?: number;
+          p_limit: number;
+          p_model_name: string;
+          p_provider: string;
+          p_task_type: string;
+          p_window_start: string;
+          p_window_type: string;
+        };
+        Returns: {
+          allowed: boolean;
+          remaining: number;
+          request_limit: number;
+          requests_used: number;
+          window_start: string;
+          window_type: string;
+        }[];
+      };
     };
     Enums: {
       [_ in never]: never;
