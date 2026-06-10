@@ -66,6 +66,56 @@ export interface PricingStatsResult {
 
 export type PricingConfidence = 'low' | 'medium' | 'high';
 
+export type LlmPricingPromptFactKey =
+  | 'Player'
+  | 'Year'
+  | 'Manufacturer'
+  | 'Set'
+  | 'Card Number'
+  | 'Parallel/Variety'
+  | 'Team/Franchise';
+
+export type LlmPricingPromptFacts = Partial<Record<LlmPricingPromptFactKey, string | null>>;
+
+export interface LlmPricingPromptListing {
+  title: string;
+  condition?: string | null;
+  facts?: LlmPricingPromptFacts;
+}
+
+export interface LlmPricingPromptStats {
+  soldCount: number;
+  low?: number | null;
+  median?: number | null;
+  high?: number | null;
+  suggested?: number | null;
+  confidence: PricingConfidence;
+}
+
+export interface LlmPricingPromptComp {
+  id: string;
+  title: string;
+  price: number;
+  soldAt: string;
+  condition?: string | null;
+}
+
+export interface LlmPricingPromptOptions {
+  maxComps?: number;
+}
+
+export interface LlmPricingPromptInput {
+  listing: LlmPricingPromptListing;
+  stats: LlmPricingPromptStats;
+  comps: LlmPricingPromptComp[];
+  options?: LlmPricingPromptOptions;
+}
+
+export interface LlmPricingPrompt {
+  systemInstruction: string;
+  userPrompt: string;
+}
+
 export interface LlmPricingReasoningCompNote {
   compId: string;
   note: string;
