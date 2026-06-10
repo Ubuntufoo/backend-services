@@ -136,13 +136,25 @@ function buildPricingTitleFromItemSpecifics(
   return titleParts.length > 0 ? titleParts.join(' ') : undefined;
 }
 
+function buildResearchPriceError(
+  code:
+    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_FAILED
+    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE
+    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID
+    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND
+    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+  message: string,
+  context: Record<string, Json> = {}
+): SidecarJobError {
+  return new SidecarJobError(code, 'terminal', message, context);
+}
+
 function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): PricingProvider {
   const pricingProvider = dependencies.pricingProvider ?? createFixturePricingProvider();
 
   if (pricingProvider.name !== FIXTURE_PROVIDER_NAME) {
-    throw new SidecarJobError(
+    throw buildResearchPriceError(
       JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
-      'terminal',
       `Unsupported pricing provider "${pricingProvider.name}" for research_price. Only "${FIXTURE_PROVIDER_NAME}" is supported.`,
       {
         provider: pricingProvider.name,
@@ -152,6 +164,43 @@ function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): Pri
   }
 
   return pricingProvider;
+}
+
+function assertResearchPriceListingEligible(listing: ListingRow): void {
+  if (listing.listing_type !== 'single') {
+    throw buildResearchPriceError(
+      JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE,
+      `Listing "${listing.listing_id}" is not eligible for research_price because listing_type is "${listing.listing_type ?? 'null'}".`,
+      {
+        listing_id: listing.listing_id,
+        listing_type: listing.listing_type ?? 'null',
+      }
+    );
+  }
+
+  if (listing.status !== 'needs_review') {
+    throw buildResearchPriceError(
+      JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE,
+      `Listing "${listing.listing_id}" is not eligible for research_price from status "${listing.status}".`,
+      {
+        listing_id: listing.listing_id,
+        status: listing.status,
+        sub_status: listing.sub_status ?? 'null',
+      }
+    );
+  }
+
+  if (listing.sub_status !== 'review_pending') {
+    throw buildResearchPriceError(
+      JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE,
+      `Listing "${listing.listing_id}" is not eligible for research_price from sub_status "${listing.sub_status ?? 'null'}".`,
+      {
+        listing_id: listing.listing_id,
+        status: listing.status,
+        sub_status: listing.sub_status ?? 'null',
+      }
+    );
+  }
 }
 
 async function getListingSafely(
@@ -185,18 +234,6 @@ async function markResearchFailedSafely(
   });
 }
 
-function buildResearchPriceEligibilityError(
-  code:
-    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE
-    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID
-    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND
-    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
-  category: 'terminal' | 'user_fixable',
-  message: string
-): SidecarJobError {
-  return new SidecarJobError(code, category, message);
-}
-
 export async function runResearchPriceJob(
   job: JobRow,
   dependencies: ResearchPriceJobDependencies
@@ -205,9 +242,8 @@ export async function runResearchPriceJob(
   const listingId = asNonEmptyString(job.listing_id);
 
   if (!listingId) {
-    const error = buildResearchPriceEligibilityError(
+    const error = buildResearchPriceError(
       JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID,
-      'terminal',
       `Job "${job.id}" is missing listing_id and cannot run research_price.`
     );
     const failedJob = await dependencies.dataAccess.jobs.fail(
@@ -224,9 +260,8 @@ export async function runResearchPriceJob(
   const listing = await dependencies.dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
-    const error = buildResearchPriceEligibilityError(
+    const error = buildResearchPriceError(
       JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND,
-      'terminal',
       `Listing "${listingId}" was not found for research_price.`
     );
     const failedJob = await dependencies.dataAccess.jobs.fail(
@@ -240,32 +275,15 @@ export async function runResearchPriceJob(
     };
   }
 
-  if (listing.listing_type !== 'single') {
-    const error = buildResearchPriceEligibilityError(
-      JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE,
-      'user_fixable',
-      `Listing "${listingId}" is not eligible for research_price because listing_type is "${listing.listing_type ?? 'null'}".`
-    );
+  let pricingProvider: PricingProvider;
+  try {
+    assertResearchPriceListingEligible(listing);
+    pricingProvider = resolvePricingProvider(dependencies);
+  } catch (error) {
+    const jobError = classifyJobError(job.job_type, error);
     const failedJob = await dependencies.dataAccess.jobs.fail(
       job.id,
-      toJobErrorUpdateInput(error, errorAt)
-    );
-
-    return {
-      job: failedJob,
-      listing,
-    };
-  }
-
-  if (listing.status !== 'needs_review') {
-    const error = buildResearchPriceEligibilityError(
-      JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE,
-      'user_fixable',
-      `Listing "${listingId}" is not eligible for research_price from status "${listing.status}".`
-    );
-    const failedJob = await dependencies.dataAccess.jobs.fail(
-      job.id,
-      toJobErrorUpdateInput(error, errorAt)
+      toJobErrorUpdateInput(jobError, errorAt)
     );
 
     return {
@@ -282,7 +300,6 @@ export async function runResearchPriceJob(
   let providerResult: PricingProviderResult | undefined;
 
   try {
-    const pricingProvider = resolvePricingProvider(dependencies);
     research = await dependencies.dataAccess.listingPriceResearch.create({
       listing_id: listingId,
       provider: FIXTURE_PROVIDER_NAME,
@@ -296,9 +313,8 @@ export async function runResearchPriceJob(
     const suggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
 
     if (suggestedPrice === null) {
-      throw buildResearchPriceEligibilityError(
+      throw buildResearchPriceError(
         JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
-        'terminal',
         `Listing "${listingId}" did not produce a deterministic suggested price.`
       );
     }
