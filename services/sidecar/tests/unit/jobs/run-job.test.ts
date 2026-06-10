@@ -5,7 +5,25 @@ import type {
   ListingRow,
   ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const jobLoggerWarn = vi.hoisted(() => vi.fn());
+
+vi.mock('@/utils/logger.js', async () => {
+  const actual = await vi.importActual<typeof import('@/utils/logger.js')>('@/utils/logger.js');
+
+  return {
+    ...actual,
+    createLogger: vi.fn(() => ({
+      debug: vi.fn(),
+      error: vi.fn(),
+      http: vi.fn(),
+      info: vi.fn(),
+      verbose: vi.fn(),
+      warn: jobLoggerWarn,
+    })),
+  };
+});
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
@@ -98,6 +116,10 @@ const queuedResearchPriceJob: JobRow = {
   status: 'queued',
   updated_at: '2026-05-20T12:00:00.000Z',
 };
+
+beforeEach(() => {
+  jobLoggerWarn.mockReset();
+});
 
 const startedAiModelAttemptRow: AiModelAttemptRow = {
   attempt_order: 1,
@@ -1248,6 +1270,12 @@ describe('runSidecarJob', () => {
         listing_id: 'Single-000001',
       },
       listing: createListingRow({
+        last_error_at: '2026-05-19T10:00:00.000Z',
+        last_error_code: 'previous_error',
+        last_error_context: {
+          source: 'prior-run',
+        },
+        last_error_message: 'Previous listing error.',
         listing_id: 'Single-000001',
       }),
     });
@@ -1275,12 +1303,52 @@ describe('runSidecarJob', () => {
     });
 
     expect(result.job.status).toBe('completed');
+    expect(result.job.last_error).toBeNull();
+    expect(result.job.last_error_at).toBeNull();
     expect(result.job.last_error_code).toBeNull();
+    expect(result.listing?.title).toBe('1991 Upper Deck Michael Jordan');
+    expect(result.listing?.price).toBe(249.99);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
+    expect(result.listing?.last_error_at).toBeNull();
+    expect(result.listing?.last_error_code).toBeNull();
+    expect(result.listing?.last_error_context).toEqual({});
+    expect(result.listing?.last_error_message).toBeNull();
+    expect(dataAccess.listings.update).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'Single-000001',
+      expect.objectContaining({
+        last_error_at: null,
+        last_error_code: null,
+        last_error_context: {},
+        last_error_message: null,
+        price: 249.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: '1991 Upper Deck Michael Jordan',
+      })
+    );
+    expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
+    expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledWith({
+      listingId: 'Single-000001',
+      status: 'generating',
+      subStatus: 'ai_call_in_progress',
+    });
     expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
+    expect(dataAccess.jobs.complete).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(dataAccess.listings.updateWorkflowState).mock.invocationCallOrder[0]
+    ).toBeLessThan(vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]);
     expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expect(jobLoggerWarn).toHaveBeenCalledWith(
+      'Failed to enqueue research_price after generate_ai success.',
+      {
+        error: 'research enqueue failed',
+        listingId: 'Single-000001',
+        phase: 'post_generate_ai_enqueue',
+      }
+    );
   });
 
   it('persists OTHER skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
