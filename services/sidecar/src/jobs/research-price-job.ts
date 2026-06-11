@@ -2,9 +2,12 @@ import type { JobRow, Json, ListingPriceResearchRow, ListingRow } from '@ebay-in
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  buildPricingProviderInput,
+  buildPricingTitleFromItemSpecifics,
   computePricingConfidence,
   computePricingStats,
   createFixturePricingProvider,
+  getListingItemSpecifics,
   normalizeSoldComps,
   redactSensitiveText as redactPricingSensitiveText,
   type LlmPricingPromptFactKey,
@@ -75,30 +78,6 @@ function asNonEmptyString(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getListingItemSpecifics(
-  value: ListingRow['item_specifics']
-): PricingProviderInput['itemSpecifics'] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const itemSpecifics = Object.fromEntries(
-    Object.entries(value).flatMap(([key, entryValue]) => {
-      if (
-        entryValue === null ||
-        typeof entryValue === 'string' ||
-        (Array.isArray(entryValue) && entryValue.every((candidate) => typeof candidate === 'string'))
-      ) {
-        return [[key, entryValue]];
-      }
-
-      return [];
-    })
-  );
-
-  return Object.keys(itemSpecifics).length > 0 ? itemSpecifics : undefined;
 }
 
 function normalizeSuggestedPrice(value: unknown): number | null {
@@ -207,41 +186,6 @@ function buildResearchProviderFailureJobError(
       }).filter(([, value]) => value !== undefined)
     ) as Record<string, Json>
   );
-}
-
-function buildPricingProviderInput(listing: ListingRow, listingId: string): PricingProviderInput {
-  const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
-  const title = asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId;
-
-  return {
-    categoryId: listing.category_id,
-    conditionId: listing.condition_id,
-    itemSpecifics,
-    listingId,
-    minSoldComps: DEFAULT_MIN_SOLD_COMPS,
-    title,
-  };
-}
-
-function buildPricingTitleFromItemSpecifics(
-  itemSpecifics: PricingProviderInput['itemSpecifics']
-): string | undefined {
-  if (!itemSpecifics) {
-    return undefined;
-  }
-
-  const titleParts = [
-    itemSpecifics.Player,
-    itemSpecifics.Year,
-    itemSpecifics.Manufacturer,
-    itemSpecifics.Set,
-    itemSpecifics['Card Number'],
-  ]
-    .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  return titleParts.length > 0 ? titleParts.join(' ') : undefined;
 }
 
 function buildLlmPricingFacts(itemSpecifics: PricingProviderInput['itemSpecifics']): LlmPricingPromptFacts | undefined {
@@ -511,7 +455,9 @@ export async function runResearchPriceJob(
       status: 'pending',
     });
 
-    providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
+    providerResult = await pricingProvider.fetchSoldComps(
+      buildPricingProviderInput(listing, listingId, DEFAULT_MIN_SOLD_COMPS)
+    );
     rawCompCount = providerResult.soldComps.length;
 
     const normalized = runNormalizeComps(providerResult.soldComps);

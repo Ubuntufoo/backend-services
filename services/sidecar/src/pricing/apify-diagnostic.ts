@@ -1,4 +1,4 @@
-const DEFAULT_MIN_SOLD_COMPS = 12;
+const DEFAULT_MIN_SOLD_COMPS = 8;
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const APIFY_API_BASE_URL = 'https://api.apify.com/v2';
 
@@ -62,7 +62,7 @@ interface ParsedPositiveInteger {
   value: number | null;
 }
 
-interface RuntimeApifyConfig {
+export interface RuntimeApifyConfig {
   actorId: string | null;
   enabled: boolean;
   minSoldComps: ParsedPositiveInteger;
@@ -151,7 +151,7 @@ function buildCheck(
   };
 }
 
-function parseRuntimeApifyConfig(env: NodeJS.ProcessEnv): RuntimeApifyConfig {
+export function parseRuntimeApifyConfig(env: NodeJS.ProcessEnv): RuntimeApifyConfig {
   return {
     actorId: asTrimmedString(env.APIFY_PRICE_ACTOR_ID),
     enabled: parseEnabled(env.APIFY_ENABLED),

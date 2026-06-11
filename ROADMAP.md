@@ -37,8 +37,8 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9E.4 | BE/Tests | Add post-Gemini enqueue tests | Successful draft generation queues pricing without duplicate active pricing jobs |
 | 9F.1 | BE/Apify | Add Apify provider adapter shell | Adapter constructs Actor input and parses Actor output behind `APIFY_ENABLED` | 
 | 9F.2 | BE/Apify | Add Apify actor config diagnostics | CLI/API can verify token, actor ID, min comps, timeout, and enabled state |
-| 9F.3 | BE/Apify | Add Apify rate-limit/failure classification | Rate-limit/provider failures fail only the pricing job; listing pipeline continues | -->
-| 9F.4 | BE/Apify | Add live Apify smoke script | One selected listing can run live pricing from CLI when `APIFY_ENABLED=true` |
+| 9F.3 | BE/Apify | Add Apify rate-limit/failure classification | Rate-limit/provider failures fail only the pricing job; listing pipeline continues | 
+| 9F.4 | BE/Apify | Add live Apify smoke script | One selected listing can run live pricing from CLI when `APIFY_ENABLED=true` |-->
 | 9F.5 | BE/Tests | Add Apify adapter fixture coverage | Adapter handles rate limits, malformed responses, and fewer-than-12-comp responses without spending credits |
 | 9G.1 | BE/Docs | Add controlled Apify pricing pilot notes | Minimal instructions for first live pricing tests from CLI |
 | 9G.2 | BE/Ops | Add one-listing live pricing command | Specific listing IDs can be priced without waiting for the runner loop |
@@ -49,10 +49,11 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9H.2 | FE | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |
 | 9H.3 | FE | Add manual rerun pricing action | Reviewer can request a fresh pricing job from the listing review UI |
 | 9H.4 | BE/FE | Display pricing failures without blocking approval | Rate-limit/provider failures are visible but do not block export |
-| 9I.1 | BE/Architecture | Evaluate extracting pricing into `services/pricing-service` | Decision based on live Apify latency, failure isolation needs, local dev overhead, and pricing module coupling |
-| 9I.2 | BE/Architecture | Extract pricing worker to dedicated service if justified | Pricing runs as its own workspace service while preserving shared data contracts and non-blocking listing workflow |
-| 9I.3 | DOCS | Repo docs need a macro review and overhaul to reflect the new pricing service and its integration with the existing architecture | General doc cleanup should also be done in this pass |
-
+| 9I.1 | BE/Archi | Eval extracting pricing into `services/pricing-service` | Decision based on live Apify latency, failure isolation needs, local dev overhead, and pricing module coupling |
+| 9I.2 | BE/Archi | Extract pricing worker to dedicated service if justified | Pricing runs its own workspace service while preserving shared data contracts and non-blocking listing workflow |
+| 9I.3 | BE/Pricing | Add Apify pricing eligibility gate | Low-value or low-confidence lot candidates skip live Apify; only likely singles or manually selected listings spend Apify credits | GPT-5.5 mini | Medium | Protects monthly Apify budget; use listing metadata, Gemini draft confidence, estimated value threshold, duplicate-cache checks, and manual override |
+| 9I.4 | BE/Pricing | Add Apify usage budget guard | Live Apify calls stop before daily/monthly local caps are exceeded | GPT-5.5 mini | Low-Medium | Track run count/estimated spend; default conservative caps; allow CLI override only for smoke/manual testing |
+| 9I.5 | DOCS | Repo docs need a macro review to reflect the new pricing service and its integration with the existing architecture | General doc cleanup should also be done in this pass |
 --------------- READY FOR LIVE PILOT --------------
 | 10 | BE/FE | Remove 'assets_ready' (seller hints) step for singles | Single listings skip AI generation and go straight from watcher intake to review | GPT-5.5 mini | Medium | Simplifies single listing flow for pilot; lot listings keep full flow with seller hints and Gemini draft |
 | 10 | BE/DB | Add manual listing status reconciliation tool | Exported listings can later be batch-marked listed/sold after Seller Hub-managed pilot | GPT-5.5 mini | Low-Medium | Defer until after initial live testing; useful before order sync exists |

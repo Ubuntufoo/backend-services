@@ -4,7 +4,7 @@ import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawS
 
 const APIFY_PROVIDER_NAME = 'apify';
 const DEFAULT_TIMEOUT_SECONDS = 120;
-const DEFAULT_MIN_SOLD_COMPS = 12;
+const DEFAULT_MIN_SOLD_COMPS = 8;
 const ISO_SOLD_DATE_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
@@ -22,7 +22,16 @@ const moneySchema = z.object({
   currency: z.string().trim().min(1),
 });
 
-const apifySoldCompSchema = z.object({
+const numericValueSchema = z.union([
+  z.number().finite(),
+  z
+    .string()
+    .trim()
+    .min(1)
+    .refine((value) => !Number.isNaN(Number(value)), 'must be numeric'),
+]);
+
+const internalApifySoldCompSchema = z.object({
   condition: z.string().trim().min(1).nullable().optional(),
   listingUrl: z
     .string()
@@ -41,8 +50,27 @@ const apifySoldCompSchema = z.object({
   title: z.string().trim().min(1),
 });
 
+const actorDatasetItemSchema = z.object({
+  condition: z.string().trim().min(1).nullable().optional(),
+  endedAt: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((value) => ISO_SOLD_DATE_PATTERN.test(value), 'endedAt must be ISO-8601')
+    .refine((value) => !Number.isNaN(new Date(value).getTime()), 'endedAt must be valid'),
+  soldCurrency: z.string().trim().min(1),
+  soldPrice: numericValueSchema,
+  shippingPrice: numericValueSchema.nullable().optional(),
+  title: z.string().trim().min(1),
+  url: z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => URL_PROTOCOLS.has(new URL(value).protocol), 'url must use http or https'),
+});
+
 const apifyActorOutputSchema = z.object({
-  items: z.array(apifySoldCompSchema),
+  items: z.array(z.union([internalApifySoldCompSchema, actorDatasetItemSchema])),
   query: z.string().trim().min(1),
   run: z
     .object({
@@ -57,19 +85,20 @@ const apifyActorOutputSchema = z.object({
 });
 
 export interface ApifyActorInput {
-  categoryId?: string;
-  conditionId?: string;
+  count: number;
   facets?: Partial<Record<(typeof QUERY_ITEM_SPECIFIC_KEYS)[number], string>>;
   itemSpecifics?: PricingProviderInput['itemSpecifics'];
+  keywords: string[];
   listingId: string;
   minSoldComps: number;
-  query: string;
   title: string;
 }
 
 export interface ApifyActorOutputMeta {
+  actorInput?: ApifyActorInput;
   actorId: string;
   fetchedAt?: string;
+  query?: string;
 }
 
 export interface ApifyPricingProviderConfig {
@@ -126,18 +155,17 @@ export class ApifyPricingProviderError extends Error {
 }
 
 export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInput {
-  const minSoldComps = Math.max(input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS, DEFAULT_MIN_SOLD_COMPS);
+  const minSoldComps = input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS;
   const query = buildApifyQuery(input);
   const facets = buildFacets(input.itemSpecifics);
 
   return {
-    ...(input.categoryId ? { categoryId: input.categoryId } : {}),
-    ...(input.conditionId ? { conditionId: input.conditionId } : {}),
+    count: minSoldComps,
     ...(facets ? { facets } : {}),
     ...(input.itemSpecifics ? { itemSpecifics: input.itemSpecifics } : {}),
+    keywords: [query],
     listingId: input.listingId,
     minSoldComps,
-    query,
     title: input.title.trim(),
   };
 }
@@ -166,12 +194,13 @@ export function parseApifyActorOutput(
   return {
     fetchedAt,
     provider: APIFY_PROVIDER_NAME,
-    query: parsed.query,
+    query: meta.query ?? parsed.query,
     rawResult: {
       actorId: meta.actorId,
       fetchedAt,
       input: {
-        query: redactSensitiveText(parsed.query),
+        actorInput: meta.actorInput ? sanitizeActorInput(meta.actorInput) : undefined,
+        query: redactSensitiveText(meta.query ?? parsed.query),
       },
       output: {
         itemCount: soldComps.length,
@@ -206,7 +235,7 @@ export function createApifyPricingProvider(
 
       const actorInput = buildApifyActorInput({
         ...input,
-        minSoldComps: Math.max(input.minSoldComps ?? config.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS, DEFAULT_MIN_SOLD_COMPS),
+        minSoldComps: input.minSoldComps ?? config.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS,
       });
       const fetchedAt = now().toISOString();
 
@@ -214,14 +243,16 @@ export function createApifyPricingProvider(
         const raw = await runActor({
           actorId: config.actorId,
           actorInput,
-          query: actorInput.query,
+          query: actorInput.keywords[0],
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
           token: config.token,
         });
 
         return parseApifyActorOutput(raw, {
+          actorInput,
           actorId: config.actorId,
           fetchedAt,
+          query: actorInput.keywords[0],
         });
       } catch (error) {
         if (error instanceof ApifyPricingProviderError) {
@@ -232,7 +263,7 @@ export function createApifyPricingProvider(
           'apify_provider_failure',
           'provider_failure',
           error instanceof Error ? error.message : String(error),
-          actorInput.query,
+          actorInput.keywords[0] ?? input.title,
           { cause: error instanceof Error ? error : undefined }
         );
       }
@@ -316,28 +347,52 @@ async function defaultRunActor(
 }
 
 function buildApifyQuery(input: PricingProviderInput): string {
-  const queryParts = [input.title.trim()];
-
-  if (input.categoryId) {
-    queryParts.push(`category:${input.categoryId}`);
-  }
-
-  if (input.conditionId) {
-    queryParts.push(`condition:${input.conditionId}`);
-  }
+  const normalizedTitle = input.title.trim();
+  const normalizedTitleLower = normalizedTitle.toLocaleLowerCase();
+  const queryParts = [normalizedTitle];
 
   for (const key of QUERY_ITEM_SPECIFIC_KEYS) {
     const value = input.itemSpecifics?.[key];
     const normalizedValue = Array.isArray(value)
-      ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0).join(', ')
-      : value?.trim();
+      ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+      : value?.trim()
+        ? [value.trim()]
+        : [];
 
-    if (normalizedValue) {
-      queryParts.push(`${normalizeQueryKey(key)}:${normalizedValue}`);
+    for (const candidate of normalizedValue) {
+      const candidateLower = candidate.toLocaleLowerCase();
+
+      if (
+        normalizedTitleLower.includes(candidateLower) ||
+        queryParts.some((part) => part.localeCompare(candidate, undefined, { sensitivity: 'accent' }) === 0)
+      ) {
+        continue;
+      }
+
+      if (
+        candidateLower.length > 0 &&
+        queryParts.some((part) => part.toLocaleLowerCase().includes(candidateLower))
+      ) {
+        continue;
+      }
+
+      if (
+        candidateLower.length > 0 &&
+        queryParts.some((part) => candidateLower.includes(part.toLocaleLowerCase()))
+      ) {
+        continue;
+      }
+
+      if (
+        candidateLower.length > 0 &&
+        !queryParts.some((part) => part.localeCompare(candidate, undefined, { sensitivity: 'accent' }) === 0)
+      ) {
+        queryParts.push(candidate);
+      }
     }
   }
 
-  return queryParts.join(' | ');
+  return queryParts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function buildFacets(
@@ -361,8 +416,34 @@ function buildFacets(
   return Object.keys(facets).length > 0 ? facets : undefined;
 }
 
-function normalizeQueryKey(key: string): string {
-  return key.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replaceAll(/^_|_$/g, '');
+function sanitizeActorInput(input: ApifyActorInput): Record<string, unknown> {
+  return {
+    count: input.count,
+    ...(input.facets ? { facets: sanitizeUnknown(input.facets) } : {}),
+    ...(input.itemSpecifics ? { itemSpecifics: sanitizeUnknown(input.itemSpecifics) } : {}),
+    keywords: input.keywords.map((value) => redactSensitiveText(value)),
+    listingId: redactSensitiveText(input.listingId),
+    minSoldComps: input.minSoldComps,
+    title: redactSensitiveText(input.title),
+  };
+}
+
+function sanitizeUnknown(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactSensitiveText(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeUnknown(entry));
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, sanitizeUnknown(entryValue)])
+    );
+  }
+
+  return value;
 }
 
 export function redactSensitiveText(value: string): string {
@@ -375,15 +456,69 @@ export function redactSensitiveText(value: string): string {
     );
 }
 
-function toRawSoldComp(item: z.infer<typeof apifySoldCompSchema>): RawSoldComp {
+function toRawSoldComp(
+  item: z.infer<typeof internalApifySoldCompSchema> | z.infer<typeof actorDatasetItemSchema>
+): RawSoldComp {
+  if ('price' in item) {
+    return {
+      ...(item.condition !== undefined ? { condition: item.condition } : {}),
+      ...(item.listingUrl !== undefined ? { listingUrl: item.listingUrl } : {}),
+      ...(item.shippingPrice !== undefined ? { shippingPrice: item.shippingPrice } : {}),
+      price: item.price,
+      soldDate: item.soldDate,
+      title: item.title,
+    };
+  }
+
+  const soldPriceValue = normalizeNumericValue(item.soldPrice);
+
+  if (soldPriceValue === null) {
+    throw new ApifyPricingProviderError(
+      'apify_output_invalid',
+      'malformed_output',
+      'Apify actor output malformed: soldPrice must be numeric.',
+      item.title
+    );
+  }
+
+  const shippingPriceValue =
+    item.shippingPrice === null || item.shippingPrice === undefined
+      ? null
+      : normalizeNumericValue(item.shippingPrice);
+
+  if (item.shippingPrice !== null && item.shippingPrice !== undefined && shippingPriceValue === null) {
+    throw new ApifyPricingProviderError(
+      'apify_output_invalid',
+      'malformed_output',
+      'Apify actor output malformed: shippingPrice must be numeric when present.',
+      item.title
+    );
+  }
+
   return {
     ...(item.condition !== undefined ? { condition: item.condition } : {}),
-    ...(item.listingUrl !== undefined ? { listingUrl: item.listingUrl } : {}),
-    ...(item.shippingPrice !== undefined ? { shippingPrice: item.shippingPrice } : {}),
-    price: item.price,
-    soldDate: item.soldDate,
+    listingUrl: item.url,
+    price: {
+      currency: item.soldCurrency,
+      value: soldPriceValue,
+    },
+    ...(shippingPriceValue === null
+      ? {}
+      : {
+          shippingPrice: {
+            currency: item.soldCurrency,
+            value: shippingPriceValue,
+          },
+        }),
+    soldDate: item.endedAt,
     title: item.title,
   };
+}
+
+function normalizeNumericValue(value: string | number): number | null {
+  const normalized = typeof value === 'number' ? value : Number(value.trim());
+
+  return Number.isFinite(normalized) ? normalized : null;
 }
 
 async function readResponseText(response: { text(): Promise<string> }): Promise<string> {

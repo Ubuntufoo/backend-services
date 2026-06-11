@@ -18,6 +18,7 @@
     "ebay:diagnose-sandbox": "tsx src/scripts/diagnose-sandbox.ts",
     "ebay:diagnose-sandbox-config": "tsx src/scripts/diagnose-sandbox-config.ts",
     "pricing:diagnose-apify-config": "tsx src/scripts/diagnose-apify-pricing.ts",
+    "pricing:smoke-apify": "tsx src/scripts/smoke-apify-pricing.ts",
     "ebay:cleanup-sandbox": "tsx src/scripts/cleanup-ebay-sandbox.ts",
     "ebay:list-live-publish-config": "tsx src/scripts/list-live-publish-config.ts",
     "ebay:opt-in-selling-policies": "tsx src/scripts/opt-in-selling-policies.ts",

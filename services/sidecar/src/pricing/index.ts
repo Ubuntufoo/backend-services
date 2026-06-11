@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './provider-input.js';
 export * from './apify-diagnostic.js';
 export * from './apify-provider.js';
 export * from './fixture-provider.js';

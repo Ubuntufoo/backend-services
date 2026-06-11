@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   ApifyPricingProviderError,
@@ -27,33 +27,39 @@ describe('Apify pricing provider', () => {
   const validActorOutput = {
     items: [
       {
-        condition: 'Near Mint',
-        listingUrl: 'https://www.ebay.com/itm/100000000001',
-        price: {
-          currency: 'USD',
-          value: 24.99,
-        },
-        shippingPrice: {
-          currency: 'USD',
-          value: 4.99,
-        },
-        soldDate: '2026-05-18T12:00:00.000Z',
-        title: '2023 Panini Prizm Victor Wembanyama Rookie Card #136',
+        condition: 'Pre-Owned',
+        conditionId: 3000,
+        endedAt: '2026-05-13T00:00:00.000Z',
+        isBestOfferAccepted: false,
+        itemId: '377150575490',
+        keyword: 'Johnny Riddle 1954 Topps #98 St. Louis Cardinals Coach',
+        listingType: 'buy_it_now',
+        scrapedAt: '2026-06-11T20:51:02.556Z',
+        sellerFeedbackScore: 46900,
+        sellerPositivePercent: 99.7,
+        sellerType: null,
+        sellerUsername: 'sbarko',
+        shippingPrice: null,
+        shippingType: 'free',
+        soldCurrency: 'USD',
+        soldPrice: '5.00',
+        thumbnailUrl: 'https://i.ebayimg.com/images/g/T2cAAeSwAaFp8Smi/s-l500.webp',
+        title: '1954 Topps - Johnny Riddle #147 - St. Louis Cardinals',
+        totalPrice: '5.00',
+        url: 'https://www.ebay.com/itm/377150575490?nordt=true',
       },
       {
-        condition: null,
-        listingUrl: null,
-        price: {
-          currency: 'USD',
-          value: 21,
-        },
-        shippingPrice: null,
-        soldDate: '2026-05-17T12:00:00.000Z',
-        title: 'Victor Wembanyama 2023 Prizm Base Rookie',
+        condition: 'Pre-Owned',
+        endedAt: '2026-05-12T00:00:00.000Z',
+        keyword: 'Johnny Riddle 1954 Topps #98 St. Louis Cardinals Coach',
+        shippingPrice: '4.99',
+        soldCurrency: 'USD',
+        soldPrice: 7.5,
+        title: '1954 Topps Johnny Riddle Cardinals',
+        url: 'https://www.ebay.com/itm/377150575491?nordt=true',
       },
     ],
-    query:
-      '2023 Panini Prizm Victor Wembanyama Rookie Card | category:261328 | condition:2750 | player:Victor Wembanyama | year:2023 | manufacturer:Panini | card_number:136 | set:Prizm',
+    query: 'Johnny Riddle 1954 Topps #98 St. Louis Cardinals Coach',
     run: {
       finishedAt: '2026-05-20T13:00:03.000Z',
       itemCount: 2,
@@ -65,8 +71,7 @@ describe('Apify pricing provider', () => {
 
   it('builds expected actor input from pricing context', () => {
     expect(buildApifyActorInput(baseInput)).toEqual({
-      categoryId: '261328',
-      conditionId: '2750',
+      count: 9,
       facets: {
         'Card Number': '136',
         Manufacturer: 'Panini',
@@ -75,11 +80,77 @@ describe('Apify pricing provider', () => {
         Year: '2023',
       },
       itemSpecifics: baseInput.itemSpecifics,
+      keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
       listingId: 'LIST-001',
-      minSoldComps: 12,
-      query:
-        '2023 Panini Prizm Victor Wembanyama Rookie Card | category:261328 | condition:2750 | player:Victor Wembanyama | year:2023 | manufacturer:Panini | card_number:136 | set:Prizm',
+      minSoldComps: 9,
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+  });
+
+  it('omits structured categoryId and conditionId even when eBay ids exist', async () => {
+    const runActor = vi.fn(async () => validActorOutput);
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        runActor,
+      }
+    );
+
+    await provider.fetchSoldComps({
+      ...baseInput,
+      categoryId: '183050',
+      conditionId: '3000',
+    });
+
+    expect(runActor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorInput: expect.objectContaining({
+          keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
+          listingId: 'LIST-001',
+        }),
+      })
+    );
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('categoryId');
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('conditionId');
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('query');
+  });
+
+  it('does not include synthetic category or condition fragments in actor search string', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      categoryId: '183050',
+      conditionId: '4000',
+    });
+
+    expect(actorInput.keywords).toEqual(['2023 Panini Prizm Victor Wembanyama Rookie Card 136']);
+    expect(actorInput.keywords[0]).not.toContain('category:183050');
+    expect(actorInput.keywords[0]).not.toContain('condition:4000');
+  });
+
+  it('uses Apify default min sold comps of 8 when input omits minSoldComps', () => {
+    expect(
+      buildApifyActorInput({
+        ...baseInput,
+        minSoldComps: undefined,
+      })
+    ).toMatchObject({
+      count: 8,
+      minSoldComps: 8,
+    });
+  });
+
+  it('honors explicit lower Apify min sold comps without clamping to 8 or 12', () => {
+    expect(
+      buildApifyActorInput({
+        ...baseInput,
+        minSoldComps: 5,
+      })
+    ).toMatchObject({
+      count: 5,
+      minSoldComps: 5,
     });
   });
 
@@ -94,27 +165,53 @@ describe('Apify pricing provider', () => {
       provider: 'apify',
       query: validActorOutput.query,
     });
-    expect(result.soldComps).toEqual(validActorOutput.items);
+    expect(result.soldComps[0]).toEqual({
+      condition: 'Pre-Owned',
+      listingUrl: 'https://www.ebay.com/itm/377150575490?nordt=true',
+      price: {
+        currency: 'USD',
+        value: 5,
+      },
+      soldDate: '2026-05-13T00:00:00.000Z',
+      title: '1954 Topps - Johnny Riddle #147 - St. Louis Cardinals',
+    });
     expect(result.rawResult).toMatchObject({
       actorId: 'actor-123',
+      input: {
+        actorInput: undefined,
+      },
       output: {
         itemCount: 2,
         sampleTitles: [
-          '2023 Panini Prizm Victor Wembanyama Rookie Card #136',
-          'Victor Wembanyama 2023 Prizm Base Rookie',
+          '1954 Topps - Johnny Riddle #147 - St. Louis Cardinals',
+          '1954 Topps Johnny Riddle Cardinals',
         ],
       },
       run: validActorOutput.run,
     });
   });
 
+  it('maps actor shippingPrice string to internal shippingPrice money shape', () => {
+    const result = parseApifyActorOutput(validActorOutput, {
+      actorId: 'actor-123',
+      fetchedAt: '2026-05-20T13:00:04.000Z',
+    });
+
+    expect(result.soldComps[1]).toMatchObject({
+      shippingPrice: {
+        currency: 'USD',
+        value: 4.99,
+      },
+    });
+  });
+
   it.each([
     ['null output', null],
     ['object instead of item array', { query: validActorOutput.query, run: {}, items: {} }],
-    ['missing price field', { ...validActorOutput, items: [{ ...validActorOutput.items[0], price: undefined }] }],
-    ['non-finite price', { ...validActorOutput, items: [{ ...validActorOutput.items[0], price: { currency: 'USD', value: Number.NaN } }] }],
-    ['bad sold date', { ...validActorOutput, items: [{ ...validActorOutput.items[0], soldDate: '' }] }],
-    ['bad url', { ...validActorOutput, items: [{ ...validActorOutput.items[0], listingUrl: '' }] }],
+    ['missing soldPrice field', { ...validActorOutput, items: [{ ...validActorOutput.items[0], soldPrice: undefined }] }],
+    ['non-finite soldPrice', { ...validActorOutput, items: [{ ...validActorOutput.items[0], soldPrice: 'NaN' }] }],
+    ['bad endedAt', { ...validActorOutput, items: [{ ...validActorOutput.items[0], endedAt: '' }] }],
+    ['bad url', { ...validActorOutput, items: [{ ...validActorOutput.items[0], url: '' }] }],
   ])('rejects malformed actor output: %s', (_label, payload) => {
     expect(() =>
       parseApifyActorOutput(payload, {
@@ -147,7 +244,10 @@ describe('Apify pricing provider', () => {
     expect(result.provider).toBe('apify');
     expect(result.rawResult).toMatchObject({
       input: {
-        query: '[redacted-url] Bearer [redacted-token]',
+        actorInput: {
+          keywords: [expect.stringContaining('[redacted-url] Bearer [redacted-token]')],
+        },
+        query: expect.stringContaining('[redacted-url] Bearer [redacted-token]'),
       },
     });
     expect(JSON.stringify(result.rawResult)).not.toContain('secret-value');
