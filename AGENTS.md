@@ -14,6 +14,7 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 - `packages/types`: shared workflow/domain contracts.
 - Pricing currently lives inside sidecar; no dedicated pricing service.
 - eBay publish path and readiness checks already live inside sidecar.
+- Placeholder dirs like `services/r2-service`, `services/gemini-service`, `services/job-runner`, and `services/ebay-service` are not current runtime boundaries unless code proves otherwise.
 
 ## Agent File Routing
 
@@ -47,11 +48,12 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 
 ## Current Pricing Status
 
-- Implemented: fixture-backed `research_price` job, comp normalization, deterministic median-based stats, confidence scoring, `listing_price_research` persistence.
+- Implemented: fixture-backed `research_price` job, comp normalization, deterministic median-based stats, confidence scoring, validated LLM pricing wiring/config behind deterministic fallback, `listing_price_research` persistence.
 - Workflow-safe: successful research may update `listings.price` while listing remains `needs_review` / `review_pending`.
 - Pricing failures should stay job-scoped and `listing_price_research`-scoped; they should not block review/export and should not write listing `last_error_*`.
+- Live Apify provider/pilot still pending.
+- Pricing remains sidecar-local.
 - Do not document live Apify pricing as active unless code exists beyond fixture/test scaffolding.
-- Do not document LLM pricing reasoning as implemented.
 
 ## Do Not Open Unless Needed
 
