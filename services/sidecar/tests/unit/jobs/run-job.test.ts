@@ -3653,6 +3653,12 @@ describe('runSidecarJob', () => {
           listingId: 'LIST-001',
         })
       );
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Fell back to deterministic research_price after LLM failure.',
+        expect.objectContaining({
+          compactErrorMessage: expect.not.stringContaining('https://images.example'),
+        })
+      );
       expect(jobLoggerInfo).toHaveBeenCalledWith(
         'Succeeded research_price job.',
         expect.objectContaining({
@@ -3661,6 +3667,47 @@ describe('runSidecarJob', () => {
           llmStatus: 'failed',
         })
       );
+    });
+
+    it('redacts urls in llm fallback log messages', async () => {
+      const listing = createListingRow({
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Throwing analyst listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const pricingAnalyst = {
+        analyze: vi.fn(async () => {
+          throw new Error('analyst exploded https://images.example/llm-card.jpg');
+        }),
+        name: 'fixture',
+      };
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingAnalyst,
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Fell back to deterministic research_price after LLM failure.',
+        expect.objectContaining({
+          compactErrorMessage: 'analyst exploded [redacted-url]',
+          event: 'research_price_llm_fallback',
+        })
+      );
+      expect(
+        [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(([, meta]) =>
+          JSON.stringify(meta).includes('https://images.example')
+        )
+      ).toBe(false);
     });
 
     it('logs provider failure detail without raw payloads or image urls', async () => {
@@ -3704,7 +3751,7 @@ describe('runSidecarJob', () => {
           listingId: 'LIST-001',
           provider: 'fixture',
           providerFailureCode: 'fixture_fetch_failed',
-          providerFailureMessage: 'fixture exploded https://images.example/card.jpg',
+          providerFailureMessage: 'fixture exploded [redacted-url]',
           query: 'victor wembanyama prizm',
           workflowSafe: true,
         })
@@ -3717,6 +3764,11 @@ describe('runSidecarJob', () => {
       );
       expect(
         jobLoggerWarn.mock.calls.some(([, meta]) => JSON.stringify(meta).includes('"comps"'))
+      ).toBe(false);
+      expect(
+        [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(([, meta]) =>
+          JSON.stringify(meta).includes('https://images.example')
+        )
       ).toBe(false);
     });
 

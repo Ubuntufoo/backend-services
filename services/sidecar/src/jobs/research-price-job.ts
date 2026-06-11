@@ -118,9 +118,13 @@ function asJson(value: unknown): Json {
   return value as Json;
 }
 
+function redactUrls(value: string): string {
+  return value.replace(/https?:\/\/\S+/gi, '[redacted-url]');
+}
+
 function asCompactErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.replace(/\s+/g, ' ').trim();
+  const normalized = redactUrls(message).replace(/\s+/g, ' ').trim();
 
   if (normalized.length <= 240) {
     return normalized;
@@ -155,11 +159,12 @@ function getProviderFailureDetails(error: unknown): {
   return {
     provider: asNonEmptyString(error.provider) ?? asNonEmptyString(error.providerName),
     providerFailureCode: asNonEmptyString(error.code) ?? asNonEmptyString(error.errorCode),
-    providerFailureMessage:
+    providerFailureMessage: asCompactErrorMessage(
       asNonEmptyString(error.providerFailureMessage) ??
-      asNonEmptyString(error.errorMessage) ??
-      asNonEmptyString(error.message) ??
-      providerFailureMessage,
+        asNonEmptyString(error.errorMessage) ??
+        asNonEmptyString(error.message) ??
+        providerFailureMessage
+    ),
     query: asNonEmptyString(error.query),
   };
 }
