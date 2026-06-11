@@ -7,6 +7,9 @@ import type {
 } from '@ebay-inventory/data';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const jobLoggerDebug = vi.hoisted(() => vi.fn());
+const jobLoggerError = vi.hoisted(() => vi.fn());
+const jobLoggerInfo = vi.hoisted(() => vi.fn());
 const jobLoggerWarn = vi.hoisted(() => vi.fn());
 
 vi.mock('@/utils/logger.js', async () => {
@@ -15,10 +18,10 @@ vi.mock('@/utils/logger.js', async () => {
   return {
     ...actual,
     createLogger: vi.fn(() => ({
-      debug: vi.fn(),
-      error: vi.fn(),
+      debug: jobLoggerDebug,
+      error: jobLoggerError,
       http: vi.fn(),
-      info: vi.fn(),
+      info: jobLoggerInfo,
       verbose: vi.fn(),
       warn: jobLoggerWarn,
     })),
@@ -118,6 +121,9 @@ const queuedResearchPriceJob: JobRow = {
 };
 
 beforeEach(() => {
+  jobLoggerDebug.mockReset();
+  jobLoggerError.mockReset();
+  jobLoggerInfo.mockReset();
   jobLoggerWarn.mockReset();
 });
 
@@ -2810,6 +2816,48 @@ describe('runSidecarJob', () => {
       );
       expect(result.listing?.price).not.toBe(listing.price);
       expect(writeOrder).toEqual(['research_success', 'listing_update']);
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Started research_price job.',
+        expect.objectContaining({
+          event: 'research_price_started',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          pricingMode: 'fixture',
+          provider: 'fixture',
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Completed research_price provider fetch.',
+        expect.objectContaining({
+          event: 'research_price_provider_result',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          normalizedCompCount: 12,
+          provider: 'fixture',
+          rawCompCount: 12,
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Succeeded research_price job.',
+        expect.objectContaining({
+          confidence: markSucceededInput?.confidence,
+          deterministicSuggestedPrice: markSucceededInput?.suggested_price,
+          event: 'research_price_succeeded',
+          finalSuggestedPrice: markSucceededInput?.suggested_price,
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          llmStatus: 'not_attempted',
+          normalizedCompCount: 12,
+          pricingModelName: 'deterministic-fixture-v1',
+          soldCount: 12,
+        })
+      );
+      expect(jobLoggerInfo).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          rawResult: expect.anything(),
+        })
+      );
     });
 
     it('uses valid analyst suggested price as final price and persists llm fields', async () => {
@@ -2909,6 +2957,22 @@ describe('runSidecarJob', () => {
         price: 14.44,
       });
       expect(pricingAnalyst.analyze).toHaveBeenCalledTimes(1);
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Started research_price job.',
+        expect.objectContaining({
+          event: 'research_price_started',
+          pricingMode: 'llm_assisted',
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Succeeded research_price job.',
+        expect.objectContaining({
+          event: 'research_price_succeeded',
+          finalSuggestedPrice: 14.44,
+          llmStatus: 'succeeded',
+          pricingModelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+        })
+      );
     });
 
     it('falls back to deterministic price when analyst returns suggestedPrice null and still persists reasoning', async () => {
@@ -2987,6 +3051,17 @@ describe('runSidecarJob', () => {
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
       expect(markSucceededInput?.llm_selected_comp_ids).toEqual([expect.any(String)]);
       expect(markSucceededInput?.llm_rejected_comp_ids).toHaveLength(11);
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Fell back to deterministic research_price after null LLM price.',
+        expect.objectContaining({
+          deterministicSuggestedPrice: markSucceededInput?.suggested_price,
+          event: 'research_price_llm_fallback',
+          fallbackReason: 'llm_suggested_price_null',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          pricingModelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
+        })
+      );
     });
 
     it.each([
@@ -3544,6 +3619,157 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
       expect(dataAccess.listings.update).not.toHaveBeenCalled();
       expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    });
+
+    it('logs llm analysis fallback and still succeeds research_price', async () => {
+      const listing = createListingRow({
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Throwing analyst listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingAnalyst: createFixtureLlmPricingAnalyst({ mode: 'throws' }),
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Fell back to deterministic research_price after LLM failure.',
+        expect.objectContaining({
+          analyst: 'fixture',
+          compactErrorMessage: expect.any(String),
+          event: 'research_price_llm_fallback',
+          fallbackReason: 'llm_analysis_failed',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+        })
+      );
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Fell back to deterministic research_price after LLM failure.',
+        expect.objectContaining({
+          compactErrorMessage: expect.not.stringContaining('https://images.example'),
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Succeeded research_price job.',
+        expect.objectContaining({
+          event: 'research_price_succeeded',
+          llmFallbackReason: 'llm_analysis_failed',
+          llmStatus: 'failed',
+        })
+      );
+    });
+
+    it('redacts urls in llm fallback log messages', async () => {
+      const listing = createListingRow({
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Throwing analyst listing',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const pricingAnalyst = {
+        analyze: vi.fn(async () => {
+          throw new Error('analyst exploded https://images.example/llm-card.jpg');
+        }),
+        name: 'fixture',
+      };
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingAnalyst,
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Fell back to deterministic research_price after LLM failure.',
+        expect.objectContaining({
+          compactErrorMessage: 'analyst exploded [redacted-url]',
+          event: 'research_price_llm_fallback',
+        })
+      );
+      expect(
+        [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(([, meta]) =>
+          JSON.stringify(meta).includes('https://images.example')
+        )
+      ).toBe(false);
+    });
+
+    it('logs provider failure detail without raw payloads or image urls', async () => {
+      const listing = createListingRow({
+        price: 13.25,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Broken provider listing',
+      });
+      const providerError = Object.assign(new Error('fixture exploded https://images.example/card.jpg'), {
+        code: 'fixture_fetch_failed',
+        provider: 'fixture',
+        query: 'victor wembanyama prizm',
+      });
+      const fetchSoldComps = vi.fn(async () => {
+        throw providerError;
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'fixture',
+          },
+        },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Failed research_price job.',
+        expect.objectContaining({
+          event: 'research_price_failed',
+          failureCode: 'research_price_failed',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          provider: 'fixture',
+          providerFailureCode: 'fixture_fetch_failed',
+          providerFailureMessage: 'fixture exploded [redacted-url]',
+          query: 'victor wembanyama prizm',
+          workflowSafe: true,
+        })
+      );
+      expect(jobLoggerWarn).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          rawResult: expect.anything(),
+        })
+      );
+      expect(
+        jobLoggerWarn.mock.calls.some(([, meta]) => JSON.stringify(meta).includes('"comps"'))
+      ).toBe(false);
+      expect(
+        [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(([, meta]) =>
+          JSON.stringify(meta).includes('https://images.example')
+        )
+      ).toBe(false);
     });
 
     it('marks listing price research failed on normalizer errors without writing listing workflow errors', async () => {
