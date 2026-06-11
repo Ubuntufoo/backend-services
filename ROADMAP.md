@@ -31,8 +31,8 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9E.1 | BE/Jobs | Enqueue pricing after successful Gemini generation | `generate_ai` completion creates or ensures one `research_price` job for single listings |  | 
 | 9E.2 | BE/Jobs | Make pricing enqueue failure non-blocking | Gemini job still completes if pricing enqueue fails |
 | 9E.3 | BE/Jobs | Add pricing job observability logs | Logs show listing ID, comp count, confidence, suggested price, and provider failure details |
-| 9E.4 | BE/Tests | Add post-Gemini enqueue tests | Successful draft generation queues pricing without duplicate active pricing jobs |. -->
-| 9F.1 | BE/Apify | Add Apify provider adapter shell | Adapter constructs Actor input and parses Actor output behind `APIFY_ENABLED` |
+| 9E.4 | BE/Tests | Add post-Gemini enqueue tests | Successful draft generation queues pricing without duplicate active pricing jobs |
+| 9F.1 | BE/Apify | Add Apify provider adapter shell | Adapter constructs Actor input and parses Actor output behind `APIFY_ENABLED` | -->
 | 9F.2 | BE/Apify | Add Apify actor config diagnostics | CLI/API can verify token, actor ID, min comps, timeout, and enabled state |
 | 9F.3 | BE/Apify | Add Apify rate-limit/failure classification | Rate-limit/provider failures fail only the pricing job; listing pipeline continues |
 | 9F.4 | BE/Apify | Add live Apify smoke script | One selected listing can run live pricing from CLI when `APIFY_ENABLED=true` |

@@ -300,5 +300,39 @@ describe('Environment Configuration', () => {
 
       expect(isEbayEnabled(process.env)).toBe(false);
     });
+
+    it('does not require Apify credentials when Apify disabled', () => {
+      process.env.EBAY_ENABLED = 'false';
+      process.env.APIFY_ENABLED = 'false';
+      delete process.env.APIFY_TOKEN;
+      delete process.env.APIFY_PRICE_ACTOR_ID;
+
+      const result = validateEnvironmentConfig();
+
+      expect(result.isValid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('fails validation when Apify enabled without token', () => {
+      process.env.APIFY_ENABLED = 'true';
+      process.env.APIFY_PRICE_ACTOR_ID = 'actor-123';
+      delete process.env.APIFY_TOKEN;
+
+      const result = validateEnvironmentConfig();
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('APIFY_TOKEN is required');
+    });
+
+    it('fails validation when Apify enabled without actor id', () => {
+      process.env.APIFY_ENABLED = 'true';
+      process.env.APIFY_TOKEN = 'secret-token';
+      delete process.env.APIFY_PRICE_ACTOR_ID;
+
+      const result = validateEnvironmentConfig();
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('APIFY_PRICE_ACTOR_ID is required');
+    });
   });
 });
