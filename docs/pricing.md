@@ -1,6 +1,6 @@
 # Pricing
 
-## Implemented Today
+## Implemented
 
 - Sidecar-local pricing code under `services/sidecar/src/pricing/`
 - Job entry: `services/sidecar/src/jobs/research-price-job.ts`
@@ -10,6 +10,7 @@
 - Comp normalization in `normalizer.ts`
 - Deterministic median-based stats in `stats.ts`
 - Confidence scoring in `confidence.ts`
+- Validated LLM pricing support/config behind deterministic fallback
 - Noisy Apify-like fixture coverage in `services/sidecar/tests/unit/pricing/`
 
 ## Current Data Flow
@@ -30,10 +31,7 @@
 - Pricing failure should not block review/export.
 - Pricing failure should not write listing `last_error_*`; failure stays on job state and `listing_price_research`.
 
-## Not Implemented
+## Pending
 
-- Live Apify pricing adapter as default active provider
-- LLM pricing reasoning or LLM-selected comps
+- Live Apify pricing adapter/pilot
 - Pricing service extracted from sidecar
-
-Apify-related env and test fixtures exist, but current documented execution path is fixture-only.
