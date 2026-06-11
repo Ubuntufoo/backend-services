@@ -218,11 +218,10 @@ describe('smoke apify pricing script', () => {
       return {
         fetchedAt: '2026-06-11T12:05:00.000Z',
         provider: 'apify',
-        query:
-          '2023 Panini Prizm Victor Wembanyama Rookie Card | category:183050 | condition:2750',
-      rawResult: {
-        actorId: 'actor-123',
-        input: {
+        query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+        rawResult: {
+          actorId: 'actor-123',
+          input: {
           actorInput: {
             count: 8,
             keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
@@ -330,6 +329,8 @@ describe('smoke apify pricing script', () => {
     });
     expect(payload.sampleComps).toHaveLength(3);
     expect(JSON.stringify(payload)).not.toContain('listingUrl');
+    expect(JSON.stringify(payload)).not.toContain('category:183050');
+    expect(JSON.stringify(payload)).not.toContain('condition:2750');
     expect(fetchSoldComps).toHaveBeenCalledTimes(1);
     expect(enqueueResearchPrice).not.toHaveBeenCalled();
     expect(createResearch).not.toHaveBeenCalled();

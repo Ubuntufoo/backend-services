@@ -80,7 +80,7 @@ Actor output shape excerpt:
 - Do not send eBay `listings.category_id` directly as actor `categoryId`.
 - Do not send eBay `listings.condition_id` directly as actor structured condition field.
 - Only send actor `categoryId`, `subcategoryId`, `itemCondition`, or other structured filters when explicit Apify-side mapping exists in code.
-- Current safe boundary: sidecar query text may contain eBay category/condition hints, but actor structured payload omits unmapped eBay IDs.
+- Sidecar search query should use plain marketplace search text. Do not include synthetic `category:<id>` or `condition:<id>` fragments unless a future actor-specific query syntax explicitly supports them.
 - Preserve provider input fields useful for search text generation: `listingId`, `title`, `itemSpecifics`, `minSoldComps`.
 - Treat actor `condition` string as authoritative output label.
 - Treat actor `conditionId` output as best-effort lookup only; do not assume exhaustive/stable locale coverage.
