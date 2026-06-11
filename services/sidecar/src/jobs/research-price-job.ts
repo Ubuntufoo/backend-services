@@ -6,6 +6,7 @@ import {
   computePricingStats,
   createFixturePricingProvider,
   normalizeSoldComps,
+  redactSensitiveText as redactPricingSensitiveText,
   type LlmPricingPromptFactKey,
   type LlmPricingPromptFacts,
   type PricingAnalyst,
@@ -121,13 +122,7 @@ function asJson(value: unknown): Json {
 }
 
 function redactSensitiveText(value: string): string {
-  return value
-    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, 'Bearer [redacted-token]')
-    .replace(
-      /\b(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token)=([^\s&]+)/gi,
-      '[redacted-secret]'
-    );
+  return redactPricingSensitiveText(value);
 }
 
 function asCompactErrorMessage(error: unknown): string {
@@ -153,10 +148,12 @@ function getPricingMode(
 }
 
 function getProviderFailureDetails(error: unknown): {
+  providerFailureCategory?: string;
   providerFailureCode?: string;
   providerFailureMessage: string;
   provider?: string;
   query?: string;
+  workflowSafe?: boolean;
 } {
   const providerFailureMessage = asCompactErrorMessage(error);
 
@@ -166,6 +163,8 @@ function getProviderFailureDetails(error: unknown): {
 
   return {
     provider: asNonEmptyString(error.provider) ?? asNonEmptyString(error.providerName),
+    providerFailureCategory:
+      asNonEmptyString(error.category) ?? asNonEmptyString(error.providerFailureCategory),
     providerFailureCode: asNonEmptyString(error.code) ?? asNonEmptyString(error.errorCode),
     providerFailureMessage: asCompactErrorMessage(
       asNonEmptyString(error.providerFailureMessage) ??
@@ -176,7 +175,38 @@ function getProviderFailureDetails(error: unknown): {
     query: asNonEmptyString(error.query)
       ? redactSensitiveText(asNonEmptyString(error.query)!)
       : undefined,
+    workflowSafe: typeof error.workflowSafe === 'boolean' ? error.workflowSafe : undefined,
   };
+}
+
+function buildResearchProviderFailureJobError(
+  error: unknown,
+  fallbackProvider: string
+): SidecarJobError {
+  const failure = getProviderFailureDetails(error);
+  const category =
+    failure.providerFailureCategory === 'rate_limit' ||
+    failure.providerFailureCategory === 'timeout_network' ||
+    failure.providerFailureCategory === 'provider_unavailable'
+      ? 'recoverable'
+      : failure.providerFailureCategory === 'auth_config'
+        ? 'user_fixable'
+        : 'terminal';
+
+  return new SidecarJobError(
+    JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+    category,
+    failure.providerFailureMessage,
+    Object.fromEntries(
+      Object.entries({
+        provider: failure.provider ?? fallbackProvider,
+        provider_failure_category: failure.providerFailureCategory,
+        provider_failure_code: failure.providerFailureCode,
+        query: failure.query,
+        workflow_safe: failure.workflowSafe ?? true,
+      }).filter(([, value]) => value !== undefined)
+    ) as Record<string, Json>
+  );
 }
 
 function buildPricingProviderInput(listing: ListingRow, listingId: string): PricingProviderInput {
@@ -374,13 +404,28 @@ async function markResearchFailedSafely(
     return;
   }
 
+  const failureContext = {
+    failure: Object.fromEntries(
+      Object.entries({
+        category: asNonEmptyString(error.context.provider_failure_category),
+        code: asNonEmptyString(error.context.provider_failure_code) ?? error.code,
+        message: asCompactErrorMessage(error.message),
+        provider: asNonEmptyString(error.context.provider),
+        query: asNonEmptyString(error.context.query),
+        workflowSafe:
+          typeof error.context.workflow_safe === 'boolean' ? error.context.workflow_safe : true,
+      }).filter(([, value]) => value !== undefined)
+    ),
+    ...(providerResult ? { providerResult: providerResult.rawResult } : {}),
+  };
+
   await dataAccess.listingPriceResearch.markFailed({
     error_code: error.code,
-    error_message: error.message,
+    error_message: asCompactErrorMessage(error.message),
     id: research.id,
     llm_reasoning_json: {},
     pricing_model_name: PRICING_MODEL_NAME,
-    raw_result_json: providerResult ? asJson(providerResult.rawResult) : undefined,
+    raw_result_json: asJson(failureContext),
   });
 }
 
@@ -604,13 +649,21 @@ export async function runResearchPriceJob(
       listing: pricedListing,
     };
   } catch (error) {
-    let jobError = classifyJobError(job.job_type, error);
+    let jobError =
+      pricingProvider.name === APIFY_PROVIDER_NAME
+        ? buildResearchProviderFailureJobError(error, pricingProvider.name)
+        : classifyJobError(job.job_type, error);
     const providerFailure = getProviderFailureDetails(error);
     const provider =
       providerResult?.provider ??
       providerFailure.provider ??
       (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider) : undefined) ??
       pricingProvider.name;
+    const providerFailureCategory =
+      providerFailure.providerFailureCategory ??
+      (error instanceof SidecarJobError
+        ? asNonEmptyString(error.context.provider_failure_category)
+        : undefined);
     const providerFailureCode =
       providerFailure.providerFailureCode ??
       (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider_failure_code) : undefined);
@@ -645,6 +698,7 @@ export async function runResearchPriceJob(
       listingId,
       normalizedCompCount,
       provider,
+      providerFailureCategory,
       providerFailureCode,
       providerFailureMessage: providerFailure.providerFailureMessage,
       query,

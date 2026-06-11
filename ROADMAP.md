@@ -2,6 +2,9 @@
 
 Note: Commented out early tasks that have been completed to keep the focus on upcoming work.
 
+Future Consideration:
+Maintain workflow, pricing, and publish abstractions so listing types can expand beyond single and lot. Anticipated future support includes eBay "You Pick" style inventory listings where one listing may represent multiple underlying inventory items.
+
 | Phase | Area | Task | Output |
 |---:|---|---|---|
 <!--
@@ -32,9 +35,9 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9E.2 | BE/Jobs | Make pricing enqueue failure non-blocking | Gemini job still completes if pricing enqueue fails |
 | 9E.3 | BE/Jobs | Add pricing job observability logs | Logs show listing ID, comp count, confidence, suggested price, and provider failure details |
 | 9E.4 | BE/Tests | Add post-Gemini enqueue tests | Successful draft generation queues pricing without duplicate active pricing jobs |
-| 9F.1 | BE/Apify | Add Apify provider adapter shell | Adapter constructs Actor input and parses Actor output behind `APIFY_ENABLED` | -->
+| 9F.1 | BE/Apify | Add Apify provider adapter shell | Adapter constructs Actor input and parses Actor output behind `APIFY_ENABLED` | 
 | 9F.2 | BE/Apify | Add Apify actor config diagnostics | CLI/API can verify token, actor ID, min comps, timeout, and enabled state |
-| 9F.3 | BE/Apify | Add Apify rate-limit/failure classification | Rate-limit/provider failures fail only the pricing job; listing pipeline continues |
+| 9F.3 | BE/Apify | Add Apify rate-limit/failure classification | Rate-limit/provider failures fail only the pricing job; listing pipeline continues | -->
 | 9F.4 | BE/Apify | Add live Apify smoke script | One selected listing can run live pricing from CLI when `APIFY_ENABLED=true` |
 | 9F.5 | BE/Tests | Add Apify adapter fixture coverage | Adapter handles rate limits, malformed responses, and fewer-than-12-comp responses without spending credits |
 | 9G.1 | BE/Docs | Add controlled Apify pricing pilot notes | Minimal instructions for first live pricing tests from CLI |

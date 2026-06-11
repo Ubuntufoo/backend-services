@@ -5,6 +5,7 @@ import {
   buildApifyActorInput,
   createApifyPricingProvider,
   parseApifyActorOutput,
+  redactSensitiveText,
 } from '@/pricing/index.js';
 
 describe('Apify pricing provider', () => {
@@ -119,7 +120,7 @@ describe('Apify pricing provider', () => {
       parseApifyActorOutput(payload, {
         actorId: 'actor-123',
       })
-    ).toThrow();
+    ).toThrow(ApifyPricingProviderError);
   });
 
   it('uses injected actor runner and redacts sensitive query fragments in raw result', async () => {
@@ -168,6 +169,80 @@ describe('Apify pricing provider', () => {
 
     await expect(provider.fetchSoldComps(baseInput)).rejects.toBeInstanceOf(
       ApifyPricingProviderError
+    );
+  });
+
+  it.each([
+    [429, 'rate_limit', 'apify_rate_limited'],
+    [401, 'auth_config', 'apify_auth_failed'],
+    [504, 'timeout_network', 'apify_timeout'],
+    [503, 'provider_unavailable', 'apify_provider_unavailable'],
+    [418, 'provider_failure', 'apify_http_418'],
+  ] as const)('classifies HTTP %s failures', async (status, category, code) => {
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        fetch: vi.fn(async () => ({
+          json: async () => ({}),
+          ok: false,
+          status,
+          text: async () => `token=secret-value status=${status}`,
+        })) as typeof fetch,
+      }
+    );
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toMatchObject({
+      category,
+      code,
+      provider: 'apify',
+      query: expect.not.stringContaining('secret-value'),
+      workflowSafe: true,
+    });
+  });
+
+  it('classifies network-like failures', async () => {
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        fetch: vi.fn(async () => {
+          throw new TypeError('fetch failed: ECONNRESET token=secret-value');
+        }) as typeof fetch,
+      }
+    );
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toMatchObject({
+      category: 'timeout_network',
+      code: 'apify_network_error',
+      query: expect.not.stringContaining('secret-value'),
+    });
+  });
+
+  it('classifies missing auth/config before actor run', async () => {
+    const provider = createApifyPricingProvider({
+      actorId: ' ',
+      token: ' ',
+    });
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toMatchObject({
+      category: 'auth_config',
+      code: 'apify_auth_config_invalid',
+      workflowSafe: true,
+    });
+  });
+
+  it('redacts token-like fragments from messages', () => {
+    expect(
+      redactSensitiveText(
+        'Bearer super-secret-token https://api.example/path?access_token=abc token=xyz apiKey: 1234567890'
+      )
+    ).toBe(
+      'Bearer [redacted-token] [redacted-url] [redacted-secret:***] [redacted-secret:12***90]'
     );
   });
 });

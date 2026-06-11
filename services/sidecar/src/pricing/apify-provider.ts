@@ -93,16 +93,35 @@ export interface ApifyPricingProviderDependencies {
   runActor?: (input: RunApifyActorInput) => Promise<unknown>;
 }
 
+export type ApifyProviderFailureCategory =
+  | 'rate_limit'
+  | 'auth_config'
+  | 'timeout_network'
+  | 'provider_unavailable'
+  | 'malformed_output'
+  | 'provider_failure';
+
 export class ApifyPricingProviderError extends Error {
+  readonly category: ApifyProviderFailureCategory;
   readonly code: string;
   readonly provider = APIFY_PROVIDER_NAME;
   readonly query: string;
+  readonly statusCode?: number;
+  readonly workflowSafe = true;
 
-  constructor(code: string, message: string, query: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(
+    code: string,
+    category: ApifyProviderFailureCategory,
+    message: string,
+    query: string,
+    options?: ErrorOptions & { statusCode?: number }
+  ) {
+    super(compactApifyErrorMessage(message), options);
     this.name = 'ApifyPricingProviderError';
+    this.category = category;
     this.code = code;
-    this.query = query;
+    this.query = redactSensitiveText(query);
+    this.statusCode = options?.statusCode;
   }
 }
 
@@ -127,7 +146,20 @@ export function parseApifyActorOutput(
   raw: unknown,
   meta: ApifyActorOutputMeta
 ): PricingProviderResult {
-  const parsed = apifyActorOutputSchema.parse(raw);
+  let parsed: z.infer<typeof apifyActorOutputSchema>;
+
+  try {
+    parsed = apifyActorOutputSchema.parse(raw);
+  } catch (error) {
+    throw new ApifyPricingProviderError(
+      'apify_output_invalid',
+      'malformed_output',
+      `Apify actor output malformed: ${extractZodErrorMessage(error)}`,
+      getQueryFromActorOutput(raw),
+      { cause: error instanceof Error ? error : undefined }
+    );
+  }
+
   const soldComps = parsed.items.map((item) => toRawSoldComp(item));
   const fetchedAt = meta.fetchedAt ?? new Date().toISOString();
 
@@ -163,6 +195,15 @@ export function createApifyPricingProvider(
   return {
     name: APIFY_PROVIDER_NAME,
     async fetchSoldComps(input: PricingProviderInput): Promise<PricingProviderResult> {
+      if (!config.token.trim() || !config.actorId.trim()) {
+        throw new ApifyPricingProviderError(
+          'apify_auth_config_invalid',
+          'auth_config',
+          'Apify pricing provider misconfigured: APIFY_TOKEN and APIFY_PRICE_ACTOR_ID required.',
+          input.title
+        );
+      }
+
       const actorInput = buildApifyActorInput({
         ...input,
         minSoldComps: Math.max(input.minSoldComps ?? config.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS, DEFAULT_MIN_SOLD_COMPS),
@@ -188,7 +229,8 @@ export function createApifyPricingProvider(
         }
 
         throw new ApifyPricingProviderError(
-          'apify_actor_request_failed',
+          'apify_provider_failure',
+          'provider_failure',
           error instanceof Error ? error.message : String(error),
           actorInput.query,
           { cause: error instanceof Error ? error : undefined }
@@ -219,11 +261,16 @@ async function defaultRunActor(
 
     if (!response.ok) {
       const responseText = await readResponseText(response);
+      const { category, code } = classifyApifyHttpFailure(response.status);
 
       throw new ApifyPricingProviderError(
-        `apify_http_${response.status}`,
+        code,
+        category,
         `Apify Actor request failed with status ${response.status}: ${truncateText(responseText)}`,
-        input.query
+        input.query,
+        {
+          statusCode: response.status,
+        }
       );
     }
 
@@ -245,7 +292,18 @@ async function defaultRunActor(
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ApifyPricingProviderError(
         'apify_timeout',
+        'timeout_network',
         `Apify Actor request timed out after ${input.timeoutSeconds} seconds.`,
+        input.query,
+        { cause: error }
+      );
+    }
+
+    if (error instanceof Error && isNetworkLikeError(error)) {
+      throw new ApifyPricingProviderError(
+        'apify_network_error',
+        'timeout_network',
+        error.message,
         input.query,
         { cause: error }
       );
@@ -307,11 +365,14 @@ function normalizeQueryKey(key: string): string {
   return key.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replaceAll(/^_|_$/g, '');
 }
 
-function redactSensitiveText(value: string): string {
+export function redactSensitiveText(value: string): string {
   return value
     .replace(/https?:\/\/\S+/gi, '[redacted-url]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, 'Bearer [redacted-token]')
-    .replace(/\b(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token)=([^\s&]+)/gi, '[redacted-secret]');
+    .replace(/\b(?:Bearer|bearer)\s+[A-Za-z0-9._~+/=-]+\b/g, 'Bearer [redacted-token]')
+    .replace(
+      /\b(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token|key|apikey|apiKey)\s*[:=]\s*([^\s,&]+)/gi,
+      (_match, secret: string) => `[redacted-secret:${maskSecret(secret)}]`
+    );
 }
 
 function toRawSoldComp(item: z.infer<typeof apifySoldCompSchema>): RawSoldComp {
@@ -341,4 +402,80 @@ function truncateText(value: string, maxLength = 240): string {
   }
 
   return `${redactSensitiveText(normalized.slice(0, maxLength - 3))}...`;
+}
+
+function compactApifyErrorMessage(value: string): string {
+  const normalized = redactSensitiveText(value).replace(/\s+/g, ' ').trim();
+
+  if (normalized.length <= 240) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 237)}...`;
+}
+
+function extractZodErrorMessage(error: unknown): string {
+  if (!(error instanceof z.ZodError)) {
+    return error instanceof Error ? error.message : 'invalid actor output';
+  }
+
+  const issue = error.issues[0];
+  if (!issue) {
+    return 'invalid actor output';
+  }
+
+  const path = issue.path.length > 0 ? issue.path.join('.') : 'payload';
+  return `${path}: ${issue.message}`;
+}
+
+function getQueryFromActorOutput(raw: unknown): string {
+  if (!raw || Array.isArray(raw) || typeof raw !== 'object') {
+    return '';
+  }
+
+  const query = 'query' in raw ? raw.query : undefined;
+  return typeof query === 'string' ? query : '';
+}
+
+function classifyApifyHttpFailure(
+  status: number
+): { category: ApifyProviderFailureCategory; code: string } {
+  if (status === 401 || status === 403) {
+    return { category: 'auth_config', code: 'apify_auth_failed' };
+  }
+
+  if (status === 429 || status === 402) {
+    return { category: 'rate_limit', code: 'apify_rate_limited' };
+  }
+
+  if (status === 408 || status === 504) {
+    return { category: 'timeout_network', code: 'apify_timeout' };
+  }
+
+  if (status === 502 || status === 503 || status === 521 || status === 522 || status === 523 || status === 524) {
+    return { category: 'provider_unavailable', code: 'apify_provider_unavailable' };
+  }
+
+  return { category: 'provider_failure', code: `apify_http_${status}` };
+}
+
+function isNetworkLikeError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('network') ||
+    message.includes('socket') ||
+    message.includes('fetch failed') ||
+    message.includes('econnreset') ||
+    message.includes('enotfound') ||
+    message.includes('timed out') ||
+    message.includes('timeout')
+  );
+}
+
+function maskSecret(value: string): string {
+  if (value.length <= 8) {
+    return '***';
+  }
+
+  return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
