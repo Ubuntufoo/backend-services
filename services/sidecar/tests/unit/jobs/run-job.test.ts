@@ -38,6 +38,7 @@ import {
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import { runSidecarJob } from '@/jobs/index.js';
 import {
+  ApifyPricingProviderError,
   FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
   createFixtureLlmPricingAnalyst,
   createFixturePricingProvider,
@@ -3784,7 +3785,70 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
-    it('marks listing price research failed on apify provider output errors without corrupting listing workflow', async () => {
+    it.each([
+      [
+        'rate-limit failure',
+        new ApifyPricingProviderError(
+          'apify_rate_limited',
+          'rate_limit',
+          '429 quota hit https://api.apify.com/v2/acts/token=secret-value Bearer super-secret-token',
+          'https://market.example/item/123?token=secret-value'
+        ),
+        'rate_limit',
+      ],
+      [
+        'auth/config failure',
+        new ApifyPricingProviderError(
+          'apify_auth_failed',
+          'auth_config',
+          '403 bad token apiKey=super-secret-token',
+          'https://market.example/item/123?access_token=secret-value'
+        ),
+        'auth_config',
+      ],
+      [
+        'timeout/network failure',
+        new ApifyPricingProviderError(
+          'apify_timeout',
+          'timeout_network',
+          'request timed out token=secret-value',
+          'https://market.example/item/123?token=secret-value'
+        ),
+        'timeout_network',
+      ],
+      [
+        'provider unavailable failure',
+        new ApifyPricingProviderError(
+          'apify_provider_unavailable',
+          'provider_unavailable',
+          '503 upstream unavailable Bearer super-secret-token',
+          'https://market.example/item/123?token=secret-value'
+        ),
+        'provider_unavailable',
+      ],
+      [
+        'malformed output failure',
+        new ApifyPricingProviderError(
+          'apify_output_invalid',
+          'malformed_output',
+          'actor output invalid https://market.example/item/123?token=secret-value Bearer super-secret-token',
+          'https://market.example/item/123?token=secret-value'
+        ),
+        'malformed_output',
+      ],
+      [
+        'generic provider failure',
+        new ApifyPricingProviderError(
+          'apify_provider_failure',
+          'provider_failure',
+          'provider exploded access_token=secret-value',
+          'https://market.example/item/123?token=secret-value'
+        ),
+        'provider_failure',
+      ],
+    ])(
+      'marks listing price research failed on apify %s without corrupting listing workflow',
+      async (_label, providerError, expectedCategory) => {
       const listing = createListingRow({
         last_error_at: '2026-05-19T12:00:00.000Z',
         last_error_code: 'existing_error',
@@ -3795,16 +3859,6 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
         title: 'Broken apify provider listing',
       });
-      const providerError = Object.assign(
-        new Error(
-          'apify output invalid https://market.example/item/123?token=secret-value Bearer super-secret-token'
-        ),
-        {
-          code: 'apify_output_invalid',
-          provider: 'apify',
-          query: 'https://market.example/item/123?token=secret-value Bearer super-secret-token',
-        }
-      );
       const dataAccess = createDataAccess({
         job: queuedResearchPriceJob,
         listing,
@@ -3825,6 +3879,8 @@ describe('runSidecarJob', () => {
 
       expect(result.job.status).toBe('failed');
       expect(result.job.last_error_code).toBe('research_price_failed');
+      expect(result.job.last_error).not.toContain('secret-value');
+      expect(result.job.last_error).not.toContain('super-secret-token');
       expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
       expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
         listing_id: 'LIST-001',
@@ -3834,15 +3890,30 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
         expect.objectContaining({
           error_code: 'research_price_failed',
+          error_message: expect.not.stringContaining('secret-value'),
+          raw_result_json: expect.objectContaining({
+            failure: expect.objectContaining({
+              category: expectedCategory,
+              code: providerError.code,
+              message: expect.not.stringContaining('secret-value'),
+              provider: 'apify',
+              query: '[redacted-url]',
+              workflowSafe: true,
+            }),
+          }),
         })
       );
+      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+      expect(dataAccess.listings.update).not.toHaveBeenCalled();
       expect(jobLoggerWarn).toHaveBeenCalledWith(
         'Failed research_price job.',
         expect.objectContaining({
           provider: 'apify',
-          providerFailureCode: 'apify_output_invalid',
-          providerFailureMessage: 'apify output invalid [redacted-url] Bearer [redacted-token]',
-          query: '[redacted-url] Bearer [redacted-token]',
+          providerFailureCategory: expectedCategory,
+          providerFailureCode: providerError.code,
+          providerFailureMessage: expect.not.stringContaining('secret-value'),
+          query: '[redacted-url]',
+          workflowSafe: true,
         })
       );
       expect(
@@ -3851,7 +3922,8 @@ describe('runSidecarJob', () => {
           JSON.stringify(meta).includes('super-secret-token')
         )
       ).toBe(false);
-    });
+      }
+    );
 
     it('logs llm analysis fallback and still succeeds research_price', async () => {
       const listing = createListingRow({
