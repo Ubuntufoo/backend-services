@@ -3649,6 +3649,96 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
+    it('supports explicit apify pricing providers without changing deterministic pricing flow', async () => {
+      const listing = createListingRow({
+        category_id: '261328',
+        condition_id: '2750',
+        item_specifics: {
+          'Card Number': '136',
+          Manufacturer: 'Panini',
+          Player: 'Victor Wembanyama',
+          Set: 'Prizm',
+          Year: '2023',
+        },
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_message: 'keep me',
+        price: 9.99,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const fixtureProvider = createFixturePricingProvider();
+      const fixtureResult = await fixtureProvider.fetchSoldComps({
+        categoryId: listing.category_id,
+        conditionId: listing.condition_id,
+        itemSpecifics: listing.item_specifics as Record<string, string>,
+        listingId: listing.listing_id,
+        title: listing.title!,
+      });
+      const fetchSoldComps = vi.fn(async () => ({
+        ...fixtureResult,
+        provider: 'apify',
+        rawResult: {
+          actorId: 'actor-123',
+          output: {
+            itemCount: fixtureResult.soldComps.length,
+          },
+          provider: 'apify',
+        },
+      }));
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'apify',
+          },
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(fetchSoldComps).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
+        listing_id: 'LIST-001',
+        provider: 'apify',
+        status: 'pending',
+      });
+      expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: fixtureResult.query,
+          raw_result_json: expect.objectContaining({
+            actorId: 'actor-123',
+            provider: 'apify',
+          }),
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Started research_price job.',
+        expect.objectContaining({
+          event: 'research_price_started',
+          pricingMode: 'deterministic',
+          provider: 'apify',
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Completed research_price provider fetch.',
+        expect.objectContaining({
+          event: 'research_price_provider_result',
+          provider: 'apify',
+        })
+      );
+      expect(result.listing?.status).toBe('needs_review');
+      expect(result.listing?.sub_status).toBe('review_pending');
+      expect(result.listing?.price).not.toBe(listing.price);
+    });
+
     it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
       const listing = createListingRow({
         last_error_at: '2026-05-19T12:00:00.000Z',
@@ -3692,6 +3782,75 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
       expect(dataAccess.listings.update).not.toHaveBeenCalled();
       expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    });
+
+    it('marks listing price research failed on apify provider output errors without corrupting listing workflow', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 13.25,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Broken apify provider listing',
+      });
+      const providerError = Object.assign(
+        new Error(
+          'apify output invalid https://market.example/item/123?token=secret-value Bearer super-secret-token'
+        ),
+        {
+          code: 'apify_output_invalid',
+          provider: 'apify',
+          query: 'https://market.example/item/123?token=secret-value Bearer super-secret-token',
+        }
+      );
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps: vi.fn(async () => {
+              throw providerError;
+            }),
+            name: 'apify',
+          },
+        },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_failed');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
+        listing_id: 'LIST-001',
+        provider: 'apify',
+        status: 'pending',
+      });
+      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: 'research_price_failed',
+        })
+      );
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Failed research_price job.',
+        expect.objectContaining({
+          provider: 'apify',
+          providerFailureCode: 'apify_output_invalid',
+          providerFailureMessage: 'apify output invalid [redacted-url] Bearer [redacted-token]',
+          query: '[redacted-url] Bearer [redacted-token]',
+        })
+      );
+      expect(
+        [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(([, meta]) =>
+          JSON.stringify(meta).includes('secret-value') ||
+          JSON.stringify(meta).includes('super-secret-token')
+        )
+      ).toBe(false);
     });
 
     it('logs llm analysis fallback and still succeeds research_price', async () => {
@@ -3986,14 +4145,14 @@ describe('runSidecarJob', () => {
             fetchSoldComps: vi.fn(async () => {
               throw new Error('should not run');
             }),
-            name: 'apify',
+            name: 'other-provider',
           },
         },
       });
 
       expect(result.job.status).toBe('failed');
       expect(result.job.last_error_code).toBe('research_price_failed');
-      expect(result.job.last_error).toContain('Unsupported pricing provider "apify"');
+      expect(result.job.last_error).toContain('Unsupported pricing provider "other-provider"');
       expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
       expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
       expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();

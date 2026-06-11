@@ -236,6 +236,23 @@ describe('loadEnv', () => {
     expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('120');
   });
 
+  it('treats blank APIFY_ENABLED as disabled', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        APIFY_ENABLED: '',
+        EBAY_ENABLED: 'false',
+      },
+    });
+
+    expect(env.APIFY_ENABLED).toBe('false');
+    expect(env.APIFY_MIN_SOLD_COMPS).toBe('12');
+    expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('120');
+  });
+
   it('requires Apify token and actor id when enabled', () => {
     expect(() =>
       loadSidecarRootEnv({
@@ -251,7 +268,25 @@ describe('loadEnv', () => {
     ).toThrow(/APIFY_TOKEN is required/);
   });
 
-  it('rejects invalid positive integer string Apify values', () => {
+  it('allows invalid Apify min/timeout values while disabled', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        APIFY_MIN_SOLD_COMPS: 'abc',
+        APIFY_PRICE_TIMEOUT_SECONDS: '0',
+        EBAY_ENABLED: 'false',
+      },
+    });
+
+    expect(env.APIFY_ENABLED).toBe('false');
+    expect(env.APIFY_MIN_SOLD_COMPS).toBe('abc');
+    expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('0');
+  });
+
+  it('rejects invalid positive integer string Apify values when enabled', () => {
     for (const invalidValue of ['0', '-1', '1.5', 'abc']) {
       expect(() =>
         loadSidecarRootEnv({
@@ -260,11 +295,34 @@ describe('loadEnv', () => {
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
             SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
             SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
-            EBAY_ENABLED: 'false',
+            APIFY_ENABLED: 'true',
+            APIFY_PRICE_ACTOR_ID: 'actor-id',
+            APIFY_TOKEN: 'token',
             APIFY_MIN_SOLD_COMPS: invalidValue,
+            APIFY_PRICE_TIMEOUT_SECONDS: invalidValue,
+            EBAY_ENABLED: 'false',
           },
         })
       ).toThrow(/APIFY_MIN_SOLD_COMPS must be a positive integer string/);
     }
+  });
+
+  it('rejects invalid Apify timeout values when enabled', () => {
+    expect(() =>
+      loadSidecarRootEnv({
+        env: {
+          NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+          SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+          SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+          APIFY_ENABLED: 'true',
+          APIFY_MIN_SOLD_COMPS: '12',
+          APIFY_PRICE_ACTOR_ID: 'actor-id',
+          APIFY_PRICE_TIMEOUT_SECONDS: 'abc',
+          APIFY_TOKEN: 'token',
+          EBAY_ENABLED: 'false',
+        },
+      })
+    ).toThrow(/APIFY_PRICE_TIMEOUT_SECONDS must be a positive integer string/);
   });
 });
