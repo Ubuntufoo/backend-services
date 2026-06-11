@@ -34,10 +34,18 @@ const optionalNonEmptyString = () =>
   z.preprocess(normalizeOptionalEnvValue, z.string().trim().min(1).optional());
 const optionalTrimmedString = () =>
   z.preprocess(normalizeOptionalEnvValue, z.string().trim().optional());
-const positiveIntegerString = (name: string) =>
+const falseByDefaultBooleanString = () =>
+  z.preprocess(
+    (value) => {
+      const normalized = normalizeOptionalEnvValue(value);
+      return normalized === undefined ? 'false' : normalized;
+    },
+    z.enum(['true', 'false'])
+  );
+const optionalPositiveIntegerStringWithDefault = (name: string, defaultValue: string) =>
   z.preprocess(
     normalizeOptionalEnvValue,
-    z.string().trim().regex(/^[1-9]\d*$/, `${name} must be a positive integer string`)
+    z.string().trim().regex(/^[1-9]\d*$/, `${name} must be a positive integer string`).optional().default(defaultValue)
   );
 const requiredUrlString = (name: string) =>
   requiredNonEmptyString(name).url(`${name} must be a valid URL`);
@@ -95,11 +103,12 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     SIDECAR_API_URL: optionalNonEmptyString(),
     GEMINI_API_KEY: optionalNonEmptyString(),
     GEMINI_MODEL: optionalNonEmptyString(),
-    APIFY_ENABLED: z.enum(['true', 'false']).default('false'),
+    APIFY_ENABLED: falseByDefaultBooleanString(),
     APIFY_TOKEN: optionalNonEmptyString(),
     APIFY_PRICE_ACTOR_ID: optionalNonEmptyString(),
-    APIFY_MIN_SOLD_COMPS: positiveIntegerString('APIFY_MIN_SOLD_COMPS').default('12'),
-    APIFY_PRICE_TIMEOUT_SECONDS: positiveIntegerString('APIFY_PRICE_TIMEOUT_SECONDS').default(
+    APIFY_MIN_SOLD_COMPS: optionalPositiveIntegerStringWithDefault('APIFY_MIN_SOLD_COMPS', '12'),
+    APIFY_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
+      'APIFY_PRICE_TIMEOUT_SECONDS',
       '120'
     ),
     EBAY_ENABLED: z.enum(['true', 'false']).default('true'),

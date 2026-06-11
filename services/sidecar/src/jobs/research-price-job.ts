@@ -26,8 +26,10 @@ import {
 } from './job-errors.js';
 
 const DEFAULT_MIN_SOLD_COMPS = 12;
+const APIFY_PROVIDER_NAME = 'apify';
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
+const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([APIFY_PROVIDER_NAME, FIXTURE_PROVIDER_NAME]);
 const jobLogger = createLogger('Job');
 const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
   'Player',
@@ -118,13 +120,19 @@ function asJson(value: unknown): Json {
   return value as Json;
 }
 
-function redactUrls(value: string): string {
-  return value.replace(/https?:\/\/\S+/gi, '[redacted-url]');
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, 'Bearer [redacted-token]')
+    .replace(
+      /\b(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token)=([^\s&]+)/gi,
+      '[redacted-secret]'
+    );
 }
 
 function asCompactErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const normalized = redactUrls(message).replace(/\s+/g, ' ').trim();
+  const normalized = redactSensitiveText(message).replace(/\s+/g, ' ').trim();
 
   if (normalized.length <= 240) {
     return normalized;
@@ -165,7 +173,9 @@ function getProviderFailureDetails(error: unknown): {
         asNonEmptyString(error.message) ??
         providerFailureMessage
     ),
-    query: asNonEmptyString(error.query),
+    query: asNonEmptyString(error.query)
+      ? redactSensitiveText(asNonEmptyString(error.query)!)
+      : undefined,
   };
 }
 
@@ -283,13 +293,13 @@ function buildResearchPriceError(
 function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): PricingProvider {
   const pricingProvider = dependencies.pricingProvider ?? createFixturePricingProvider();
 
-  if (pricingProvider.name !== FIXTURE_PROVIDER_NAME) {
+  if (!SUPPORTED_PRICING_PROVIDER_NAMES.has(pricingProvider.name)) {
     throw buildResearchPriceError(
       JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
-      `Unsupported pricing provider "${pricingProvider.name}" for research_price. Only "${FIXTURE_PROVIDER_NAME}" is supported.`,
+      `Unsupported pricing provider "${pricingProvider.name}" for research_price. Supported providers: ${[...SUPPORTED_PRICING_PROVIDER_NAMES].join(', ')}.`,
       {
         provider: pricingProvider.name,
-        supported_provider: FIXTURE_PROVIDER_NAME,
+        supported_providers: [...SUPPORTED_PRICING_PROVIDER_NAMES],
       }
     );
   }
@@ -452,7 +462,7 @@ export async function runResearchPriceJob(
 
     research = await dependencies.dataAccess.listingPriceResearch.create({
       listing_id: listingId,
-      provider: FIXTURE_PROVIDER_NAME,
+      provider: pricingProvider.name,
       status: 'pending',
     });
 
@@ -468,7 +478,7 @@ export async function runResearchPriceJob(
       listingId,
       normalizedCompCount,
       provider: providerResult.provider,
-      query: providerResult.query,
+      query: redactSensitiveText(providerResult.query),
       rawCompCount,
     });
     const deterministicSuggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
@@ -605,7 +615,7 @@ export async function runResearchPriceJob(
       providerFailure.providerFailureCode ??
       (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider_failure_code) : undefined);
     const query =
-      providerResult?.query ??
+      (providerResult?.query ? redactSensitiveText(providerResult.query) : undefined) ??
       providerFailure.query ??
       (error instanceof SidecarJobError ? asNonEmptyString(error.context.query) : undefined);
 
