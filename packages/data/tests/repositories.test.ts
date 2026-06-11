@@ -3185,6 +3185,156 @@ describe('shared repositories', () => {
     });
   });
 
+  it('returns existing queued research_price job on repeated enqueue attempts', async () => {
+    let insertCount = 0;
+    let createdJob: JobRow | null = null;
+
+    const duplicateClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'research_price',
+              listing_id: 'LIST-001',
+              max_attempts: 1,
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => {
+                  insertCount += 1;
+
+                  if (insertCount === 1) {
+                    createdJob = {
+                      ...researchPriceJobRow,
+                      id: 'job-research-price-repeat',
+                      status: 'queued',
+                    };
+
+                    return {
+                      data: createdJob,
+                      error: null,
+                    };
+                  }
+
+                  return {
+                    data: null,
+                    error: {
+                      code: '23505',
+                      message:
+                        'duplicate key value violates unique constraint "jobs_research_price_active_listing_idx"',
+                    },
+                  };
+                }),
+              })),
+            };
+          }),
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                in: vi.fn((statusColumn: string, statuses: string[]) => {
+                  expect(statusColumn).toBe('status');
+                  expect(statuses).toEqual(['queued', 'running']);
+
+                  return {
+                    order: vi.fn(() => ({
+                      limit: vi.fn(() => ({
+                        maybeSingle: vi.fn(async () => ({
+                          data: createdJob,
+                          error: null,
+                        })),
+                      })),
+                    })),
+                  };
+                }),
+              })),
+            })),
+          })),
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    const firstResult = await enqueueResearchPriceJob(duplicateClient, 'LIST-001');
+    const secondResult = await enqueueResearchPriceJob(duplicateClient, 'LIST-001');
+
+    expect(firstResult).toEqual({
+      alreadyQueued: false,
+      job: expect.objectContaining({ id: 'job-research-price-repeat', status: 'queued' }),
+    });
+    expect(secondResult).toEqual({
+      alreadyQueued: true,
+      job: expect.objectContaining({ id: 'job-research-price-repeat', status: 'queued' }),
+    });
+  });
+
+  it('returns existing running research_price job when duplicate insert hits DB protection', async () => {
+    const runningResearchPriceJobRow: JobRow = {
+      ...researchPriceJobRow,
+      id: 'job-research-price-running',
+      status: 'running',
+    };
+    const lookupClient = createActiveResearchPriceLookupClient(runningResearchPriceJobRow);
+    const duplicateClient = {
+      from: vi.fn((name: string) => {
+        expect(name).toBe('jobs');
+
+        return {
+          insert: vi.fn((payload: unknown) => {
+            expect(payload).toEqual({
+              job_type: 'research_price',
+              listing_id: 'LIST-001',
+              max_attempts: 1,
+              status: 'queued',
+            });
+
+            return {
+              select: vi.fn(() => ({
+                single: vi.fn(async () => ({
+                  data: null,
+                  error: {
+                    code: '23505',
+                    message:
+                      'duplicate key value violates unique constraint "jobs_research_price_active_listing_idx"',
+                  },
+                })),
+              })),
+            };
+          }),
+          select: lookupClient.from('jobs').select,
+        };
+      }),
+    } as unknown as SupabaseDataClient;
+
+    await expect(enqueueResearchPriceJob(duplicateClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: true,
+      job: runningResearchPriceJobRow,
+    });
+  });
+
+  it('allows a second research_price enqueue after historical jobs because only active jobs conflict', async () => {
+    const completedReplacementJob: JobRow = {
+      ...researchPriceJobRow,
+      id: 'job-research-price-row-id-completed-replacement',
+      status: 'queued',
+    };
+    const createClient = createInsertClient('jobs', completedReplacementJob, (payload) => {
+      expect(payload).toEqual({
+        job_type: 'research_price',
+        listing_id: 'LIST-001',
+        max_attempts: 1,
+        status: 'queued',
+      });
+    });
+
+    await expect(enqueueResearchPriceJob(createClient, 'LIST-001')).resolves.toEqual({
+      alreadyQueued: false,
+      job: completedReplacementJob,
+    });
+  });
+
   it('respects explicit research_price max attempts override', async () => {
     const overrideRow: JobRow = {
       ...researchPriceJobRow,

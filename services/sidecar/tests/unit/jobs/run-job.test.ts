@@ -969,11 +969,22 @@ describe('runSidecarJob', () => {
       warnings: ['Condition inferred from visible wear only.'],
       rawModelResponse: { id: 'raw-response-1' },
     }));
+    const pricingProvider = {
+      fetch: vi.fn(),
+      name: 'fixture' as const,
+    };
+    const pricingAnalyst = {
+      analyze: vi.fn(),
+    };
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
       generateListingDraft: generateListingDraftMock,
       now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingAnalyst,
+        pricingProvider,
+      },
     });
 
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
@@ -1096,6 +1107,8 @@ describe('runSidecarJob', () => {
     expect(result.listing?.sku).toBe('Single-000001');
     expect(result.listing?.listing_id).toBe('Single-000001');
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expect(pricingProvider.fetch).not.toHaveBeenCalled();
+    expect(pricingAnalyst.analyze).not.toHaveBeenCalled();
     expect(result.job.status).toBe('completed');
     expect(result.job.gemini_attempt_count).toBe(1);
     expect(result.job.gemini_selected_model).toBe('gemini-3.1-flash-lite');
@@ -1266,6 +1279,44 @@ describe('runSidecarJob', () => {
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
     expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+  });
+
+  it('skips research_price enqueue after generate_ai success for unsupported listing types', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-UNSUPPORTED',
+      },
+      listing: createListingRow({
+        listing_id: 'LIST-UNSUPPORTED',
+        listing_type: 'bundle' as ListingRow['listing_type'],
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Unsupported listing type card',
+      description: 'Draft still succeeds.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {},
+      priceSuggestion: 19.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-unsupported-type' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
   it('keeps generate_ai success when research_price enqueue fails after review transition', async () => {
@@ -1619,6 +1670,7 @@ describe('runSidecarJob', () => {
     expect(result.job.next_run_at).toBe('2026-05-20T13:01:00.000Z');
     expect(result.listing?.status).toBe('assets_ready');
     expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
       gemini_attempt_count: 1,
       gemini_attempts: [
@@ -1813,6 +1865,27 @@ describe('runSidecarJob', () => {
     expect(result.job.last_error_code).toBeNull();
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
+  });
+
+  it('does not enqueue research_price when generated draft validation fails', async () => {
+    const dataAccess = createDataAccess();
+    const generateListingDraftMock = vi.fn(async () => {
+      throw new Error('Generated draft missing required title field');
+    });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(result.job.status).toBe('queued');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.listing?.status).toBe('assets_ready');
+    expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
   it('preserves the Gemini failure when Gemini audit persistence fails', async () => {
