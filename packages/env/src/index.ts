@@ -42,6 +42,11 @@ const falseByDefaultBooleanString = () =>
     },
     z.enum(['true', 'false'])
   );
+const optionalPositiveIntegerStringWithDefault = (name: string, defaultValue: string) =>
+  z.preprocess(
+    normalizeOptionalEnvValue,
+    z.string().trim().regex(/^[1-9]\d*$/, `${name} must be a positive integer string`).optional().default(defaultValue)
+  );
 const requiredUrlString = (name: string) =>
   requiredNonEmptyString(name).url(`${name} must be a valid URL`);
 const optionalUrlString = (name: string) =>
@@ -93,10 +98,6 @@ export interface R2Env {
   R2_PUBLIC_BASE_URL: string;
 }
 
-function isPositiveIntegerString(value: string | undefined): boolean {
-  return value !== undefined && /^[1-9]\d*$/.test(value);
-}
-
 export const sidecarRootEnvSchema = supabaseEnvSchema
   .extend({
     SIDECAR_API_URL: optionalNonEmptyString(),
@@ -105,8 +106,11 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     APIFY_ENABLED: falseByDefaultBooleanString(),
     APIFY_TOKEN: optionalNonEmptyString(),
     APIFY_PRICE_ACTOR_ID: optionalNonEmptyString(),
-    APIFY_MIN_SOLD_COMPS: optionalTrimmedString(),
-    APIFY_PRICE_TIMEOUT_SECONDS: optionalTrimmedString(),
+    APIFY_MIN_SOLD_COMPS: optionalPositiveIntegerStringWithDefault('APIFY_MIN_SOLD_COMPS', '12'),
+    APIFY_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
+      'APIFY_PRICE_TIMEOUT_SECONDS',
+      '120'
+    ),
     EBAY_ENABLED: z.enum(['true', 'false']).default('true'),
     EBAY_CLIENT_ID: optionalNonEmptyString(),
     EBAY_CLIENT_SECRET: optionalNonEmptyString(),
@@ -144,22 +148,6 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
           path: ['APIFY_PRICE_ACTOR_ID'],
         });
       }
-
-      if (!isPositiveIntegerString(env.APIFY_MIN_SOLD_COMPS ?? undefined)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'APIFY_MIN_SOLD_COMPS must be a positive integer string',
-          path: ['APIFY_MIN_SOLD_COMPS'],
-        });
-      }
-
-      if (!isPositiveIntegerString(env.APIFY_PRICE_TIMEOUT_SECONDS ?? undefined)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'APIFY_PRICE_TIMEOUT_SECONDS must be a positive integer string',
-          path: ['APIFY_PRICE_TIMEOUT_SECONDS'],
-        });
-      }
     }
 
     if (env.EBAY_ENABLED === 'false') {
@@ -193,12 +181,7 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
         path: ['EBAY_ENVIRONMENT'],
       });
     }
-  })
-  .transform((env) => ({
-    ...env,
-    APIFY_MIN_SOLD_COMPS: env.APIFY_MIN_SOLD_COMPS ?? '12',
-    APIFY_PRICE_TIMEOUT_SECONDS: env.APIFY_PRICE_TIMEOUT_SECONDS ?? '120',
-  }));
+  });
 
 export type SidecarRootEnv = z.infer<typeof sidecarRootEnvSchema>;
 
