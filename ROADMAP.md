@@ -14,11 +14,9 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9B.2 | BE/Pricing | Add sold-comps normalizer | Raw provider records normalize into stable comp objects with price, shipping, total, sold date, title, and URL | 
 | 9B.3 | BE/Pricing | Add deterministic pricing stats| Service computes sold count, median, low, high, and deterministic fallback price   |
 | 9B.4 | BE/Pricing | Add confidence scoring  | Pricing output includes confidence only; no single/lot recommendation logic |
-
 | 9B.5 | BE/Tests | Add normalizer fixture tests | Noisy Apify-like records are parsed, filtered, and priced predictably |
-
 | 9C.1 | BE/Jobs | Add `runResearchPriceJob` fixture path | A `needs_review` single listing can run pricing and complete |
-| 9C.2 | BE/Jobs | Keep pricing workflow-safe | Pricing failures do not alter listing workflow, block review, or write to `listing.last_error_*` | -->
+| 9C.2 | BE/Jobs | Keep pricing workflow-safe | Pricing failures do not alter listing workflow, block review, or write to `listing.last_error_*`
 | 9C.3 | BE/Jobs | Update listing price on pricing success | `listings.price` is overwritten only from a valid suggested price; listing stays `needs_review/review_pending` |
 | 9C.4 | BE/Jobs | Reject unsupported pricing inputs safely | Lot and non-review listings fail pricing job without disrupting listing state |
 | 9C.5 | BE/Tests | Add job-runner pricing tests | Success, lot reject, non-review reject, provider failure, and price update behavior are covered |
@@ -30,7 +28,7 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 | 9D.6 | BE/Models | Add Gemma 4 31B pricing route config | Pricing reasoning has explicit `pricing_reasoning` route config for `gemma-4-31b-it` |
 | 9D.7 | BE/Jobs | Wire validated LLM pricing behind deterministic fallback | Valid LLM output can affect suggested price; invalid/failing LLM falls back to deterministic pricing |
 | 9D.8 | BE/Tests | Harden LLM pricing validation coverage | Bad LLM output cannot corrupt price, confidence, selected/rejected comps, or listing workflow |
-| 9E.1 | BE/Jobs | Enqueue pricing after successful Gemini generation | `generate_ai` completion creates or ensures one `research_price` job for single listings |
+| 9E.1 | BE/Jobs | Enqueue pricing after successful Gemini generation | `generate_ai` completion creates or ensures one `research_price` job for single listings |  | -->
 | 9E.2 | BE/Jobs | Make pricing enqueue failure non-blocking | Gemini job still completes if pricing enqueue fails |
 | 9E.3 | BE/Jobs | Add pricing job observability logs | Logs show listing ID, comp count, confidence, suggested price, and provider failure details |
 | 9E.4 | BE/Tests | Add post-Gemini enqueue tests | Successful draft generation queues pricing without duplicate active pricing jobs |
