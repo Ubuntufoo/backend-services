@@ -1,5 +1,6 @@
 import {
   AiModelRouteNotFoundError,
+  isPricingServiceEnabled,
   type AiModelAttemptRow,
   type GeminiJobAttemptAuditUpdate,
   type GeminiModelAttempt,
@@ -477,12 +478,24 @@ async function enqueueResearchPriceAfterGenerate(
   }
 
   try {
+    const appSettings = await dataAccess.appSettings.get();
+    if (!isPricingServiceEnabled(appSettings)) {
+      jobLogger.info('Skipped research_price enqueue after generate_ai because pricing service is disabled.', {
+        event: 'research_price_enqueue_skipped',
+        listingId: listing.listing_id,
+        pricingServiceEnabled: false,
+        settingsSource: appSettings ? 'app_settings' : 'default',
+      });
+      return;
+    }
+
     await dataAccess.jobs.enqueueResearchPrice(listing.listing_id);
   } catch (error) {
     jobLogger.warn('Failed to enqueue research_price after generate_ai success.', {
       error: error instanceof Error ? error.message : String(error),
       listingId: listing.listing_id,
       phase: 'post_generate_ai_enqueue',
+      pricingServiceEnabled: true,
     });
   }
 }

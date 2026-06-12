@@ -43,6 +43,7 @@ export const JOB_ERROR_CODES = {
   PUBLISH_MISSING_LISTING_ID: 'publish_missing_listing_id',
   PROCESS_IMAGES_FAILED: 'process_images_failed',
   RESEARCH_PRICE_FAILED: 'research_price_failed',
+  RESEARCH_PRICE_DISABLED: 'research_price_disabled',
   RESEARCH_PRICE_LISTING_NOT_ELIGIBLE: 'research_price_listing_not_eligible',
   RESEARCH_PRICE_LISTING_NOT_FOUND: 'research_price_listing_not_found',
   RESEARCH_PRICE_MISSING_LISTING_ID: 'research_price_missing_listing_id',
@@ -149,6 +150,7 @@ function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCatego
     case JOB_ERROR_CODES.PUBLISH_APP_SETTINGS_NOT_FOUND:
     case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_ELIGIBLE:
     case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_READY:
+    case JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED:
     case JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE:
       return 'user_fixable';
     case JOB_ERROR_CODES.GENERATE_AI_LISTING_NOT_FOUND:

@@ -102,6 +102,15 @@ export const enqueueGenerateAiRequestSchema = z
   })
   .strict();
 
+export const updatePricingServiceEnabledRequestSchema = z
+  .object({
+    pricingServiceEnabled: z.boolean({
+      required_error: 'pricingServiceEnabled is required',
+      invalid_type_error: 'pricingServiceEnabled must be a boolean',
+    }),
+  })
+  .strict();
+
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
 export type SellerEditableListingFieldsInput = z.infer<
   typeof sellerEditableListingFieldsSchema
@@ -116,3 +125,6 @@ export type UpdateListingWorkflowStateRequest = z.infer<
   typeof updateListingWorkflowStateRequestSchema
 >;
 export type EnqueueGenerateAiRequest = z.infer<typeof enqueueGenerateAiRequestSchema>;
+export type UpdatePricingServiceEnabledRequest = z.infer<
+  typeof updatePricingServiceEnabledRequestSchema
+>;

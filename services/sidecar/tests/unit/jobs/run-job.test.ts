@@ -351,6 +351,10 @@ function createDataAccess({
   aiModelRoute = resolvedAiModelRoute,
   aiModelRoutes = [aiModelRoute],
   aiModelRouteError,
+  appSettings = {
+    id: 'default',
+    pricing_service_enabled: true,
+  },
   dailyUsageIncrementError,
   dailyUsageIncrementErrors,
   enqueueResearchPriceError,
@@ -365,6 +369,10 @@ function createDataAccess({
   aiModelRoute?: ResolvedAiModelRoute;
   aiModelRoutes?: ResolvedAiModelRoute[];
   aiModelRouteError?: Error;
+  appSettings?: {
+    id: string;
+    pricing_service_enabled: boolean;
+  } | null;
   dailyUsageIncrementError?: Error;
   dailyUsageIncrementErrors?: (Error | undefined)[];
   enqueueResearchPriceError?: Error;
@@ -484,7 +492,31 @@ function createDataAccess({
   const ordersGetByOrderId = vi.fn();
   const ordersUpdate = vi.fn();
   const appSettingsCreate = vi.fn();
-  const appSettingsGet = vi.fn();
+  const appSettingsGet = vi.fn(async () =>
+    appSettings
+      ? ({
+          capture_mode: 'single_2_image',
+          default_fulfillment_policy_id: null,
+          default_package_type: null,
+          default_payment_policy_id: null,
+          default_return_policy_id: null,
+          default_shipping_profile: null,
+          ebay_marketplace_id: 'EBAY_US',
+          ebay_publish_config: null,
+          gemini_daily_limit: 500,
+          handling_days: 2,
+          id: appSettings.id,
+          incoming_folder_path: null,
+          max_order_syncs_per_day: 25,
+          merchant_location_key: null,
+          office_location_name: null,
+          pricing_service_enabled: appSettings.pricing_service_enabled,
+          processed_folder_path: null,
+          r2_retention_days_after_sold: 30,
+          updated_at: '2026-05-20T12:00:00.000Z',
+        } as const)
+      : null
+  );
   const appSettingsUpdate = vi.fn();
 
   return {
@@ -1208,6 +1240,58 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
+  it('does not enqueue research_price after generate_ai success when pricing service is disabled', async () => {
+    const dataAccess = createDataAccess({
+      appSettings: {
+        id: 'default',
+        pricing_service_enabled: false,
+      },
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Single-000001',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: '1991 Upper Deck Michael Jordan',
+      description: 'Ungraded single card with visible edge wear.',
+      categorySuggestion: 'Sports Trading Cards',
+      conditionSuggestion: 'Ungraded',
+      aspects: {
+        Player: 'Michael Jordan',
+        Manufacturer: 'Upper Deck',
+      },
+      priceSuggestion: 249.99,
+      confidence: {
+        title: 0.91,
+      },
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-disabled-pricing' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing?.status).toBe('needs_review');
+    expect(result.listing?.sub_status).toBe('review_pending');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+    expect(dataAccess.appSettings.get).toHaveBeenCalledOnce();
+    expect(jobLoggerInfo).toHaveBeenCalledWith(
+      'Skipped research_price enqueue after generate_ai because pricing service is disabled.',
+      expect.objectContaining({
+        event: 'research_price_enqueue_skipped',
+        listingId: 'Single-000001',
+        pricingServiceEnabled: false,
+      })
+    );
+  });
+
   it('skips research_price enqueue after generate_ai success for lot listings', async () => {
     const dataAccess = createDataAccess({
       job: {
@@ -1405,6 +1489,7 @@ describe('runSidecarJob', () => {
         error: 'research enqueue failed',
         listingId: 'Single-000001',
         phase: 'post_generate_ai_enqueue',
+        pricingServiceEnabled: true,
       }
     );
   });
@@ -3422,6 +3507,56 @@ describe('runSidecarJob', () => {
       expect(result.listing?.listing_type).toBe('lot');
       expect(fetchSoldComps).not.toHaveBeenCalled();
       expectNoPricingPreflightWrites(dataAccess);
+    });
+
+    it('fails research_price cleanly when pricing service is disabled without changing listing workflow', async () => {
+      const listing = createListingRow({
+        last_error_at: '2026-05-19T12:00:00.000Z',
+        last_error_code: 'existing_error',
+        last_error_context: { source: 'publish' },
+        last_error_message: 'keep me',
+        price: 42.5,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Disabled pricing listing',
+      });
+      const fetchSoldComps = vi.fn(async () => {
+        throw new Error('should not run');
+      });
+      const dataAccess = createDataAccess({
+        appSettings: {
+          id: 'default',
+          pricing_service_enabled: false,
+        },
+        job: queuedResearchPriceJob,
+        listing,
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'fixture',
+          },
+        },
+      });
+
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_disabled');
+      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(fetchSoldComps).not.toHaveBeenCalled();
+      expectNoPricingPreflightWrites(dataAccess);
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Skipped research_price job because pricing service is disabled.',
+        expect.objectContaining({
+          event: 'research_price_disabled',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          pricingServiceEnabled: false,
+        })
+      );
     });
 
     it.each([
