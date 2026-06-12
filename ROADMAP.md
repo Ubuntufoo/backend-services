@@ -43,7 +43,6 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 -->
 | 9G.0 | BE/API | Add global pricing-service enable setting | Backend exposes and persists a global pricing-service enabled flag so FE can display and toggle pricing on/off safely |
 | 9G.1 | FE | Add manual toggle for price service on/off in UI | In the UI, reviewers can enable or disable the price service globally |
-| 9G.1 | FE | Add manual toggle for price service on/off in UI | In the UI, reviewers can enable or disable the price service globally |
 | 9G.2 | $BE/Docs$ | Add controlled Apify pricing pilot notes | Minimal instructions for first live pricing tests from CLI |
 | 9G.3 | $BE/Ops$ | Add one-listing live pricing command | Specific listing IDs can be priced without waiting for the runner loop |
 | 9G.4 | $BE/Pricing$ | Tune trading-card query builder | Query builder uses player, year, set, card number, parallel, and raw/graded signals |
