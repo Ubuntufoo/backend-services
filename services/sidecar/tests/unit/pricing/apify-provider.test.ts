@@ -424,4 +424,16 @@ describe('Apify pricing provider', () => {
       'Bearer [redacted-token] [redacted-url] [redacted-secret:***] [redacted-secret:12***90]'
     );
   });
+
+  it('redacts exact token/access-token/apiKey/bearer patterns directly', () => {
+    const redacted = redactSensitiveText(
+      'token=secret-value access_token=secret apiKey=secret Bearer super-secret-token'
+    );
+
+    expect(redacted).not.toContain('secret-value');
+    expect(redacted).not.toContain('super-secret-token');
+    expect(redacted).not.toContain('apiKey=secret');
+    expect(redacted).not.toContain('access_token=secret');
+    expect(redacted).toContain('Bearer [redacted-token]');
+  });
 });
