@@ -7,7 +7,7 @@
 - Job type: `research_price`
 - Persistence: `public.listing_price_research` plus `packages/data/src/repositories/listing-price-research.ts`
 - Fixture provider path via `createFixturePricingProvider()`
-- Live Apify smoke script via `pnpm pricing:smoke-apify -- --listing-id <listingId>`
+- Live Apify smoke script via `pnpm pricing:smoke-apify -- --listing-id <listing_id>`
 - Comp normalization in `normalizer.ts`
 - Deterministic median-based stats in `stats.ts`
 - Confidence scoring in `confidence.ts`
@@ -26,7 +26,7 @@
 ## Primary Live Actor Contract
 
 Primary live sold-comps actor:
-- Apify actor `oTtB3VgfuE9GtxQt2`
+- Configured by `APIFY_PRICE_ACTOR_ID`
 - Purpose: scrape sold eBay listings; return structured sold-card/item comps
 
 Actor input shape used by actor docs:
@@ -97,6 +97,42 @@ Actor output shape excerpt:
 - Smoke script exists only to verify live provider path safely; it must not enqueue jobs, mutate listings, or persist `listing_price_research`.
 - Offline Apify fixtures under `services/sidecar/tests/fixtures/apify/` exist for unit coverage only; live calls belong only in `pnpm pricing:smoke-apify`.
 - Fewer-than-requested sold comps remain valid provider success; downstream stats/confidence decides usefulness.
+
+## Controlled Apify Pilot
+
+Use live smoke only for first CLI validation of real Apify pricing output. Keep initial pilot manual and narrow.
+
+```bash
+pnpm pricing:smoke-apify -- --listing-id <listing_id>
+```
+
+Safety:
+
+- CLI smoke only
+- no job enqueue
+- no DB writes
+- no listing mutation
+- real Apify call; can spend credits
+
+Prereqs:
+
+- valid Apify token/env configured
+- listing exists locally
+- use real listing with assets/draft context sufficient for pricing search
+
+Recommended pilot behavior:
+
+- run 1 listing first
+- inspect logs/output manually
+- do not enable automated pricing until smoke output looks sane
+- keep `app_settings.pricing_service_enabled=false` during initial CLI-only testing
+- global pricing toggle not required for CLI smoke
+
+Failure interpretation:
+
+- rate-limit/quota/provider failures: external; retry later
+- malformed comps or zero/few comps: valid pilot observation, not automatic app failure
+- missing token/config: local setup problem
 
 ## Workflow Guarantees
 
