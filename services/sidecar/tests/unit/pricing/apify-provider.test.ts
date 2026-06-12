@@ -35,8 +35,9 @@ describe('Apify pricing provider', () => {
       Year: '2023',
     },
     listingId: 'LIST-001',
+    listingType: 'single' as const,
     minSoldComps: 9,
-    title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
   };
 
   it('builds expected actor input from pricing context', () => {
@@ -50,10 +51,10 @@ describe('Apify pricing provider', () => {
         Year: '2023',
       },
       itemSpecifics: baseInput.itemSpecifics,
-      keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
+      keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
       listingId: 'LIST-001',
       minSoldComps: 9,
-      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
     });
   });
 
@@ -76,7 +77,7 @@ describe('Apify pricing provider', () => {
     expect(runActor).toHaveBeenCalledWith(
       expect.objectContaining({
         actorInput: expect.objectContaining({
-          keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
+          keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
           listingId: 'LIST-001',
         }),
       })
@@ -93,9 +94,111 @@ describe('Apify pricing provider', () => {
       conditionId: '4000',
     });
 
-    expect(actorInput.keywords).toEqual(['2023 Panini Prizm Victor Wembanyama Rookie Card 136']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 raw']);
     expect(actorInput.keywords[0]).not.toContain('category:183050');
     expect(actorInput.keywords[0]).not.toContain('condition:4000');
+  });
+
+  it('de-dupes repeated parallel signals across title and specifics', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        ...baseInput.itemSpecifics,
+        Features: ['Silver', 'Prizm'],
+        'Parallel/Variety': 'Silver Prizm',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Silver Prizm Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 Silver raw']);
+  });
+
+  it('uses raw signal for ungraded cards without grader grade', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        ...baseInput.itemSpecifics,
+        'Card Condition': 'NEAR_MINT_OR_BETTER',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 raw']);
+    expect(actorInput.keywords[0]).not.toContain('PSA');
+  });
+
+  it('uses graded signal without raw when grader and grade exist', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      itemSpecifics: {
+        ...baseInput.itemSpecifics,
+        'Card Condition': 'NEAR_MINT_OR_BETTER',
+      },
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 PSA 10']);
+    expect(actorInput.keywords[0]).not.toContain('raw');
+  });
+
+  it('builds query without player when missing', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '136',
+        Manufacturer: 'Panini',
+        Set: 'Prizm',
+        Year: '2023',
+      },
+      title: '2023 Panini Prizm Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['2023 Panini Prizm #136 raw']);
+  });
+
+  it('omits malformed card number fragments when missing', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        Manufacturer: 'Panini',
+        Player: 'Victor Wembanyama',
+        Set: 'Prizm',
+        Year: '2023',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm raw']);
+    expect(actorInput.keywords[0]).not.toContain('# ');
+  });
+
+  it('keeps lot queries broader and includes lot signal', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      listingType: 'lot',
+      title: '2023 Panini Prizm Victor Wembanyama Lot of 3 Rookie Cards',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm raw lot']);
+    expect(actorInput.keywords[0]).not.toContain('#136');
+  });
+
+  it('falls back to minimal safe query when identity sparse', () => {
+    const actorInput = buildApifyActorInput({
+      categoryId: '261328',
+      conditionId: null,
+      itemSpecifics: undefined,
+      listingId: 'LIST-EMPTY',
+      listingType: 'single',
+      minSoldComps: 8,
+      title: 'Vintage trading card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Vintage']);
   });
 
   it('uses Apify default min sold comps of 8 when input omits minSoldComps', () => {

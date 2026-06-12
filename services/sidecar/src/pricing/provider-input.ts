@@ -74,6 +74,7 @@ export function buildPricingProviderInput(
     conditionId: listing.condition_id,
     itemSpecifics,
     listingId,
+    listingType: listing.listing_type,
     minSoldComps,
     title,
   };

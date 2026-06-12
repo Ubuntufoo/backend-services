@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  GRADED_TRADING_CARD_CONDITION_ID,
+  RAW_TRADING_CARD_CONDITION_ID,
+  TRADING_CARD_CONDITION_ASPECT_KEY,
+} from '@/listings/trading-card-conditions.js';
 
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
@@ -16,6 +21,91 @@ const QUERY_ITEM_SPECIFIC_KEYS = [
   'Set',
   'Parallel/Variety',
 ] as const;
+const QUERY_TITLE_STOPWORDS = new Set([
+  'and',
+  'baseball',
+  'basketball',
+  'card',
+  'cards',
+  'football',
+  'for',
+  'hockey',
+  'insert',
+  'mlb',
+  'nba',
+  'nfl',
+  'nhl',
+  'of',
+  'rc',
+  'rookie',
+  'soccer',
+  'sports',
+  'tcg',
+  'the',
+  'trading',
+]);
+const SET_LINE_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Brand', 'Set', 'Series', 'Product', 'Product Line'] as const;
+const PARALLEL_ITEM_SPECIFIC_KEYS = [
+  'Parallel/Variety',
+  'Insert Set',
+  'Features',
+  'Series',
+  'Product',
+  'Product Line',
+  'Variation',
+] as const;
+const PARALLEL_TERMS = [
+  'Topps Chrome',
+  'Bowman Chrome',
+  'Rated Rookie',
+  'Blue Velocity',
+  'Red Ice',
+  'Pink Ice',
+  'Fast Break',
+  'Tiger Stripe',
+  'Cracked Ice',
+  'Photo Variation',
+  'X-Fractor',
+  'Die-Cut',
+  'Prizm',
+  'Silver',
+  'Refractor',
+  'Mosaic',
+  'Optic',
+  'Select',
+  'Chrome',
+  'Concourse',
+  'Courtside',
+  'Genesis',
+  'Checkerboard',
+  'Kaboom',
+  'Downtown',
+  'Color Blast',
+  'Shimmer',
+  'Sparkle',
+  'Disco',
+  'Mojo',
+  'Scope',
+  'Impact',
+  'Holo',
+  'Foil',
+  'Negative',
+  'Sepia',
+  'Hyper',
+  'Wave',
+  'Pink',
+  'Gold',
+  'Green',
+  'Blue',
+  'Red',
+  'Black',
+  'White',
+  'Purple',
+  'Orange',
+] as const;
+const GRADE_PATTERN = /\b(PSA|BGS|SGC|CGC|CSG|TAG|HGA)\s*(10|[1-9](?:\.\d)?)\b/i;
+const TITLE_CARD_NUMBER_PATTERN = /(?:^|[\s(#-])#?([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})(?:$|[\s)#-])/g;
+const TITLE_YEAR_PATTERN = /\b(19\d{2}|20\d{2})\b/g;
 
 const moneySchema = z.object({
   value: z.number().finite(),
@@ -347,52 +437,35 @@ async function defaultRunActor(
 }
 
 function buildApifyQuery(input: PricingProviderInput): string {
-  const normalizedTitle = input.title.trim();
-  const normalizedTitleLower = normalizedTitle.toLocaleLowerCase();
-  const queryParts = [normalizedTitle];
+  const title = input.title.trim();
+  const terms = new QueryTermAccumulator();
+  const isLot = isLotListing(input, title);
 
-  for (const key of QUERY_ITEM_SPECIFIC_KEYS) {
-    const value = input.itemSpecifics?.[key];
-    const normalizedValue = Array.isArray(value)
-      ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
-      : value?.trim()
-        ? [value.trim()]
-        : [];
+  terms.add(getFirstSpecificValue(input.itemSpecifics, ['Player']));
+  terms.add(getPrimaryYear(input.itemSpecifics, title));
+  terms.add(getSetLine(input.itemSpecifics, title));
 
-    for (const candidate of normalizedValue) {
-      const candidateLower = candidate.toLocaleLowerCase();
+  if (!isLot) {
+    terms.add(formatCardNumber(getCardNumber(input.itemSpecifics, title)));
+  }
 
-      if (
-        normalizedTitleLower.includes(candidateLower) ||
-        queryParts.some((part) => part.localeCompare(candidate, undefined, { sensitivity: 'accent' }) === 0)
-      ) {
-        continue;
-      }
+  for (const token of getParallelSignals(input.itemSpecifics, title)) {
+    terms.add(token);
+  }
 
-      if (
-        candidateLower.length > 0 &&
-        queryParts.some((part) => part.toLocaleLowerCase().includes(candidateLower))
-      ) {
-        continue;
-      }
+  terms.add(getGradingSignal(input));
 
-      if (
-        candidateLower.length > 0 &&
-        queryParts.some((part) => candidateLower.includes(part.toLocaleLowerCase()))
-      ) {
-        continue;
-      }
+  if (isLot) {
+    terms.add('lot');
+  }
 
-      if (
-        candidateLower.length > 0 &&
-        !queryParts.some((part) => part.localeCompare(candidate, undefined, { sensitivity: 'accent' }) === 0)
-      ) {
-        queryParts.push(candidate);
-      }
+  if (terms.isEmpty()) {
+    for (const token of tokenizeTitle(title)) {
+      terms.add(token);
     }
   }
 
-  return queryParts.join(' ').replace(/\s+/g, ' ').trim();
+  return terms.toString() || title;
 }
 
 function buildFacets(
@@ -519,6 +592,197 @@ function normalizeNumericValue(value: string | number): number | null {
   const normalized = typeof value === 'number' ? value : Number(value.trim());
 
   return Number.isFinite(normalized) ? normalized : null;
+}
+
+class QueryTermAccumulator {
+  readonly #terms: string[] = [];
+  readonly #seen = new Set<string>();
+
+  add(value: string | undefined): void {
+    const normalized = value?.trim().replace(/\s+/g, ' ');
+
+    if (!normalized) {
+      return;
+    }
+
+    const key = normalized.toLocaleLowerCase();
+    if (this.#seen.has(key)) {
+      return;
+    }
+
+    if (this.#terms.some((term) => containsWholePhrase(term, normalized))) {
+      return;
+    }
+
+    this.#terms.push(normalized);
+    this.#seen.add(key);
+  }
+
+  isEmpty(): boolean {
+    return this.#terms.length === 0;
+  }
+
+  toArray(): string[] {
+    return [...this.#terms];
+  }
+
+  toString(): string {
+    return this.#terms.join(' ');
+  }
+}
+
+function getSpecificValues(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  keys: readonly string[]
+): string[] {
+  if (!itemSpecifics) {
+    return [];
+  }
+
+  return keys.flatMap((key) => normalizeSpecificValue(itemSpecifics[key]));
+}
+
+function normalizeSpecificValue(value: string | string[] | null | undefined): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  }
+
+  const normalized = value?.trim();
+  return normalized ? [normalized] : [];
+}
+
+function getFirstSpecificValue(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  keys: readonly string[]
+): string | undefined {
+  return getSpecificValues(itemSpecifics, keys)[0];
+}
+
+function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+  const specificYear = getFirstSpecificValue(itemSpecifics, ['Year']);
+
+  if (specificYear) {
+    const match = specificYear.match(/\b(19\d{2}|20\d{2})\b/);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return title.match(TITLE_YEAR_PATTERN)?.[0];
+}
+
+function getSetLine(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+  const terms = new QueryTermAccumulator();
+
+  for (const value of getSpecificValues(itemSpecifics, SET_LINE_ITEM_SPECIFIC_KEYS)) {
+    terms.add(value);
+  }
+
+  if (!terms.isEmpty()) {
+    return terms.toString();
+  }
+
+  return tokenizeTitle(title)
+    .filter((token) => !/^\d{4}$/.test(token))
+    .slice(0, 4)
+    .join(' ');
+}
+
+function getCardNumber(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+  const specific = sanitizeCardNumber(getFirstSpecificValue(itemSpecifics, ['Card Number']));
+  const primaryYear = getPrimaryYear(itemSpecifics, title);
+
+  if (specific) {
+    return specific;
+  }
+
+  for (const match of title.matchAll(TITLE_CARD_NUMBER_PATTERN)) {
+    const candidate = sanitizeCardNumber(match[1]);
+    if (candidate && candidate !== primaryYear) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function sanitizeCardNumber(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^#+/, '');
+  return normalized && /^[A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4}$/.test(normalized) ? normalized : undefined;
+}
+
+function formatCardNumber(value: string | undefined): string | undefined {
+  return value ? `#${value.replace(/^#+/, '')}` : undefined;
+}
+
+function getParallelSignals(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string[] {
+  const terms = new QueryTermAccumulator();
+
+  for (const value of getSpecificValues(itemSpecifics, PARALLEL_ITEM_SPECIFIC_KEYS)) {
+    for (const term of extractParallelTerms(value)) {
+      terms.add(term);
+    }
+  }
+
+  for (const term of extractParallelTerms(title)) {
+    terms.add(term);
+  }
+
+  return terms.toArray();
+}
+
+function extractParallelTerms(value: string): string[] {
+  return PARALLEL_TERMS.filter((term) => includesWholeTerm(value, term));
+}
+
+function includesWholeTerm(source: string, candidate: string): boolean {
+  const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?:^|[^A-Za-z0-9])${escaped}(?:$|[^A-Za-z0-9])`, 'i').test(source);
+}
+
+function containsWholePhrase(source: string, candidate: string): boolean {
+  const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i').test(source);
+}
+
+function getGradingSignal(input: PricingProviderInput): string | undefined {
+  const gradedFromTitle = extractTitleGrade(input.title);
+
+  if (input.conditionId?.trim() === GRADED_TRADING_CARD_CONDITION_ID) {
+    return gradedFromTitle;
+  }
+
+  if (input.conditionId?.trim() === RAW_TRADING_CARD_CONDITION_ID) {
+    return 'raw';
+  }
+
+  if (gradedFromTitle) {
+    return gradedFromTitle;
+  }
+
+  if (getFirstSpecificValue(input.itemSpecifics, [TRADING_CARD_CONDITION_ASPECT_KEY])) {
+    return 'raw';
+  }
+
+  return undefined;
+}
+
+function extractTitleGrade(title: string): string | undefined {
+  const match = title.match(GRADE_PATTERN);
+  return match ? `${match[1].toUpperCase()} ${match[2]}` : undefined;
+}
+
+function isLotListing(input: PricingProviderInput, title: string): boolean {
+  return input.listingType === 'lot' || /\blot\b|\blot of\b|\bbundle\b|\bmultiple\b/i.test(title);
+}
+
+function tokenizeTitle(title: string): string[] {
+  return title
+    .replace(/[#/()-]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1)
+    .filter((token) => !QUERY_TITLE_STOPWORDS.has(token.toLocaleLowerCase()));
 }
 
 async function readResponseText(response: { text(): Promise<string> }): Promise<string> {
