@@ -232,7 +232,7 @@ describe('loadEnv', () => {
     expect(env.APIFY_ENABLED).toBe('false');
     expect(env.APIFY_TOKEN).toBeUndefined();
     expect(env.APIFY_PRICE_ACTOR_ID).toBeUndefined();
-    expect(env.APIFY_MIN_SOLD_COMPS).toBe('12');
+    expect(env.APIFY_MIN_SOLD_COMPS).toBe('8');
     expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('120');
   });
 
@@ -249,7 +249,7 @@ describe('loadEnv', () => {
     });
 
     expect(env.APIFY_ENABLED).toBe('false');
-    expect(env.APIFY_MIN_SOLD_COMPS).toBe('12');
+    expect(env.APIFY_MIN_SOLD_COMPS).toBe('8');
     expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('120');
   });
 

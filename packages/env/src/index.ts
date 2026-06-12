@@ -106,7 +106,7 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     APIFY_ENABLED: falseByDefaultBooleanString(),
     APIFY_TOKEN: optionalNonEmptyString(),
     APIFY_PRICE_ACTOR_ID: optionalNonEmptyString(),
-    APIFY_MIN_SOLD_COMPS: optionalPositiveIntegerStringWithDefault('APIFY_MIN_SOLD_COMPS', '12'),
+    APIFY_MIN_SOLD_COMPS: optionalPositiveIntegerStringWithDefault('APIFY_MIN_SOLD_COMPS', '8'),
     APIFY_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
       'APIFY_PRICE_TIMEOUT_SECONDS',
       '120'
