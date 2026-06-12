@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxBootstrapApi } from '@/ebay/sandbox-bootstrap.js';
 import {
   ensureDefaultInventoryLocation,
@@ -65,8 +65,16 @@ function createDataAccess(): {
 }
 
 describe('sandbox bootstrap', () => {
+  let originalEnv: NodeJS.ProcessEnv;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    originalEnv = { ...process.env };
+    process.env.EBAY_REFRESH_TOKEN = 'test-refresh-token';
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
   it('persists stored policy ids and location key when they are still valid', async () => {

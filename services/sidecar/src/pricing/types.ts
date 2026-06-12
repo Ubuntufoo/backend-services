@@ -1,6 +1,7 @@
 export interface PricingProviderInput {
   listingId: string;
   title: string;
+  listingType?: 'single' | 'lot' | null;
   categoryId?: string | null;
   conditionId?: string | null;
   itemSpecifics?: Record<string, string | string[] | null | undefined>;
