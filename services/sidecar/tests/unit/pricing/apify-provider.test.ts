@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,6 +11,17 @@ import {
   parseApifyActorOutput,
   redactSensitiveText,
 } from '@/pricing/index.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const fixtureDir = path.resolve(__dirname, '../../fixtures/apify');
+const soldCompsFixture = JSON.parse(
+  readFileSync(path.join(fixtureDir, 'sold-comps-single-000007.json'), 'utf8')
+) as {
+  items: Array<Record<string, unknown>>;
+  query: string;
+  run: Record<string, unknown>;
+};
 
 describe('Apify pricing provider', () => {
   const baseInput = {
@@ -22,51 +37,6 @@ describe('Apify pricing provider', () => {
     listingId: 'LIST-001',
     minSoldComps: 9,
     title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
-  };
-
-  const validActorOutput = {
-    items: [
-      {
-        condition: 'Pre-Owned',
-        conditionId: 3000,
-        endedAt: '2026-05-13T00:00:00.000Z',
-        isBestOfferAccepted: false,
-        itemId: '377150575490',
-        keyword: 'Johnny Riddle 1954 Topps #98 St. Louis Cardinals Coach',
-        listingType: 'buy_it_now',
-        scrapedAt: '2026-06-11T20:51:02.556Z',
-        sellerFeedbackScore: 46900,
-        sellerPositivePercent: 99.7,
-        sellerType: null,
-        sellerUsername: 'sbarko',
-        shippingPrice: null,
-        shippingType: 'free',
-        soldCurrency: 'USD',
-        soldPrice: '5.00',
-        thumbnailUrl: 'https://i.ebayimg.com/images/g/T2cAAeSwAaFp8Smi/s-l500.webp',
-        title: '1954 Topps - Johnny Riddle #147 - St. Louis Cardinals',
-        totalPrice: '5.00',
-        url: 'https://www.ebay.com/itm/377150575490?nordt=true',
-      },
-      {
-        condition: 'Pre-Owned',
-        endedAt: '2026-05-12T00:00:00.000Z',
-        keyword: 'Johnny Riddle 1954 Topps #98 St. Louis Cardinals Coach',
-        shippingPrice: '4.99',
-        soldCurrency: 'USD',
-        soldPrice: 7.5,
-        title: '1954 Topps Johnny Riddle Cardinals',
-        url: 'https://www.ebay.com/itm/377150575491?nordt=true',
-      },
-    ],
-    query: 'Johnny Riddle 1954 Topps #98 St. Louis Cardinals Coach',
-    run: {
-      finishedAt: '2026-05-20T13:00:03.000Z',
-      itemCount: 2,
-      runId: 'run-123',
-      startedAt: '2026-05-20T13:00:00.000Z',
-      status: 'SUCCEEDED',
-    },
   };
 
   it('builds expected actor input from pricing context', () => {
@@ -88,15 +58,13 @@ describe('Apify pricing provider', () => {
   });
 
   it('omits structured categoryId and conditionId even when eBay ids exist', async () => {
-    const runActor = vi.fn(async () => validActorOutput);
+    const runActor = vi.fn(async () => soldCompsFixture);
     const provider = createApifyPricingProvider(
       {
         actorId: 'actor-123',
         token: 'secret-token',
       },
-      {
-        runActor,
-      }
+      { runActor }
     );
 
     await provider.fetchSoldComps({
@@ -154,16 +122,16 @@ describe('Apify pricing provider', () => {
     });
   });
 
-  it('parses valid actor output into pricing provider result', () => {
-    const result = parseApifyActorOutput(validActorOutput, {
+  it('maps actor-native fixture into internal sold comps', () => {
+    const result = parseApifyActorOutput(soldCompsFixture, {
       actorId: 'actor-123',
-      fetchedAt: '2026-05-20T13:00:04.000Z',
+      fetchedAt: '2026-06-11T20:51:09.000Z',
     });
 
     expect(result).toMatchObject({
-      fetchedAt: '2026-05-20T13:00:04.000Z',
+      fetchedAt: '2026-06-11T20:51:09.000Z',
       provider: 'apify',
-      query: validActorOutput.query,
+      query: soldCompsFixture.query,
     });
     expect(result.soldComps[0]).toEqual({
       condition: 'Pre-Owned',
@@ -181,103 +149,112 @@ describe('Apify pricing provider', () => {
         actorInput: undefined,
       },
       output: {
-        itemCount: 2,
+        itemCount: 7,
         sampleTitles: [
           '1954 Topps - Johnny Riddle #147 - St. Louis Cardinals',
           '1954 Topps Johnny Riddle Cardinals',
+          '1954 Topps Johnny Riddle #147',
         ],
       },
-      run: validActorOutput.run,
+      run: soldCompsFixture.run,
     });
   });
 
   it('maps actor shippingPrice string to internal shippingPrice money shape', () => {
-    const result = parseApifyActorOutput(validActorOutput, {
+    const result = parseApifyActorOutput(soldCompsFixture, {
       actorId: 'actor-123',
-      fetchedAt: '2026-05-20T13:00:04.000Z',
+      fetchedAt: '2026-06-11T20:51:09.000Z',
     });
 
     expect(result.soldComps[1]).toMatchObject({
       shippingPrice: {
         currency: 'USD',
-        value: 4.99,
+        value: 1.99,
+      },
+    });
+  });
+
+  it.each([8, 12])(
+    'accepts fewer-than-requested comps: requested=%s returned=7',
+    async (minSoldComps) => {
+      const provider = createApifyPricingProvider(
+        {
+          actorId: 'actor-123',
+          token: 'secret-token',
+        },
+        {
+          now: () => new Date('2026-06-11T20:51:09.000Z'),
+          runActor: async () => soldCompsFixture,
+        }
+      );
+
+      const result = await provider.fetchSoldComps({
+        ...baseInput,
+        minSoldComps,
+        title: soldCompsFixture.query,
+      });
+
+      expect(result.soldComps).toHaveLength(7);
+    }
+  );
+
+  it('accepts zero-comp actor output without provider failure', () => {
+    const result = parseApifyActorOutput(
+      {
+        items: [],
+        query: soldCompsFixture.query,
+        run: {
+          itemCount: 0,
+          status: 'SUCCEEDED',
+        },
+      },
+      {
+        actorId: 'actor-123',
+        fetchedAt: '2026-06-11T20:51:09.000Z',
+      }
+    );
+
+    expect(result.soldComps).toEqual([]);
+    expect(result.rawResult).toMatchObject({
+      output: {
+        itemCount: 0,
+        sampleTitles: [],
       },
     });
   });
 
   it.each([
-    ['null output', null],
-    ['object instead of item array', { query: validActorOutput.query, run: {}, items: {} }],
-    ['missing soldPrice field', { ...validActorOutput, items: [{ ...validActorOutput.items[0], soldPrice: undefined }] }],
-    ['non-finite soldPrice', { ...validActorOutput, items: [{ ...validActorOutput.items[0], soldPrice: 'NaN' }] }],
-    ['bad endedAt', { ...validActorOutput, items: [{ ...validActorOutput.items[0], endedAt: '' }] }],
-    ['bad url', { ...validActorOutput, items: [{ ...validActorOutput.items[0], url: '' }] }],
+    ['missing title', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], title: undefined }] }],
+    ['missing soldPrice', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldPrice: undefined }] }],
+    ['non-numeric soldPrice', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldPrice: 'free' }] }],
+    ['missing soldCurrency', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldCurrency: undefined }] }],
+    ['missing endedAt', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], endedAt: undefined }] }],
+    ['invalid endedAt', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], endedAt: '2026-13-40' }] }],
+    ['missing url', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], url: undefined }] }],
+    ['invalid url', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], url: 'ftp://example.com/item/1' }] }],
+    ['invalid shippingPrice', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], shippingPrice: 'free' }] }],
   ])('rejects malformed actor output: %s', (_label, payload) => {
     expect(() =>
       parseApifyActorOutput(payload, {
         actorId: 'actor-123',
       })
-    ).toThrow(ApifyPricingProviderError);
-  });
-
-  it('uses injected actor runner and redacts sensitive query fragments in raw result', async () => {
-    const provider = createApifyPricingProvider(
-      {
-        actorId: 'actor-123',
-        token: 'secret-token',
-      },
-      {
-        now: () => new Date('2026-05-20T13:00:04.000Z'),
-        runActor: async () => ({
-          ...validActorOutput,
-          query:
-            'https://market.example/item/123?token=secret-value Bearer super-secret-token',
-        }),
-      }
-    );
-
-    const result = await provider.fetchSoldComps({
-      ...baseInput,
-      title: 'https://market.example/item/123?token=secret-value Bearer super-secret-token',
-    });
-
-    expect(result.provider).toBe('apify');
-    expect(result.rawResult).toMatchObject({
-      input: {
-        actorInput: {
-          keywords: [expect.stringContaining('[redacted-url] Bearer [redacted-token]')],
-        },
-        query: expect.stringContaining('[redacted-url] Bearer [redacted-token]'),
-      },
-    });
-    expect(JSON.stringify(result.rawResult)).not.toContain('secret-value');
-    expect(JSON.stringify(result.rawResult)).not.toContain('super-secret-token');
-  });
-
-  it('surfaces provider failures through typed Apify provider errors', async () => {
-    const provider = createApifyPricingProvider(
-      {
-        actorId: 'actor-123',
-        token: 'secret-token',
-      },
-      {
-        runActor: async () => {
-          throw new Error('Actor failed');
-        },
-      }
-    );
-
-    await expect(provider.fetchSoldComps(baseInput)).rejects.toBeInstanceOf(
-      ApifyPricingProviderError
+    ).toThrowError(
+      expect.objectContaining({
+        category: 'malformed_output',
+        code: 'apify_output_invalid',
+        workflowSafe: true,
+      })
     );
   });
 
   it.each([
     [429, 'rate_limit', 'apify_rate_limited'],
+    [402, 'rate_limit', 'apify_rate_limited'],
     [401, 'auth_config', 'apify_auth_failed'],
-    [504, 'timeout_network', 'apify_timeout'],
+    [403, 'auth_config', 'apify_auth_failed'],
     [503, 'provider_unavailable', 'apify_provider_unavailable'],
-    [418, 'provider_failure', 'apify_http_418'],
+    [502, 'provider_unavailable', 'apify_provider_unavailable'],
+    [504, 'timeout_network', 'apify_timeout'],
   ] as const)('classifies HTTP %s failures', async (status, category, code) => {
     const provider = createApifyPricingProvider(
       {
@@ -289,7 +266,8 @@ describe('Apify pricing provider', () => {
           json: async () => ({}),
           ok: false,
           status,
-          text: async () => `token=secret-value status=${status}`,
+          text: async () =>
+            `Bearer super-secret-token token=secret-value access_token=secret apiKey=secret status=${status}`,
         })) as typeof fetch,
       }
     );
@@ -299,6 +277,28 @@ describe('Apify pricing provider', () => {
       code,
       provider: 'apify',
       query: expect.not.stringContaining('secret-value'),
+      workflowSafe: true,
+    });
+  });
+
+  it('classifies timeout aborts', async () => {
+    const abortError = new Error('Request aborted token=secret-value');
+    abortError.name = 'AbortError';
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        fetch: vi.fn(async () => {
+          throw abortError;
+        }) as typeof fetch,
+      }
+    );
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toMatchObject({
+      category: 'timeout_network',
+      code: 'apify_timeout',
       workflowSafe: true,
     });
   });
@@ -320,6 +320,85 @@ describe('Apify pricing provider', () => {
       category: 'timeout_network',
       code: 'apify_network_error',
       query: expect.not.stringContaining('secret-value'),
+      workflowSafe: true,
+    });
+  });
+
+  it('redacts token-like fragments from raw result', async () => {
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        now: () => new Date('2026-05-20T13:00:04.000Z'),
+        runActor: async () => ({
+          ...soldCompsFixture,
+          query:
+            'https://market.example/item/123?token=secret-value&access_token=secret apiKey=secret-value Bearer super-secret-token',
+        }),
+      }
+    );
+
+    const result = await provider.fetchSoldComps({
+      ...baseInput,
+      title:
+        'https://market.example/item/123?token=secret-value&access_token=secret apiKey=secret-value Bearer super-secret-token',
+    });
+
+    const serialized = JSON.stringify(result.rawResult);
+    expect(serialized).not.toContain('secret-token');
+    expect(serialized).not.toContain('secret-value');
+    expect(serialized).not.toContain('super-secret-token');
+    expect(serialized).toContain('[redacted-url]');
+    expect(serialized).toContain('Bearer [redacted-token]');
+  });
+
+  it('redacts token-like fragments from thrown failure messages', async () => {
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        fetch: vi.fn(async () => ({
+          json: async () => ({}),
+          ok: false,
+          status: 429,
+          text: async () =>
+            'Bearer super-secret-token token=secret-value access_token=secret apiKey=secret',
+        })) as typeof fetch,
+      }
+    );
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toSatisfy((error) => {
+      expect(error).toBeInstanceOf(ApifyPricingProviderError);
+      const message = (error as Error).message;
+      expect(message).not.toContain('secret-token');
+      expect(message).not.toContain('super-secret-token');
+      expect(message).not.toContain('secret-value');
+      expect(message).toContain('Bearer [redacted-token]');
+      return true;
+    });
+  });
+
+  it('surfaces provider failures through typed Apify provider errors', async () => {
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        runActor: async () => {
+          throw new Error('Actor failed');
+        },
+      }
+    );
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toMatchObject({
+      category: 'provider_failure',
+      code: 'apify_provider_failure',
+      workflowSafe: true,
     });
   });
 
@@ -344,5 +423,17 @@ describe('Apify pricing provider', () => {
     ).toBe(
       'Bearer [redacted-token] [redacted-url] [redacted-secret:***] [redacted-secret:12***90]'
     );
+  });
+
+  it('redacts exact token/access-token/apiKey/bearer patterns directly', () => {
+    const redacted = redactSensitiveText(
+      'token=secret-value access_token=secret apiKey=secret Bearer super-secret-token'
+    );
+
+    expect(redacted).not.toContain('secret-value');
+    expect(redacted).not.toContain('super-secret-token');
+    expect(redacted).not.toContain('apiKey=secret');
+    expect(redacted).not.toContain('access_token=secret');
+    expect(redacted).toContain('Bearer [redacted-token]');
   });
 });

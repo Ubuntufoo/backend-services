@@ -95,6 +95,8 @@ Actor output shape excerpt:
 - Structured actor payload intentionally omits `categoryId` and `conditionId` until repo contains explicit mapping from eBay taxonomy/condition ids to actor-accepted values.
 - Live Apify default requested sold comps: `8` when `APIFY_MIN_SOLD_COMPS` unset.
 - Smoke script exists only to verify live provider path safely; it must not enqueue jobs, mutate listings, or persist `listing_price_research`.
+- Offline Apify fixtures under `services/sidecar/tests/fixtures/apify/` exist for unit coverage only; live calls belong only in `pnpm pricing:smoke-apify`.
+- Fewer-than-requested sold comps remain valid provider success; downstream stats/confidence decides usefulness.
 
 ## Workflow Guarantees
 
