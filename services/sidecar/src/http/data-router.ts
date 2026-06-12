@@ -2,7 +2,9 @@ import { randomUUID } from 'crypto';
 import {
   DEFAULT_APP_SETTINGS_ID,
   ListingWorkflowTransitionConflictError,
+  isPricingServiceEnabled,
   type ListingInsert,
+  type AppSettingsRow,
   type ListingUpdate,
 } from '@ebay-inventory/data';
 import type { GeminiUsageLastAttempt } from '@ebay-inventory/data';
@@ -155,6 +157,13 @@ function mapSellerEditableListingFields(
     price: input.price,
     seller_hints: input.sellerHints,
     title: input.title,
+  };
+}
+
+function serializeAppSettings(appSettings: AppSettingsRow): AppSettingsRow {
+  return {
+    ...appSettings,
+    pricing_service_enabled: isPricingServiceEnabled(appSettings),
   };
 }
 
@@ -474,7 +483,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      res.json(appSettings);
+      res.json(serializeAppSettings(appSettings));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -494,7 +503,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         DEFAULT_APP_SETTINGS_ID
       );
 
-      res.json(appSettings);
+      res.json(serializeAppSettings(appSettings));
     } catch (error) {
       sendRouteError(res, error);
     }
