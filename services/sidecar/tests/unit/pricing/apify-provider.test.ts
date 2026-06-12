@@ -142,6 +142,16 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
+  it('falls back to generic graded signal when graded title lacks grader and grade', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 graded']);
+    expect(actorInput.keywords[0]).not.toContain('raw');
+  });
+
   it('builds query without player when missing', () => {
     const actorInput = buildApifyActorInput({
       ...baseInput,

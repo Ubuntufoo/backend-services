@@ -749,7 +749,7 @@ function getGradingSignal(input: PricingProviderInput): string | undefined {
   const gradedFromTitle = extractTitleGrade(input.title);
 
   if (input.conditionId?.trim() === GRADED_TRADING_CARD_CONDITION_ID) {
-    return gradedFromTitle;
+    return gradedFromTitle ?? 'graded';
   }
 
   if (input.conditionId?.trim() === RAW_TRADING_CARD_CONDITION_ID) {
