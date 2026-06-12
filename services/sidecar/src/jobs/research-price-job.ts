@@ -32,6 +32,7 @@ import {
 const DEFAULT_MIN_SOLD_COMPS = 12;
 const APIFY_PROVIDER_NAME = 'apify';
 const FIXTURE_PROVIDER_NAME = 'fixture';
+const DEFAULT_PRICING_SERVICE_ENABLED = true;
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
 const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([APIFY_PROVIDER_NAME, FIXTURE_PROVIDER_NAME]);
 const jobLogger = createLogger('Job');
@@ -74,6 +75,14 @@ function asNonEmptyString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isPricingServiceEnabled(
+  appSettings: { pricing_service_enabled?: boolean | null } | null | undefined
+): boolean {
+  return typeof appSettings?.pricing_service_enabled === 'boolean'
+    ? appSettings.pricing_service_enabled
+    : DEFAULT_PRICING_SERVICE_ENABLED;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -254,6 +263,7 @@ function buildFailedLlmReasoningJson(
 function buildResearchPriceError(
   code:
     | typeof JOB_ERROR_CODES.RESEARCH_PRICE_FAILED
+    | typeof JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED
     | typeof JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE
     | typeof JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID
     | typeof JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND
@@ -261,7 +271,36 @@ function buildResearchPriceError(
   message: string,
   context: Record<string, Json> = {}
 ): SidecarJobError {
-  return new SidecarJobError(code, 'terminal', message, context);
+  return new SidecarJobError(
+    code,
+    code === JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_ELIGIBLE ||
+      code === JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED
+      ? 'user_fixable'
+      : 'terminal',
+    message,
+    context
+  );
+}
+
+async function assertPricingServiceEnabled(
+  dependencies: ResearchPriceJobDependencies,
+  job: JobRow
+): Promise<void> {
+  const appSettings = await dependencies.dataAccess.appSettings.get();
+
+  if (isPricingServiceEnabled(appSettings)) {
+    return;
+  }
+
+  throw buildResearchPriceError(
+    JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
+    `Pricing service disabled. research_price skipped for job "${job.id}".`,
+    {
+      pricing_service_enabled: false,
+      settings_source: appSettings ? 'app_settings' : 'default',
+      workflow_safe: true,
+    }
+  );
 }
 
 function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): PricingProvider {
@@ -416,10 +455,19 @@ export async function runResearchPriceJob(
 
   let pricingProvider: PricingProvider;
   try {
+    await assertPricingServiceEnabled(dependencies, job);
     assertResearchPriceListingEligible(listing);
     pricingProvider = resolvePricingProvider(dependencies);
   } catch (error) {
     const jobError = classifyJobError(job.job_type, error);
+    if (jobError.code === JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED) {
+      jobLogger.info('Skipped research_price job because pricing service is disabled.', {
+        event: 'research_price_disabled',
+        jobId: job.id,
+        listingId,
+        pricingServiceEnabled: false,
+      });
+    }
     const failedJob = await dependencies.dataAccess.jobs.fail(
       job.id,
       toJobErrorUpdateInput(jobError, errorAt)

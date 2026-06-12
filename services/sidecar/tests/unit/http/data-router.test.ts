@@ -82,6 +82,7 @@ const appSettingsRow = {
   default_return_policy_id: null,
   default_shipping_profile: null,
   ebay_marketplace_id: 'EBAY_US',
+  ebay_publish_config: null,
   gemini_daily_limit: 500,
   handling_days: 2,
   id: 'default',
@@ -89,6 +90,7 @@ const appSettingsRow = {
   max_order_syncs_per_day: 25,
   merchant_location_key: null,
   office_location_name: null,
+  pricing_service_enabled: true,
   processed_folder_path: '/processed',
   r2_retention_days_after_sold: 30,
   updated_at: '2026-05-17T00:00:00.000Z',
@@ -156,15 +158,23 @@ function createDataAccess(): SidecarDataAccess {
       enqueueGenerateAi: vi.fn(),
       enqueueProcessImages: vi.fn(),
       enqueuePublish: vi.fn(),
+      enqueueResearchPrice: vi.fn(),
       fail: vi.fn(),
       getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
       listDueQueued: vi.fn(),
       listByListingId: vi.fn(),
+      listByListingIds: vi.fn(),
       listStaleRunning: vi.fn(),
       resetForManualRetry: vi.fn(),
       requeue: vi.fn(),
+      updateGeminiAttemptAudit: vi.fn(),
       update: vi.fn(),
+    },
+    listingPriceResearch: {
+      create: vi.fn(),
+      markFailed: vi.fn(),
+      markSucceeded: vi.fn(),
     },
     orders: {
       create: vi.fn(),
@@ -174,7 +184,10 @@ function createDataAccess(): SidecarDataAccess {
     appSettings: {
       create: vi.fn(),
       get: vi.fn(async () => appSettingsRow),
-      update: vi.fn(),
+      update: vi.fn(async (changes) => ({
+        ...appSettingsRow,
+        ...changes,
+      })),
     },
   };
 }
@@ -1324,6 +1337,48 @@ describe('data API router', () => {
       error: 'not_found',
       message: 'App settings "default" were not found.',
     });
+  });
+
+  it('updates pricing_service_enabled through app settings', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/app-settings').send({
+      pricingServiceEnabled: false,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 'default',
+      pricing_service_enabled: false,
+    });
+    expect(dataAccess.appSettings.update).toHaveBeenCalledWith(
+      {
+        pricing_service_enabled: false,
+      },
+      'default'
+    );
+  });
+
+  it('rejects invalid app settings update payloads', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/app-settings').send({
+      pricingServiceEnabled: 'false',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: 'pricingServiceEnabled must be a boolean',
+          path: 'pricingServiceEnabled',
+        },
+      ],
+    });
+    expect(dataAccess.appSettings.update).not.toHaveBeenCalled();
   });
 
   it('returns not_found when a listing lookup misses', async () => {

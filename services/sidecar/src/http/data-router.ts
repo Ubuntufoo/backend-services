@@ -14,6 +14,7 @@ import {
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
   listingIdParamsSchema,
+  updatePricingServiceEnabledRequestSchema,
   updateListingRequestSchema,
   updateListingImageUrlsRequestSchema,
   updateListingWorkflowStateRequestSchema,
@@ -472,6 +473,26 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         });
         return;
       }
+
+      res.json(appSettings);
+    } catch (error) {
+      sendRouteError(res, error);
+    }
+  });
+
+  router.patch('/app-settings', async (req: Request, res: Response) => {
+    const body = parseOrSend(res, updatePricingServiceEnabledRequestSchema, req.body);
+    if (!body) {
+      return;
+    }
+
+    try {
+      const appSettings = await getDataAccess().appSettings.update(
+        {
+          pricing_service_enabled: body.pricingServiceEnabled,
+        },
+        DEFAULT_APP_SETTINGS_ID
+      );
 
       res.json(appSettings);
     } catch (error) {

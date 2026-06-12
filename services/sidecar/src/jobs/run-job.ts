@@ -56,6 +56,7 @@ const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
+const DEFAULT_PRICING_SERVICE_ENABLED = true;
 const jobLogger = createLogger('Job');
 
 type GenerateListingDraftFn = (
@@ -112,6 +113,14 @@ function asNonEmptyString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isPricingServiceEnabled(
+  appSettings: { pricing_service_enabled?: boolean | null } | null | undefined
+): boolean {
+  return typeof appSettings?.pricing_service_enabled === 'boolean'
+    ? appSettings.pricing_service_enabled
+    : DEFAULT_PRICING_SERVICE_ENABLED;
 }
 
 function getListingImageUrls(listing: ListingRow): string[] {
@@ -477,12 +486,24 @@ async function enqueueResearchPriceAfterGenerate(
   }
 
   try {
+    const appSettings = await dataAccess.appSettings.get();
+    if (!isPricingServiceEnabled(appSettings)) {
+      jobLogger.info('Skipped research_price enqueue after generate_ai because pricing service is disabled.', {
+        event: 'research_price_enqueue_skipped',
+        listingId: listing.listing_id,
+        pricingServiceEnabled: false,
+        settingsSource: appSettings ? 'app_settings' : 'default',
+      });
+      return;
+    }
+
     await dataAccess.jobs.enqueueResearchPrice(listing.listing_id);
   } catch (error) {
     jobLogger.warn('Failed to enqueue research_price after generate_ai success.', {
       error: error instanceof Error ? error.message : String(error),
       listingId: listing.listing_id,
       phase: 'post_generate_ai_enqueue',
+      pricingServiceEnabled: DEFAULT_PRICING_SERVICE_ENABLED,
     });
   }
 }

@@ -278,6 +278,7 @@ export type Database = {
           max_order_syncs_per_day: number | null;
           merchant_location_key: string | null;
           office_location_name: string | null;
+          pricing_service_enabled: boolean;
           processed_folder_path: string | null;
           r2_retention_days_after_sold: number | null;
           updated_at: string;
@@ -298,6 +299,7 @@ export type Database = {
           max_order_syncs_per_day?: number | null;
           merchant_location_key?: string | null;
           office_location_name?: string | null;
+          pricing_service_enabled?: boolean;
           processed_folder_path?: string | null;
           r2_retention_days_after_sold?: number | null;
           updated_at?: string;
@@ -318,6 +320,7 @@ export type Database = {
           max_order_syncs_per_day?: number | null;
           merchant_location_key?: string | null;
           office_location_name?: string | null;
+          pricing_service_enabled?: boolean;
           processed_folder_path?: string | null;
           r2_retention_days_after_sold?: number | null;
           updated_at?: string;

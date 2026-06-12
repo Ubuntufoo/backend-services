@@ -7,6 +7,17 @@ import {
 } from './shared.js';
 
 export const DEFAULT_APP_SETTINGS_ID = 'default';
+export const DEFAULT_PRICING_SERVICE_ENABLED = true;
+
+export function isPricingServiceEnabled(
+  appSettings: Pick<AppSettingsRow, 'pricing_service_enabled'> | null | undefined
+): boolean {
+  if (typeof appSettings?.pricing_service_enabled === 'boolean') {
+    return appSettings.pricing_service_enabled;
+  }
+
+  return DEFAULT_PRICING_SERVICE_ENABLED;
+}
 
 export async function createAppSettings(
   client: SupabaseDataClient,
