@@ -1,4 +1,10 @@
-import type { JobRow, Json, ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
+import {
+  isPricingServiceEnabled,
+  type JobRow,
+  type Json,
+  type ListingPriceResearchRow,
+  type ListingRow,
+} from '@ebay-inventory/data';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
@@ -32,7 +38,6 @@ import {
 const DEFAULT_MIN_SOLD_COMPS = 12;
 const APIFY_PROVIDER_NAME = 'apify';
 const FIXTURE_PROVIDER_NAME = 'fixture';
-const DEFAULT_PRICING_SERVICE_ENABLED = true;
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
 const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([APIFY_PROVIDER_NAME, FIXTURE_PROVIDER_NAME]);
 const jobLogger = createLogger('Job');
@@ -75,14 +80,6 @@ function asNonEmptyString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isPricingServiceEnabled(
-  appSettings: { pricing_service_enabled?: boolean | null } | null | undefined
-): boolean {
-  return typeof appSettings?.pricing_service_enabled === 'boolean'
-    ? appSettings.pricing_service_enabled
-    : DEFAULT_PRICING_SERVICE_ENABLED;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,5 +1,6 @@
 import {
   AiModelRouteNotFoundError,
+  isPricingServiceEnabled,
   type AiModelAttemptRow,
   type GeminiJobAttemptAuditUpdate,
   type GeminiModelAttempt,
@@ -56,7 +57,6 @@ const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
-const DEFAULT_PRICING_SERVICE_ENABLED = true;
 const jobLogger = createLogger('Job');
 
 type GenerateListingDraftFn = (
@@ -113,14 +113,6 @@ function asNonEmptyString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isPricingServiceEnabled(
-  appSettings: { pricing_service_enabled?: boolean | null } | null | undefined
-): boolean {
-  return typeof appSettings?.pricing_service_enabled === 'boolean'
-    ? appSettings.pricing_service_enabled
-    : DEFAULT_PRICING_SERVICE_ENABLED;
 }
 
 function getListingImageUrls(listing: ListingRow): string[] {
@@ -503,7 +495,7 @@ async function enqueueResearchPriceAfterGenerate(
       error: error instanceof Error ? error.message : String(error),
       listingId: listing.listing_id,
       phase: 'post_generate_ai_enqueue',
-      pricingServiceEnabled: DEFAULT_PRICING_SERVICE_ENABLED,
+      pricingServiceEnabled: true,
     });
   }
 }
