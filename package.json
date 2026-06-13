@@ -25,6 +25,7 @@
     "ebay:diagnose-sandbox": "pnpm --filter sidecar ebay:diagnose-sandbox",
     "ebay:diagnose-sandbox-config": "pnpm --filter sidecar ebay:diagnose-sandbox-config",
     "pricing:diagnose-apify-config": "pnpm --filter sidecar pricing:diagnose-apify-config",
+    "pricing:price-one": "pnpm --filter sidecar pricing:price-one",
     "pricing:smoke-apify": "pnpm --filter sidecar pricing:smoke-apify",
     "ebay:cleanup-sandbox": "pnpm --filter sidecar ebay:cleanup-sandbox",
     "ebay:list-live-publish-config": "pnpm --filter sidecar ebay:list-live-publish-config",
