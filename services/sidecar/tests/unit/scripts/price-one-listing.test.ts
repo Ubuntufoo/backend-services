@@ -130,7 +130,7 @@ describe('price one listing script', () => {
         createPricingProvider: expect.any(Function),
         dataAccess: {},
         now: expect.any(Function),
-        pricingProviderMinSoldComps: 8,
+        pricingProviderRequestedCompCount: 8,
       }),
       {
         executionSource: 'cli',

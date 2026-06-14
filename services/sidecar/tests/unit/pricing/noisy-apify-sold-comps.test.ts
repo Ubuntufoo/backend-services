@@ -23,14 +23,14 @@ describe('pricing noisy Apify-like sold comps fixture', () => {
       '2024 Topps Chrome Rookie I',
     ]);
     expect(normalized.rejected).toEqual([
-      { index: 1, reason: 'blank_title' },
-      { index: 2, reason: 'invalid_price' },
-      { index: 3, reason: 'invalid_price' },
-      { index: 4, reason: 'invalid_price' },
-      { index: 7, reason: 'invalid_shipping' },
-      { index: 8, reason: 'invalid_sold_date' },
-      { index: 9, reason: 'invalid_listing_url' },
-      { index: 12, reason: 'invalid_listing_url' },
+      { index: 1, reason: 'blank_title', title: null },
+      { index: 2, reason: 'invalid_price', title: 'Zero Price Record' },
+      { index: 3, reason: 'invalid_price', title: 'Negative Price Record' },
+      { index: 4, reason: 'invalid_price', title: 'Infinite Price Record' },
+      { index: 7, reason: 'invalid_shipping', title: 'Negative Shipping Record' },
+      { index: 8, reason: 'invalid_sold_date', title: 'Invalid Sold Date Record' },
+      { index: 9, reason: 'invalid_listing_url', title: 'Invalid URL Record' },
+      { index: 12, reason: 'invalid_listing_url', title: 'Non HTTP URL Record' },
     ]);
   });
 

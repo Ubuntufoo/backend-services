@@ -6,11 +6,11 @@ import {
 } from '@/listings/trading-card-conditions.js';
 import { createLogger } from '@/utils/logger.js';
 
+import { DEFAULT_APIFY_SOLD_COMP_COUNT } from './apify-config.js';
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
 const APIFY_PROVIDER_NAME = 'apify';
 const DEFAULT_TIMEOUT_SECONDS = 120;
-const DEFAULT_MIN_SOLD_COMPS = 8;
 const ISO_SOLD_DATE_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
@@ -221,7 +221,7 @@ export interface ApifyActorOutputMeta {
 
 export interface ApifyPricingProviderConfig {
   actorId: string;
-  minSoldComps?: number;
+  requestedCompCount?: number;
   timeoutSeconds?: number;
   token: string;
 }
@@ -275,7 +275,7 @@ export class ApifyPricingProviderError extends Error {
 
 export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInput {
   return {
-    count: input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS,
+    count: input.requestedCompCount ?? DEFAULT_APIFY_SOLD_COMP_COUNT,
     ebaySite: 'ebay.com',
     itemCondition: 'used',
     keywords: [buildApifyQuery(input)],
@@ -284,7 +284,6 @@ export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInp
 }
 
 function buildApifyActorDiagnosticContext(input: PricingProviderInput): ApifyActorDiagnosticContext {
-  const minSoldComps = input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS;
   const facets = buildFacets(input.itemSpecifics);
 
   return {
@@ -363,7 +362,10 @@ export function createApifyPricingProvider(
 
       const actorInput = buildApifyActorInput({
         ...input,
-        minSoldComps: input.minSoldComps ?? config.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS,
+        requestedCompCount:
+          input.requestedCompCount ??
+          config.requestedCompCount ??
+          DEFAULT_APIFY_SOLD_COMP_COUNT,
       });
       const diagnosticContext = buildApifyActorDiagnosticContext(input);
       const fetchedAt = now().toISOString();
@@ -877,12 +879,12 @@ function getGradingSignal(input: PricingProviderInput): string | undefined {
     return explicitGrade ?? 'graded';
   }
 
-  if (input.conditionId?.trim() === RAW_TRADING_CARD_CONDITION_ID) {
-    return undefined;
-  }
-
   if (explicitGrade) {
     return explicitGrade;
+  }
+
+  if (input.conditionId?.trim() === RAW_TRADING_CARD_CONDITION_ID) {
+    return undefined;
   }
 
   if (getFirstSpecificValue(input.itemSpecifics, [TRADING_CARD_CONDITION_ASPECT_KEY])) {

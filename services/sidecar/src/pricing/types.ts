@@ -5,7 +5,7 @@ export interface PricingProviderInput {
   categoryId?: string | null;
   conditionId?: string | null;
   itemSpecifics?: Record<string, string | string[] | null | undefined>;
-  minSoldComps?: number;
+  requestedCompCount?: number;
 }
 
 export interface RawSoldComp {
@@ -43,6 +43,7 @@ export interface NormalizedSoldComp {
 export interface NormalizeSoldCompsRejectedRow {
   index: number;
   reason: string;
+  title: string | null;
 }
 
 export interface NormalizeSoldCompsResult {

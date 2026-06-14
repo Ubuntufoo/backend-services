@@ -239,13 +239,14 @@ describe('priceListingNow', () => {
         }) as never,
       dataAccess,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProviderRequestedCompCount: 20,
     });
 
     expect(fetchSoldComps).toHaveBeenCalledTimes(1);
     expect(fetchSoldComps).toHaveBeenCalledWith(
       expect.objectContaining({
         listingId: listing.listing_id,
-        minSoldComps: 8,
+        requestedCompCount: 20,
       })
     );
     expect(spies.create).toHaveBeenCalledWith({
@@ -267,7 +268,7 @@ describe('priceListingNow', () => {
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
-  it('uses explicit configured minSoldComps for canonical apify pricing path', async () => {
+  it('uses explicit configured requestedCompCount for canonical apify pricing path', async () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(listing);
     const fetchSoldComps = vi.fn().mockResolvedValue({
@@ -290,18 +291,18 @@ describe('priceListingNow', () => {
         }) as never,
       dataAccess,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
-      pricingProviderMinSoldComps: 8,
+      pricingProviderRequestedCompCount: 20,
     });
 
     expect(fetchSoldComps).toHaveBeenCalledWith(
       expect.objectContaining({
         listingId: listing.listing_id,
-        minSoldComps: 8,
+        requestedCompCount: 20,
       })
     );
   });
 
-  it('falls back to apify default minSoldComps=8 in live provider path', async () => {
+  it('uses canonical 20-count default in normal apify job path even when env override is set', async () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(listing);
     const fetchSoldComps = vi.fn().mockResolvedValue({
@@ -316,7 +317,7 @@ describe('priceListingNow', () => {
       ],
     });
     const originalEnv = process.env.APIFY_MIN_SOLD_COMPS;
-    process.env.APIFY_MIN_SOLD_COMPS = '';
+    process.env.APIFY_MIN_SOLD_COMPS = '8';
 
     try {
       await priceListingNow(listing.listing_id, {
@@ -339,7 +340,7 @@ describe('priceListingNow', () => {
     expect(fetchSoldComps).toHaveBeenCalledWith(
       expect.objectContaining({
         listingId: listing.listing_id,
-        minSoldComps: 8,
+        requestedCompCount: 20,
       })
     );
   });
@@ -367,11 +368,124 @@ describe('priceListingNow', () => {
         }) as never,
       dataAccess,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
-      pricingProviderMinSoldComps: 8,
+      pricingProviderRequestedCompCount: 20,
     });
 
     expect(result.rawCompCount).toBe(12);
     expect(result.acceptedCompCount).toBe(12);
+  });
+
+  it('filters invalid comps before stats and llm input while preserving raw-result audit', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Number': '98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps',
+        Year: '1955',
+      },
+      title: '1955 Topps #98 Johnny Riddle',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const analyze = vi.fn().mockResolvedValue({
+      modelName: 'gemini-test',
+      prompt: { systemInstruction: 'sys', userPrompt: 'user' },
+      rawOutput: {},
+      reasoning: {
+        confidence: 'medium',
+        priceExplanation: 'accepted comps only',
+        rejectedCompIds: [],
+        selectedCompIds: [],
+        suggestedPrice: 19,
+      },
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: 'Johnny Riddle 1955 Topps #98',
+            rawResult: {
+              output: {
+                itemCount: 5,
+                sampleTitles: [
+                  '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+',
+                  '1955 Topps #98 Johnny Riddle PSA 5',
+                  '1955 Topps Set Break #98 Johnny Riddle VG-VGEX St Louis Cardinals',
+                ],
+              },
+            },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 18 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+',
+              },
+              {
+                price: { currency: 'USD', value: 22 },
+                soldDate: '2026-05-31T10:00:00.000Z',
+                title: '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE VG',
+              },
+              {
+                price: { currency: 'USD', value: 60 },
+                soldDate: '2026-05-30T10:00:00.000Z',
+                title: '1955 Topps #98 Johnny Riddle PSA 5',
+              },
+              {
+                price: { currency: 'USD', value: 7 },
+                soldDate: '2026-05-29T10:00:00.000Z',
+                title: '1955 Topps Set Break #98 Johnny Riddle VG-VGEX St Louis Cardinals',
+              },
+              {
+                price: { currency: 'USD', value: 5 },
+                soldDate: '2026-05-28T10:00:00.000Z',
+                title: '1955 Topps #98 Johnny Riddle complete your set',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: {
+        analyze,
+        name: 'test-analyst',
+      },
+    });
+
+    expect(
+      analyze.mock.calls[0]?.[0]?.comps.map((comp: { title: string }) => comp.title)
+    ).toEqual([
+      '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+',
+      '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE VG',
+      '1955 Topps Set Break #98 Johnny Riddle VG-VGEX St Louis Cardinals',
+    ]);
+    expect(analyze).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stats: expect.objectContaining({
+          highSoldPrice: 22,
+          lowSoldPrice: 7,
+          soldCount: 3,
+        }),
+      })
+    );
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        raw_result_json: expect.objectContaining({
+          normalization: expect.objectContaining({
+            acceptedCount: 3,
+            rawCount: 5,
+            sampleRejectedTitles: [
+              '1955 Topps #98 Johnny Riddle PSA 5',
+              '1955 Topps #98 Johnny Riddle complete your set',
+            ],
+          }),
+        }),
+        sold_count: 3,
+      })
+    );
   });
 
   it('classifies and redacts provider failure', async () => {

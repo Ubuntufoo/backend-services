@@ -121,8 +121,11 @@ export class FixturePricingProvider implements PricingProvider {
   readonly name = FIXTURE_PROVIDER_NAME;
 
   async fetchSoldComps(input: PricingProviderInput): Promise<PricingProviderResult> {
-    const minSoldComps = Math.max(input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS, DEFAULT_MIN_SOLD_COMPS);
-    const soldComps = buildFixtureSoldComps(minSoldComps);
+    const requestedCompCount = Math.max(
+      input.requestedCompCount ?? DEFAULT_MIN_SOLD_COMPS,
+      DEFAULT_MIN_SOLD_COMPS
+    );
+    const soldComps = buildFixtureSoldComps(requestedCompCount);
     const query = buildFixtureQuery(input);
 
     return {
@@ -133,7 +136,7 @@ export class FixturePricingProvider implements PricingProvider {
         provider: this.name,
         query,
         listingId: input.listingId,
-        requestedMinSoldComps: input.minSoldComps ?? null,
+        requestedCompCount: input.requestedCompCount ?? null,
         returnedSoldComps: soldComps.length,
         comps: soldComps,
       },
@@ -146,8 +149,8 @@ export function createFixturePricingProvider(): PricingProvider {
   return new FixturePricingProvider();
 }
 
-function buildFixtureSoldComps(minSoldComps: number): RawSoldComp[] {
-  return Array.from({ length: minSoldComps }, (_, index) => {
+function buildFixtureSoldComps(requestedCompCount: number): RawSoldComp[] {
+  return Array.from({ length: requestedCompCount }, (_, index) => {
     const baseComp = BASE_FIXTURE_SOLD_COMPS[index % BASE_FIXTURE_SOLD_COMPS.length];
     const cycle = Math.floor(index / BASE_FIXTURE_SOLD_COMPS.length);
 

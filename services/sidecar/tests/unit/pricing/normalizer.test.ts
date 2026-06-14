@@ -14,8 +14,8 @@ describe('normalizeSoldComps', () => {
 
     const normalized = normalizeSoldComps(result.soldComps);
 
-    expect(normalized.comps.length).toBeGreaterThanOrEqual(12);
-    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps.length).toBeGreaterThan(0);
+    expect(normalized.comps.length + normalized.rejected.length).toBeGreaterThanOrEqual(12);
     expect(normalized.comps[0]).toMatchObject({
       source: 'provider',
       price: { currency: 'USD' },
@@ -33,16 +33,16 @@ describe('normalizeSoldComps', () => {
     const normalized = normalizeSoldComps([buildRawComp({ title: '   ' })]);
 
     expect(normalized.comps).toEqual([]);
-    expect(normalized.rejected).toEqual([{ index: 0, reason: 'blank_title' }]);
+    expect(normalized.rejected).toEqual([{ index: 0, reason: 'blank_title', title: null }]);
   });
 
   it('requires positive finite price', () => {
     expect(normalizeSoldComps([buildRawComp({ price: { value: 0, currency: 'USD' } })]).rejected).toEqual([
-      { index: 0, reason: 'invalid_price' },
+      { index: 0, reason: 'invalid_price', title: 'Sample Title' },
     ]);
     expect(
       normalizeSoldComps([buildRawComp({ price: { value: Number.POSITIVE_INFINITY, currency: 'USD' } })]).rejected,
-    ).toEqual([{ index: 0, reason: 'invalid_price' }]);
+    ).toEqual([{ index: 0, reason: 'invalid_price', title: 'Sample Title' }]);
   });
 
   it('accepts zero shipping', () => {
@@ -63,10 +63,10 @@ describe('normalizeSoldComps', () => {
   it('rejects negative and non-finite shipping', () => {
     expect(
       normalizeSoldComps([buildRawComp({ shippingPrice: { value: -1, currency: 'USD' } })]).rejected,
-    ).toEqual([{ index: 0, reason: 'invalid_shipping' }]);
+    ).toEqual([{ index: 0, reason: 'invalid_shipping', title: 'Sample Title' }]);
     expect(
       normalizeSoldComps([buildRawComp({ shippingPrice: { value: Number.NaN, currency: 'USD' } })]).rejected,
-    ).toEqual([{ index: 0, reason: 'invalid_shipping' }]);
+    ).toEqual([{ index: 0, reason: 'invalid_shipping', title: 'Sample Title' }]);
   });
 
   it('includes shipping in total price when present', () => {
@@ -96,13 +96,13 @@ describe('normalizeSoldComps', () => {
 
   it('rejects invalid soldDate', () => {
     expect(normalizeSoldComps([buildRawComp({ soldDate: 'not-a-date' })]).rejected).toEqual([
-      { index: 0, reason: 'invalid_sold_date' },
+      { index: 0, reason: 'invalid_sold_date', title: 'Sample Title' },
     ]);
     expect(normalizeSoldComps([buildRawComp({ soldDate: '2026-01-15' })]).rejected).toEqual([
-      { index: 0, reason: 'invalid_sold_date' },
+      { index: 0, reason: 'invalid_sold_date', title: 'Sample Title' },
     ]);
     expect(normalizeSoldComps([buildRawComp({ soldDate: '01/15/2026 12:34:56' })]).rejected).toEqual([
-      { index: 0, reason: 'invalid_sold_date' },
+      { index: 0, reason: 'invalid_sold_date', title: 'Sample Title' },
     ]);
   });
 
@@ -123,7 +123,40 @@ describe('normalizeSoldComps', () => {
   it('rejects non-http listingUrl', () => {
     const normalized = normalizeSoldComps([buildRawComp({ listingUrl: 'ftp://example.com/item/1' })]);
 
-    expect(normalized.rejected).toEqual([{ index: 0, reason: 'invalid_listing_url' }]);
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'invalid_listing_url', title: 'Sample Title' },
+    ]);
+  });
+
+  it.each([
+    ['1955 Topps #98 Johnny Riddle PSA 5', 'excluded_graded_listing'],
+    ['1955 Topps #98 Johnny Riddle SGC 4', 'excluded_graded_listing'],
+    ['1955 Topps #98 Johnny Riddle BGS 7.5', 'excluded_graded_listing'],
+    ['1955 Topps #98 Johnny Riddle slabbed', 'excluded_graded_listing'],
+    ['1955 Topps #98 Johnny Riddle You Pick', 'excluded_selection_listing'],
+    ['1955 Topps #98 Johnny Riddle complete your set', 'excluded_selection_listing'],
+    ['1955 Topps #98 Johnny Riddle pick choose', 'excluded_selection_listing'],
+  ])('rejects filtered title "%s"', (title, reason) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([{ index: 0, reason, title }]);
+  });
+
+  it('keeps valid raw exact-card comp title', () => {
+    const title = '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+';
+    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('accepts exact-card set-break comp title', () => {
+    const title = '1955 Topps Set Break #98 Johnny Riddle VG-VGEX St Louis Cardinals';
+    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
   });
 
   it('generates deterministic ids across repeated normalization', () => {
@@ -159,8 +192,8 @@ describe('normalizeSoldComps', () => {
 
     expect(normalized.comps.map((comp) => comp.title)).toEqual(['Accepted A', 'Accepted B']);
     expect(normalized.rejected).toEqual([
-      { index: 1, reason: 'blank_title' },
-      { index: 2, reason: 'invalid_sold_date' },
+      { index: 1, reason: 'blank_title', title: null },
+      { index: 2, reason: 'invalid_sold_date', title: 'Sample Title' },
     ]);
   });
 });

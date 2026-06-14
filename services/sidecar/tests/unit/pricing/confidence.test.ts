@@ -205,7 +205,8 @@ describe('computePricingConfidence', () => {
       stats,
     });
 
-    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps.length).toBeGreaterThan(0);
+    expect(normalized.rejected.length).toBeGreaterThanOrEqual(1);
     expect(result.confidence).toMatch(/^(low|medium|high)$/);
     expect(Array.isArray(result.reasons)).toBe(true);
   });

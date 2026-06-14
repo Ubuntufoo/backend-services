@@ -1,0 +1,1 @@
+export const DEFAULT_APIFY_SOLD_COMP_COUNT = 20;

@@ -20,7 +20,7 @@ describe('Apify pricing diagnostic', () => {
         actor: null,
         attempted: false,
       },
-      minSoldComps: 8,
+      requestedCompCount: 20,
       overallStatus: 'pass',
       timeoutSeconds: 120,
       token: {
@@ -113,7 +113,7 @@ describe('Apify pricing diagnostic', () => {
         },
         attempted: true,
       },
-      minSoldComps: 18,
+      requestedCompCount: 18,
       overallStatus: 'pass',
       timeoutSeconds: 240,
       token: {

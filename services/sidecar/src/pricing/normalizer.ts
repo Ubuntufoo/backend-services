@@ -13,11 +13,40 @@ const ISO_SOLD_DATE_PATTERN =
 
 const REJECTION_REASONS = {
   blankTitle: 'blank_title',
+  excludedGradedListing: 'excluded_graded_listing',
+  excludedSelectionListing: 'excluded_selection_listing',
   invalidPrice: 'invalid_price',
   invalidShipping: 'invalid_shipping',
   invalidSoldDate: 'invalid_sold_date',
   invalidListingUrl: 'invalid_listing_url',
 } as const;
+
+const INVALID_TITLE_PATTERNS = [
+  {
+    pattern: /\b(?:PSA|BGS|SGC|CGC|CSG|TAG|HGA|GMA|KSA|ISA|WCG|BCCG)\b/i,
+    reason: REJECTION_REASONS.excludedGradedListing,
+  },
+  {
+    pattern: /\bgraded\b/i,
+    reason: REJECTION_REASONS.excludedGradedListing,
+  },
+  {
+    pattern: /\bslab(?:bed)?\b/i,
+    reason: REJECTION_REASONS.excludedGradedListing,
+  },
+  {
+    pattern: /\byou\s+pick\b/i,
+    reason: REJECTION_REASONS.excludedSelectionListing,
+  },
+  {
+    pattern: /\bcomplete\s+your\s+set\b/i,
+    reason: REJECTION_REASONS.excludedSelectionListing,
+  },
+  {
+    pattern: /\bpick\s+choose\b/i,
+    reason: REJECTION_REASONS.excludedSelectionListing,
+  },
+] as const;
 
 export function normalizeSoldComps(rawSoldComps: RawSoldComp[]): NormalizeSoldCompsResult {
   const comps: NormalizedSoldComp[] = [];
@@ -27,7 +56,7 @@ export function normalizeSoldComps(rawSoldComps: RawSoldComp[]): NormalizeSoldCo
     const normalized = normalizeSoldComp(rawComp);
 
     if ('reason' in normalized) {
-      rejected.push({ index, reason: normalized.reason });
+      rejected.push({ index, reason: normalized.reason, title: normalized.title });
       return;
     }
 
@@ -43,28 +72,33 @@ export function normalizeSoldComps(rawSoldComps: RawSoldComp[]): NormalizeSoldCo
 
 function normalizeSoldComp(rawComp: RawSoldComp):
   | Omit<NormalizedSoldComp, 'id' | 'source'>
-  | { reason: string } {
+  | { reason: string; title: string | null } {
   const title = rawComp.title.trim();
   if (title.length === 0) {
-    return { reason: REJECTION_REASONS.blankTitle };
+    return { reason: REJECTION_REASONS.blankTitle, title: null };
+  }
+
+  const invalidTitleReason = getInvalidTitleReason(title);
+  if (invalidTitleReason) {
+    return { reason: invalidTitleReason, title };
   }
 
   const price = normalizeMoneyValue(rawComp.price);
   if (!price || price.value <= 0) {
-    return { reason: REJECTION_REASONS.invalidPrice };
+    return { reason: REJECTION_REASONS.invalidPrice, title };
   }
 
   let shippingPrice: NormalizedMoneyValue | null = null;
   if (rawComp.shippingPrice !== undefined && rawComp.shippingPrice !== null) {
     shippingPrice = normalizeMoneyValue(rawComp.shippingPrice);
     if (!shippingPrice || shippingPrice.value < 0) {
-      return { reason: REJECTION_REASONS.invalidShipping };
+      return { reason: REJECTION_REASONS.invalidShipping, title };
     }
   }
 
   const soldDate = normalizeSoldDate(rawComp.soldDate);
   if (!soldDate) {
-    return { reason: REJECTION_REASONS.invalidSoldDate };
+    return { reason: REJECTION_REASONS.invalidSoldDate, title };
   }
 
   const condition = normalizeOptionalTrimmedString(rawComp.condition);
@@ -73,7 +107,7 @@ function normalizeSoldComp(rawComp: RawSoldComp):
   if (listingUrl) {
     const parsed = tryParseUrl(listingUrl);
     if (!parsed || !URL_PROTOCOLS.has(parsed.protocol)) {
-      return { reason: REJECTION_REASONS.invalidListingUrl };
+      return { reason: REJECTION_REASONS.invalidListingUrl, title };
     }
   }
 
@@ -89,6 +123,16 @@ function normalizeSoldComp(rawComp: RawSoldComp):
     condition,
     listingUrl,
   };
+}
+
+function getInvalidTitleReason(title: string): string | null {
+  for (const { pattern, reason } of INVALID_TITLE_PATTERNS) {
+    if (pattern.test(title)) {
+      return reason;
+    }
+  }
+
+  return null;
 }
 
 function normalizeMoneyValue(value: { value: number; currency: string }): NormalizedMoneyValue | null {

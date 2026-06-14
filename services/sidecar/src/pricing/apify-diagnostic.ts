@@ -1,4 +1,5 @@
-const DEFAULT_MIN_SOLD_COMPS = 8;
+import { DEFAULT_APIFY_SOLD_COMP_COUNT } from './apify-config.js';
+
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const APIFY_API_BASE_URL = 'https://api.apify.com/v2';
 
@@ -37,7 +38,7 @@ export interface ApifyPricingDiagnosticReport {
     actor: ApifyActorMetadata | null;
     attempted: boolean;
   };
-  minSoldComps: number | null;
+  requestedCompCount: number | null;
   overallStatus: ApifyPricingDiagnosticStatus;
   timeoutSeconds: number | null;
   token: {
@@ -65,7 +66,7 @@ interface ParsedPositiveInteger {
 export interface RuntimeApifyConfig {
   actorId: string | null;
   enabled: boolean;
-  minSoldComps: ParsedPositiveInteger;
+  requestedCompCount: ParsedPositiveInteger;
   timeoutSeconds: ParsedPositiveInteger;
   token: string | null;
 }
@@ -155,10 +156,10 @@ export function parseRuntimeApifyConfig(env: NodeJS.ProcessEnv): RuntimeApifyCon
   return {
     actorId: asTrimmedString(env.APIFY_PRICE_ACTOR_ID),
     enabled: parseEnabled(env.APIFY_ENABLED),
-    minSoldComps: parsePositiveInteger(
+    requestedCompCount: parsePositiveInteger(
       env.APIFY_MIN_SOLD_COMPS,
       'APIFY_MIN_SOLD_COMPS',
-      DEFAULT_MIN_SOLD_COMPS
+      DEFAULT_APIFY_SOLD_COMP_COUNT
     ),
     timeoutSeconds: parsePositiveInteger(
       env.APIFY_PRICE_TIMEOUT_SECONDS,
@@ -250,12 +251,12 @@ export async function getApifyPricingDiagnostic(
       ),
       buildCheck(
         'apify_min_sold_comps',
-        config.minSoldComps.value === null ? 'fail' : 'pass',
-        config.minSoldComps.value === null
-          ? config.minSoldComps.issues[0]
+        config.requestedCompCount.value === null ? 'fail' : 'pass',
+        config.requestedCompCount.value === null
+          ? config.requestedCompCount.issues[0]
           : 'APIFY_MIN_SOLD_COMPS valid.',
         {
-          value: config.minSoldComps.value,
+          value: config.requestedCompCount.value,
         }
       ),
       buildCheck(
@@ -308,12 +309,12 @@ export async function getApifyPricingDiagnostic(
   checks.push(
     buildCheck(
       'apify_min_sold_comps',
-      config.minSoldComps.value === null ? 'fail' : 'pass',
-      config.minSoldComps.value === null
-        ? config.minSoldComps.issues[0]
+      config.requestedCompCount.value === null ? 'fail' : 'pass',
+      config.requestedCompCount.value === null
+        ? config.requestedCompCount.issues[0]
         : 'APIFY_MIN_SOLD_COMPS valid.',
       {
-        value: config.minSoldComps.value,
+        value: config.requestedCompCount.value,
       }
     )
   );
@@ -333,7 +334,7 @@ export async function getApifyPricingDiagnostic(
   const metadataEligible =
     config.token !== null &&
     config.actorId !== null &&
-    config.minSoldComps.value !== null &&
+    config.requestedCompCount.value !== null &&
     config.timeoutSeconds.value !== null;
 
   if (!metadataEligible) {
@@ -398,7 +399,7 @@ function buildReport(
     checks,
     enabled: config.enabled,
     metadata,
-    minSoldComps: config.minSoldComps.value,
+    requestedCompCount: config.requestedCompCount.value,
     overallStatus: checks.some((check) => check.status === 'fail') ? 'fail' : 'pass',
     timeoutSeconds: config.timeoutSeconds.value,
     token: {

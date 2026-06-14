@@ -8,6 +8,7 @@ import {
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  DEFAULT_APIFY_SOLD_COMP_COUNT,
   buildPricingProviderInput,
   buildPricingTitleFromItemSpecifics,
   computePricingConfidence,
@@ -15,7 +16,6 @@ import {
   createFixturePricingProvider,
   getListingItemSpecifics,
   normalizeSoldComps,
-  parseRuntimeApifyConfig,
   redactSensitiveText as redactPricingSensitiveText,
   type LlmPricingPromptFactKey,
   type LlmPricingPromptFacts,
@@ -37,7 +37,6 @@ import {
 } from './job-errors.js';
 
 const APIFY_PROVIDER_NAME = 'apify';
-const DEFAULT_APIFY_MIN_SOLD_COMPS = 8;
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
 const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([APIFY_PROVIDER_NAME, FIXTURE_PROVIDER_NAME]);
@@ -64,7 +63,7 @@ export interface ResearchPriceJobDependencies {
   now: () => Date;
   pricingAnalyst?: PricingAnalyst;
   pricingProvider?: PricingProvider;
-  pricingProviderMinSoldComps?: number;
+  pricingProviderRequestedCompCount?: number;
 }
 
 export interface RunResearchPriceJobResult {
@@ -146,6 +145,31 @@ function normalizeSuggestedPrice(value: unknown): number | null {
 
 function asJson(value: unknown): Json {
   return value as Json;
+}
+
+function buildPricingResearchRawResult(
+  providerRawResult: unknown,
+  rawCompCount: number,
+  normalized: ReturnType<typeof normalizeSoldComps>
+): Json {
+  const base =
+    typeof providerRawResult === 'object' && providerRawResult !== null && !Array.isArray(providerRawResult)
+      ? { ...providerRawResult }
+      : { providerRawResult };
+
+  return asJson({
+    ...base,
+    normalization: {
+      acceptedCount: normalized.comps.length,
+      rawCount: rawCompCount,
+      rejected: normalized.rejected,
+      sampleAcceptedTitles: normalized.comps.slice(0, 3).map((comp) => comp.title),
+      sampleRejectedTitles: normalized.rejected
+        .map((entry) => entry.title)
+        .filter((title): title is string => Boolean(title))
+        .slice(0, 3),
+    },
+  });
 }
 
 function redactSensitiveText(value: string): string {
@@ -366,19 +390,19 @@ function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): Pri
   return pricingProvider;
 }
 
-function resolvePricingProviderMinSoldComps(
+function resolvePricingProviderRequestedCompCount(
   pricingProvider: PricingProvider,
   dependencies: ResearchPriceJobDependencies
 ): number | undefined {
-  if (typeof dependencies.pricingProviderMinSoldComps === 'number') {
-    return dependencies.pricingProviderMinSoldComps;
+  if (typeof dependencies.pricingProviderRequestedCompCount === 'number') {
+    return dependencies.pricingProviderRequestedCompCount;
   }
 
   if (pricingProvider.name !== APIFY_PROVIDER_NAME) {
     return undefined;
   }
 
-  return parseRuntimeApifyConfig(process.env).minSoldComps.value ?? DEFAULT_APIFY_MIN_SOLD_COMPS;
+  return DEFAULT_APIFY_SOLD_COMP_COUNT;
 }
 
 function assertResearchPriceListingEligible(listing: ListingRow): void {
@@ -491,7 +515,10 @@ export async function priceListingNow(
   assertResearchPriceListingEligible(listing);
 
   const pricingProvider = resolvePricingProvider(dependencies);
-  const pricingProviderMinSoldComps = resolvePricingProviderMinSoldComps(pricingProvider, dependencies);
+  const pricingProviderRequestedCompCount = resolvePricingProviderRequestedCompCount(
+    pricingProvider,
+    dependencies
+  );
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
@@ -518,13 +545,18 @@ export async function priceListingNow(
     });
 
     providerResult = await pricingProvider.fetchSoldComps(
-      buildPricingProviderInput(listing, listingId, pricingProviderMinSoldComps)
+      buildPricingProviderInput(listing, listingId, pricingProviderRequestedCompCount)
     );
     rawCompCount = providerResult.soldComps.length;
 
     const normalized = runNormalizeComps(providerResult.soldComps);
     normalizedCompCount = normalized.comps.length;
     const stats = runComputeStats(normalized.comps);
+    const pricingRawResult = buildPricingResearchRawResult(
+      providerResult.rawResult,
+      rawCompCount,
+      normalized
+    );
     jobLogger.info('Completed research_price provider fetch.', {
       acceptedCompCount: normalizedCompCount,
       event: 'research_price_provider_result',
@@ -623,7 +655,7 @@ export async function priceListingNow(
       median_sold_price: stats.medianSoldPrice,
       pricing_model_name: pricingModelName,
       query: providerResult.query,
-      raw_result_json: asJson(providerResult.rawResult),
+      raw_result_json: pricingRawResult,
       sold_count: stats.soldCount,
       suggested_price: finalSuggestedPrice,
     });

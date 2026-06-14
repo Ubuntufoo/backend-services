@@ -27,22 +27,22 @@ describe('FixturePricingProvider', () => {
     expect(result.rawResult).toMatchObject({
       provider: 'fixture',
       listingId: 'listing-123',
-      requestedMinSoldComps: null,
+      requestedCompCount: null,
       returnedSoldComps: 12,
     });
   });
 
-  it('respects minSoldComps when greater than default floor', async () => {
+  it('respects requestedCompCount when greater than default floor', async () => {
     const provider = new FixturePricingProvider();
 
     const result = await provider.fetchSoldComps({
       ...baseInput,
-      minSoldComps: 15,
+      requestedCompCount: 15,
     });
 
     expect(result.soldComps).toHaveLength(15);
     expect(result.rawResult).toMatchObject({
-      requestedMinSoldComps: 15,
+      requestedCompCount: 15,
       returnedSoldComps: 15,
     });
   });
@@ -52,11 +52,11 @@ describe('FixturePricingProvider', () => {
 
     const first = await provider.fetchSoldComps({
       ...baseInput,
-      minSoldComps: 14,
+      requestedCompCount: 14,
     });
     const second = await provider.fetchSoldComps({
       ...baseInput,
-      minSoldComps: 14,
+      requestedCompCount: 14,
     });
 
     expect(second).toEqual(first);

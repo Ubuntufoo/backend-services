@@ -159,10 +159,10 @@ function buildProviderConfig(env: NodeJS.ProcessEnv): ApifyPricingProviderConfig
     );
   }
 
-  if (config.minSoldComps.value === null) {
+  if (config.requestedCompCount.value === null) {
     throw buildConfigFailurePayload(
       'apify_min_sold_comps',
-      config.minSoldComps.issues[0] ?? 'APIFY_MIN_SOLD_COMPS invalid.'
+      config.requestedCompCount.issues[0] ?? 'APIFY_MIN_SOLD_COMPS invalid.'
     );
   }
 
@@ -175,7 +175,7 @@ function buildProviderConfig(env: NodeJS.ProcessEnv): ApifyPricingProviderConfig
 
   return {
     actorId: config.actorId,
-    minSoldComps: config.minSoldComps.value,
+    requestedCompCount: config.requestedCompCount.value,
     timeoutSeconds: config.timeoutSeconds.value,
     token: config.token,
   };
@@ -283,7 +283,7 @@ export async function runPriceOneListingCli(
       },
       dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],
       now: () => new Date(),
-      pricingProviderMinSoldComps: config.minSoldComps,
+      pricingProviderRequestedCompCount: config.requestedCompCount,
     }, {
       executionSource: 'cli',
     });

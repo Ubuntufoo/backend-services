@@ -37,7 +37,7 @@ describe('Apify pricing provider', () => {
     },
     listingId: 'LIST-001',
     listingType: 'single' as const,
-    minSoldComps: 9,
+    requestedCompCount: 9,
     title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
   };
 
@@ -101,7 +101,7 @@ describe('Apify pricing provider', () => {
       conditionId: '4000',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 PSA 10']);
     expect(actorInput.keywords[0]).not.toContain('category:183050');
     expect(actorInput.keywords[0]).not.toContain('condition:4000');
   });
@@ -121,7 +121,7 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 Silver']);
   });
 
-  it('does not add raw signal for ungraded cards', () => {
+  it('does not append raw signal for conservative ungraded-card inputs', () => {
     const actorInput = buildApifyActorInput({
       ...baseInput,
       conditionId: '4000',
@@ -259,29 +259,53 @@ describe('Apify pricing provider', () => {
       itemSpecifics: undefined,
       listingId: 'LIST-EMPTY',
       listingType: 'single',
-      minSoldComps: 8,
+      requestedCompCount: 20,
       title: 'Vintage trading card',
     });
 
     expect(actorInput.keywords).toEqual(['Vintage']);
   });
 
-  it('uses Apify default min sold comps of 8 when input omits minSoldComps', () => {
+  it('uses Apify default requested comp count of 20 when input omits requestedCompCount', () => {
     expect(
       buildApifyActorInput({
         ...baseInput,
-        minSoldComps: undefined,
+        requestedCompCount: undefined,
       })
     ).toMatchObject({
-      count: 8,
+      count: 20,
     });
   });
 
-  it('honors explicit lower Apify min sold comps without clamping to 8 or 12', () => {
+  it('uses canonical 20-count actor request when provider fetch has no per-call override', async () => {
+    const runActor = vi.fn(async () => soldCompsFixture);
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      { runActor }
+    );
+
+    await provider.fetchSoldComps({
+      ...baseInput,
+      requestedCompCount: undefined,
+    });
+
+    expect(runActor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorInput: expect.objectContaining({
+          count: 20,
+        }),
+      })
+    );
+  });
+
+  it('honors explicit lower Apify requested comp count without clamping to 20', () => {
     expect(
       buildApifyActorInput({
         ...baseInput,
-        minSoldComps: 5,
+        requestedCompCount: 5,
       })
     ).toMatchObject({
       count: 5,
@@ -300,7 +324,7 @@ describe('Apify pricing provider', () => {
       },
       listingId: 'Single-000007',
       listingType: 'single',
-      minSoldComps: 8,
+      requestedCompCount: 20,
       title: '1955 Topps #98 Johnny Riddle St. Louis Cardinals Vintage Baseball Card',
     });
 
@@ -320,7 +344,7 @@ describe('Apify pricing provider', () => {
       },
       listingId: 'Single-000007',
       listingType: 'single',
-      minSoldComps: 8,
+      requestedCompCount: 20,
       title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
     });
     const runActor = vi.fn(async () => soldCompsFixture);
@@ -348,13 +372,13 @@ describe('Apify pricing provider', () => {
       },
       listingId: 'Single-000007',
       listingType: 'single',
-      minSoldComps: 8,
+      requestedCompCount: 20,
       title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
     });
 
     expect(runActor.mock.calls[0][0]).toMatchObject({
       actorInput: {
-        count: 8,
+        count: 20,
         ebaySite: 'ebay.com',
         itemCondition: 'used',
         keywords: ['Johnny Riddle 1955 Topps #98'],
@@ -388,7 +412,7 @@ describe('Apify pricing provider', () => {
       },
       listingId: 'Single-000007',
       listingType: 'single',
-      minSoldComps: 8,
+      requestedCompCount: 20,
       title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
     });
 
@@ -448,9 +472,9 @@ describe('Apify pricing provider', () => {
     });
   });
 
-  it.each([8, 12])(
+  it.each([20, 12])(
     'accepts fewer-than-requested comps: requested=%s returned=7',
-    async (minSoldComps) => {
+    async (requestedCompCount) => {
       const provider = createApifyPricingProvider(
         {
           actorId: 'actor-123',
@@ -464,7 +488,7 @@ describe('Apify pricing provider', () => {
 
       const result = await provider.fetchSoldComps({
         ...baseInput,
-        minSoldComps,
+        requestedCompCount,
         title: soldCompsFixture.query,
       });
 
@@ -498,7 +522,7 @@ describe('Apify pricing provider', () => {
     const result = await provider.fetchSoldComps({
       ...baseInput,
       listingId: 'Single-000007',
-      minSoldComps: 8,
+      requestedCompCount: 20,
       title: '1955 Topps #98 Johnny Riddle St. Louis Cardinals Vintage Baseball Card',
     });
     const normalized = normalizeSoldComps(result.soldComps);
@@ -667,7 +691,7 @@ describe('Apify pricing provider', () => {
     const result = parseApifyActorOutput(soldCompsFixture, {
       actorId: 'actor-123',
       actorInput: {
-        count: 8,
+        count: 20,
         ebaySite: 'ebay.com',
         itemCondition: 'used',
         keywords: ['Johnny Riddle 1955 Topps #98 token=secret-value'],
@@ -692,7 +716,7 @@ describe('Apify pricing provider', () => {
     expect(result.rawResult).toMatchObject({
       input: {
         actorInput: {
-          count: 8,
+          count: 20,
           ebaySite: 'ebay.com',
           itemCondition: 'used',
           keywords: ['Johnny Riddle 1955 Topps #98 [redacted-secret:se***ue]'],
