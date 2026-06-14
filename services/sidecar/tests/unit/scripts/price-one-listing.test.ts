@@ -2,7 +2,11 @@ import type { ListingRow } from '@ebay-inventory/data';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const loadRootEnvironmentMock = vi.fn();
+import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
+
+const { loadRootEnvironmentMock } = vi.hoisted(() => ({
+  loadRootEnvironmentMock: vi.fn(),
+}));
 
 vi.mock('@/config/env-paths.js', () => ({
   loadRootEnvironment: loadRootEnvironmentMock,
@@ -125,7 +129,10 @@ describe('price one listing script', () => {
         createPricingProvider: expect.any(Function),
         dataAccess: {},
         now: expect.any(Function),
-      })
+      }),
+      {
+        executionSource: 'cli',
+      }
     );
 
     const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
@@ -150,5 +157,130 @@ describe('price one listing script', () => {
       suggested_price: 27.5,
     });
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('prints cli-specific skipped payload when pricing disabled', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runPriceListingNow = vi.fn().mockRejectedValue(
+      new SidecarJobError(
+        JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
+        'user_fixable',
+        'Pricing service disabled. pricing:price-one skipped.'
+      )
+    );
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess: () => ({}) as never,
+      runPriceListingNow,
+    });
+
+    const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
+      db_updated: boolean;
+      listing_id: string;
+      listing_price_updated: boolean;
+      message: string;
+      overallStatus: string;
+      provider: string;
+      suggested_price: string;
+    };
+
+    expect(runPriceListingNow).toHaveBeenCalledWith(
+      'Single-000123',
+      expect.any(Object),
+      {
+        executionSource: 'cli',
+      }
+    );
+    expect(payload).toEqual({
+      db_updated: false,
+      listing_id: 'Single-000123',
+      listing_price_updated: false,
+      message: 'Pricing service disabled. pricing:price-one skipped.',
+      overallStatus: 'skipped',
+      provider: 'apify',
+      suggested_price: 'no price produced',
+    });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('prints missing-listing failure payload and exits non-zero', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runPriceListingNow = vi.fn().mockRejectedValue(
+      new SidecarJobError(
+        JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND,
+        'terminal',
+        'Listing "Single-404" was not found for research_price.'
+      )
+    );
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-404'], {
+      createDataAccess: () => ({}) as never,
+      runPriceListingNow,
+    });
+
+    const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
+      failure: { code: string; message: string };
+      listing_id: string;
+      listing_price_updated: boolean;
+      overallStatus: string;
+      provider: string;
+    };
+
+    expect(payload).toMatchObject({
+      failure: {
+        code: JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND,
+        message: 'Listing "Single-404" was not found for research_price.',
+      },
+      listing_id: 'Single-404',
+      listing_price_updated: false,
+      overallStatus: 'fail',
+      provider: 'apify',
+    });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('prints redacted provider failure payload and exits non-zero', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runPriceListingNow = vi.fn().mockRejectedValue(
+      new SidecarJobError(
+        JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+        'user_fixable',
+        '403 bad token [redacted-secret:su***en]',
+        {
+          provider: 'apify',
+          provider_failure_category: 'auth_config',
+          provider_failure_code: 'apify_auth_failed',
+          query: 'token=super-secret-token',
+        }
+      )
+    );
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess: () => ({}) as never,
+      runPriceListingNow,
+    });
+
+    const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
+      failure: { category: string; code: string; message: string; query: string };
+      listing_id: string;
+      overallStatus: string;
+      provider: string;
+    };
+
+    expect(payload).toMatchObject({
+      failure: {
+        category: 'user_fixable',
+        code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      },
+      listing_id: 'Single-000123',
+      overallStatus: 'fail',
+      provider: 'apify',
+    });
+    expect(payload.failure.message).not.toContain('super-secret-token');
+    expect(payload.failure.query).not.toContain('super-secret-token');
+    expect(process.exitCode).toBe(1);
   });
 });

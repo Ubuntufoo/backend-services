@@ -8,6 +8,7 @@ import { createSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import {
   priceListingNow,
+  type PriceListingNowOptions,
   type PriceListingNowResult,
   type ResearchPriceJobDependencies,
 } from '@/jobs/research-price-job.js';
@@ -28,7 +29,8 @@ interface PriceOneListingCliDependencies {
   createProvider?: (config: ApifyPricingProviderConfig) => PricingProvider;
   runPriceListingNow?: (
     listingId: string,
-    dependencies: ResearchPriceJobDependencies
+    dependencies: ResearchPriceJobDependencies,
+    options: PriceListingNowOptions
   ) => Promise<PriceListingNowResult>;
 }
 
@@ -281,6 +283,8 @@ export async function runPriceOneListingCli(
       },
       dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],
       now: () => new Date(),
+    }, {
+      executionSource: 'cli',
     });
 
     capture.restore();
