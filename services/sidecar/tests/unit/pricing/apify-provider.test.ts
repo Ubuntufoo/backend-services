@@ -44,21 +44,14 @@ describe('Apify pricing provider', () => {
   it('builds expected actor input from pricing context', () => {
     expect(buildApifyActorInput(baseInput)).toEqual({
       count: 9,
-      facets: {
-        'Card Number': '136',
-        Manufacturer: 'Panini',
-        Player: 'Victor Wembanyama',
-        Set: 'Prizm',
-        Year: '2023',
-      },
-      itemSpecifics: baseInput.itemSpecifics,
+      ebaySite: 'ebay.com',
+      itemCondition: 'used',
       keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
-      listingId: 'LIST-001',
-      title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
+      sortOrder: 'endedRecently',
     });
   });
 
-  it('omits structured categoryId and conditionId even when eBay ids exist', async () => {
+  it('sends documented actor fields only and keeps local metadata in diagnostic context', async () => {
     const runActor = vi.fn(async () => soldCompsFixture);
     const provider = createApifyPricingProvider(
       {
@@ -76,15 +69,29 @@ describe('Apify pricing provider', () => {
 
     expect(runActor).toHaveBeenCalledWith(
       expect.objectContaining({
-        actorInput: expect.objectContaining({
+        actorInput: {
+          count: 9,
+          ebaySite: 'ebay.com',
+          itemCondition: 'used',
           keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
+          sortOrder: 'endedRecently',
+        },
+        diagnosticContext: expect.objectContaining({
+          facets: expect.objectContaining({
+            'Card Number': '136',
+          }),
           listingId: 'LIST-001',
+          title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
         }),
       })
     );
     expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('categoryId');
     expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('conditionId');
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('facets');
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('itemSpecifics');
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('listingId');
     expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('query');
+    expect(runActor.mock.calls[0][0]?.actorInput).not.toHaveProperty('title');
   });
 
   it('does not include synthetic category or condition fragments in actor search string', () => {
@@ -203,6 +210,36 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords[0]).not.toContain('# ');
   });
 
+  it('uses explicit title card-number markers when specifics omit card number', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Year: '1955',
+      },
+      title: 'Johnny Riddle 1955 Topps Card No. 98 St. Louis Cardinals Coach',
+    });
+
+    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
+  });
+
+  it('does not infer bare title numbers as card numbers without explicit marker', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Year: '1955',
+      },
+      title: 'Johnny Riddle 1955 Topps 98 St. Louis Cardinals Coach',
+    });
+
+    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps']);
+  });
+
   it('keeps lot queries broader and includes lot signal', () => {
     const actorInput = buildApifyActorInput({
       ...baseInput,
@@ -270,6 +307,94 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
   });
 
+  it('normalizes hash-prefixed card numbers from specifics and renders one query token', async () => {
+    const actorInput = buildApifyActorInput({
+      categoryId: '261328',
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '#98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps Johnny Riddle 98',
+        Year: '1955',
+      },
+      listingId: 'Single-000007',
+      listingType: 'single',
+      minSoldComps: 8,
+      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+    });
+    const runActor = vi.fn(async () => soldCompsFixture);
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      { runActor }
+    );
+
+    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
+    expect(actorInput.keywords[0]?.match(/#98/g)).toHaveLength(1);
+    expect(actorInput.keywords[0]).not.toContain('98 #98');
+
+    await provider.fetchSoldComps({
+      categoryId: '261328',
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '#98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps Johnny Riddle 98',
+        Year: '1955',
+      },
+      listingId: 'Single-000007',
+      listingType: 'single',
+      minSoldComps: 8,
+      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+    });
+
+    expect(runActor.mock.calls[0][0]).toMatchObject({
+      actorInput: {
+        count: 8,
+        ebaySite: 'ebay.com',
+        itemCondition: 'used',
+        keywords: ['Johnny Riddle 1955 Topps #98'],
+        sortOrder: 'endedRecently',
+      },
+      diagnosticContext: {
+        facets: {
+          'Card Number': '98',
+          Manufacturer: 'Topps',
+          Player: 'Johnny Riddle',
+          Set: 'Topps Johnny Riddle 98',
+          Year: '1955',
+        },
+        listingId: 'Single-000007',
+        title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+      },
+    });
+  });
+
+  it('uses alias fields for canonical query and facets when primary keys absent', () => {
+    const actorInput = buildApifyActorInput({
+      categoryId: '261328',
+      conditionId: '4000',
+      itemSpecifics: {
+        Athlete: 'Johnny Riddle',
+        Brand: 'Topps',
+        'Card Manufacturer': 'Topps',
+        'Insert Set': 'All-Star',
+        Product: 'Johnny Riddle 1955 Topps 98',
+        Season: '1955',
+      },
+      listingId: 'Single-000007',
+      listingType: 'single',
+      minSoldComps: 8,
+      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+    });
+
+    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98 All-Star']);
+  });
+
   it('maps actor-native fixture into internal sold comps', () => {
     const result = parseApifyActorOutput(soldCompsFixture, {
       actorId: 'actor-123',
@@ -295,6 +420,7 @@ describe('Apify pricing provider', () => {
       actorId: 'actor-123',
       input: {
         actorInput: undefined,
+        diagnosticContext: undefined,
       },
       output: {
         itemCount: 7,
@@ -535,6 +661,58 @@ describe('Apify pricing provider', () => {
     expect(serialized).not.toContain('super-secret-token');
     expect(serialized).toContain('[redacted-url]');
     expect(serialized).toContain('Bearer [redacted-token]');
+  });
+
+  it('nests diagnostic-only metadata under rawResult.input.diagnosticContext', () => {
+    const result = parseApifyActorOutput(soldCompsFixture, {
+      actorId: 'actor-123',
+      actorInput: {
+        count: 8,
+        ebaySite: 'ebay.com',
+        itemCondition: 'used',
+        keywords: ['Johnny Riddle 1955 Topps #98 token=secret-value'],
+        sortOrder: 'endedRecently',
+      },
+      diagnosticContext: {
+        facets: {
+          'Card Number': '98',
+          Player: 'Johnny Riddle',
+        },
+        itemSpecifics: {
+          'Card Number': '#98',
+          Player: 'Johnny Riddle',
+        },
+        listingId: 'LIST-001',
+        title: 'Johnny Riddle 1955 Topps #98 token=secret-value',
+      },
+      fetchedAt: '2026-06-11T20:51:09.000Z',
+      query: 'Johnny Riddle 1955 Topps #98 token=secret-value',
+    });
+
+    expect(result.rawResult).toMatchObject({
+      input: {
+        actorInput: {
+          count: 8,
+          ebaySite: 'ebay.com',
+          itemCondition: 'used',
+          keywords: ['Johnny Riddle 1955 Topps #98 [redacted-secret:se***ue]'],
+          sortOrder: 'endedRecently',
+        },
+        diagnosticContext: {
+          facets: {
+            'Card Number': '98',
+            Player: 'Johnny Riddle',
+          },
+          itemSpecifics: {
+            'Card Number': '#98',
+            Player: 'Johnny Riddle',
+          },
+          listingId: 'LIST-001',
+          title: 'Johnny Riddle 1955 Topps #98 [redacted-secret:se***ue]',
+        },
+        query: 'Johnny Riddle 1955 Topps #98 [redacted-secret:se***ue]',
+      },
+    });
   });
 
   it('redacts token-like fragments from thrown failure messages', async () => {

@@ -22,6 +22,12 @@ const QUERY_ITEM_SPECIFIC_KEYS = [
   'Set',
   'Parallel/Variety',
 ] as const;
+const PLAYER_ITEM_SPECIFIC_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
+const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
+const MANUFACTURER_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Card Manufacturer', 'Brand'] as const;
+const SET_ITEM_SPECIFIC_KEYS = ['Set', 'Product', 'Product Line', 'Series'] as const;
+const CARD_NUMBER_ITEM_SPECIFIC_KEYS = ['Card Number'] as const;
+const PARALLEL_FACET_ITEM_SPECIFIC_KEYS = ['Parallel/Variety', 'Insert Set'] as const;
 const QUERY_TITLE_STOPWORDS = new Set([
   'and',
   'baseball',
@@ -45,7 +51,7 @@ const QUERY_TITLE_STOPWORDS = new Set([
   'the',
   'trading',
 ]);
-const SET_LINE_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Brand', 'Set', 'Series', 'Product', 'Product Line'] as const;
+const SET_LINE_ITEM_SPECIFIC_KEYS = ['Set', 'Series', 'Product', 'Product Line'] as const;
 const PARALLEL_ITEM_SPECIFIC_KEYS = [
   'Parallel/Variety',
   'Insert Set',
@@ -105,7 +111,12 @@ const PARALLEL_TERMS = [
   'Orange',
 ] as const;
 const GRADE_PATTERN = /\b(PSA|BGS|SGC|CGC|CSG|TAG|HGA)\s*(10|[1-9](?:\.\d)?)\b/i;
-const TITLE_CARD_NUMBER_PATTERN = /(?:^|[\s(#-])#?([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})(?:$|[\s)#-])/g;
+const TITLE_CARD_NUMBER_PATTERNS = [
+  /\bCard\s*#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
+  /\bCard\s*No\.?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
+  /\bCard\s*Number\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
+  /(?:^|[\s(])#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})(?=$|[\s),.-])/gi,
+] as const;
 const TITLE_YEAR_PATTERN = /\b(19\d{2}|20\d{2})\b/g;
 const SERIAL_NUMBER_PATTERN = /(?:^|[\s(])(?:#?\d{1,4}\s*\/\s*\d{1,4}|\d{1,4}\s*of\s*\d{1,4})(?:$|[\s)])/i;
 const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader', 'Graded'] as const;
@@ -181,15 +192,28 @@ const apifyActorOutputSchema = z.object({
 
 export interface ApifyActorInput {
   count: number;
+  ebaySite: 'ebay.com';
+  itemCondition: 'used';
+  keywords: string[];
+  sortOrder: 'endedRecently';
+  categoryId?: string;
+  daysToScrape?: number;
+  itemLocation?: string;
+  maxPrice?: number;
+  minPrice?: number;
+  subcategoryId?: string;
+}
+
+export interface ApifyActorDiagnosticContext {
   facets?: Partial<Record<(typeof QUERY_ITEM_SPECIFIC_KEYS)[number], string>>;
   itemSpecifics?: PricingProviderInput['itemSpecifics'];
-  keywords: string[];
   listingId: string;
   title: string;
 }
 
 export interface ApifyActorOutputMeta {
   actorInput?: ApifyActorInput;
+  diagnosticContext?: ApifyActorDiagnosticContext;
   actorId: string;
   fetchedAt?: string;
   query?: string;
@@ -205,6 +229,7 @@ export interface ApifyPricingProviderConfig {
 export interface RunApifyActorInput {
   actorId: string;
   actorInput: ApifyActorInput;
+  diagnosticContext: ApifyActorDiagnosticContext;
   query: string;
   timeoutSeconds: number;
   token: string;
@@ -249,15 +274,22 @@ export class ApifyPricingProviderError extends Error {
 }
 
 export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInput {
+  return {
+    count: input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS,
+    ebaySite: 'ebay.com',
+    itemCondition: 'used',
+    keywords: [buildApifyQuery(input)],
+    sortOrder: 'endedRecently',
+  };
+}
+
+function buildApifyActorDiagnosticContext(input: PricingProviderInput): ApifyActorDiagnosticContext {
   const minSoldComps = input.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS;
-  const query = buildApifyQuery(input);
   const facets = buildFacets(input.itemSpecifics);
 
   return {
-    count: minSoldComps,
     ...(facets ? { facets } : {}),
     ...(input.itemSpecifics ? { itemSpecifics: input.itemSpecifics } : {}),
-    keywords: [query],
     listingId: input.listingId,
     title: input.title.trim(),
   };
@@ -293,6 +325,9 @@ export function parseApifyActorOutput(
       fetchedAt,
       input: {
         actorInput: meta.actorInput ? sanitizeActorInput(meta.actorInput) : undefined,
+        diagnosticContext: meta.diagnosticContext
+          ? sanitizeDiagnosticContext(meta.diagnosticContext)
+          : undefined,
         query: redactSensitiveText(meta.query ?? parsed.query),
       },
       output: {
@@ -330,12 +365,14 @@ export function createApifyPricingProvider(
         ...input,
         minSoldComps: input.minSoldComps ?? config.minSoldComps ?? DEFAULT_MIN_SOLD_COMPS,
       });
+      const diagnosticContext = buildApifyActorDiagnosticContext(input);
       const fetchedAt = now().toISOString();
 
       try {
         const raw = await runActor({
           actorId: config.actorId,
           actorInput,
+          diagnosticContext,
           query: actorInput.keywords[0],
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
           token: config.token,
@@ -343,6 +380,7 @@ export function createApifyPricingProvider(
 
         const result = parseApifyActorOutput(raw, {
           actorInput,
+          diagnosticContext,
           actorId: config.actorId,
           fetchedAt,
           query: actorInput.keywords[0],
@@ -457,13 +495,15 @@ function buildApifyQuery(input: PricingProviderInput): string {
   const title = input.title.trim();
   const terms = new QueryTermAccumulator();
   const isLot = isLotListing(input, title);
-  const player = getFirstSpecificValue(input.itemSpecifics, ['Player']);
+  const player = getPlayer(input.itemSpecifics);
   const primaryYear = getPrimaryYear(input.itemSpecifics, title);
+  const manufacturer = getManufacturer(input.itemSpecifics);
   const cardNumber = getCardNumber(input.itemSpecifics, title, primaryYear);
 
   terms.add(player);
   terms.add(primaryYear);
-  terms.add(getSetLine(input.itemSpecifics, title, { cardNumber, player, primaryYear }));
+  terms.add(manufacturer);
+  terms.add(getSetLine(input.itemSpecifics, title, { cardNumber, manufacturer, player, primaryYear }));
 
   if (!isLot) {
     terms.add(formatCardNumber(cardNumber));
@@ -490,18 +530,22 @@ function buildApifyQuery(input: PricingProviderInput): string {
 
 function buildFacets(
   itemSpecifics: PricingProviderInput['itemSpecifics']
-): ApifyActorInput['facets'] | undefined {
+): ApifyActorDiagnosticContext['facets'] | undefined {
   if (!itemSpecifics) {
     return undefined;
   }
 
+  const facetMap = {
+    'Card Number': getCardNumber(itemSpecifics, ''),
+    Manufacturer: getManufacturer(itemSpecifics),
+    'Parallel/Variety': getFirstSpecificValue(itemSpecifics, PARALLEL_FACET_ITEM_SPECIFIC_KEYS),
+    Player: getPlayer(itemSpecifics),
+    Set: getSetFacet(itemSpecifics),
+    Year: getPrimaryYear(itemSpecifics, ''),
+  } satisfies Partial<Record<(typeof QUERY_ITEM_SPECIFIC_KEYS)[number], string | undefined>>;
   const facets = Object.fromEntries(
     QUERY_ITEM_SPECIFIC_KEYS.flatMap((key) => {
-      const value = itemSpecifics[key];
-      const normalized = Array.isArray(value)
-        ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0).join(' / ')
-        : value?.trim() ?? '';
-
+      const normalized = facetMap[key]?.trim() ?? '';
       return normalized.length > 0 ? [[key, normalized] as const] : [];
     })
   );
@@ -512,9 +556,23 @@ function buildFacets(
 function sanitizeActorInput(input: ApifyActorInput): Record<string, unknown> {
   return {
     count: input.count,
+    ...(input.categoryId ? { categoryId: redactSensitiveText(input.categoryId) } : {}),
+    ...(input.daysToScrape ? { daysToScrape: input.daysToScrape } : {}),
+    ebaySite: input.ebaySite,
+    itemCondition: input.itemCondition,
+    ...(input.itemLocation ? { itemLocation: redactSensitiveText(input.itemLocation) } : {}),
+    keywords: input.keywords.map((value) => redactSensitiveText(value)),
+    ...(input.maxPrice ? { maxPrice: input.maxPrice } : {}),
+    ...(input.minPrice ? { minPrice: input.minPrice } : {}),
+    sortOrder: input.sortOrder,
+    ...(input.subcategoryId ? { subcategoryId: redactSensitiveText(input.subcategoryId) } : {}),
+  };
+}
+
+function sanitizeDiagnosticContext(input: ApifyActorDiagnosticContext): Record<string, unknown> {
+  return {
     ...(input.facets ? { facets: sanitizeUnknown(input.facets) } : {}),
     ...(input.itemSpecifics ? { itemSpecifics: sanitizeUnknown(input.itemSpecifics) } : {}),
-    keywords: input.keywords.map((value) => redactSensitiveText(value)),
     listingId: redactSensitiveText(input.listingId),
     title: redactSensitiveText(input.title),
   };
@@ -677,22 +735,30 @@ function getFirstSpecificValue(
   return getSpecificValues(itemSpecifics, keys)[0];
 }
 
-function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
-  const titleYear = title.match(TITLE_YEAR_PATTERN)?.[0];
-  const specificYear = getFirstSpecificValue(itemSpecifics, ['Year']);
+function getPlayer(itemSpecifics: PricingProviderInput['itemSpecifics']): string | undefined {
+  return getFirstSpecificValue(itemSpecifics, PLAYER_ITEM_SPECIFIC_KEYS);
+}
 
+function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+  const titleYear = extractYear(title);
   if (titleYear) {
     return titleYear;
   }
 
-  if (specificYear) {
-    const match = specificYear.match(/\b(19\d{2}|20\d{2})\b/);
-    if (match) {
-      return match[1];
-    }
-  }
+  const specificYear = getFirstSpecificValue(itemSpecifics, YEAR_ITEM_SPECIFIC_KEYS);
+  return extractYear(specificYear);
+}
 
-  return undefined;
+function extractYear(value: string | undefined): string | undefined {
+  return value?.match(/\b(19\d{2}|20\d{2})\b/)?.[1];
+}
+
+function getManufacturer(itemSpecifics: PricingProviderInput['itemSpecifics']): string | undefined {
+  return getFirstSpecificValue(itemSpecifics, MANUFACTURER_ITEM_SPECIFIC_KEYS);
+}
+
+function getSetFacet(itemSpecifics: PricingProviderInput['itemSpecifics']): string | undefined {
+  return getFirstSpecificValue(itemSpecifics, SET_ITEM_SPECIFIC_KEYS);
 }
 
 function getSetLine(
@@ -700,6 +766,7 @@ function getSetLine(
   title: string,
   context: {
     cardNumber?: string;
+    manufacturer?: string;
     player?: string;
     primaryYear?: string;
   }
@@ -714,8 +781,15 @@ function getSetLine(
     return terms.toString();
   }
 
+  if (context.manufacturer) {
+    return undefined;
+  }
+
   return tokenizeTitle(title)
     .filter((token) => !/^\d{4}$/.test(token))
+    .filter((token) => !context.player || !includesWholeTerm(context.player, token))
+    .filter((token) => !context.manufacturer || !includesWholeTerm(context.manufacturer, token))
+    .filter((token) => token !== context.cardNumber)
     .slice(0, 4)
     .join(' ');
 }
@@ -725,16 +799,18 @@ function getCardNumber(
   title: string,
   primaryYear?: string
 ): string | undefined {
-  const specific = sanitizeCardNumber(getFirstSpecificValue(itemSpecifics, ['Card Number']));
+  const specific = sanitizeCardNumber(getFirstSpecificValue(itemSpecifics, CARD_NUMBER_ITEM_SPECIFIC_KEYS));
 
   if (specific) {
     return specific;
   }
 
-  for (const match of title.matchAll(TITLE_CARD_NUMBER_PATTERN)) {
-    const candidate = sanitizeCardNumber(match[1]);
-    if (candidate && candidate !== primaryYear) {
-      return candidate;
+  for (const pattern of TITLE_CARD_NUMBER_PATTERNS) {
+    for (const match of title.matchAll(pattern)) {
+      const candidate = sanitizeCardNumber(match[1]);
+      if (candidate && candidate !== primaryYear) {
+        return candidate;
+      }
     }
   }
 
@@ -752,6 +828,20 @@ function formatCardNumber(value: string | undefined): string | undefined {
 
 function getParallelSignals(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string[] {
   const terms = new QueryTermAccumulator();
+
+  for (const key of PARALLEL_FACET_ITEM_SPECIFIC_KEYS) {
+    for (const value of normalizeSpecificValue(itemSpecifics?.[key])) {
+      const extracted = extractParallelTerms(value);
+      if (extracted.length === 0) {
+        terms.add(value);
+        continue;
+      }
+
+      for (const term of extracted) {
+        terms.add(term);
+      }
+    }
+  }
 
   for (const value of getSpecificValues(itemSpecifics, PARALLEL_ITEM_SPECIFIC_KEYS)) {
     for (const term of extractParallelTerms(value)) {
@@ -830,6 +920,7 @@ function cleanSetLineValue(
   value: string,
   context: {
     cardNumber?: string;
+    manufacturer?: string;
     player?: string;
     primaryYear?: string;
   }
@@ -848,15 +939,20 @@ function cleanSetLineValue(
     normalized = removeWholePhrase(normalized, context.primaryYear);
   }
 
+  if (context.manufacturer) {
+    normalized = removeWholePhrase(normalized, context.manufacturer);
+  }
+
   if (context.cardNumber) {
     normalized = normalized.replace(
-      new RegExp(`(?:^|\\s)#?${escapeRegExp(context.cardNumber)}(?=$|\\s)`, 'gi'),
+      new RegExp(`(?:^|\\s)#?${escapeRegExp(context.cardNumber)}(?=$|[\\s),.-])`, 'gi'),
       ' '
     );
   }
 
   normalized = normalized.replace(/\b(19\d{2}|20\d{2})\b/g, ' ');
   normalized = normalized.replace(SERIAL_NUMBER_PATTERN, ' ');
+  normalized = normalized.replace(/\bCard\s*(?:No\.?|Number)\s*#?\s*[A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4}\b/gi, ' ');
   normalized = normalized.replace(/\s+/g, ' ').trim();
 
   return normalized || undefined;
