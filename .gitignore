@@ -17,6 +17,7 @@ ebay-category-ids.md
 .agents/skills/
 .agents/
 .codex/
+.chatgpt/
 
 # Build and cache output
 build/
