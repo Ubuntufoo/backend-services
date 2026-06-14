@@ -95,6 +95,7 @@ Actor output shape excerpt:
 - Structured actor payload intentionally omits `categoryId` and `conditionId` until repo contains explicit mapping from eBay taxonomy/condition ids to actor-accepted values.
 - Live Apify default requested sold comps: `8` when `APIFY_MIN_SOLD_COMPS` unset.
 - Smoke script exists only to verify live provider path safely; it must not enqueue jobs, mutate listings, or persist `listing_price_research`.
+- Live one-listing pricing script via `pnpm pricing:price-one -- --listing-id <listing_id>` intentionally runs real pricing persistence for exactly one listing.
 - Offline Apify fixtures under `services/sidecar/tests/fixtures/apify/` exist for unit coverage only; live calls belong only in `pnpm pricing:smoke-apify`.
 - Fewer-than-requested sold comps remain valid provider success; downstream stats/confidence decides usefulness.
 
@@ -104,6 +105,7 @@ Use live smoke only for first CLI validation of real Apify pricing output. Keep 
 
 ```bash
 pnpm pricing:smoke-apify -- --listing-id <listing_id>
+pnpm pricing:price-one -- --listing-id <listing_id>
 ```
 
 Safety:
@@ -113,6 +115,8 @@ Safety:
 - no DB writes
 - no listing mutation
 - real Apify call; can spend credits
+- `pricing:price-one` intentionally writes `listing_price_research` plus `listings.price` for one listing only
+- keep `app_settings.pricing_service_enabled=true` only while intentionally running live pricing
 
 Prereqs:
 
@@ -127,6 +131,7 @@ Recommended pilot behavior:
 - do not enable automated pricing until smoke output looks sane
 - keep `app_settings.pricing_service_enabled=false` during initial CLI-only testing
 - global pricing toggle not required for CLI smoke
+- global pricing toggle required for `pricing:price-one`
 
 Failure interpretation:
 

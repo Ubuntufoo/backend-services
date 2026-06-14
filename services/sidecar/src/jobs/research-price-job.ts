@@ -52,6 +52,7 @@ const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
 ] as const;
 
 export interface ResearchPriceJobDependencies {
+  createPricingProvider?: () => PricingProvider;
   computeConfidence?: (input: {
     comps: Parameters<typeof computePricingConfidence>[0]['comps'];
     stats: PricingStatsResult;
@@ -67,6 +68,45 @@ export interface ResearchPriceJobDependencies {
 export interface RunResearchPriceJobResult {
   job: JobRow;
   listing: ListingRow | null;
+}
+
+export interface PriceListingNowOptions {
+  executionSource?: 'cli' | 'job';
+  jobId?: string;
+}
+
+export interface PriceListingNowResult {
+  acceptedCompCount: number;
+  listing: ListingRow;
+  listingPriceResearchUpdated: boolean;
+  provider: string;
+  rawCompCount: number;
+  suggestedPrice: number;
+}
+
+function getResearchPriceLogMessage(
+  phase: 'failed' | 'started' | 'succeeded',
+  executionSource: PriceListingNowOptions['executionSource']
+): string {
+  if (executionSource === 'cli') {
+    switch (phase) {
+      case 'started':
+        return 'Started research_price execution.';
+      case 'succeeded':
+        return 'Succeeded research_price execution.';
+      case 'failed':
+        return 'Failed research_price execution.';
+    }
+  }
+
+  switch (phase) {
+    case 'started':
+      return 'Started research_price job.';
+    case 'succeeded':
+      return 'Succeeded research_price job.';
+    case 'failed':
+      return 'Failed research_price job.';
+  }
 }
 
 function asIsoTimestamp(now: () => Date): string {
@@ -281,7 +321,7 @@ function buildResearchPriceError(
 
 async function assertPricingServiceEnabled(
   dependencies: ResearchPriceJobDependencies,
-  job: JobRow
+  options: PriceListingNowOptions = {}
 ): Promise<void> {
   const appSettings = await dependencies.dataAccess.appSettings.get();
 
@@ -291,8 +331,12 @@ async function assertPricingServiceEnabled(
 
   throw buildResearchPriceError(
     JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
-    `Pricing service disabled. research_price skipped for job "${job.id}".`,
+    options.executionSource === 'cli'
+      ? 'Pricing service disabled. pricing:price-one skipped.'
+      : `Pricing service disabled. research_price skipped for job "${options.jobId ?? 'unknown'}".`,
     {
+      ...(options.executionSource ? { execution_source: options.executionSource } : {}),
+      ...(options.jobId ? { job_id: options.jobId } : {}),
       pricing_service_enabled: false,
       settings_source: appSettings ? 'app_settings' : 'default',
       workflow_safe: true,
@@ -301,7 +345,10 @@ async function assertPricingServiceEnabled(
 }
 
 function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): PricingProvider {
-  const pricingProvider = dependencies.pricingProvider ?? createFixturePricingProvider();
+  const pricingProvider =
+    dependencies.pricingProvider ??
+    dependencies.createPricingProvider?.() ??
+    createFixturePricingProvider();
 
   if (!SUPPORTED_PRICING_PROVIDER_NAMES.has(pricingProvider.name)) {
     throw buildResearchPriceError(
@@ -409,86 +456,38 @@ async function markResearchFailedSafely(
   });
 }
 
-export async function runResearchPriceJob(
-  job: JobRow,
-  dependencies: ResearchPriceJobDependencies
-): Promise<RunResearchPriceJobResult> {
-  const errorAt = asIsoTimestamp(dependencies.now);
-  const listingId = asNonEmptyString(job.listing_id);
-
-  if (!listingId) {
-    const error = buildResearchPriceError(
-      JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID,
-      `Job "${job.id}" is missing listing_id and cannot run research_price.`
-    );
-    const failedJob = await dependencies.dataAccess.jobs.fail(
-      job.id,
-      toJobErrorUpdateInput(error, errorAt)
-    );
-
-    return {
-      job: failedJob,
-      listing: null,
-    };
-  }
-
+export async function priceListingNow(
+  listingId: string,
+  dependencies: ResearchPriceJobDependencies,
+  options: PriceListingNowOptions = {}
+): Promise<PriceListingNowResult> {
   const listing = await dependencies.dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
-    const error = buildResearchPriceError(
+    throw buildResearchPriceError(
       JOB_ERROR_CODES.RESEARCH_PRICE_LISTING_NOT_FOUND,
       `Listing "${listingId}" was not found for research_price.`
     );
-    const failedJob = await dependencies.dataAccess.jobs.fail(
-      job.id,
-      toJobErrorUpdateInput(error, errorAt)
-    );
-
-    return {
-      job: failedJob,
-      listing: null,
-    };
   }
 
-  let pricingProvider: PricingProvider;
-  try {
-    await assertPricingServiceEnabled(dependencies, job);
-    assertResearchPriceListingEligible(listing);
-    pricingProvider = resolvePricingProvider(dependencies);
-  } catch (error) {
-    const jobError = classifyJobError(job.job_type, error);
-    if (jobError.code === JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED) {
-      jobLogger.info('Skipped research_price job because pricing service is disabled.', {
-        event: 'research_price_disabled',
-        jobId: job.id,
-        listingId,
-        pricingServiceEnabled: false,
-      });
-    }
-    const failedJob = await dependencies.dataAccess.jobs.fail(
-      job.id,
-      toJobErrorUpdateInput(jobError, errorAt)
-    );
+  await assertPricingServiceEnabled(dependencies, options);
+  assertResearchPriceListingEligible(listing);
 
-    return {
-      job: failedJob,
-      listing,
-    };
-  }
-
+  const pricingProvider = resolvePricingProvider(dependencies);
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
   let research: ListingPriceResearchRow | null = null;
   let researchSucceeded = false;
   let providerResult: PricingProviderResult | undefined;
-  let rawCompCount: number | undefined;
-  let normalizedCompCount: number | undefined;
+  let rawCompCount = 0;
+  let normalizedCompCount = 0;
 
   try {
-    jobLogger.info('Started research_price job.', {
+    jobLogger.info(getResearchPriceLogMessage('started', options.executionSource), {
       event: 'research_price_started',
-      jobId: job.id,
+      executionSource: options.executionSource ?? 'job',
+      jobId: options.jobId,
       listingId,
       pricingMode: getPricingMode(pricingProvider, dependencies.pricingAnalyst),
       provider: pricingProvider.name,
@@ -509,8 +508,10 @@ export async function runResearchPriceJob(
     normalizedCompCount = normalized.comps.length;
     const stats = runComputeStats(normalized.comps);
     jobLogger.info('Completed research_price provider fetch.', {
+      acceptedCompCount: normalizedCompCount,
       event: 'research_price_provider_result',
-      jobId: job.id,
+      executionSource: options.executionSource ?? 'job',
+      jobId: options.jobId,
       listingId,
       normalizedCompCount,
       provider: providerResult.provider,
@@ -565,7 +566,7 @@ export async function runResearchPriceJob(
           deterministicSuggestedPrice,
           event: 'research_price_llm_fallback',
           fallbackReason,
-          jobId: job.id,
+          jobId: options.jobId,
           listingId,
         });
       }
@@ -576,7 +577,7 @@ export async function runResearchPriceJob(
         deterministicSuggestedPrice,
         event: 'research_price_llm_fallback',
         fallbackReason,
-        jobId: job.id,
+        jobId: options.jobId,
         listingId,
         pricingModelName,
       });
@@ -614,12 +615,14 @@ export async function runResearchPriceJob(
       price: finalSuggestedPrice,
     });
 
-    jobLogger.info('Succeeded research_price job.', {
+    jobLogger.info(getResearchPriceLogMessage('succeeded', options.executionSource), {
+      acceptedCompCount: normalizedCompCount,
       confidence: confidence.confidence,
       deterministicSuggestedPrice,
       event: 'research_price_succeeded',
+      executionSource: options.executionSource ?? 'job',
       finalSuggestedPrice,
-      jobId: job.id,
+      jobId: options.jobId,
       listingId,
       listingPriceUpdated: pricedListing.price === finalSuggestedPrice,
       llmFallbackReason: fallbackReason ?? undefined,
@@ -630,20 +633,23 @@ export async function runResearchPriceJob(
         : 'not_attempted',
       normalizedCompCount,
       pricingModelName,
+      rawCompCount,
       soldCount: stats.soldCount,
     });
 
-    const completedJob = await dependencies.dataAccess.jobs.complete(job.id);
-
     return {
-      job: completedJob,
+      acceptedCompCount: normalizedCompCount,
       listing: pricedListing,
+      listingPriceResearchUpdated: true,
+      provider: providerResult.provider,
+      rawCompCount,
+      suggestedPrice: finalSuggestedPrice,
     };
   } catch (error) {
     let jobError =
       pricingProvider.name === APIFY_PROVIDER_NAME
         ? buildResearchProviderFailureJobError(error, pricingProvider.name)
-        : classifyJobError(job.job_type, error);
+        : classifyJobError('research_price', error);
     const providerFailure = getProviderFailureDetails(error);
     const provider =
       providerResult?.provider ??
@@ -657,7 +663,9 @@ export async function runResearchPriceJob(
         : undefined);
     const providerFailureCode =
       providerFailure.providerFailureCode ??
-      (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider_failure_code) : undefined);
+      (error instanceof SidecarJobError
+        ? asNonEmptyString(error.context.provider_failure_code)
+        : undefined);
     const query =
       (providerResult?.query ? redactSensitiveText(providerResult.query) : undefined) ??
       providerFailure.query ??
@@ -665,12 +673,7 @@ export async function runResearchPriceJob(
 
     try {
       if (!researchSucceeded) {
-        await markResearchFailedSafely(
-          dependencies.dataAccess,
-          research,
-          jobError,
-          providerResult
-        );
+        await markResearchFailedSafely(dependencies.dataAccess, research, jobError, providerResult);
       }
     } catch (cleanupError) {
       jobError = new SidecarJobError(
@@ -682,10 +685,12 @@ export async function runResearchPriceJob(
       );
     }
 
-    jobLogger.warn('Failed research_price job.', {
+    jobLogger.warn(getResearchPriceLogMessage('failed', options.executionSource), {
+      acceptedCompCount: normalizedCompCount,
       event: 'research_price_failed',
+      executionSource: options.executionSource ?? 'job',
       failureCode: jobError.code,
-      jobId: job.id,
+      jobId: options.jobId,
       listingId,
       normalizedCompCount,
       provider,
@@ -697,6 +702,55 @@ export async function runResearchPriceJob(
       workflowSafe: true,
     });
 
+    throw jobError;
+  }
+}
+
+export async function runResearchPriceJob(
+  job: JobRow,
+  dependencies: ResearchPriceJobDependencies
+): Promise<RunResearchPriceJobResult> {
+  const errorAt = asIsoTimestamp(dependencies.now);
+  const listingId = asNonEmptyString(job.listing_id);
+
+  if (!listingId) {
+    const error = buildResearchPriceError(
+      JOB_ERROR_CODES.RESEARCH_PRICE_MISSING_LISTING_ID,
+      `Job "${job.id}" is missing listing_id and cannot run research_price.`
+    );
+    const failedJob = await dependencies.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
+
+    return {
+      job: failedJob,
+      listing: null,
+    };
+  }
+
+  try {
+    const result = await priceListingNow(listingId, dependencies, {
+      executionSource: 'job',
+      jobId: job.id,
+    });
+    const completedJob = await dependencies.dataAccess.jobs.complete(job.id);
+
+    return {
+      job: completedJob,
+      listing: result.listing,
+    };
+  } catch (error) {
+    const jobError = classifyJobError(job.job_type, error);
+    if (jobError.code === JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED) {
+      jobLogger.info('Skipped research_price job because pricing service is disabled.', {
+        event: 'research_price_disabled',
+        jobId: job.id,
+        listingId,
+        pricingServiceEnabled: false,
+      });
+    }
+
     const failedJob = await dependencies.dataAccess.jobs.fail(
       job.id,
       toJobErrorUpdateInput(jobError, errorAt)
@@ -704,7 +758,9 @@ export async function runResearchPriceJob(
 
     return {
       job: failedJob,
-      listing: await getListingSafely(dependencies.dataAccess, listingId),
+      listing: listingId
+        ? await getListingSafely(dependencies.dataAccess, listingId)
+        : null,
     };
   }
 }
