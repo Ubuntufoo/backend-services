@@ -242,6 +242,12 @@ describe('priceListingNow', () => {
     });
 
     expect(fetchSoldComps).toHaveBeenCalledTimes(1);
+    expect(fetchSoldComps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingId: listing.listing_id,
+        minSoldComps: 8,
+      })
+    );
     expect(spies.create).toHaveBeenCalledWith({
       listing_id: listing.listing_id,
       provider: 'apify',
@@ -259,6 +265,113 @@ describe('priceListingNow', () => {
       suggestedPrice: expect.any(Number),
     });
     expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('uses explicit configured minSoldComps for canonical apify pricing path', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(listing);
+    const fetchSoldComps = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: 'query',
+      rawResult: { actorId: 'actor-123' },
+      soldComps: [
+        { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
+        { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
+        { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+      ],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps,
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProviderMinSoldComps: 8,
+    });
+
+    expect(fetchSoldComps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingId: listing.listing_id,
+        minSoldComps: 8,
+      })
+    );
+  });
+
+  it('falls back to apify default minSoldComps=8 in live provider path', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(listing);
+    const fetchSoldComps = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: 'query',
+      rawResult: { actorId: 'actor-123' },
+      soldComps: [
+        { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
+        { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
+        { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+      ],
+    });
+    const originalEnv = process.env.APIFY_MIN_SOLD_COMPS;
+    process.env.APIFY_MIN_SOLD_COMPS = '';
+
+    try {
+      await priceListingNow(listing.listing_id, {
+        createPricingProvider: () =>
+          ({
+            fetchSoldComps,
+            name: 'apify',
+          }) as never,
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+      });
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.APIFY_MIN_SOLD_COMPS;
+      } else {
+        process.env.APIFY_MIN_SOLD_COMPS = originalEnv;
+      }
+    }
+
+    expect(fetchSoldComps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingId: listing.listing_id,
+        minSoldComps: 8,
+      })
+    );
+  });
+
+  it('does not cap over-returned comps after fetch in canonical path', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(listing);
+    const soldComps = Array.from({ length: 12 }, (_value, index) => ({
+      price: { currency: 'USD', value: 20 + index },
+      soldDate: `2026-06-${String(index + 1).padStart(2, '0')}T10:00:00.000Z`,
+      title: `Comp ${index + 1}`,
+    }));
+
+    const result = await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: 'query',
+            rawResult: { actorId: 'actor-123' },
+            soldComps,
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProviderMinSoldComps: 8,
+    });
+
+    expect(result.rawCompCount).toBe(12);
+    expect(result.acceptedCompCount).toBe(12);
   });
 
   it('classifies and redacts provider failure', async () => {

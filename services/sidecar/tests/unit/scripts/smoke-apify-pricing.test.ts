@@ -226,7 +226,6 @@ describe('smoke apify pricing script', () => {
             count: 8,
             keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
             listingId: 'Single-000123',
-            minSoldComps: 8,
             title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
           },
           query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',

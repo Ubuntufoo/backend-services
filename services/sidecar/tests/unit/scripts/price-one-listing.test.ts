@@ -107,6 +107,7 @@ describe('price one listing script', () => {
   });
 
   it('calls canonical pricing function and prints compact success summary', async () => {
+    process.env.APIFY_MIN_SOLD_COMPS = '8';
     const runPriceListingNow = vi.fn().mockResolvedValue({
       acceptedCompCount: 3,
       listing: createListing({ price: 27.5 }),
@@ -129,6 +130,7 @@ describe('price one listing script', () => {
         createPricingProvider: expect.any(Function),
         dataAccess: {},
         now: expect.any(Function),
+        pricingProviderMinSoldComps: 8,
       }),
       {
         executionSource: 'cli',

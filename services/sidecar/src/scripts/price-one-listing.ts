@@ -276,13 +276,14 @@ export async function runPriceOneListingCli(
     const dataAccess =
       dependencies.createDataAccess?.() ?? createSidecarDataAccess(process.env);
     const runPriceNow = dependencies.runPriceListingNow ?? priceListingNow;
+    const config = buildProviderConfig(process.env);
     const result = await runPriceNow(parsedArgs.listingId, {
       createPricingProvider: () => {
-        const config = buildProviderConfig(process.env);
         return dependencies.createProvider?.(config) ?? createApifyPricingProvider(config);
       },
       dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],
       now: () => new Date(),
+      pricingProviderMinSoldComps: config.minSoldComps,
     }, {
       executionSource: 'cli',
     });

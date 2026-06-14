@@ -8,6 +8,7 @@ import {
   ApifyPricingProviderError,
   buildApifyActorInput,
   createApifyPricingProvider,
+  normalizeSoldComps,
   parseApifyActorOutput,
   redactSensitiveText,
 } from '@/pricing/index.js';
@@ -53,7 +54,6 @@ describe('Apify pricing provider', () => {
       itemSpecifics: baseInput.itemSpecifics,
       keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
       listingId: 'LIST-001',
-      minSoldComps: 9,
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
     });
   });
@@ -94,7 +94,7 @@ describe('Apify pricing provider', () => {
       conditionId: '4000',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 raw']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136']);
     expect(actorInput.keywords[0]).not.toContain('category:183050');
     expect(actorInput.keywords[0]).not.toContain('condition:4000');
   });
@@ -111,10 +111,10 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Silver Prizm Rookie Card',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 Silver raw']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 Silver']);
   });
 
-  it('uses raw signal for ungraded cards without grader grade', () => {
+  it('does not add raw signal for ungraded cards', () => {
     const actorInput = buildApifyActorInput({
       ...baseInput,
       conditionId: '4000',
@@ -125,8 +125,9 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 raw']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136']);
     expect(actorInput.keywords[0]).not.toContain('PSA');
+    expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
   it('uses graded signal without raw when grader and grade exist', () => {
@@ -152,6 +153,23 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
+  it.each([
+    ['SGC', '7', 'Victor Wembanyama 2023 Panini Prizm #136 SGC 7'],
+    ['BGS', '9.5', 'Victor Wembanyama 2023 Panini Prizm #136 BGS 9.5'],
+  ])('uses structured grader+grade signal for %s %s', (grader, grade, expectedQuery) => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+      itemSpecifics: {
+        ...baseInput.itemSpecifics,
+        Grade: grade,
+        'Professional Grader': grader,
+      },
+    });
+
+    expect(actorInput.keywords).toEqual([expectedQuery]);
+  });
+
   it('builds query without player when missing', () => {
     const actorInput = buildApifyActorInput({
       ...baseInput,
@@ -165,7 +183,7 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Rookie Card',
     });
 
-    expect(actorInput.keywords).toEqual(['2023 Panini Prizm #136 raw']);
+    expect(actorInput.keywords).toEqual(['2023 Panini Prizm #136']);
   });
 
   it('omits malformed card number fragments when missing', () => {
@@ -181,7 +199,7 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm raw']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm']);
     expect(actorInput.keywords[0]).not.toContain('# ');
   });
 
@@ -193,7 +211,7 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Lot of 3 Rookie Cards',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm raw lot']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm lot']);
     expect(actorInput.keywords[0]).not.toContain('#136');
   });
 
@@ -219,7 +237,6 @@ describe('Apify pricing provider', () => {
       })
     ).toMatchObject({
       count: 8,
-      minSoldComps: 8,
     });
   });
 
@@ -231,8 +248,26 @@ describe('Apify pricing provider', () => {
       })
     ).toMatchObject({
       count: 5,
-      minSoldComps: 5,
     });
+  });
+
+  it('removes duplicated player/year/card number noise from trading-card query parts', () => {
+    const actorInput = buildApifyActorInput({
+      categoryId: '261328',
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '98',
+        Player: 'Johnny Riddle',
+        'Product Line': 'Johnny Riddle Topps 98',
+        Year: '1954',
+      },
+      listingId: 'Single-000007',
+      listingType: 'single',
+      minSoldComps: 8,
+      title: '1955 Topps #98 Johnny Riddle St. Louis Cardinals Vintage Baseball Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
   });
 
   it('maps actor-native fixture into internal sold comps', () => {
@@ -310,6 +345,41 @@ describe('Apify pricing provider', () => {
       expect(result.soldComps).toHaveLength(7);
     }
   );
+
+  it('retains over-returned comps instead of capping them to requested count', async () => {
+    const items = Array.from({ length: 12 }, (_value, index) => ({
+      endedAt: `2026-06-${String(index + 1).padStart(2, '0')}T12:00:00.000Z`,
+      soldCurrency: 'USD',
+      soldPrice: String(index + 10),
+      title: `Comp ${index + 1}`,
+      url: `https://www.ebay.com/itm/${index + 1}`,
+    }));
+    const provider = createApifyPricingProvider(
+      {
+        actorId: 'actor-123',
+        token: 'secret-token',
+      },
+      {
+        now: () => new Date('2026-06-11T20:51:09.000Z'),
+        runActor: async () => ({
+          items,
+          query: 'Johnny Riddle 1955 Topps #98',
+          run: { itemCount: 12, status: 'SUCCEEDED' },
+        }),
+      }
+    );
+
+    const result = await provider.fetchSoldComps({
+      ...baseInput,
+      listingId: 'Single-000007',
+      minSoldComps: 8,
+      title: '1955 Topps #98 Johnny Riddle St. Louis Cardinals Vintage Baseball Card',
+    });
+    const normalized = normalizeSoldComps(result.soldComps);
+
+    expect(result.soldComps).toHaveLength(12);
+    expect(normalized.comps).toHaveLength(12);
+  });
 
   it('accepts zero-comp actor output without provider failure', () => {
     const result = parseApifyActorOutput(

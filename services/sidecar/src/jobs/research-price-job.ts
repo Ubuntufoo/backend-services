@@ -15,6 +15,7 @@ import {
   createFixturePricingProvider,
   getListingItemSpecifics,
   normalizeSoldComps,
+  parseRuntimeApifyConfig,
   redactSensitiveText as redactPricingSensitiveText,
   type LlmPricingPromptFactKey,
   type LlmPricingPromptFacts,
@@ -35,8 +36,8 @@ import {
   toJobErrorUpdateInput,
 } from './job-errors.js';
 
-const DEFAULT_MIN_SOLD_COMPS = 12;
 const APIFY_PROVIDER_NAME = 'apify';
+const DEFAULT_APIFY_MIN_SOLD_COMPS = 8;
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
 const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([APIFY_PROVIDER_NAME, FIXTURE_PROVIDER_NAME]);
@@ -63,6 +64,7 @@ export interface ResearchPriceJobDependencies {
   now: () => Date;
   pricingAnalyst?: PricingAnalyst;
   pricingProvider?: PricingProvider;
+  pricingProviderMinSoldComps?: number;
 }
 
 export interface RunResearchPriceJobResult {
@@ -364,6 +366,21 @@ function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): Pri
   return pricingProvider;
 }
 
+function resolvePricingProviderMinSoldComps(
+  pricingProvider: PricingProvider,
+  dependencies: ResearchPriceJobDependencies
+): number | undefined {
+  if (typeof dependencies.pricingProviderMinSoldComps === 'number') {
+    return dependencies.pricingProviderMinSoldComps;
+  }
+
+  if (pricingProvider.name !== APIFY_PROVIDER_NAME) {
+    return undefined;
+  }
+
+  return parseRuntimeApifyConfig(process.env).minSoldComps.value ?? DEFAULT_APIFY_MIN_SOLD_COMPS;
+}
+
 function assertResearchPriceListingEligible(listing: ListingRow): void {
   if (listing.listing_type !== 'single') {
     throw buildResearchPriceError(
@@ -474,6 +491,7 @@ export async function priceListingNow(
   assertResearchPriceListingEligible(listing);
 
   const pricingProvider = resolvePricingProvider(dependencies);
+  const pricingProviderMinSoldComps = resolvePricingProviderMinSoldComps(pricingProvider, dependencies);
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
@@ -500,7 +518,7 @@ export async function priceListingNow(
     });
 
     providerResult = await pricingProvider.fetchSoldComps(
-      buildPricingProviderInput(listing, listingId, DEFAULT_MIN_SOLD_COMPS)
+      buildPricingProviderInput(listing, listingId, pricingProviderMinSoldComps)
     );
     rawCompCount = providerResult.soldComps.length;
 

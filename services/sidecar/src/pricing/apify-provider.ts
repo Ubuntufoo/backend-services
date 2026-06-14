@@ -4,6 +4,7 @@ import {
   RAW_TRADING_CARD_CONDITION_ID,
   TRADING_CARD_CONDITION_ASPECT_KEY,
 } from '@/listings/trading-card-conditions.js';
+import { createLogger } from '@/utils/logger.js';
 
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
@@ -106,6 +107,10 @@ const PARALLEL_TERMS = [
 const GRADE_PATTERN = /\b(PSA|BGS|SGC|CGC|CSG|TAG|HGA)\s*(10|[1-9](?:\.\d)?)\b/i;
 const TITLE_CARD_NUMBER_PATTERN = /(?:^|[\s(#-])#?([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})(?:$|[\s)#-])/g;
 const TITLE_YEAR_PATTERN = /\b(19\d{2}|20\d{2})\b/g;
+const SERIAL_NUMBER_PATTERN = /(?:^|[\s(])(?:#?\d{1,4}\s*\/\s*\d{1,4}|\d{1,4}\s*of\s*\d{1,4})(?:$|[\s)])/i;
+const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader', 'Graded'] as const;
+const GRADE_ITEM_SPECIFIC_KEYS = ['Grade', 'Card Grade'] as const;
+const pricingLogger = createLogger('Pricing');
 
 const moneySchema = z.object({
   value: z.number().finite(),
@@ -180,7 +185,6 @@ export interface ApifyActorInput {
   itemSpecifics?: PricingProviderInput['itemSpecifics'];
   keywords: string[];
   listingId: string;
-  minSoldComps: number;
   title: string;
 }
 
@@ -255,7 +259,6 @@ export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInp
     ...(input.itemSpecifics ? { itemSpecifics: input.itemSpecifics } : {}),
     keywords: [query],
     listingId: input.listingId,
-    minSoldComps,
     title: input.title.trim(),
   };
 }
@@ -338,12 +341,26 @@ export function createApifyPricingProvider(
           token: config.token,
         });
 
-        return parseApifyActorOutput(raw, {
+        const result = parseApifyActorOutput(raw, {
           actorInput,
           actorId: config.actorId,
           fetchedAt,
           query: actorInput.keywords[0],
         });
+
+        if (result.soldComps.length > actorInput.count) {
+          pricingLogger.warn('Apify pricing provider returned more comps than requested.', {
+            actorId: config.actorId,
+            event: 'apify_provider_over_return',
+            listingId: input.listingId,
+            provider: APIFY_PROVIDER_NAME,
+            query: redactSensitiveText(actorInput.keywords[0] ?? ''),
+            requestedCount: actorInput.count,
+            returnedCount: result.soldComps.length,
+          });
+        }
+
+        return result;
       } catch (error) {
         if (error instanceof ApifyPricingProviderError) {
           throw error;
@@ -440,13 +457,16 @@ function buildApifyQuery(input: PricingProviderInput): string {
   const title = input.title.trim();
   const terms = new QueryTermAccumulator();
   const isLot = isLotListing(input, title);
+  const player = getFirstSpecificValue(input.itemSpecifics, ['Player']);
+  const primaryYear = getPrimaryYear(input.itemSpecifics, title);
+  const cardNumber = getCardNumber(input.itemSpecifics, title, primaryYear);
 
-  terms.add(getFirstSpecificValue(input.itemSpecifics, ['Player']));
-  terms.add(getPrimaryYear(input.itemSpecifics, title));
-  terms.add(getSetLine(input.itemSpecifics, title));
+  terms.add(player);
+  terms.add(primaryYear);
+  terms.add(getSetLine(input.itemSpecifics, title, { cardNumber, player, primaryYear }));
 
   if (!isLot) {
-    terms.add(formatCardNumber(getCardNumber(input.itemSpecifics, title)));
+    terms.add(formatCardNumber(cardNumber));
   }
 
   for (const token of getParallelSignals(input.itemSpecifics, title)) {
@@ -496,7 +516,6 @@ function sanitizeActorInput(input: ApifyActorInput): Record<string, unknown> {
     ...(input.itemSpecifics ? { itemSpecifics: sanitizeUnknown(input.itemSpecifics) } : {}),
     keywords: input.keywords.map((value) => redactSensitiveText(value)),
     listingId: redactSensitiveText(input.listingId),
-    minSoldComps: input.minSoldComps,
     title: redactSensitiveText(input.title),
   };
 }
@@ -659,7 +678,12 @@ function getFirstSpecificValue(
 }
 
 function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+  const titleYear = title.match(TITLE_YEAR_PATTERN)?.[0];
   const specificYear = getFirstSpecificValue(itemSpecifics, ['Year']);
+
+  if (titleYear) {
+    return titleYear;
+  }
 
   if (specificYear) {
     const match = specificYear.match(/\b(19\d{2}|20\d{2})\b/);
@@ -668,14 +692,22 @@ function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], ti
     }
   }
 
-  return title.match(TITLE_YEAR_PATTERN)?.[0];
+  return undefined;
 }
 
-function getSetLine(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+function getSetLine(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  title: string,
+  context: {
+    cardNumber?: string;
+    player?: string;
+    primaryYear?: string;
+  }
+): string | undefined {
   const terms = new QueryTermAccumulator();
 
   for (const value of getSpecificValues(itemSpecifics, SET_LINE_ITEM_SPECIFIC_KEYS)) {
-    terms.add(value);
+    terms.add(cleanSetLineValue(value, context));
   }
 
   if (!terms.isEmpty()) {
@@ -688,9 +720,12 @@ function getSetLine(itemSpecifics: PricingProviderInput['itemSpecifics'], title:
     .join(' ');
 }
 
-function getCardNumber(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
+function getCardNumber(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  title: string,
+  primaryYear?: string
+): string | undefined {
   const specific = sanitizeCardNumber(getFirstSpecificValue(itemSpecifics, ['Card Number']));
-  const primaryYear = getPrimaryYear(itemSpecifics, title);
 
   if (specific) {
     return specific;
@@ -746,22 +781,41 @@ function containsWholePhrase(source: string, candidate: string): boolean {
 }
 
 function getGradingSignal(input: PricingProviderInput): string | undefined {
-  const gradedFromTitle = extractTitleGrade(input.title);
+  const explicitGrade = extractGradeSignal(input.itemSpecifics, input.title);
 
   if (input.conditionId?.trim() === GRADED_TRADING_CARD_CONDITION_ID) {
-    return gradedFromTitle ?? 'graded';
+    return explicitGrade ?? 'graded';
   }
 
   if (input.conditionId?.trim() === RAW_TRADING_CARD_CONDITION_ID) {
-    return 'raw';
+    return undefined;
   }
 
-  if (gradedFromTitle) {
-    return gradedFromTitle;
+  if (explicitGrade) {
+    return explicitGrade;
   }
 
   if (getFirstSpecificValue(input.itemSpecifics, [TRADING_CARD_CONDITION_ASPECT_KEY])) {
-    return 'raw';
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function extractGradeSignal(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  title: string
+): string | undefined {
+  const fromTitle = extractTitleGrade(title);
+  if (fromTitle) {
+    return fromTitle;
+  }
+
+  const grader = normalizeGrader(getFirstSpecificValue(itemSpecifics, GRADER_ITEM_SPECIFIC_KEYS));
+  const grade = normalizeGrade(getFirstSpecificValue(itemSpecifics, GRADE_ITEM_SPECIFIC_KEYS));
+
+  if (grader && grade) {
+    return `${grader} ${grade}`;
   }
 
   return undefined;
@@ -770,6 +824,61 @@ function getGradingSignal(input: PricingProviderInput): string | undefined {
 function extractTitleGrade(title: string): string | undefined {
   const match = title.match(GRADE_PATTERN);
   return match ? `${match[1].toUpperCase()} ${match[2]}` : undefined;
+}
+
+function cleanSetLineValue(
+  value: string,
+  context: {
+    cardNumber?: string;
+    player?: string;
+    primaryYear?: string;
+  }
+): string | undefined {
+  let normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (context.player) {
+    normalized = removeWholePhrase(normalized, context.player);
+  }
+
+  if (context.primaryYear) {
+    normalized = removeWholePhrase(normalized, context.primaryYear);
+  }
+
+  if (context.cardNumber) {
+    normalized = normalized.replace(
+      new RegExp(`(?:^|\\s)#?${escapeRegExp(context.cardNumber)}(?=$|\\s)`, 'gi'),
+      ' '
+    );
+  }
+
+  normalized = normalized.replace(/\b(19\d{2}|20\d{2})\b/g, ' ');
+  normalized = normalized.replace(SERIAL_NUMBER_PATTERN, ' ');
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  return normalized || undefined;
+}
+
+function removeWholePhrase(source: string, candidate: string): string {
+  const escaped = escapeRegExp(candidate).replace(/\s+/g, '\\s+');
+  return source.replace(new RegExp(`(?:^|\\s)${escaped}(?=$|\\s)`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeGrader(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toUpperCase();
+  return normalized && /^(PSA|BGS|SGC|CGC|CSG|TAG|HGA)$/.test(normalized) ? normalized : undefined;
+}
+
+function normalizeGrade(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && /^(10|[1-9](?:\.\d)?)$/.test(normalized) ? normalized : undefined;
 }
 
 function isLotListing(input: PricingProviderInput, title: string): boolean {
