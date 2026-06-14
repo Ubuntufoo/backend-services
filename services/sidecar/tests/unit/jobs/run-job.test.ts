@@ -1154,6 +1154,59 @@ describe('runSidecarJob', () => {
     ]);
   });
 
+  it('normalizes pricing-critical trading card aspects before persistence', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-JR-98',
+      },
+      listing: createListingRow({
+        listing_id: 'LIST-JR-98',
+        sku: 'LIST-JR-98',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+      description: 'Vintage single card.',
+      categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: null,
+      cardConditionToken: null,
+      conditionSuggestion: null,
+      skuCategoryCode: 'BSBL',
+      aspects: {
+        Athlete: 'Johnny Riddle',
+        'Card Manufacturer': 'Topps',
+        Season: '1955',
+      },
+      priceSuggestion: null,
+      confidence: {},
+      warnings: [],
+      rawModelResponse: { id: 'raw-response-jr-98' },
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-JR-98',
+      expect.objectContaining({
+        item_specifics: expect.objectContaining({
+          Athlete: 'Johnny Riddle',
+          Player: 'Johnny Riddle',
+          'Card Manufacturer': 'Topps',
+          Manufacturer: 'Topps',
+          Season: '1955',
+          Year: '1955',
+          'Card Number': '98',
+          skuCategoryCode: 'BSBL',
+        }),
+      })
+    );
+  });
+
   it('persists BSBL skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
     const dataAccess = createDataAccess({
       job: {

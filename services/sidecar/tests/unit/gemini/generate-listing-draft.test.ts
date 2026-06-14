@@ -230,6 +230,18 @@ describe('generateListingDraft', () => {
       'Do not return collector shorthand such as NM-MT, EX-MT, VG-EX, MT, NM, EX, VG, FR, or PR.'
     );
     expect(request.prompt).toContain('Include a Franchise aspect when the team, franchise, or IP is identifiable');
+    expect(request.prompt).toContain(
+      'Emit canonical trading-card pricing aspects whenever visible or strongly inferable'
+    );
+    expect(request.prompt).toContain(
+      'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98"'
+    );
+    expect(request.prompt).toContain('"Year": "string"');
+    expect(request.prompt).toContain('"Manufacturer": "string"');
+    expect(request.prompt).toContain('"Set": "string"');
+    expect(request.prompt).toContain('"Card Number": "string"');
+    expect(request.prompt).toContain('"Parallel/Variety": "string"');
+    expect(request.prompt).toContain('"Insert Set": "string"');
     expect(request.prompt).toContain('"Franchise": "string"');
     expect(request.prompt).toContain(
       '"cardConditionToken": "NEAR_MINT_OR_BETTER | EXCELLENT | VERY_GOOD | POOR | null"'
@@ -252,8 +264,10 @@ describe('generateListingDraft', () => {
       aspects: {
         Franchise: 'Utah Jazz',
         Player: 'Michael Jordan',
+        Manufacturer: 'Fleer',
         Sport: 'Basketball',
         'Card Manufacturer': 'Fleer',
+        Year: '1986-87',
         Season: '1986-87',
       },
       priceSuggestion: 12500,
@@ -290,6 +304,38 @@ describe('generateListingDraft', () => {
     expect(result.aspects).toEqual({
       Player: 'Karl Malone',
       Franchise: 'Utah Jazz',
+    });
+  });
+
+  it('normalizes canonical pricing aspects from aliases and title card number fallback', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+        description: 'Vintage single card.',
+        aspects: {
+          Athlete: 'Johnny Riddle',
+          'Card Manufacturer': 'Topps',
+          Season: '1955',
+          Team: 'St. Louis Cardinals',
+        },
+        warnings: [],
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-013',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.aspects).toMatchObject({
+      Athlete: 'Johnny Riddle',
+      Player: 'Johnny Riddle',
+      'Card Manufacturer': 'Topps',
+      Manufacturer: 'Topps',
+      Season: '1955',
+      Year: '1955',
+      'Card Number': '98',
+      Team: 'St. Louis Cardinals',
     });
   });
 

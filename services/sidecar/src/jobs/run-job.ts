@@ -14,6 +14,7 @@ import {
   generateListingDraft,
   generateListingDraftWithFallback,
   GeminiFallbackExecutionError,
+  normalizeGeneratedDraft,
   prepareGenerateListingDraft,
   resolveTradingCardListingIds,
   type GenerateListingDraftInput,
@@ -194,22 +195,26 @@ function buildGeneratedListingReviewUpdate(
   listing: ListingRow,
   draft: Awaited<ReturnType<typeof generateListingDraft>>
 ): ListingUpdate {
-  const resolvedIds = resolveTradingCardListingIds(listing, draft);
+  const normalizedDraft = {
+    ...draft,
+    ...normalizeGeneratedDraft(draft),
+  };
+  const resolvedIds = resolveTradingCardListingIds(listing, normalizedDraft);
 
   return {
     category_id: resolvedIds.category_id,
     condition_id: resolvedIds.condition_id,
-    condition_notes: draft.cardConditionNote ?? null,
-    description: draft.description,
-    item_specifics: buildGeneratedListingAspects(draft),
+    condition_notes: normalizedDraft.cardConditionNote ?? null,
+    description: normalizedDraft.description,
+    item_specifics: buildGeneratedListingAspects(normalizedDraft),
     last_error_at: null,
     last_error_code: null,
     last_error_context: {},
     last_error_message: null,
-    price: draft.priceSuggestion ?? null,
+    price: normalizedDraft.priceSuggestion ?? null,
     status: 'needs_review',
     sub_status: 'review_pending',
-    title: draft.title,
+    title: normalizedDraft.title,
   };
 }
 

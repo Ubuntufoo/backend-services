@@ -8,9 +8,16 @@ import { isRawCardConditionToken } from '@/listings/trading-card-conditions.js';
 
 type DraftRecord = Record<string, unknown>;
 type ConfidenceKey = 'title' | 'category' | 'price' | 'aspects';
+type AspectRecord = Record<string, string | string[]>;
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const CONFIDENCE_KEYS: ConfidenceKey[] = ['title', 'category', 'price', 'aspects'];
+const TITLE_CARD_NUMBER_PATTERNS = [
+  /(?:^|[\s([{])#\s*([A-Za-z0-9-]+)\b/i,
+  /\bCard\s*#\s*([A-Za-z0-9-]+)\b/i,
+  /\bCard\s+No\.?\s*([A-Za-z0-9-]+)\b/i,
+  /\bCard\s+Number\s+([A-Za-z0-9-]+)\b/i,
+];
 
 function extractJsonPayload(rawText: string): string {
   const trimmed = rawText.trim();
@@ -125,6 +132,94 @@ function normalizeAspects(value: unknown, warnings: string[]): Record<string, st
   return aspects;
 }
 
+function getAspectString(aspects: AspectRecord, key: string): string | null {
+  const value = aspects[key];
+
+  return typeof value === 'string' ? value : null;
+}
+
+function normalizeCardNumberValue(value: string): string {
+  return value.trim().replace(/^#\s*/, '').trim();
+}
+
+function extractCardNumberFromTitle(title: string): string | null {
+  for (const pattern of TITLE_CARD_NUMBER_PATTERNS) {
+    const match = pattern.exec(title);
+    const candidate = match?.[1];
+
+    if (!candidate) {
+      continue;
+    }
+
+    const normalized = normalizeCardNumberValue(candidate);
+
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+export function normalizeGeneratedDraft(
+  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings'>
+): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings'> {
+  const aspects: AspectRecord = { ...draft.aspects };
+  const warnings = [...draft.warnings];
+
+  const year = getAspectString(aspects, 'Year');
+  const season = getAspectString(aspects, 'Season');
+  if (!year && season) {
+    aspects.Year = season;
+  }
+
+  const manufacturer = getAspectString(aspects, 'Manufacturer');
+  const cardManufacturer = getAspectString(aspects, 'Card Manufacturer');
+  if (!manufacturer && cardManufacturer) {
+    aspects.Manufacturer = cardManufacturer;
+  }
+
+  const player = getAspectString(aspects, 'Player');
+  const playerAthlete = getAspectString(aspects, 'Player/Athlete');
+  const athlete = getAspectString(aspects, 'Athlete');
+
+  if (!player && playerAthlete) {
+    aspects.Player = playerAthlete;
+  } else if (!player && athlete) {
+    aspects.Player = athlete;
+  }
+
+  const cardNumber = getAspectString(aspects, 'Card Number');
+  if (cardNumber) {
+    const normalizedCardNumber = normalizeCardNumberValue(cardNumber);
+
+    if (normalizedCardNumber.length > 0) {
+      aspects['Card Number'] = normalizedCardNumber;
+    }
+  }
+
+  const normalizedAspectCardNumber = getAspectString(aspects, 'Card Number');
+  const titleCardNumber = extractCardNumberFromTitle(draft.title);
+
+  if (!normalizedAspectCardNumber && titleCardNumber) {
+    aspects['Card Number'] = titleCardNumber;
+  } else if (
+    normalizedAspectCardNumber &&
+    titleCardNumber &&
+    normalizedAspectCardNumber !== titleCardNumber
+  ) {
+    warnings.push(
+      `Gemini response title card number "${titleCardNumber}" conflicted with aspects["Card Number"] "${normalizedAspectCardNumber}"; kept aspect value.`
+    );
+  }
+
+  return {
+    title: draft.title,
+    aspects,
+    warnings,
+  };
+}
+
 function normalizePriceSuggestion(value: unknown, warnings: string[]): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -195,19 +290,35 @@ export function parseGeneratedDraft(
   const parsed = parseDraftObject(rawText);
   const serviceWarnings: string[] = [];
   const modelWarnings = normalizeModelWarnings(parsed.warnings);
+  const title = normalizeRequiredString(parsed.title, 'title', serviceWarnings);
+  const description = normalizeRequiredString(parsed.description, 'description', serviceWarnings);
+  const categorySuggestion = normalizeNullableString(parsed.categorySuggestion);
+  const cardConditionNote = normalizeNullableString(parsed.cardConditionNote);
+  const cardConditionToken = normalizeCardConditionToken(parsed.cardConditionToken, serviceWarnings);
+  const conditionSuggestion = normalizeNullableString(parsed.conditionSuggestion);
+  const skuCategoryCode = normalizeSkuCategoryCodeSuggestion(parsed.skuCategoryCode, serviceWarnings);
+  const aspects = normalizeAspects(parsed.aspects, serviceWarnings);
+  const priceSuggestion = normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings);
+  const confidence = normalizeConfidence(parsed.confidence, serviceWarnings);
+
+  const normalizedDraft = normalizeGeneratedDraft({
+    title,
+    aspects,
+    warnings: [...modelWarnings, ...serviceWarnings],
+  });
 
   return generatedListingDraftSchema.parse({
-    title: normalizeRequiredString(parsed.title, 'title', serviceWarnings),
-    description: normalizeRequiredString(parsed.description, 'description', serviceWarnings),
-    categorySuggestion: normalizeNullableString(parsed.categorySuggestion),
-    cardConditionNote: normalizeNullableString(parsed.cardConditionNote),
-    cardConditionToken: normalizeCardConditionToken(parsed.cardConditionToken, serviceWarnings),
-    conditionSuggestion: normalizeNullableString(parsed.conditionSuggestion),
-    skuCategoryCode: normalizeSkuCategoryCodeSuggestion(parsed.skuCategoryCode, serviceWarnings),
-    aspects: normalizeAspects(parsed.aspects, serviceWarnings),
-    priceSuggestion: normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings),
-    confidence: normalizeConfidence(parsed.confidence, serviceWarnings),
-    warnings: [...modelWarnings, ...serviceWarnings],
+    title: normalizedDraft.title,
+    description,
+    categorySuggestion,
+    cardConditionNote,
+    cardConditionToken,
+    conditionSuggestion,
+    skuCategoryCode,
+    aspects: normalizedDraft.aspects,
+    priceSuggestion,
+    confidence,
+    warnings: normalizedDraft.warnings,
     rawModelResponse,
   });
 }
