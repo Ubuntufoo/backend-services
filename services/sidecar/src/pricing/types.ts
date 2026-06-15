@@ -73,6 +73,53 @@ export interface PricingStatsResult {
 
 export type PricingConfidence = 'low' | 'medium' | 'high';
 
+export interface ConditionSignal {
+  label: string;
+  score: number;
+  source: 'listing_condition' | 'comp_title' | 'comp_condition';
+  matchedText: string;
+}
+
+export interface ConditionAdjustmentCompSignal {
+  compId: string;
+  title: string;
+  price: number;
+  signal: ConditionSignal | null;
+}
+
+export interface AllowedConditionAdjustment {
+  eligible: boolean;
+  targetPrice: number | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+  rawPercent: number | null;
+  appliedPercent: number | null;
+  reason:
+    | 'eligible'
+    | 'listing_condition_unknown'
+    | 'median_price_unavailable'
+    | 'insufficient_explicit_comp_conditions'
+    | 'comp_condition_median_unavailable'
+    | 'target_price_invalid';
+}
+
+export interface ConditionAdjustmentInput {
+  listingCondition: string | null | undefined;
+  comps: NormalizedSoldComp[];
+  stats: PricingStatsResult;
+}
+
+export interface ConditionAdjustmentSummary {
+  listingConditionSignal: ConditionSignal | null;
+  compConditionSignals: ConditionAdjustmentCompSignal[];
+  explicitCompConditionCount: number;
+  compMedianConditionScore: number | null;
+  listingConditionScore: number | null;
+  conditionDelta: number | null;
+  deterministicMedianPrice: number | null;
+  allowedAdjustment: AllowedConditionAdjustment;
+}
+
 export type LlmPricingPromptFactKey =
   | 'Player'
   | 'Year'
@@ -115,6 +162,7 @@ export interface LlmPricingPromptInput {
   listing: LlmPricingPromptListing;
   stats: LlmPricingPromptStats;
   comps: LlmPricingPromptComp[];
+  conditionAdjustment: ConditionAdjustmentSummary;
   options?: LlmPricingPromptOptions;
 }
 
@@ -131,21 +179,26 @@ export interface LlmPricingReasoningCompNote {
 export interface LlmPricingReasoning {
   selectedCompIds: string[];
   rejectedCompIds: string[];
-  suggestedPrice: number | null;
+  conditionAdjustedPrice: number | null;
+  conditionAdjustmentPercent: number | null;
+  conditionAdjustmentReason: string | null;
   confidence: PricingConfidence;
   priceExplanation: string;
+  reviewWarnings?: string[];
+  ambiguousConditionTerms?: string[];
   compNotes?: LlmPricingReasoningCompNote[];
 }
 
 export interface LlmPricingReasoningValidationContext {
   validCompIds: readonly string[];
-  stats: Pick<PricingStatsResult, 'lowSoldPrice' | 'highSoldPrice'>;
+  allowedAdjustment: Pick<AllowedConditionAdjustment, 'eligible' | 'targetPrice' | 'minPrice' | 'maxPrice'>;
 }
 
 export interface PricingAnalystInput {
   listing: LlmPricingPromptListing;
   stats: PricingStatsResult;
   comps: NormalizedSoldComp[];
+  conditionAdjustment: ConditionAdjustmentSummary;
   promptOptions?: LlmPricingPromptOptions;
 }
 

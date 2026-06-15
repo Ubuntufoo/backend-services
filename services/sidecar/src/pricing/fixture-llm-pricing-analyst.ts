@@ -38,6 +38,7 @@ class FixtureLlmPricingAnalyst implements PricingAnalyst {
       listing: input.listing,
       stats: toPromptStats(input),
       comps: input.comps.map(toPromptComp),
+      conditionAdjustment: input.conditionAdjustment,
       options: input.promptOptions,
     });
 
@@ -49,10 +50,7 @@ class FixtureLlmPricingAnalyst implements PricingAnalyst {
       const rawOutput = buildRawOutput(input, this.options.mode, this.options.rawOutput);
       const reasoning = parseLlmPricingReasoningOutput(rawOutput, {
         validCompIds: input.comps.map((comp) => comp.id),
-        stats: {
-          lowSoldPrice: input.stats.lowSoldPrice,
-          highSoldPrice: input.stats.highSoldPrice,
-        },
+        allowedAdjustment: input.conditionAdjustment.allowedAdjustment,
       });
 
       return {
@@ -99,34 +97,29 @@ function buildRawOutput(
 }
 
 function buildValidRawOutput(input: PricingAnalystInput) {
-  const guardrailsAvailable =
-    isPositiveAmount(input.stats.lowSoldPrice) &&
-    isPositiveAmount(input.stats.highSoldPrice) &&
-    input.stats.lowSoldPrice <= input.stats.highSoldPrice;
-  const selectedCompIds = guardrailsAvailable
-    ? input.comps
-        .filter((comp) =>
-          isCompWithinGuardrails(comp, input.stats.lowSoldPrice as number, input.stats.highSoldPrice as number),
-        )
-        .map((comp) => comp.id)
-    : [];
-  const rejectedCompIds = input.comps
-    .map((comp) => comp.id)
-    .filter((compId) => !selectedCompIds.includes(compId));
-  const suggestedPrice = getSafeSuggestedPrice(input);
+  const selectedCompIds = input.comps.map((comp) => comp.id);
+  const conditionAdjustedPrice = getConditionAdjustedPrice(input);
 
   return {
     selectedCompIds,
-    rejectedCompIds,
-    suggestedPrice,
+    rejectedCompIds: [],
+    conditionAdjustedPrice,
+    conditionAdjustmentPercent:
+      conditionAdjustedPrice !== null ? input.conditionAdjustment.allowedAdjustment.appliedPercent : null,
+    conditionAdjustmentReason:
+      conditionAdjustedPrice !== null
+        ? 'Deterministic condition target accepted.'
+        : input.conditionAdjustment.allowedAdjustment.eligible
+          ? 'No safe condition adjustment selected.'
+          : 'Condition adjustment unavailable from deterministic guardrails.',
     confidence: computePricingConfidence({
       comps: input.comps,
       stats: input.stats,
     }).confidence,
     priceExplanation:
-      selectedCompIds.length > 0 && suggestedPrice !== null
-        ? 'Selected comps align with deterministic sold range.'
-        : 'Deterministic comps do not support a safe price.',
+      conditionAdjustedPrice !== null
+        ? 'Deterministic median and condition evidence support exact target.'
+        : 'Deterministic median remains final because condition adjustment was not applied.',
   };
 }
 
@@ -154,25 +147,12 @@ function toPromptComp(comp: PricingAnalystInput['comps'][number]): LlmPricingPro
   };
 }
 
-function getSafeSuggestedPrice(input: PricingAnalystInput): number | null {
-  const suggestedPrice = normalizePrice(input.stats.deterministicSuggestedPrice);
-  const low = normalizePrice(input.stats.lowSoldPrice);
-  const high = normalizePrice(input.stats.highSoldPrice);
-
-  if (suggestedPrice === null || low === null || high === null || suggestedPrice < low || suggestedPrice > high) {
+function getConditionAdjustedPrice(input: PricingAnalystInput): number | null {
+  if (!input.conditionAdjustment.allowedAdjustment.eligible) {
     return null;
   }
 
-  return suggestedPrice;
-}
-
-function isCompWithinGuardrails(
-  comp: PricingAnalystInput['comps'][number],
-  low: number,
-  high: number,
-): boolean {
-  const totalValue = comp.totalPrice.value;
-  return Number.isFinite(totalValue) && totalValue > 0 && totalValue >= low && totalValue <= high;
+  return normalizePrice(input.conditionAdjustment.allowedAdjustment.targetPrice);
 }
 
 function isPositiveAmount(value: number | null): value is number {

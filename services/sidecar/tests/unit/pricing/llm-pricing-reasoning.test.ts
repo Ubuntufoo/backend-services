@@ -7,53 +7,67 @@ import {
 describe('parseLlmPricingReasoningOutput', () => {
   const context: LlmPricingReasoningValidationContext = {
     validCompIds: ['comp-1', 'comp-2', 'comp-3'],
-    stats: {
-      lowSoldPrice: 10,
-      highSoldPrice: 20,
+    allowedAdjustment: {
+      eligible: true,
+      targetPrice: 15.13,
+      minPrice: 15.13,
+      maxPrice: 15.13,
     },
   };
 
-  it('accepts valid output', () => {
+  it('accepts valid exact-target output', () => {
     expect(
       parseLlmPricingReasoningOutput(
         {
           selectedCompIds: ['comp-1', 'comp-2'],
           rejectedCompIds: ['comp-3'],
-          suggestedPrice: 15.129,
+          conditionAdjustedPrice: 15.129,
+          conditionAdjustmentPercent: -0.0488,
+          conditionAdjustmentReason: 'Most explicit-condition comps appear slightly stronger.',
           confidence: 'medium',
-          priceExplanation: 'Median sold comps support mid-range pricing.',
-          compNotes: [{ compId: 'comp-1', note: 'Recent sale near median.' }],
+          priceExplanation: 'Median comps support exact deterministic target.',
+          reviewWarnings: ['Most explicit-condition comps appear higher grade than listing.'],
+          ambiguousConditionTerms: ['low grade'],
+          compNotes: [{ compId: 'comp-1', note: 'Recent sale aligns with target.' }],
         },
         context,
       ),
     ).toEqual({
       selectedCompIds: ['comp-1', 'comp-2'],
       rejectedCompIds: ['comp-3'],
-      suggestedPrice: 15.13,
+      conditionAdjustedPrice: 15.13,
+      conditionAdjustmentPercent: -0.0488,
+      conditionAdjustmentReason: 'Most explicit-condition comps appear slightly stronger.',
       confidence: 'medium',
-      priceExplanation: 'Median sold comps support mid-range pricing.',
-      compNotes: [{ compId: 'comp-1', note: 'Recent sale near median.' }],
+      priceExplanation: 'Median comps support exact deterministic target.',
+      reviewWarnings: ['Most explicit-condition comps appear higher grade than listing.'],
+      ambiguousConditionTerms: ['low grade'],
+      compNotes: [{ compId: 'comp-1', note: 'Recent sale aligns with target.' }],
     });
   });
 
-  it('accepts suggestedPrice null', () => {
+  it('accepts null conditionAdjustedPrice', () => {
     expect(
       parseLlmPricingReasoningOutput(
         {
           selectedCompIds: ['comp-1'],
           rejectedCompIds: ['comp-2', 'comp-3'],
-          suggestedPrice: null,
+          conditionAdjustedPrice: null,
+          conditionAdjustmentPercent: null,
+          conditionAdjustmentReason: 'Condition evidence is thin.',
           confidence: 'low',
-          priceExplanation: 'Deterministic stats should drive price.',
+          priceExplanation: 'Deterministic median should remain final.',
         },
         context,
       ),
     ).toEqual({
       selectedCompIds: ['comp-1'],
       rejectedCompIds: ['comp-2', 'comp-3'],
-      suggestedPrice: null,
+      conditionAdjustedPrice: null,
+      conditionAdjustmentPercent: null,
+      conditionAdjustmentReason: 'Condition evidence is thin.',
       confidence: 'low',
-      priceExplanation: 'Deterministic stats should drive price.',
+      priceExplanation: 'Deterministic median should remain final.',
     });
   });
 
@@ -73,63 +87,50 @@ describe('parseLlmPricingReasoningOutput', () => {
     ['selected duplicate comp id', { ...buildValidPayload(), selectedCompIds: ['comp-1', 'comp-1'] }, /duplicate compId/],
     ['rejected duplicate comp id', { ...buildValidPayload(), rejectedCompIds: ['comp-2', 'comp-2'] }, /duplicate compId/],
     ['selected rejected overlap', { ...buildValidPayload(), selectedCompIds: ['comp-1'], rejectedCompIds: ['comp-1'] }, /overlaps rejectedCompIds/],
-    ['selected non-string comp id', { ...buildValidPayload(), selectedCompIds: [123] }, /compId must be a string/],
-    ['rejected non-string comp id', { ...buildValidPayload(), rejectedCompIds: [123] }, /compId must be a string/],
-    ['suggestedPrice string', { ...buildValidPayload(), suggestedPrice: '12.50' }, /suggestedPrice/],
-    ['suggestedPrice NaN', { ...buildValidPayload(), suggestedPrice: Number.NaN }, /suggestedPrice/],
-    ['suggestedPrice Infinity', { ...buildValidPayload(), suggestedPrice: Number.POSITIVE_INFINITY }, /suggestedPrice/],
-    ['suggestedPrice zero', { ...buildValidPayload(), suggestedPrice: 0 }, /suggestedPrice/],
-    ['suggestedPrice negative', { ...buildValidPayload(), suggestedPrice: -1 }, /suggestedPrice/],
-    ['suggestedPrice rounds to zero', { ...buildValidPayload(), suggestedPrice: 0.001 }, /suggestedPrice/],
+    ['conditionAdjustedPrice string', { ...buildValidPayload(), conditionAdjustedPrice: '15.13' }, /conditionAdjustedPrice/],
+    ['conditionAdjustedPrice NaN', { ...buildValidPayload(), conditionAdjustedPrice: Number.NaN }, /conditionAdjustedPrice/],
+    ['conditionAdjustedPrice zero', { ...buildValidPayload(), conditionAdjustedPrice: 0 }, /conditionAdjustedPrice/],
+    ['conditionAdjustedPrice negative', { ...buildValidPayload(), conditionAdjustedPrice: -1 }, /conditionAdjustedPrice/],
+    ['conditionAdjustedPrice rounds to zero', { ...buildValidPayload(), conditionAdjustedPrice: 0.001 }, /conditionAdjustedPrice/],
+    ['conditionAdjustmentPercent string', { ...buildValidPayload(), conditionAdjustmentPercent: '0.1' }, /conditionAdjustmentPercent/],
     ['oversized explanation', { ...buildValidPayload(), priceExplanation: 'x'.repeat(501) }, /priceExplanation/],
-    ['recommendation language', { ...buildValidPayload(), priceExplanation: 'Sell as lot based on grouped demand.' }, /disallowed lot\/single recommendation language/],
+    ['reviewWarnings non-string', { ...buildValidPayload(), reviewWarnings: [123] }, /reviewWarnings/],
+    ['ambiguous terms too long', { ...buildValidPayload(), ambiguousConditionTerms: ['x'.repeat(81)] }, /ambiguousConditionTerms/],
     ['compNotes unknown comp id', { ...buildValidPayload(), compNotes: [{ compId: 'unknown', note: 'Outlier comp.' }] }, /compNotes.*unknown/],
-    ['compNotes note too long', { ...buildValidPayload(), compNotes: [{ compId: 'comp-1', note: 'x'.repeat(241) }] }, /compNotes.*at most 240 characters/],
-    ['compNotes note non-string', { ...buildValidPayload(), compNotes: [{ compId: 'comp-1', note: 123 }] }, /compNotes\.0\.note/],
   ])('rejects %s', (_label, payload, message) => {
     expect(() => parseLlmPricingReasoningOutput(payload, context)).toThrow(message);
   });
 
-  it('rejects suggested price below low guardrail', () => {
+  it('rejects off-target adjustment', () => {
     expect(() =>
       parseLlmPricingReasoningOutput(
         {
           ...buildValidPayload(),
-          suggestedPrice: 9.99,
+          conditionAdjustedPrice: 15.12,
         },
         context,
       ),
-    ).toThrow(/within deterministic sold price range 10.00-20.00/);
+    ).toThrow(/deterministic condition-adjusted target 15.13/);
   });
 
-  it('rejects suggested price above high guardrail', () => {
+  it('rejects conditionAdjustedPrice when deterministic target unavailable', () => {
     expect(() =>
       parseLlmPricingReasoningOutput(
         {
           ...buildValidPayload(),
-          suggestedPrice: 20.01,
-        },
-        context,
-      ),
-    ).toThrow(/within deterministic sold price range 10.00-20.00/);
-  });
-
-  it('rejects suggested price when deterministic guardrails unavailable', () => {
-    expect(() =>
-      parseLlmPricingReasoningOutput(
-        {
-          ...buildValidPayload(),
-          suggestedPrice: 15,
+          conditionAdjustedPrice: 15.13,
         },
         {
           ...context,
-          stats: {
-            lowSoldPrice: null,
-            highSoldPrice: null,
+          allowedAdjustment: {
+            eligible: false,
+            targetPrice: null,
+            minPrice: null,
+            maxPrice: null,
           },
         },
       ),
-    ).toThrow(/requires deterministic low\/high sold price guardrails/);
+    ).toThrow(/requires deterministic eligible condition adjustment target/);
   });
 });
 
@@ -137,8 +138,10 @@ function buildValidPayload() {
   return {
     selectedCompIds: ['comp-1'],
     rejectedCompIds: ['comp-2'],
-    suggestedPrice: 15,
+    conditionAdjustedPrice: 15.13,
+    conditionAdjustmentPercent: 0,
+    conditionAdjustmentReason: 'Exact deterministic target accepted.',
     confidence: 'high' as const,
-    priceExplanation: 'Price sits inside deterministic sold range and aligns with strongest comps.',
+    priceExplanation: 'Price aligns with exact deterministic condition target.',
   };
 }

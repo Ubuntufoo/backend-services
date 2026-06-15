@@ -12,12 +12,15 @@ import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   buildPricingProviderInput,
   buildPricingTitleFromItemSpecifics,
+  computeConditionAdjustmentSummary,
   computePricingConfidence,
   computePricingStats,
   getListingItemSpecifics,
+  getListingConditionForAdjustment,
   normalizeSoldComps,
   redactSensitiveText as redactPricingSensitiveText,
   resolveProductionPricingProvider,
+  type ConditionAdjustmentSummary,
   type LlmPricingPromptFactKey,
   type LlmPricingPromptFacts,
   type LivePricingProviderMode,
@@ -306,29 +309,46 @@ function buildPricingAnalystInput(
   listing: ListingRow,
   listingId: string,
   comps: Parameters<typeof computePricingStats>[0],
-  stats: PricingStatsResult
+  stats: PricingStatsResult,
+  conditionAdjustment: ConditionAdjustmentSummary
 ): PricingAnalystInput {
   const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
 
   return {
     listing: {
+      condition: conditionAdjustment.listingConditionSignal?.label ?? null,
       title:
         asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId,
       facts: buildLlmPricingFacts(itemSpecifics),
     },
     stats,
     comps: [...comps],
+    conditionAdjustment,
   };
 }
 
 function buildSucceededLlmReasoningJson(
   result: PricingAnalystResult,
-  fallbackReason: string | null
+  fallbackReason: string | null,
+  conditionAdjustment: ConditionAdjustmentSummary
 ): Json {
+  const normalizedConditionAdjustedPrice = normalizeConditionAdjustedPrice(
+    result.reasoning.conditionAdjustedPrice
+  );
+  const derivedPercent =
+    normalizedConditionAdjustedPrice !== null && conditionAdjustment.deterministicMedianPrice !== null
+      ? Number(
+          (normalizedConditionAdjustedPrice / conditionAdjustment.deterministicMedianPrice - 1).toFixed(4)
+        )
+      : null;
+
   return asJson({
     fallback: fallbackReason,
     modelName: result.modelName,
-    reasoning: result.reasoning,
+    reasoning: {
+      ...result.reasoning,
+      conditionAdjustmentPercent: derivedPercent,
+    },
     status: 'succeeded',
   });
 }
@@ -344,6 +364,40 @@ function buildFailedLlmReasoningJson(
     fallback: fallbackReason,
     status: 'failed',
   });
+}
+
+function buildSkippedLlmReasoningJson(fallbackReason: string, conditionAdjustment: ConditionAdjustmentSummary): Json {
+  return asJson({
+    conditionAdjustment,
+    fallback: fallbackReason,
+    status: 'not_attempted',
+  });
+}
+
+function getConditionAdjustmentFallbackReason(
+  summary: ConditionAdjustmentSummary
+): 'condition_adjustment_not_allowed' | null {
+  return summary.allowedAdjustment.eligible ? null : 'condition_adjustment_not_allowed';
+}
+
+function getLlmFallbackReason(error: unknown): string {
+  if (error instanceof Error && error.message.includes('conditionAdjustedPrice must equal deterministic')) {
+    return 'llm_condition_adjusted_price_out_of_window';
+  }
+
+  if (
+    error instanceof Error &&
+    error.message.includes('conditionAdjustedPrice') &&
+    error.message.includes('must')
+  ) {
+    return 'llm_condition_adjusted_price_invalid';
+  }
+
+  return 'llm_analysis_failed';
+}
+
+function normalizeConditionAdjustedPrice(value: unknown): number | null {
+  return normalizeSuggestedPrice(value);
 }
 
 function buildResearchPriceError(
@@ -614,49 +668,72 @@ export async function priceListingNow(
       comps: normalized.comps,
       stats,
     });
+    const listingCondition = getListingConditionForAdjustment(getListingItemSpecifics(listing.item_specifics));
+    const conditionAdjustment = computeConditionAdjustmentSummary({
+      comps: normalized.comps,
+      listingCondition,
+      stats,
+    });
+    const deterministicFallbackReason = getConditionAdjustmentFallbackReason(conditionAdjustment);
 
     let llmReasoningJson: Json = {};
     let llmSelectedCompIds: Json = [];
     let llmRejectedCompIds: Json = [];
     let llmPriceExplanation: string | null = null;
     let pricingModelName: string | null = PRICING_MODEL_NAME;
-    let llmSuggestedPrice: number | null = null;
-    let fallbackReason: string | null = null;
+    let llmConditionAdjustedPrice: number | null = null;
+    let fallbackReason: string | null = deterministicFallbackReason;
 
     if (dependencies.pricingAnalyst) {
-      try {
-        const analystResult = await dependencies.pricingAnalyst.analyze(
-          buildPricingAnalystInput(listing, listingId, normalized.comps, stats)
-        );
+      if (conditionAdjustment.allowedAdjustment.eligible) {
+        try {
+          const analystResult = await dependencies.pricingAnalyst.analyze(
+            buildPricingAnalystInput(listing, listingId, normalized.comps, stats, conditionAdjustment)
+          );
 
-        llmSuggestedPrice = normalizeSuggestedPrice(analystResult.reasoning.suggestedPrice);
-        fallbackReason = llmSuggestedPrice === null ? 'llm_suggested_price_null' : null;
-        llmReasoningJson = buildSucceededLlmReasoningJson(analystResult, fallbackReason);
-        llmSelectedCompIds = asJson(analystResult.reasoning.selectedCompIds);
-        llmRejectedCompIds = asJson(analystResult.reasoning.rejectedCompIds);
-        llmPriceExplanation = analystResult.reasoning.priceExplanation;
-        pricingModelName = analystResult.modelName;
-      } catch (error) {
-        fallbackReason = 'llm_analysis_failed';
-        llmReasoningJson = buildFailedLlmReasoningJson(
-          dependencies.pricingAnalyst,
-          fallbackReason,
-          error
+          llmConditionAdjustedPrice = normalizeConditionAdjustedPrice(
+            analystResult.reasoning.conditionAdjustedPrice
+          );
+          fallbackReason =
+            llmConditionAdjustedPrice === null ? 'llm_condition_adjusted_price_null' : null;
+          llmReasoningJson = buildSucceededLlmReasoningJson(
+            analystResult,
+            fallbackReason,
+            conditionAdjustment
+          );
+          llmSelectedCompIds = asJson(analystResult.reasoning.selectedCompIds);
+          llmRejectedCompIds = asJson(analystResult.reasoning.rejectedCompIds);
+          llmPriceExplanation = analystResult.reasoning.priceExplanation;
+          pricingModelName = analystResult.modelName;
+        } catch (error) {
+          fallbackReason = getLlmFallbackReason(error);
+          llmReasoningJson = buildFailedLlmReasoningJson(
+            dependencies.pricingAnalyst,
+            fallbackReason,
+            error
+          );
+          jobLogger.warn('Fell back to deterministic research_price after LLM failure.', {
+            analyst: dependencies.pricingAnalyst.name,
+            compactErrorMessage: asCompactErrorMessage(error),
+            deterministicSuggestedPrice,
+            event: 'research_price_llm_fallback',
+            fallbackReason,
+            jobId: options.jobId,
+            listingId,
+          });
+        }
+      } else {
+        llmReasoningJson = buildSkippedLlmReasoningJson(
+          fallbackReason ?? 'condition_adjustment_not_allowed',
+          conditionAdjustment
         );
-        jobLogger.warn('Fell back to deterministic research_price after LLM failure.', {
-          analyst: dependencies.pricingAnalyst.name,
-          compactErrorMessage: asCompactErrorMessage(error),
-          deterministicSuggestedPrice,
-          event: 'research_price_llm_fallback',
-          fallbackReason,
-          jobId: options.jobId,
-          listingId,
-        });
       }
+    } else if (fallbackReason !== null) {
+      llmReasoningJson = buildSkippedLlmReasoningJson(fallbackReason, conditionAdjustment);
     }
 
-    if (fallbackReason === 'llm_suggested_price_null' && pricingModelName) {
-      jobLogger.info('Fell back to deterministic research_price after null LLM price.', {
+    if (fallbackReason === 'llm_condition_adjusted_price_null' && pricingModelName) {
+      jobLogger.info('Fell back to deterministic research_price after null LLM condition adjustment.', {
         deterministicSuggestedPrice,
         event: 'research_price_llm_fallback',
         fallbackReason,
@@ -667,7 +744,7 @@ export async function priceListingNow(
     }
 
     const finalSuggestedPrice = normalizeSuggestedPrice(
-      llmSuggestedPrice ?? deterministicSuggestedPrice
+      llmConditionAdjustedPrice ?? deterministicSuggestedPrice
     );
 
     if (finalSuggestedPrice === null) {

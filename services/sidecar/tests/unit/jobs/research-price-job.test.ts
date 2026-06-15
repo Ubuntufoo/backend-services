@@ -109,6 +109,20 @@ function createVictorComp(
   };
 }
 
+function createNormalizedComp(id: string, title: string, totalPrice: number) {
+  return {
+    condition: null,
+    id,
+    listingUrl: null,
+    price: { currency: 'USD', value: totalPrice },
+    shippingPrice: null,
+    soldDate: '2026-06-01T10:00:00.000Z',
+    source: 'provider' as const,
+    title,
+    totalPrice: { currency: 'USD', value: totalPrice },
+  };
+}
+
 function createDataAccess(listing: ListingRow | null, appSettings = createAppSettings()) {
   const getByListingId = vi.fn().mockResolvedValue(listing);
   const update = vi.fn().mockImplementation(async (_listingId: string, changes: { price?: number }) =>
@@ -405,6 +419,7 @@ describe('priceListingNow', () => {
   it('filters invalid comps before stats and llm input while preserving raw-result audit', async () => {
     const listing = createListing({
       item_specifics: {
+        'Card Condition': 'VERY_GOOD',
         'Card Number': '98',
         Manufacturer: 'Topps',
         Player: 'Johnny Riddle',
@@ -420,10 +435,12 @@ describe('priceListingNow', () => {
       rawOutput: {},
       reasoning: {
         confidence: 'medium',
+        conditionAdjustedPrice: 18,
+        conditionAdjustmentPercent: 0,
+        conditionAdjustmentReason: 'Exact target accepted.',
         priceExplanation: 'accepted comps only',
         rejectedCompIds: [],
         selectedCompIds: [],
-        suggestedPrice: 19,
       },
     });
 
@@ -491,6 +508,12 @@ describe('priceListingNow', () => {
     ]);
     expect(analyze).toHaveBeenCalledWith(
       expect.objectContaining({
+        conditionAdjustment: expect.objectContaining({
+          allowedAdjustment: expect.objectContaining({
+            eligible: true,
+            targetPrice: 18,
+          }),
+        }),
         stats: expect.objectContaining({
           highSoldPrice: 22,
           lowSoldPrice: 7,
@@ -524,6 +547,7 @@ describe('priceListingNow', () => {
   it('persists exact-card mismatch reasons and excludes rejected comps from stats', async () => {
     const listing = createListing({
       item_specifics: {
+        'Card Condition': 'VERY_GOOD',
         'Card Number': '179',
         Manufacturer: 'Fleer',
         Player: 'Darryl Strawberry',
@@ -540,10 +564,12 @@ describe('priceListingNow', () => {
       reasoning: {
         compNotes: [],
         confidence: 'medium',
+        conditionAdjustedPrice: 12,
+        conditionAdjustmentPercent: 0,
+        conditionAdjustmentReason: 'Exact target accepted.',
         priceExplanation: 'Used exact comps only.',
         rejectedCompIds: [],
         selectedCompIds: [],
-        suggestedPrice: 15,
       },
     });
 
@@ -583,18 +609,12 @@ describe('priceListingNow', () => {
       },
     });
 
-    expect(
-      analyze.mock.calls[0]?.[0]?.comps.map((comp: { title: string }) => comp.title)
-    ).toEqual([
-      '1997 Fleer Darryl Strawberry #179',
-      '1997 Fleer Set Break #179 Darryl Strawberry',
-    ]);
-    expect(analyze).toHaveBeenCalledWith(
+    expect(analyze).not.toHaveBeenCalled();
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
-        stats: expect.objectContaining({
-          highSoldPrice: 14,
-          lowSoldPrice: 10,
-          soldCount: 2,
+        llm_reasoning_json: expect.objectContaining({
+          fallback: 'condition_adjustment_not_allowed',
+          status: 'not_attempted',
         }),
       })
     );
@@ -613,6 +633,219 @@ describe('priceListingNow', () => {
           }),
         }),
         sold_count: 2,
+      })
+    );
+  });
+
+  it('uses valid exact condition-adjusted target as final price', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '12',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1952',
+      },
+      listing_id: 'Single-000012',
+      title: '1952 Topps #12 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const analyze = vi.fn().mockResolvedValue({
+      modelName: 'gemini-test',
+      prompt: { systemInstruction: 'sys', userPrompt: 'user' },
+      rawOutput: {},
+      reasoning: {
+        confidence: 'medium',
+        conditionAdjustedPrice: 5.63,
+        conditionAdjustmentPercent: -0.1,
+        conditionAdjustmentReason: 'Most explicit-condition comps are slightly stronger.',
+        priceExplanation: 'Median is 5.89 and stronger condition comps justify exact target.',
+        rejectedCompIds: [],
+        selectedCompIds: ['comp-1', 'comp-2', 'comp-3', 'comp-4'],
+      },
+    });
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [
+        createNormalizedComp('comp-1', '1952 Topps #12 Sample Player VG-EX', 5.89),
+        createNormalizedComp('comp-2', '1952 Topps #12 Sample Player VG/EX', 5.89),
+        createNormalizedComp('comp-3', '1952 Topps #12 Sample Player low grade', 4.7),
+        createNormalizedComp('comp-4', '1952 Topps #12 Sample Player EX', 6.1),
+      ],
+      rejected: [],
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1952 Topps #12 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
+              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
+              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: {
+        analyze,
+        name: 'test-analyst',
+      },
+    });
+
+    expect(result.suggestedPrice).toBe(5.63);
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm_reasoning_json: expect.objectContaining({
+          fallback: null,
+          reasoning: expect.objectContaining({
+            conditionAdjustedPrice: 5.63,
+            conditionAdjustmentPercent: -0.0441,
+          }),
+        }),
+        suggested_price: 5.63,
+      })
+    );
+  });
+
+  it('falls back to deterministic price when analyst returns null conditionAdjustedPrice', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '12',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1952',
+      },
+      title: '1952 Topps #12 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [
+        createNormalizedComp('comp-1', '1952 Topps #12 Sample Player VG-EX', 5.89),
+        createNormalizedComp('comp-2', '1952 Topps #12 Sample Player VG/EX', 5.89),
+        createNormalizedComp('comp-3', '1952 Topps #12 Sample Player low grade', 4.7),
+        createNormalizedComp('comp-4', '1952 Topps #12 Sample Player EX', 6.1),
+      ],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1952 Topps #12 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
+              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
+              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: {
+        analyze: vi.fn().mockResolvedValue({
+          modelName: 'gemini-test',
+          prompt: { systemInstruction: 'sys', userPrompt: 'user' },
+          rawOutput: {},
+          reasoning: {
+            confidence: 'medium',
+            conditionAdjustedPrice: null,
+            conditionAdjustmentPercent: null,
+            conditionAdjustmentReason: 'Deterministic median should remain final.',
+            priceExplanation: 'Deterministic median should remain final.',
+            rejectedCompIds: [],
+            selectedCompIds: [],
+          },
+        }),
+        name: 'test-analyst',
+      },
+    });
+
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm_reasoning_json: expect.objectContaining({
+          fallback: 'llm_condition_adjusted_price_null',
+        }),
+        suggested_price: 5.89,
+      })
+    );
+  });
+
+  it('falls back to deterministic price when analyst returns off-target adjustment', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '12',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1952',
+      },
+      title: '1952 Topps #12 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [
+        createNormalizedComp('comp-1', '1952 Topps #12 Sample Player VG-EX', 5.89),
+        createNormalizedComp('comp-2', '1952 Topps #12 Sample Player VG/EX', 5.89),
+        createNormalizedComp('comp-3', '1952 Topps #12 Sample Player low grade', 4.7),
+        createNormalizedComp('comp-4', '1952 Topps #12 Sample Player EX', 6.1),
+      ],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1952 Topps #12 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
+              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
+              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: {
+        analyze: vi.fn().mockRejectedValue(
+          new Error('conditionAdjustedPrice must equal deterministic condition-adjusted target 5.63')
+        ),
+        name: 'test-analyst',
+      },
+    });
+
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm_reasoning_json: expect.objectContaining({
+          fallback: 'llm_condition_adjusted_price_out_of_window',
+          status: 'failed',
+        }),
+        suggested_price: 5.89,
       })
     );
   });

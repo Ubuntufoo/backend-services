@@ -11,6 +11,7 @@ export * from './provider-resolver.js';
 export * from './normalizer.js';
 export * from './stats.js';
 export * from './confidence.js';
+export * from './condition-adjustment.js';
 export * from './llm-pricing-reasoning.js';
 export * from './llm-pricing-prompt.js';
 export * from './fixture-llm-pricing-analyst.js';

@@ -8,6 +8,9 @@ import type {
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const MAX_EXPLANATION_LENGTH = 500;
 const MAX_COMP_NOTE_LENGTH = 240;
+const MAX_REASON_LENGTH = 240;
+const MAX_WARNING_LENGTH = 180;
+const MAX_TERM_LENGTH = 80;
 const BLOCKED_RECOMMENDATION_LANGUAGE_PATTERN =
   /\b(?:sell as lot|sell as single|lot recommendation|single recommendation)\b/i;
 
@@ -50,6 +53,20 @@ const compNoteSchema = z
   })
   .strict();
 
+const shortStringArrayItemSchema = (fieldName: string, maxLength: number) =>
+  z
+    .string({
+      required_error: `${fieldName} entry is required`,
+      invalid_type_error: `${fieldName} entry must be a string`,
+    })
+    .trim()
+    .min(1, `${fieldName} entry is required`)
+    .max(maxLength, `${fieldName} entry must be at most ${maxLength} characters`)
+    .refine(
+      (value) => !BLOCKED_RECOMMENDATION_LANGUAGE_PATTERN.test(value),
+      `${fieldName} contains disallowed lot/single recommendation language`,
+    );
+
 const llmPricingReasoningSchema = z
   .object({
     selectedCompIds: z.array(compIdSchema, {
@@ -60,17 +77,41 @@ const llmPricingReasoningSchema = z
       required_error: 'rejectedCompIds is required',
       invalid_type_error: 'rejectedCompIds must be an array',
     }),
-    suggestedPrice: z
+    conditionAdjustedPrice: z
       .number({
-        invalid_type_error: 'suggestedPrice must be a number or null',
+        invalid_type_error: 'conditionAdjustedPrice must be a number or null',
       })
-      .finite('suggestedPrice must be finite')
+      .finite('conditionAdjustedPrice must be finite')
+      .nullable(),
+    conditionAdjustmentPercent: z
+      .number({
+        invalid_type_error: 'conditionAdjustmentPercent must be a number or null',
+      })
+      .finite('conditionAdjustmentPercent must be finite')
+      .nullable(),
+    conditionAdjustmentReason: z
+      .string({
+        invalid_type_error: 'conditionAdjustmentReason must be a string or null',
+      })
+      .trim()
+      .min(1, 'conditionAdjustmentReason is required when present')
+      .max(MAX_REASON_LENGTH, `conditionAdjustmentReason must be at most ${MAX_REASON_LENGTH} characters`)
       .nullable(),
     confidence: z.enum(['low', 'medium', 'high'], {
       required_error: 'confidence is required',
       invalid_type_error: 'confidence must be one of low, medium, high',
     }),
     priceExplanation: priceExplanationSchema,
+    reviewWarnings: z
+      .array(shortStringArrayItemSchema('reviewWarnings', MAX_WARNING_LENGTH), {
+        invalid_type_error: 'reviewWarnings must be an array',
+      })
+      .optional(),
+    ambiguousConditionTerms: z
+      .array(shortStringArrayItemSchema('ambiguousConditionTerms', MAX_TERM_LENGTH), {
+        invalid_type_error: 'ambiguousConditionTerms must be an array',
+      })
+      .optional(),
     compNotes: z.array(compNoteSchema, {
       invalid_type_error: 'compNotes must be an array',
     }).optional(),
@@ -115,44 +156,42 @@ export function parseLlmPricingReasoningOutput(
       }
     });
 
-    if (value.suggestedPrice !== null) {
-      const normalizedSuggestedPrice = normalizeSuggestedPrice(value.suggestedPrice);
+    if (value.conditionAdjustedPrice !== null) {
+      const normalizedConditionAdjustedPrice = normalizeSuggestedPrice(value.conditionAdjustedPrice);
 
-      if (normalizedSuggestedPrice === null) {
+      if (normalizedConditionAdjustedPrice === null) {
         refinementContext.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['suggestedPrice'],
-          message: 'suggestedPrice must be a positive amount with non-zero rounded cents',
+          path: ['conditionAdjustedPrice'],
+          message: 'conditionAdjustedPrice must be a positive amount with non-zero rounded cents',
         });
         return;
       }
 
-      if (context.stats.lowSoldPrice === null || context.stats.highSoldPrice === null) {
+      if (!context.allowedAdjustment.eligible || context.allowedAdjustment.targetPrice === null) {
         refinementContext.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['suggestedPrice'],
-          message: 'suggestedPrice requires deterministic low/high sold price guardrails',
+          path: ['conditionAdjustedPrice'],
+          message: 'conditionAdjustedPrice requires deterministic eligible condition adjustment target',
         });
         return;
       }
 
-      const normalizedLow = normalizeSuggestedPrice(context.stats.lowSoldPrice);
-      const normalizedHigh = normalizeSuggestedPrice(context.stats.highSoldPrice);
-
-      if (normalizedLow === null || normalizedHigh === null) {
+      const normalizedTargetPrice = normalizeSuggestedPrice(context.allowedAdjustment.targetPrice);
+      if (normalizedTargetPrice === null) {
         refinementContext.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['suggestedPrice'],
-          message: 'suggestedPrice requires valid deterministic low/high sold price guardrails',
+          path: ['conditionAdjustedPrice'],
+          message: 'conditionAdjustedPrice requires valid deterministic eligible condition adjustment target',
         });
         return;
       }
 
-      if (normalizedSuggestedPrice < normalizedLow || normalizedSuggestedPrice > normalizedHigh) {
+      if (normalizedConditionAdjustedPrice !== normalizedTargetPrice) {
         refinementContext.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['suggestedPrice'],
-          message: `suggestedPrice must be within deterministic sold price range ${normalizedLow.toFixed(2)}-${normalizedHigh.toFixed(2)}`,
+          path: ['conditionAdjustedPrice'],
+          message: `conditionAdjustedPrice must equal deterministic condition-adjusted target ${normalizedTargetPrice.toFixed(2)}`,
         });
       }
     }
@@ -164,10 +203,14 @@ export function parseLlmPricingReasoningOutput(
 
   return {
     ...result.data,
-    suggestedPrice:
-      result.data.suggestedPrice === null
+    conditionAdjustedPrice:
+      result.data.conditionAdjustedPrice === null
         ? null
-        : normalizeSuggestedPrice(result.data.suggestedPrice),
+        : normalizeSuggestedPrice(result.data.conditionAdjustedPrice),
+    conditionAdjustmentPercent:
+      result.data.conditionAdjustmentPercent === null
+        ? null
+        : Number(result.data.conditionAdjustmentPercent.toFixed(4)),
   };
 }
 

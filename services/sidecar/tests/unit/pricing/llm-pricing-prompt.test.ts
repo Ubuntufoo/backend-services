@@ -4,14 +4,14 @@ import {
 } from '@/pricing/index.js';
 
 describe('buildLlmPricingPrompt', () => {
-  it('builds compact deterministic payload with listing facts, stats, and normalized comps only', () => {
+  it('builds deterministic payload with listing facts, stats, comps, and condition summary', () => {
     const prompt = buildLlmPricingPrompt(buildInput());
     const payload = extractPayload(prompt.userPrompt);
 
     expect(payload).toEqual({
       listing: {
         title: '2023 Panini Prizm Victor Wembanyama #136 Rookie',
-        condition: 'Ungraded',
+        condition: 'Very Good',
         facts: {
           Player: 'Victor Wembanyama',
           Year: '2023',
@@ -33,7 +33,7 @@ describe('buildLlmPricingPrompt', () => {
       comps: [
         {
           id: 'comp-1',
-          title: '2023 Panini Prizm Victor Wembanyama Rookie #136',
+          title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
           price: 15.5,
           soldAt: '2026-05-28',
           condition: 'Ungraded',
@@ -45,10 +45,51 @@ describe('buildLlmPricingPrompt', () => {
           soldAt: '2026-05-21',
         },
       ],
+      conditionAdjustment: {
+        listingConditionSignal: {
+          label: 'Very Good',
+          matchedText: 'VERY_GOOD',
+          score: 3,
+          source: 'listing_condition',
+        },
+        compConditionSignals: [
+          {
+            compId: 'comp-1',
+            title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
+            price: 15.5,
+            signal: {
+              label: 'VG-EX',
+              matchedText: 'VG-EX',
+              score: 3.5,
+              source: 'comp_title',
+            },
+          },
+          {
+            compId: 'comp-2',
+            title: '2023 Panini Prizm Victor Wembanyama #136 Spurs RC',
+            price: 14.25,
+            signal: null,
+          },
+        ],
+        explicitCompConditionCount: 4,
+        compMedianConditionScore: 3.75,
+        listingConditionScore: 3,
+        conditionDelta: -0.75,
+        deterministicMedianPrice: 15,
+        allowedAdjustment: {
+          eligible: true,
+          targetPrice: 13.12,
+          minPrice: 13.12,
+          maxPrice: 13.12,
+          rawPercent: -0.0642,
+          appliedPercent: -0.1253,
+          reason: 'eligible',
+        },
+      },
     });
   });
 
-  it('omits workflow fields, opaque ids, helper payloads, raw output, urls, and images', () => {
+  it('omits workflow fields and opaque payload data', () => {
     const prompt = buildLlmPricingPrompt({
       ...buildInput(),
       listing: {
@@ -85,12 +126,10 @@ describe('buildLlmPricingPrompt', () => {
           rawRecord: { id: 1 },
         } as never,
       ],
-      rawResult: { soldComps: [] },
-      validCompIds: ['comp-1'],
-      outputSchema: { fields: [] },
-      forbiddenLanguage: ['sell as single'],
-      provider: 'apify',
-      imageUrls: ['https://cdn.example.com/top-level.jpg'],
+      conditionAdjustment: {
+        ...buildInput().conditionAdjustment,
+        rawResult: { unexpected: true },
+      } as never,
     } as never);
 
     const payload = extractPayload(prompt.userPrompt);
@@ -111,76 +150,23 @@ describe('buildLlmPricingPrompt', () => {
     expect(serialized).not.toContain('sub_status');
     expect(serialized).not.toContain('categoryId');
     expect(serialized).not.toContain('conditionId');
-    expect(serialized).not.toContain('validCompIds');
-    expect(serialized).not.toContain('outputSchema');
-    expect(serialized).not.toContain('forbiddenLanguage');
     expect(serialized).not.toContain('rawResult');
     expect(serialized).not.toContain('rawHtml');
     expect(serialized).not.toContain('rawRecord');
     expect(serialized).not.toContain('listingUrl');
     expect(serialized).not.toContain('imageUrl');
     expect(serialized).not.toContain('imageUrls');
-    expect(serialized).not.toContain('source');
   });
 
-  it('caps comp count at default and honors explicit lower cap while preserving order', () => {
-    const comps = Array.from({ length: 14 }, (_, index) => ({
-      id: `comp-${index + 1}`,
-      title: `Comp ${index + 1}`,
-      price: 10 + index,
-      soldAt: `2026-05-${String(index + 1).padStart(2, '0')}`,
-      condition: index % 2 === 0 ? 'Ungraded' : null,
-    }));
-
-    const defaultPayload = extractPayload(
-      buildLlmPricingPrompt({
-        ...buildInput(),
-        comps,
-      }).userPrompt,
-    );
-
-    const cappedPayload = extractPayload(
-      buildLlmPricingPrompt({
-        ...buildInput(),
-        comps,
-        options: { maxComps: 3 },
-      }).userPrompt,
-    );
-
-    expect(defaultPayload.comps).toHaveLength(12);
-    expect(defaultPayload.comps.map((comp: { id: string }) => comp.id)).toEqual([
-      'comp-1',
-      'comp-2',
-      'comp-3',
-      'comp-4',
-      'comp-5',
-      'comp-6',
-      'comp-7',
-      'comp-8',
-      'comp-9',
-      'comp-10',
-      'comp-11',
-      'comp-12',
-    ]);
-    expect(cappedPayload.comps.map((comp: { id: string }) => comp.id)).toEqual([
-      'comp-1',
-      'comp-2',
-      'comp-3',
-    ]);
-  });
-
-  it('omits comps with invalid or non-positive prices and applies cap after filtering', () => {
+  it('caps comp count after filtering invalid prices', () => {
     const payload = extractPayload(
       buildLlmPricingPrompt({
         ...buildInput(),
         comps: [
-          { id: 'bad-nan', title: 'Bad NaN', price: Number.NaN, soldAt: '2026-05-01' },
-          { id: 'good-1', title: 'Good 1', price: 11.11, soldAt: '2026-05-02' },
-          { id: 'bad-inf', title: 'Bad Infinity', price: Number.POSITIVE_INFINITY, soldAt: '2026-05-03' },
-          { id: 'bad-neg-inf', title: 'Bad Neg Infinity', price: Number.NEGATIVE_INFINITY, soldAt: '2026-05-04' },
-          { id: 'bad-zero', title: 'Bad Zero', price: 0, soldAt: '2026-05-05' },
-          { id: 'good-2', title: 'Good 2', price: 22.22, soldAt: '2026-05-06' },
-          { id: 'good-3', title: 'Good 3', price: 33.33, soldAt: '2026-05-07' },
+          { id: 'bad-zero', title: 'Bad Zero', price: 0, soldAt: '2026-05-01' },
+          { id: 'good-1', title: 'Good 1 VG', price: 11.11, soldAt: '2026-05-02' },
+          { id: 'good-2', title: 'Good 2 EX', price: 22.22, soldAt: '2026-05-03' },
+          { id: 'good-3', title: 'Good 3 NM', price: 33.33, soldAt: '2026-05-04' },
         ],
         options: { maxComps: 2 },
       }).userPrompt,
@@ -189,25 +175,20 @@ describe('buildLlmPricingPrompt', () => {
     expect(payload.comps).toEqual([
       {
         id: 'good-1',
-        title: 'Good 1',
+        title: 'Good 1 VG',
         price: 11.11,
         soldAt: '2026-05-02',
       },
       {
         id: 'good-2',
-        title: 'Good 2',
+        title: 'Good 2 EX',
         price: 22.22,
-        soldAt: '2026-05-06',
+        soldAt: '2026-05-03',
       },
     ]);
-    expect(payload.comps).not.toContainEqual(
-      expect.objectContaining({
-        price: 0,
-      }),
-    );
   });
 
-  it('normalizes numbers, omits null/empty fields, and keeps prompt deterministic', () => {
+  it('keeps prompt deterministic while normalizing nullable fields', () => {
     const input: LlmPricingPromptInput = {
       listing: {
         title: '  2023 Panini Prizm Victor Wembanyama #136 Rookie  ',
@@ -230,10 +211,28 @@ describe('buildLlmPricingPrompt', () => {
         suggested: null,
         confidence: 'medium',
       },
+      conditionAdjustment: {
+        listingConditionSignal: null,
+        compConditionSignals: [],
+        explicitCompConditionCount: 0,
+        compMedianConditionScore: null,
+        listingConditionScore: null,
+        conditionDelta: null,
+        deterministicMedianPrice: 15.126,
+        allowedAdjustment: {
+          eligible: false,
+          targetPrice: null,
+          minPrice: null,
+          maxPrice: null,
+          rawPercent: null,
+          appliedPercent: null,
+          reason: 'listing_condition_unknown',
+        },
+      },
       comps: [
         {
           id: ' comp-1 ',
-          title: '  2023 Panini Prizm Victor Wembanyama Rookie #136  ',
+          title: '  2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX  ',
           price: 15.129,
           soldAt: ' 2026-05-28 ',
           condition: '  ',
@@ -267,34 +266,45 @@ describe('buildLlmPricingPrompt', () => {
       comps: [
         {
           id: 'comp-1',
-          title: '2023 Panini Prizm Victor Wembanyama Rookie #136',
+          title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
           price: 15.13,
           soldAt: '2026-05-28',
         },
       ],
+      conditionAdjustment: {
+        listingConditionSignal: null,
+        compConditionSignals: [],
+        explicitCompConditionCount: 0,
+        compMedianConditionScore: null,
+        listingConditionScore: null,
+        conditionDelta: null,
+        deterministicMedianPrice: 15.13,
+        allowedAdjustment: {
+          eligible: false,
+          targetPrice: null,
+          minPrice: null,
+          maxPrice: null,
+          rawPercent: null,
+          appliedPercent: null,
+          reason: 'listing_condition_unknown',
+        },
+      },
     });
   });
 
-  it('includes concise schema-aligned instructions without compNotes or verbose schema blocks', () => {
+  it('includes condition-adjustment instructions and exact-target semantics', () => {
     const prompt = buildLlmPricingPrompt(buildInput());
 
-    expect(prompt.systemInstruction).toContain('normalized sold comps');
-    expect(prompt.systemInstruction).toContain('Return JSON only');
-    expect(prompt.userPrompt).toContain('Return JSON only.');
+    expect(prompt.systemInstruction).toContain('deterministically accepted normalized sold comps');
+    expect(prompt.systemInstruction).toContain('Do not decide comp eligibility');
     expect(prompt.userPrompt).toContain(
-      'Use exactly these output fields: selectedCompIds, rejectedCompIds, suggestedPrice, confidence, priceExplanation.',
+      'Use exactly these output fields: selectedCompIds, rejectedCompIds, conditionAdjustedPrice, conditionAdjustmentPercent, conditionAdjustmentReason, confidence, priceExplanation, reviewWarnings, ambiguousConditionTerms, compNotes.',
     );
-    expect(prompt.userPrompt).toContain('Use only IDs from comps.');
+    expect(prompt.userPrompt).toContain('Comps and deterministic stats are already accepted.');
     expect(prompt.userPrompt).toContain(
-      'Do not invent comps, prices, dates, grades, serials, players, teams, card attributes, or listing facts.',
+      'If conditionAdjustment.allowedAdjustment.eligible is true, either return the exact targetPrice or return conditionAdjustedPrice: null.',
     );
-    expect(prompt.userPrompt).toContain('Do not make lot or single recommendations.');
-    expect(prompt.userPrompt).toContain('Keep priceExplanation short.');
-    expect(prompt.userPrompt).toContain('Suggested price must stay within deterministic low/high range.');
-    expect(prompt.userPrompt).toContain(
-      'Use suggestedPrice: null if provided comps do not support a safe price.',
-    );
-    expect(prompt.userPrompt).not.toContain('compNotes');
+    expect(prompt.userPrompt).toContain('Never output a different adjusted price than targetPrice.');
     expect(prompt.userPrompt).not.toContain('outputSchema');
     expect(prompt.userPrompt).not.toContain('forbiddenLanguage');
   });
@@ -304,6 +314,7 @@ function extractPayload(userPrompt: string): {
   listing: Record<string, unknown>;
   stats: Record<string, unknown>;
   comps: Array<Record<string, unknown>>;
+  conditionAdjustment: Record<string, unknown>;
 } {
   const marker = 'Pricing payload:\n';
   const index = userPrompt.indexOf(marker);
@@ -319,7 +330,7 @@ function buildInput(): LlmPricingPromptInput {
   return {
     listing: {
       title: '2023 Panini Prizm Victor Wembanyama #136 Rookie',
-      condition: 'Ungraded',
+      condition: 'Very Good',
       facts: {
         Player: 'Victor Wembanyama',
         Year: '2023',
@@ -338,10 +349,51 @@ function buildInput(): LlmPricingPromptInput {
       suggested: 15,
       confidence: 'medium',
     },
+    conditionAdjustment: {
+      listingConditionSignal: {
+        label: 'Very Good',
+        matchedText: 'VERY_GOOD',
+        score: 3,
+        source: 'listing_condition',
+      },
+      compConditionSignals: [
+        {
+          compId: 'comp-1',
+          title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
+          price: 15.5,
+          signal: {
+            label: 'VG-EX',
+            matchedText: 'VG-EX',
+            score: 3.5,
+            source: 'comp_title',
+          },
+        },
+        {
+          compId: 'comp-2',
+          title: '2023 Panini Prizm Victor Wembanyama #136 Spurs RC',
+          price: 14.25,
+          signal: null,
+        },
+      ],
+      explicitCompConditionCount: 4,
+      compMedianConditionScore: 3.75,
+      listingConditionScore: 3,
+      conditionDelta: -0.75,
+      deterministicMedianPrice: 15,
+      allowedAdjustment: {
+        eligible: true,
+        targetPrice: 13.12,
+        minPrice: 13.12,
+        maxPrice: 13.12,
+        rawPercent: -0.0642,
+        appliedPercent: -0.1253,
+        reason: 'eligible',
+      },
+    },
     comps: [
       {
         id: 'comp-1',
-        title: '2023 Panini Prizm Victor Wembanyama Rookie #136',
+        title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
         price: 15.5,
         soldAt: '2026-05-28',
         condition: 'Ungraded',

@@ -26,23 +26,28 @@ export function buildLlmPricingPrompt(input: LlmPricingPromptInput): LlmPricingP
     listing: buildListingPayload(input.listing),
     stats: buildStatsPayload(input.stats),
     comps: buildCompsPayload(input.comps, input.options?.maxComps),
+    conditionAdjustment: buildConditionAdjustmentPayload(input.conditionAdjustment),
   };
 
   return {
     systemInstruction: [
-      'You are pricing analyst for normalized sold comps.',
-      'Use only provided listing facts, deterministic stats, and normalized comps.',
+      'You are pricing analyst for deterministically accepted normalized sold comps.',
+      'Use only provided listing facts, deterministic stats, normalized comps, and deterministic condition summary.',
+      'Do not decide comp eligibility or exact-card matching.',
+      'Do not invent condition scores or override deterministic target math.',
       'Return JSON only with no markdown fences or explanatory prose.',
     ].join(' '),
     userPrompt: [
       'Return JSON only.',
-      'Use exactly these output fields: selectedCompIds, rejectedCompIds, suggestedPrice, confidence, priceExplanation.',
+      'Use exactly these output fields: selectedCompIds, rejectedCompIds, conditionAdjustedPrice, conditionAdjustmentPercent, conditionAdjustmentReason, confidence, priceExplanation, reviewWarnings, ambiguousConditionTerms, compNotes.',
       'Use only IDs from comps.',
-      'Do not invent comps, prices, dates, grades, serials, players, teams, card attributes, or listing facts.',
+      'Do not invent comps, prices, dates, grades, serials, players, teams, card attributes, condition terms, or listing facts.',
+      'Comps and deterministic stats are already accepted. Do not reject exact-card comps from stats.',
       'Do not make lot or single recommendations.',
       'Keep priceExplanation short.',
-      'Suggested price must stay within deterministic low/high range.',
-      'Use suggestedPrice: null if provided comps do not support a safe price.',
+      'If conditionAdjustment.allowedAdjustment.eligible is true, either return the exact targetPrice or return conditionAdjustedPrice: null.',
+      'If conditionAdjustment.allowedAdjustment.eligible is false, return conditionAdjustedPrice: null.',
+      'Never output a different adjusted price than targetPrice.',
       'Pricing payload:',
       JSON.stringify(payload),
     ].join('\n'),
@@ -140,6 +145,48 @@ function buildCompsPayload(
   return payloads;
 }
 
+function buildConditionAdjustmentPayload(
+  summary: LlmPricingPromptInput['conditionAdjustment']
+): Record<string, unknown> {
+  return {
+    listingConditionSignal: summary.listingConditionSignal
+      ? {
+          label: summary.listingConditionSignal.label,
+          matchedText: summary.listingConditionSignal.matchedText,
+          score: summary.listingConditionSignal.score,
+          source: summary.listingConditionSignal.source,
+        }
+      : null,
+    compConditionSignals: summary.compConditionSignals.map((entry) => ({
+      compId: entry.compId,
+      price: normalizePrice(entry.price),
+      signal: entry.signal
+        ? {
+            label: entry.signal.label,
+            matchedText: entry.signal.matchedText,
+            score: entry.signal.score,
+            source: entry.signal.source,
+          }
+        : null,
+      title: truncateText(entry.title, MAX_TITLE_LENGTH),
+    })),
+    explicitCompConditionCount: summary.explicitCompConditionCount,
+    compMedianConditionScore: summary.compMedianConditionScore,
+    listingConditionScore: summary.listingConditionScore,
+    conditionDelta: summary.conditionDelta,
+    deterministicMedianPrice: normalizePrice(summary.deterministicMedianPrice),
+    allowedAdjustment: {
+      eligible: summary.allowedAdjustment.eligible,
+      targetPrice: normalizeNullablePrice(summary.allowedAdjustment.targetPrice),
+      minPrice: normalizeNullablePrice(summary.allowedAdjustment.minPrice),
+      maxPrice: normalizeNullablePrice(summary.allowedAdjustment.maxPrice),
+      rawPercent: summary.allowedAdjustment.rawPercent,
+      appliedPercent: summary.allowedAdjustment.appliedPercent,
+      reason: summary.allowedAdjustment.reason,
+    },
+  };
+}
+
 function normalizeSoldCount(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -162,6 +209,11 @@ function normalizePrice(value: number | null | undefined): number | undefined {
   }
 
   return Number(value.toFixed(2));
+}
+
+function normalizeNullablePrice(value: number | null | undefined): number | null {
+  const normalized = normalizePrice(value);
+  return normalized ?? null;
 }
 
 function normalizeRequiredText(value: string): string {

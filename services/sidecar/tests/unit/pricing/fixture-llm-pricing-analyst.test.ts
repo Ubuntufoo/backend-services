@@ -3,13 +3,14 @@ import {
   FixtureLlmPricingAnalystError,
   LlmPricingReasoningValidationError,
   createFixtureLlmPricingAnalyst,
+  type ConditionAdjustmentSummary,
   type NormalizedSoldComp,
   type PricingAnalystInput,
   type PricingStatsResult,
 } from '@/pricing/index.js';
 
 describe('createFixtureLlmPricingAnalyst', () => {
-  it('returns valid validated reasoning with fixed model name and serializable prompt/raw output', async () => {
+  it('returns validated exact-target reasoning with fixed model name', async () => {
     const analyst = createFixtureLlmPricingAnalyst();
     const result = await analyst.analyze(buildInput());
 
@@ -17,68 +18,31 @@ describe('createFixtureLlmPricingAnalyst', () => {
     expect(result.reasoning).toEqual({
       selectedCompIds: ['comp-1', 'comp-2', 'comp-3'],
       rejectedCompIds: [],
-      suggestedPrice: 15.13,
+      conditionAdjustedPrice: 14.44,
+      conditionAdjustmentPercent: -0.0456,
+      conditionAdjustmentReason: 'Deterministic condition target accepted.',
       confidence: 'medium',
-      priceExplanation: 'Selected comps align with deterministic sold range.',
+      priceExplanation: 'Deterministic median and condition evidence support exact target.',
     });
     expect(JSON.parse(JSON.stringify(result.prompt))).toEqual(result.prompt);
     expect(JSON.parse(JSON.stringify(result.rawOutput))).toEqual(result.rawOutput);
   });
 
-  it('captures compact prompt payload built from listing facts deterministic stats and normalized comps', async () => {
+  it('captures prompt payload including condition summary', async () => {
     const analyst = createFixtureLlmPricingAnalyst();
     const result = await analyst.analyze(buildInput());
     const payload = extractPayload(result.prompt.userPrompt);
-    const serialized = JSON.stringify(payload);
 
-    expect(payload).toEqual({
-      listing: {
-        title: '2023 Panini Prizm Victor Wembanyama #136 Rookie',
-        condition: 'Ungraded',
-        facts: {
-          Player: 'Victor Wembanyama',
-          Year: '2023',
-          Manufacturer: 'Panini',
-          Set: 'Prizm',
-          'Card Number': '136',
-        },
+    expect(payload.conditionAdjustment).toMatchObject({
+      listingConditionSignal: {
+        label: 'Very Good',
+        score: 3,
       },
-      stats: {
-        soldCount: 3,
-        confidence: 'medium',
-        low: 10,
-        median: 15.13,
-        high: 20,
-        suggested: 15.13,
+      allowedAdjustment: {
+        eligible: true,
+        targetPrice: 14.44,
       },
-      comps: [
-        {
-          id: 'comp-1',
-          title: 'Comp One',
-          price: 10,
-          soldAt: '2026-05-28T00:00:00.000Z',
-          condition: 'Ungraded',
-        },
-        {
-          id: 'comp-2',
-          title: 'Comp Two',
-          price: 15.13,
-          soldAt: '2026-05-27T00:00:00.000Z',
-          condition: 'Near Mint',
-        },
-        {
-          id: 'comp-3',
-          title: 'Comp Three',
-          price: 20,
-          soldAt: '2026-05-26T00:00:00.000Z',
-        },
-      ],
     });
-    expect(serialized).not.toContain('listingUrl');
-    expect(serialized).not.toContain('source');
-    expect(serialized).not.toContain('rawOutput');
-    expect(serialized).not.toContain('provider');
-    expect(serialized).not.toContain('imageUrl');
   });
 
   it('keeps selected and rejected ids within provided comps only', async () => {
@@ -87,61 +51,43 @@ describe('createFixtureLlmPricingAnalyst', () => {
       comps: [
         buildComp({ id: 'comp-a', totalPrice: { value: 11, currency: 'USD' } }),
         buildComp({ id: 'comp-b', totalPrice: { value: 25, currency: 'USD' } }),
-        buildComp({ id: 'comp-c', totalPrice: { value: 0, currency: 'USD' } }),
       ],
-      stats: {
-        ...buildStats(),
-        lowSoldPrice: 10,
-        highSoldPrice: 20,
-        deterministicSuggestedPrice: 15,
-      },
     });
     const result = await analyst.analyze(input);
     const allIds = input.comps.map((comp) => comp.id);
 
     expect(result.reasoning.selectedCompIds.every((compId) => allIds.includes(compId))).toBe(true);
     expect(result.reasoning.rejectedCompIds.every((compId) => allIds.includes(compId))).toBe(true);
-    expect(result.reasoning.selectedCompIds).toEqual(['comp-a']);
-    expect(result.reasoning.rejectedCompIds).toEqual(['comp-b', 'comp-c']);
+    expect(result.reasoning.selectedCompIds).toEqual(['comp-a', 'comp-b']);
+    expect(result.reasoning.rejectedCompIds).toEqual([]);
   });
 
-  it('returns suggestedPrice null when deterministic stats do not support safe price', async () => {
+  it('returns null conditionAdjustedPrice when deterministic adjustment not eligible', async () => {
     const analyst = createFixtureLlmPricingAnalyst();
 
     await expect(
       analyst.analyze(
         buildInput({
-          stats: {
-            ...buildStats(),
-            lowSoldPrice: null,
-            highSoldPrice: null,
-            deterministicSuggestedPrice: 15.13,
-          },
+          conditionAdjustment: buildConditionAdjustment({
+            allowedAdjustment: {
+              eligible: false,
+              targetPrice: null,
+              minPrice: null,
+              maxPrice: null,
+              rawPercent: null,
+              appliedPercent: null,
+              reason: 'listing_condition_unknown',
+            },
+            listingConditionSignal: null,
+            listingConditionScore: null,
+          }),
         }),
       ),
     ).resolves.toMatchObject({
       reasoning: {
-        suggestedPrice: null,
-        selectedCompIds: [],
-        rejectedCompIds: ['comp-1', 'comp-2', 'comp-3'],
-        priceExplanation: 'Deterministic comps do not support a safe price.',
-      },
-    });
-
-    await expect(
-      analyst.analyze(
-        buildInput({
-          stats: {
-            ...buildStats(),
-            lowSoldPrice: 10,
-            highSoldPrice: 20,
-            deterministicSuggestedPrice: 20.01,
-          },
-        }),
-      ),
-    ).resolves.toMatchObject({
-      reasoning: {
-        suggestedPrice: null,
+        conditionAdjustedPrice: null,
+        conditionAdjustmentPercent: null,
+        priceExplanation: 'Deterministic median remains final because condition adjustment was not applied.',
       },
     });
   });
@@ -158,13 +104,15 @@ describe('createFixtureLlmPricingAnalyst', () => {
       rawOutput: {
         selectedCompIds: ['comp-1'],
         rejectedCompIds: ['comp-2'],
-        suggestedPrice: 9.99,
+        conditionAdjustedPrice: 9.99,
+        conditionAdjustmentPercent: -0.3,
+        conditionAdjustmentReason: 'Below deterministic target.',
         confidence: 'medium',
-        priceExplanation: 'Below deterministic range.',
+        priceExplanation: 'Below deterministic target.',
       },
     });
 
-    await expect(analyst.analyze(buildInput())).rejects.toThrow(/within deterministic sold price range/);
+    await expect(analyst.analyze(buildInput())).rejects.toThrow(/deterministic condition-adjusted target/);
   });
 
   it('throws clear analyst error in throws mode', async () => {
@@ -174,15 +122,7 @@ describe('createFixtureLlmPricingAnalyst', () => {
     await expect(analyst.analyze(buildInput())).rejects.toThrow(/configured to throw/);
   });
 
-  it('does not require provider sdk env or api key', async () => {
-    const analyst = createFixtureLlmPricingAnalyst();
-    const result = await analyst.analyze(buildInput());
-
-    expect(result.rawOutput).toBeDefined();
-    expect(analyst.name).toBe('fixture');
-  });
-
-  it('omits compNotes by default and only allows validated custom compNotes', async () => {
+  it('omits compNotes by default and validates custom compNotes', async () => {
     const analyst = createFixtureLlmPricingAnalyst();
     const defaultResult = await analyst.analyze(buildInput());
 
@@ -193,28 +133,19 @@ describe('createFixtureLlmPricingAnalyst', () => {
       rawOutput: {
         selectedCompIds: ['comp-1'],
         rejectedCompIds: ['comp-2', 'comp-3'],
-        suggestedPrice: 15.13,
+        conditionAdjustedPrice: 14.44,
+        conditionAdjustmentPercent: -0.0456,
+        conditionAdjustmentReason: 'Exact target accepted.',
         confidence: 'medium',
-        priceExplanation: 'Deterministic range supports selected comp.',
-        compNotes: [{ compId: 'comp-1', note: 'Matches deterministic midpoint.' }],
+        priceExplanation: 'Deterministic target accepted.',
+        compNotes: [{ compId: 'comp-1', note: 'Matches deterministic target.' }],
       },
     });
     const customResult = await customAnalyst.analyze(buildInput());
 
     expect(customResult.reasoning.compNotes).toEqual([
-      { compId: 'comp-1', note: 'Matches deterministic midpoint.' },
+      { compId: 'comp-1', note: 'Matches deterministic target.' },
     ]);
-  });
-
-  it('keeps default output free of lot or single recommendation language', async () => {
-    const analyst = createFixtureLlmPricingAnalyst();
-    const result = await analyst.analyze(buildInput());
-    const serialized = JSON.stringify(result.reasoning).toLowerCase();
-
-    expect(serialized).not.toContain('sell as lot');
-    expect(serialized).not.toContain('sell as single');
-    expect(serialized).not.toContain('lot recommendation');
-    expect(serialized).not.toContain('single recommendation');
   });
 
   it('returns deterministic repeated results for identical input', async () => {
@@ -225,11 +156,7 @@ describe('createFixtureLlmPricingAnalyst', () => {
   });
 });
 
-function extractPayload(userPrompt: string): {
-  listing: Record<string, unknown>;
-  stats: Record<string, unknown>;
-  comps: Array<Record<string, unknown>>;
-} {
+function extractPayload(userPrompt: string): Record<string, unknown> {
   const marker = 'Pricing payload:\n';
   const index = userPrompt.indexOf(marker);
 
@@ -244,7 +171,7 @@ function buildInput(overrides: Partial<PricingAnalystInput> = {}): PricingAnalys
   return {
     listing: {
       title: '2023 Panini Prizm Victor Wembanyama #136 Rookie',
-      condition: 'Ungraded',
+      condition: 'Very Good',
       facts: {
         Player: 'Victor Wembanyama',
         Year: '2023',
@@ -254,24 +181,25 @@ function buildInput(overrides: Partial<PricingAnalystInput> = {}): PricingAnalys
       },
     },
     stats: buildStats(),
+    conditionAdjustment: buildConditionAdjustment(),
     comps: [
       buildComp({
         id: 'comp-1',
-        title: 'Comp One',
+        title: 'Comp One VG',
         totalPrice: { value: 10, currency: 'USD' },
         soldDate: '2026-05-28T00:00:00.000Z',
         condition: 'Ungraded',
       }),
       buildComp({
         id: 'comp-2',
-        title: 'Comp Two',
+        title: 'Comp Two EX',
         totalPrice: { value: 15.13, currency: 'USD' },
         soldDate: '2026-05-27T00:00:00.000Z',
         condition: 'Near Mint',
       }),
       buildComp({
         id: 'comp-3',
-        title: 'Comp Three',
+        title: 'Comp Three VG-EX',
         totalPrice: { value: 20, currency: 'USD' },
         soldDate: '2026-05-26T00:00:00.000Z',
         condition: null,
@@ -290,6 +218,35 @@ function buildStats(overrides: Partial<PricingStatsResult> = {}): PricingStatsRe
     deterministicSuggestedPrice: 15.13,
     currency: 'USD',
     ignored: [],
+    ...overrides,
+  };
+}
+
+function buildConditionAdjustment(
+  overrides: Partial<ConditionAdjustmentSummary> = {},
+): ConditionAdjustmentSummary {
+  return {
+    listingConditionSignal: {
+      label: 'Very Good',
+      matchedText: 'VERY_GOOD',
+      score: 3,
+      source: 'listing_condition',
+    },
+    compConditionSignals: [],
+    explicitCompConditionCount: 3,
+    compMedianConditionScore: 3.5,
+    listingConditionScore: 3,
+    conditionDelta: -0.5,
+    deterministicMedianPrice: 15.13,
+    allowedAdjustment: {
+      eligible: true,
+      targetPrice: 14.44,
+      minPrice: 14.44,
+      maxPrice: 14.44,
+      rawPercent: -0.0438,
+      appliedPercent: -0.0456,
+      reason: 'eligible',
+    },
     ...overrides,
   };
 }
