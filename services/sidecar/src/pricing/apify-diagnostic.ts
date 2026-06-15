@@ -1,4 +1,4 @@
-import { DEFAULT_APIFY_SOLD_COMP_COUNT } from './apify-config.js';
+import { APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const APIFY_API_BASE_URL = 'https://api.apify.com/v2';
@@ -159,7 +159,7 @@ export function parseRuntimeApifyConfig(env: NodeJS.ProcessEnv): RuntimeApifyCon
     requestedCompCount: parsePositiveInteger(
       env.APIFY_MIN_SOLD_COMPS,
       'APIFY_MIN_SOLD_COMPS',
-      DEFAULT_APIFY_SOLD_COMP_COUNT
+      APIFY_SOLD_COMP_REQUEST_COUNT
     ),
     timeoutSeconds: parsePositiveInteger(
       env.APIFY_PRICE_TIMEOUT_SECONDS,

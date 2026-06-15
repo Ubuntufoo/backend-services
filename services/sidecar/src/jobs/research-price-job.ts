@@ -8,7 +8,7 @@ import {
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
-  DEFAULT_APIFY_SOLD_COMP_COUNT,
+  APIFY_SOLD_COMP_REQUEST_COUNT,
   buildPricingProviderInput,
   buildPricingTitleFromItemSpecifics,
   computePricingConfidence,
@@ -63,7 +63,6 @@ export interface ResearchPriceJobDependencies {
   now: () => Date;
   pricingAnalyst?: PricingAnalyst;
   pricingProvider?: PricingProvider;
-  pricingProviderRequestedCompCount?: number;
 }
 
 export interface RunResearchPriceJobResult {
@@ -390,21 +389,6 @@ function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): Pri
   return pricingProvider;
 }
 
-function resolvePricingProviderRequestedCompCount(
-  pricingProvider: PricingProvider,
-  dependencies: ResearchPriceJobDependencies
-): number | undefined {
-  if (typeof dependencies.pricingProviderRequestedCompCount === 'number') {
-    return dependencies.pricingProviderRequestedCompCount;
-  }
-
-  if (pricingProvider.name !== APIFY_PROVIDER_NAME) {
-    return undefined;
-  }
-
-  return DEFAULT_APIFY_SOLD_COMP_COUNT;
-}
-
 function assertResearchPriceListingEligible(listing: ListingRow): void {
   if (listing.listing_type !== 'single') {
     throw buildResearchPriceError(
@@ -515,10 +499,6 @@ export async function priceListingNow(
   assertResearchPriceListingEligible(listing);
 
   const pricingProvider = resolvePricingProvider(dependencies);
-  const pricingProviderRequestedCompCount = resolvePricingProviderRequestedCompCount(
-    pricingProvider,
-    dependencies
-  );
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
@@ -545,7 +525,13 @@ export async function priceListingNow(
     });
 
     providerResult = await pricingProvider.fetchSoldComps(
-      buildPricingProviderInput(listing, listingId, pricingProviderRequestedCompCount)
+      buildPricingProviderInput(
+        listing,
+        listingId,
+        pricingProvider.name === APIFY_PROVIDER_NAME
+          ? APIFY_SOLD_COMP_REQUEST_COUNT
+          : undefined
+      )
     );
     rawCompCount = providerResult.soldComps.length;
 

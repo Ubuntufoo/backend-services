@@ -239,7 +239,6 @@ describe('priceListingNow', () => {
         }) as never,
       dataAccess,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
-      pricingProviderRequestedCompCount: 20,
     });
 
     expect(fetchSoldComps).toHaveBeenCalledTimes(1);
@@ -268,7 +267,7 @@ describe('priceListingNow', () => {
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
-  it('uses explicit configured requestedCompCount for canonical apify pricing path', async () => {
+  it('uses canonical 20-count requestedCompCount for normal apify pricing path', async () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(listing);
     const fetchSoldComps = vi.fn().mockResolvedValue({
@@ -291,7 +290,6 @@ describe('priceListingNow', () => {
         }) as never,
       dataAccess,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
-      pricingProviderRequestedCompCount: 20,
     });
 
     expect(fetchSoldComps).toHaveBeenCalledWith(
@@ -368,7 +366,6 @@ describe('priceListingNow', () => {
         }) as never,
       dataAccess,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
-      pricingProviderRequestedCompCount: 20,
     });
 
     expect(result.rawCompCount).toBe(12);

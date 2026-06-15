@@ -1,1 +1,1 @@
-export const DEFAULT_APIFY_SOLD_COMP_COUNT = 20;
+export const APIFY_SOLD_COMP_REQUEST_COUNT = 20;

@@ -42,9 +42,13 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9F.5 | $BE/Tests$ | Add Apify adapter fixture coverage | Adapter handles rate limits, malformed responses, and fewer-than-12-comp responses without spending credits |
 | 9G.0 | BE/API | Add global pricing-service enable setting | Backend exposes and persists a global pricing-service enabled flag so FE can display and toggle pricing on/off safely |
 | 9G.1 | FE | Add manual toggle for price service on/off in UI | In the UI, reviewers can enable or disable the price service globally |
-| 9G.2 | $BE/Docs$ | Add controlled Apify pricing pilot notes | Minimal instructions for first live pricing tests from CLI | -->
+| 9G.2 | $BE/Docs$ | Add controlled Apify pricing pilot notes | Minimal instructions for first live pricing tests from CLI |
 | 9G.3 | $BE/Ops$ | Add one-listing live pricing command | Specific listing IDs can be priced without waiting for the runner loop |
-| 9G.4 | $BE/Pricing$ | Tune trading-card query builder | Query builder uses player, year, set, card number, parallel, and raw/graded signals |
+| 9G.4 | $BE/Pricing$ | Tune trading-card query builder | Query builder uses player, year, set, card number, parallel, and raw/graded signals |  
+| 9G.5 | BE/Gemini | Canonicalize trading-card metadata for pricing | Gemini and backend normalization capture pricing-critical aspects, including Card Number, Year, Manufacturer, Set, and aliases |
+| 9G.6 | BE/Pricing | Normalize Apify trading-card pricing queries | Sold-comps queries use concise canonical metadata and avoid duplicate player/year/card-number terms |
+| 9G.7 | BE/Pricing | Simplify Apify sold-comp request count source | Normal Apify pricing paths request 20 comps from one canonical constant; diagnostic env checks stay isolated |
+ COMPLETED TASKS COMMENTED OUT -->
 | 9G.5 | BE/Pricing | Harden price update policy | Listing price updates only from validated positive pricing results with stored research rows |
 | 9H.1 | $BE/API$ | Expose latest pricing research on listings API | FE can later display pricing context without direct table access |
 | 9H.2 | $FE$ | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |

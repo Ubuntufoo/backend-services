@@ -1,6 +1,6 @@
 import type { ListingRow } from '@ebay-inventory/data';
 
-import { DEFAULT_APIFY_SOLD_COMP_COUNT } from './apify-config.js';
+import { APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
 import type { PricingProviderInput } from './types.js';
 
 function asNonEmptyString(value: unknown): string | undefined {
@@ -64,7 +64,7 @@ export function buildPricingTitleFromItemSpecifics(
 export function buildPricingProviderInput(
   listing: ListingRow,
   listingId: string,
-  requestedCompCount = DEFAULT_APIFY_SOLD_COMP_COUNT
+  requestedCompCount = APIFY_SOLD_COMP_REQUEST_COUNT
 ): PricingProviderInput {
   const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
   const title =

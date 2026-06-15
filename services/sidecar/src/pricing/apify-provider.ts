@@ -6,7 +6,7 @@ import {
 } from '@/listings/trading-card-conditions.js';
 import { createLogger } from '@/utils/logger.js';
 
-import { DEFAULT_APIFY_SOLD_COMP_COUNT } from './apify-config.js';
+import { APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
 const APIFY_PROVIDER_NAME = 'apify';
@@ -221,7 +221,6 @@ export interface ApifyActorOutputMeta {
 
 export interface ApifyPricingProviderConfig {
   actorId: string;
-  requestedCompCount?: number;
   timeoutSeconds?: number;
   token: string;
 }
@@ -275,7 +274,7 @@ export class ApifyPricingProviderError extends Error {
 
 export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInput {
   return {
-    count: input.requestedCompCount ?? DEFAULT_APIFY_SOLD_COMP_COUNT,
+    count: input.requestedCompCount ?? APIFY_SOLD_COMP_REQUEST_COUNT,
     ebaySite: 'ebay.com',
     itemCondition: 'used',
     keywords: [buildApifyQuery(input)],
@@ -360,13 +359,7 @@ export function createApifyPricingProvider(
         );
       }
 
-      const actorInput = buildApifyActorInput({
-        ...input,
-        requestedCompCount:
-          input.requestedCompCount ??
-          config.requestedCompCount ??
-          DEFAULT_APIFY_SOLD_COMP_COUNT,
-      });
+      const actorInput = buildApifyActorInput(input);
       const diagnosticContext = buildApifyActorDiagnosticContext(input);
       const fetchedAt = now().toISOString();
 

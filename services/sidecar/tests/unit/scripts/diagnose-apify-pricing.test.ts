@@ -37,7 +37,7 @@ describe('diagnose apify pricing script', () => {
         actor: null,
         attempted: false,
       },
-      requestedCompCount: 8,
+      requestedCompCount: 20,
       overallStatus: 'pass',
       timeoutSeconds: 120,
       token: {
@@ -66,7 +66,7 @@ describe('diagnose apify pricing script', () => {
         actor: null,
         attempted: false,
       },
-      requestedCompCount: 8,
+      requestedCompCount: 20,
       overallStatus: 'fail',
       timeoutSeconds: 120,
       token: {

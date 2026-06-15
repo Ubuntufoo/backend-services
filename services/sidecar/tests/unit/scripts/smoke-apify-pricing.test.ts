@@ -201,6 +201,7 @@ describe('smoke apify pricing script', () => {
   });
 
   it('prints success summary json only and avoids db writes', async () => {
+    process.env.APIFY_MIN_SOLD_COMPS = '8';
     const getByListingId = vi.fn().mockResolvedValue(createListing({ category_id: '183050' }));
     const update = vi.fn();
     const updateWorkflowState = vi.fn();
@@ -213,6 +214,7 @@ describe('smoke apify pricing script', () => {
         categoryId: '183050',
         conditionId: '2750',
         listingId: 'Single-000123',
+        requestedCompCount: 20,
       });
 
       return {
@@ -222,17 +224,17 @@ describe('smoke apify pricing script', () => {
         rawResult: {
           actorId: 'actor-123',
           input: {
-          actorInput: {
-            count: 8,
-            keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
-            listingId: 'Single-000123',
-            title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+            actorInput: {
+              count: 20,
+              keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
+              listingId: 'Single-000123',
+              title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+            },
+            query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
           },
-          query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
-        },
-        output: {
-          itemCount: 4,
-          sampleTitles: ['Comp A', 'Comp B', 'Comp C', 'Comp D'],
+          output: {
+            itemCount: 4,
+            sampleTitles: ['Comp A', 'Comp B', 'Comp C', 'Comp D'],
           },
           run: {
             finishedAt: '2026-06-11T12:05:00.000Z',
@@ -314,7 +316,7 @@ describe('smoke apify pricing script', () => {
       rawResultSummary: {
         input: {
           actorInput: {
-            count: 8,
+            count: 20,
             keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
           },
           query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',

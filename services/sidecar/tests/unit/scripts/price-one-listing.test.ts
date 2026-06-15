@@ -108,6 +108,7 @@ describe('price one listing script', () => {
 
   it('calls canonical pricing function and prints compact success summary', async () => {
     process.env.APIFY_MIN_SOLD_COMPS = '8';
+    const createProvider = vi.fn().mockReturnValue({ name: 'apify' });
     const runPriceListingNow = vi.fn().mockResolvedValue({
       acceptedCompCount: 3,
       listing: createListing({ price: 27.5 }),
@@ -121,8 +122,13 @@ describe('price one listing script', () => {
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
     await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
       createDataAccess: () => ({}) as never,
+      createProvider,
       runPriceListingNow,
     });
+
+    const pricingDependencies = runPriceListingNow.mock.calls[0][1] as {
+      createPricingProvider: () => unknown;
+    };
 
     expect(runPriceListingNow).toHaveBeenCalledWith(
       'Single-000123',
@@ -130,12 +136,18 @@ describe('price one listing script', () => {
         createPricingProvider: expect.any(Function),
         dataAccess: {},
         now: expect.any(Function),
-        pricingProviderRequestedCompCount: 8,
       }),
       {
         executionSource: 'cli',
       }
     );
+    expect(pricingDependencies).not.toHaveProperty('pricingProviderRequestedCompCount');
+    pricingDependencies.createPricingProvider();
+    expect(createProvider).toHaveBeenCalledWith({
+      actorId: 'actor-123',
+      timeoutSeconds: 120,
+      token: 'secret-token',
+    });
 
     const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
       accepted_comp_count: number;
