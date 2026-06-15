@@ -111,6 +111,12 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
       'APIFY_PRICE_TIMEOUT_SECONDS',
       '120'
     ),
+    SOLDCOMPS_ENABLED: falseByDefaultBooleanString(),
+    SOLDCOMPS_API_KEY: optionalNonEmptyString(),
+    SOLDCOMPS_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
+      'SOLDCOMPS_PRICE_TIMEOUT_SECONDS',
+      '120'
+    ),
     EBAY_ENABLED: z.enum(['true', 'false']).default('true'),
     EBAY_CLIENT_ID: optionalNonEmptyString(),
     EBAY_CLIENT_SECRET: optionalNonEmptyString(),
@@ -148,6 +154,14 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
           path: ['APIFY_PRICE_ACTOR_ID'],
         });
       }
+    }
+
+    if (env.SOLDCOMPS_ENABLED === 'true' && !env.SOLDCOMPS_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'SOLDCOMPS_API_KEY is required',
+        path: ['SOLDCOMPS_API_KEY'],
+      });
     }
 
     if (env.EBAY_ENABLED === 'false') {

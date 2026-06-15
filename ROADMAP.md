@@ -48,15 +48,17 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9G.5 | BE/Gemini | Canonicalize trading-card metadata for pricing | Gemini and backend normalization capture pricing-critical aspects, including Card Number, Year, Manufacturer, Set, and aliases |
 | 9G.6 | BE/Pricing | Normalize Apify trading-card pricing queries | Sold-comps queries use concise canonical metadata and avoid duplicate player/year/card-number terms |
 | 9G.7 | BE/Pricing | Simplify Apify sold-comp request count source | Normal Apify pricing paths request 20 comps from one canonical constant; diagnostic env checks stay isolated |
- COMPLETED TASKS COMMENTED OUT -->
 | 9J.1 | BE/Pricing | Extract provider-neutral sold-comps query builder | Apify and SoldComps can reuse canonical trading-card query construction without provider-specific duplication |
+COMPLETED TASKS COMMENTED OUT -->
+<!--
 | 9J.2 | BE/SoldComps | Add SoldComps provider adapter and config | SoldComps authenticates, requests 50 comps, maps responses into the shared pricing contract, and classifies failures safely |
-| 9J.3 | BE/Pricing | Harden price update policy | Listing price updates only from validated positive pricing results with stored research rows |
-| 9J.4 | BE/Pricing | Make SoldComps the default live pricing provider | Normal queued `research_price` jobs use SoldComps; provider fallback remains deferred |
-| 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused diagnostics, smoke coverage, and no Apify dependency |
-| 9J.6 | BE/API | Replace pricing boolean with provider-mode setting | App settings persist and expose `off`, `soldcomps`, or `apify`; SoldComps is the default enabled mode |
-| 9J.7 | FE | Add pricing provider dashboard selector | Dashboard control selects Pricing Off, SoldComps, or Apify and reflects the persisted backend mode |
-| 9J.8 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove each configured mode selects the intended provider and queued jobs never silently use fixtures |
+9J.2 COMPLETED -->
+| 9J.3 | BE/API | Replace pricing boolean with provider-mode setting | App settings persist and expose `off`, `soldcomps`, or `apify`; migrate the legacy boolean safely; `soldcomps` is the default enabled mode and the persisted mode becomes the sole runtime authority |
+| 9J.4 | BE/Pricing | Add provider resolver and wire queued pricing | Normal queued `research_price` jobs resolve the persisted mode, use SoldComps by default, classify either live provider safely, and never silently use fixtures; provider fallback remains deferred |
+| 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused config diagnostics and smoke coverage; output identifies the selected and actual provider |
+| 9J.6 | FE | Add pricing provider dashboard selector | Dashboard segmented control selects Pricing Off, SoldComps, or Apify; reflects persisted mode and handles loading, saving, disabled, and backend configuration-error states |
+| 9J.7 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove `off` skips enqueue/execution safely, each live mode selects the intended provider, failures remain workflow-safe, and queued jobs never silently use fixtures |
+| 9J.8 | BE/Pricing | Harden price update policy | Listing price updates only after a validated positive result and successfully stored research row, regardless of selected provider |
 | 9J.9 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
 | 9H.1 | $BE/API$ | Expose latest pricing research on listings API | FE can later display pricing context without direct table access |
 | 9H.2 | $FE$ | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |

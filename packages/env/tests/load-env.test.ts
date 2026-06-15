@@ -253,6 +253,72 @@ describe('loadEnv', () => {
     expect(env.APIFY_PRICE_TIMEOUT_SECONDS).toBe('120');
   });
 
+  it('allows blank SoldComps values when disabled and applies defaults', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        EBAY_ENABLED: 'false',
+        SOLDCOMPS_ENABLED: 'false',
+        SOLDCOMPS_API_KEY: '   ',
+      },
+    });
+
+    expect(env.SOLDCOMPS_ENABLED).toBe('false');
+    expect(env.SOLDCOMPS_API_KEY).toBeUndefined();
+    expect(env.SOLDCOMPS_PRICE_TIMEOUT_SECONDS).toBe('120');
+  });
+
+  it('treats blank SOLDCOMPS_ENABLED as disabled', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        SOLDCOMPS_ENABLED: '',
+        EBAY_ENABLED: 'false',
+      },
+    });
+
+    expect(env.SOLDCOMPS_ENABLED).toBe('false');
+    expect(env.SOLDCOMPS_PRICE_TIMEOUT_SECONDS).toBe('120');
+  });
+
+  it('requires SoldComps API key when enabled', () => {
+    expect(() =>
+      loadSidecarRootEnv({
+        env: {
+          NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+          SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+          SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+          EBAY_ENABLED: 'false',
+          SOLDCOMPS_ENABLED: 'true',
+        },
+      })
+    ).toThrow(/SOLDCOMPS_API_KEY is required/);
+  });
+
+  it('rejects invalid SoldComps timeout values even when disabled', () => {
+    for (const invalidValue of ['0', '-1', '1.5', 'abc']) {
+      expect(() =>
+        loadSidecarRootEnv({
+          env: {
+            NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+            SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+            SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+            SOLDCOMPS_PRICE_TIMEOUT_SECONDS: invalidValue,
+            EBAY_ENABLED: 'false',
+          },
+        })
+      ).toThrow(/SOLDCOMPS_PRICE_TIMEOUT_SECONDS must be a positive integer string/);
+    }
+  });
+
   it('requires Apify token and actor id when enabled', () => {
     expect(() =>
       loadSidecarRootEnv({
