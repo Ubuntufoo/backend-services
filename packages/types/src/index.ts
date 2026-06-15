@@ -98,4 +98,8 @@ export const CAPTURE_MODES = ['single_2_image', 'lot_3_image'] as const;
 
 export type CaptureMode = (typeof CAPTURE_MODES)[number];
 
+export const PRICING_PROVIDER_MODES = ['off', 'soldcomps', 'apify'] as const;
+
+export type PricingProviderMode = (typeof PRICING_PROVIDER_MODES)[number];
+
 export * from './structured-sku.js';

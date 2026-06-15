@@ -1,6 +1,7 @@
 import {
   AiModelRouteNotFoundError,
-  isPricingServiceEnabled,
+  getPricingProviderMode,
+  isPricingEnabled,
   type AiModelAttemptRow,
   type GeminiJobAttemptAuditUpdate,
   type GeminiModelAttempt,
@@ -482,13 +483,16 @@ async function enqueueResearchPriceAfterGenerate(
     return;
   }
 
+  let pricingProviderMode: ReturnType<typeof getPricingProviderMode> = 'soldcomps';
+
   try {
     const appSettings = await dataAccess.appSettings.get();
-    if (!isPricingServiceEnabled(appSettings)) {
-      jobLogger.info('Skipped research_price enqueue after generate_ai because pricing service is disabled.', {
+    pricingProviderMode = getPricingProviderMode(appSettings);
+    if (!isPricingEnabled(appSettings)) {
+      jobLogger.info('Skipped research_price enqueue after generate_ai because pricing provider mode is off.', {
         event: 'research_price_enqueue_skipped',
         listingId: listing.listing_id,
-        pricingServiceEnabled: false,
+        pricingProviderMode,
         settingsSource: appSettings ? 'app_settings' : 'default',
       });
       return;
@@ -500,7 +504,7 @@ async function enqueueResearchPriceAfterGenerate(
       error: error instanceof Error ? error.message : String(error),
       listingId: listing.listing_id,
       phase: 'post_generate_ai_enqueue',
-      pricingServiceEnabled: true,
+      pricingProviderMode,
     });
   }
 }

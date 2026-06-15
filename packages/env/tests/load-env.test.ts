@@ -3,9 +3,11 @@ import { z } from 'zod';
 import {
   EnvValidationError,
   formatEnvValidationErrors,
+  loadApifyPricingEnv,
   loadEnv,
   loadR2Env,
   loadSidecarRootEnv,
+  loadSoldCompsPricingEnv,
   loadSupabaseEnv,
 } from '../src/index.js';
 
@@ -385,5 +387,33 @@ describe('loadEnv', () => {
         },
       })
     ).toThrow(/APIFY_PRICE_TIMEOUT_SECONDS must be a positive integer string/);
+  });
+
+  it('loads selected apify pricing env without full sidecar contract', () => {
+    const env = loadApifyPricingEnv({
+      env: {
+        APIFY_PRICE_ACTOR_ID: 'actor-id',
+        APIFY_TOKEN: 'token',
+      },
+    });
+
+    expect(env).toEqual({
+      APIFY_PRICE_ACTOR_ID: 'actor-id',
+      APIFY_PRICE_TIMEOUT_SECONDS: '120',
+      APIFY_TOKEN: 'token',
+    });
+  });
+
+  it('loads selected soldcomps pricing env without full sidecar contract', () => {
+    const env = loadSoldCompsPricingEnv({
+      env: {
+        SOLDCOMPS_API_KEY: 'soldcomps-key',
+      },
+    });
+
+    expect(env).toEqual({
+      SOLDCOMPS_API_KEY: 'soldcomps-key',
+      SOLDCOMPS_PRICE_TIMEOUT_SECONDS: '120',
+    });
   });
 });

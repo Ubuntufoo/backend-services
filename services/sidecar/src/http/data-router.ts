@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import {
   DEFAULT_APP_SETTINGS_ID,
   ListingWorkflowTransitionConflictError,
-  isPricingServiceEnabled,
+  getPricingProviderMode,
   type ListingInsert,
   type AppSettingsRow,
   type ListingUpdate,
@@ -16,7 +16,7 @@ import {
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
   listingIdParamsSchema,
-  updatePricingServiceEnabledRequestSchema,
+  updatePricingProviderModeRequestSchema,
   updateListingRequestSchema,
   updateListingImageUrlsRequestSchema,
   updateListingWorkflowStateRequestSchema,
@@ -163,7 +163,7 @@ function mapSellerEditableListingFields(
 function serializeAppSettings(appSettings: AppSettingsRow): AppSettingsRow {
   return {
     ...appSettings,
-    pricing_service_enabled: isPricingServiceEnabled(appSettings),
+    pricing_provider_mode: getPricingProviderMode(appSettings),
   };
 }
 
@@ -490,7 +490,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
   });
 
   router.patch('/app-settings', async (req: Request, res: Response) => {
-    const body = parseOrSend(res, updatePricingServiceEnabledRequestSchema, req.body);
+    const body = parseOrSend(res, updatePricingProviderModeRequestSchema, req.body);
     if (!body) {
       return;
     }
@@ -498,7 +498,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     try {
       const appSettings = await getDataAccess().appSettings.update(
         {
-          pricing_service_enabled: body.pricingServiceEnabled,
+          pricing_provider_mode: body.pricingProviderMode,
         },
         DEFAULT_APP_SETTINGS_ID
       );

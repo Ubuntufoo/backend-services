@@ -1,4 +1,4 @@
-import { CAPTURE_MODES } from '@ebay-inventory/types';
+import { CAPTURE_MODES, PRICING_PROVIDER_MODES } from '@ebay-inventory/types';
 import { z } from 'zod';
 import { listingWorkflowStateSchema } from '@/workflow/listing-workflow.js';
 
@@ -102,11 +102,11 @@ export const enqueueGenerateAiRequestSchema = z
   })
   .strict();
 
-export const updatePricingServiceEnabledRequestSchema = z
+export const updatePricingProviderModeRequestSchema = z
   .object({
-    pricingServiceEnabled: z.boolean({
-      required_error: 'pricingServiceEnabled is required',
-      invalid_type_error: 'pricingServiceEnabled must be a boolean',
+    pricingProviderMode: z.enum(PRICING_PROVIDER_MODES, {
+      required_error: 'pricingProviderMode is required',
+      invalid_type_error: 'pricingProviderMode must be off, soldcomps, or apify',
     }),
   })
   .strict();
@@ -125,6 +125,6 @@ export type UpdateListingWorkflowStateRequest = z.infer<
   typeof updateListingWorkflowStateRequestSchema
 >;
 export type EnqueueGenerateAiRequest = z.infer<typeof enqueueGenerateAiRequestSchema>;
-export type UpdatePricingServiceEnabledRequest = z.infer<
-  typeof updatePricingServiceEnabledRequestSchema
+export type UpdatePricingProviderModeRequest = z.infer<
+  typeof updatePricingProviderModeRequestSchema
 >;

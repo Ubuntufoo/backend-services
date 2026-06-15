@@ -27,6 +27,7 @@ import {
   enqueuePublishJob,
   enqueueResearchPriceJob,
   failJob,
+  getPricingProviderMode,
   getEffectiveGeminiDailyLimit,
   getGeminiDailyUsageSummary,
   getEffectiveOrderSyncDailyLimit,
@@ -41,6 +42,8 @@ import {
   getOrderByOrderId,
   incrementGeminiCallsUsed,
   incrementOrderSyncCount,
+  isPricingEnabled,
+  isPricingProviderModeEnabled,
   listApprovedForExportListings,
   listAiModelAttemptsForListing,
   listAiModelAttemptsForListings,
@@ -207,7 +210,7 @@ const appSettingsRow: AppSettingsRow = {
   max_order_syncs_per_day: 25,
   merchant_location_key: null,
   office_location_name: null,
-  pricing_service_enabled: true,
+  pricing_provider_mode: 'soldcomps',
   processed_folder_path: '/processed',
   r2_retention_days_after_sold: 30,
   updated_at: '2026-05-17T00:00:00.000Z',
@@ -4456,5 +4459,24 @@ describe('shared repositories', () => {
     });
 
     await expect(updateAppSettings(updateClient, { handling_days: 3 })).resolves.toEqual(appSettingsRow);
+  });
+
+  it('normalizes pricing provider mode from canonical, legacy, and missing settings', () => {
+    expect(getPricingProviderMode(appSettingsRow)).toBe('soldcomps');
+    expect(getPricingProviderMode({ pricing_provider_mode: 'apify' })).toBe('apify');
+    expect(getPricingProviderMode({ pricing_service_enabled: false })).toBe('off');
+    expect(getPricingProviderMode({ pricing_provider_mode: null })).toBe('soldcomps');
+    expect(getPricingProviderMode(null)).toBe('soldcomps');
+  });
+
+  it('treats only off as disabled pricing mode', () => {
+    expect(isPricingProviderModeEnabled('off')).toBe(false);
+    expect(isPricingProviderModeEnabled('soldcomps')).toBe(true);
+    expect(isPricingProviderModeEnabled('apify')).toBe(true);
+    expect(isPricingEnabled({ pricing_provider_mode: 'off' })).toBe(false);
+    expect(isPricingEnabled({ pricing_provider_mode: 'soldcomps' })).toBe(true);
+    expect(isPricingEnabled({ pricing_provider_mode: 'apify' })).toBe(true);
+    expect(isPricingEnabled({ pricing_service_enabled: false })).toBe(false);
+    expect(isPricingEnabled(null)).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ export * from './sold-comps-query.js';
 export * from './apify-provider.js';
 export * from './soldcomps-provider.js';
 export * from './fixture-provider.js';
+export * from './provider-resolver.js';
 export * from './normalizer.js';
 export * from './stats.js';
 export * from './confidence.js';

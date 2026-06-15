@@ -1,24 +1,26 @@
 import {
-  isPricingServiceEnabled,
+  getPricingProviderMode,
+  isPricingEnabled,
   type JobRow,
   type Json,
   type ListingPriceResearchRow,
   type ListingRow,
 } from '@ebay-inventory/data';
+import type { EnvSource } from '@ebay-inventory/env';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
-  APIFY_SOLD_COMP_REQUEST_COUNT,
   buildPricingProviderInput,
   buildPricingTitleFromItemSpecifics,
   computePricingConfidence,
   computePricingStats,
-  createFixturePricingProvider,
   getListingItemSpecifics,
   normalizeSoldComps,
   redactSensitiveText as redactPricingSensitiveText,
+  resolveProductionPricingProvider,
   type LlmPricingPromptFactKey,
   type LlmPricingPromptFacts,
+  type LivePricingProviderMode,
   type PricingAnalyst,
   type PricingAnalystInput,
   type PricingAnalystResult,
@@ -38,8 +40,13 @@ import {
 
 const APIFY_PROVIDER_NAME = 'apify';
 const FIXTURE_PROVIDER_NAME = 'fixture';
+const SOLDCOMPS_PROVIDER_NAME = 'soldcomps';
 const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
-const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([APIFY_PROVIDER_NAME, FIXTURE_PROVIDER_NAME]);
+const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([
+  APIFY_PROVIDER_NAME,
+  FIXTURE_PROVIDER_NAME,
+  SOLDCOMPS_PROVIDER_NAME,
+]);
 const jobLogger = createLogger('Job');
 const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
   'Player',
@@ -61,8 +68,10 @@ export interface ResearchPriceJobDependencies {
   dataAccess: SidecarDataAccess;
   normalizeComps?: typeof normalizeSoldComps;
   now: () => Date;
+  pricingProviderEnv?: EnvSource;
   pricingAnalyst?: PricingAnalyst;
   pricingProvider?: PricingProvider;
+  resolvePricingProvider?: (mode: LivePricingProviderMode) => PricingProvider;
 }
 
 export interface RunResearchPriceJobResult {
@@ -259,6 +268,23 @@ function buildResearchProviderFailureJobError(
   );
 }
 
+function isProviderFailure(
+  error: unknown,
+  failure: ReturnType<typeof getProviderFailureDetails>
+): boolean {
+  return (
+    failure.provider !== undefined ||
+    failure.providerFailureCategory !== undefined ||
+    failure.providerFailureCode !== undefined ||
+    failure.workflowSafe !== undefined ||
+    (isRecord(error) &&
+      (typeof error.provider === 'string' ||
+        typeof error.providerName === 'string' ||
+        typeof error.category === 'string' ||
+        typeof error.code === 'string'))
+  );
+}
+
 function buildLlmPricingFacts(itemSpecifics: PricingProviderInput['itemSpecifics']): LlmPricingPromptFacts | undefined {
   if (!itemSpecifics) {
     return undefined;
@@ -344,37 +370,33 @@ function buildResearchPriceError(
   );
 }
 
-async function assertPricingServiceEnabled(
+async function getEnabledPricingProviderMode(
   dependencies: ResearchPriceJobDependencies,
   options: PriceListingNowOptions = {}
-): Promise<void> {
+): Promise<LivePricingProviderMode> {
   const appSettings = await dependencies.dataAccess.appSettings.get();
+  const pricingProviderMode = getPricingProviderMode(appSettings);
 
-  if (isPricingServiceEnabled(appSettings)) {
-    return;
+  if (pricingProviderMode !== 'off' && isPricingEnabled(appSettings)) {
+    return pricingProviderMode;
   }
 
   throw buildResearchPriceError(
     JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
     options.executionSource === 'cli'
-      ? 'Pricing service disabled. pricing:price-one skipped.'
-      : `Pricing service disabled. research_price skipped for job "${options.jobId ?? 'unknown'}".`,
+      ? 'Pricing provider mode off. pricing:price-one skipped.'
+      : `Pricing provider mode off. research_price skipped for job "${options.jobId ?? 'unknown'}".`,
     {
       ...(options.executionSource ? { execution_source: options.executionSource } : {}),
       ...(options.jobId ? { job_id: options.jobId } : {}),
-      pricing_service_enabled: false,
+      pricing_provider_mode: pricingProviderMode,
       settings_source: appSettings ? 'app_settings' : 'default',
       workflow_safe: true,
     }
   );
 }
 
-function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): PricingProvider {
-  const pricingProvider =
-    dependencies.pricingProvider ??
-    dependencies.createPricingProvider?.() ??
-    createFixturePricingProvider();
-
+function assertSupportedPricingProvider(pricingProvider: PricingProvider): PricingProvider {
   if (!SUPPORTED_PRICING_PROVIDER_NAMES.has(pricingProvider.name)) {
     throw buildResearchPriceError(
       JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
@@ -387,6 +409,27 @@ function resolvePricingProvider(dependencies: ResearchPriceJobDependencies): Pri
   }
 
   return pricingProvider;
+}
+
+function resolvePricingProvider(
+  dependencies: ResearchPriceJobDependencies,
+  selectedProviderMode: LivePricingProviderMode
+): PricingProvider {
+  if (dependencies.pricingProvider) {
+    return assertSupportedPricingProvider(dependencies.pricingProvider);
+  }
+
+  if (dependencies.createPricingProvider) {
+    return assertSupportedPricingProvider(dependencies.createPricingProvider());
+  }
+
+  return assertSupportedPricingProvider(
+    dependencies.resolvePricingProvider?.(selectedProviderMode) ??
+      resolveProductionPricingProvider({
+        env: dependencies.pricingProviderEnv,
+        mode: selectedProviderMode,
+      })
+  );
 }
 
 function assertResearchPriceListingEligible(listing: ListingRow): void {
@@ -495,13 +538,22 @@ export async function priceListingNow(
     );
   }
 
-  await assertPricingServiceEnabled(dependencies, options);
+  const selectedProviderMode = await getEnabledPricingProviderMode(dependencies, options);
   assertResearchPriceListingEligible(listing);
-
-  const pricingProvider = resolvePricingProvider(dependencies);
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
+  let pricingProvider: PricingProvider;
+
+  try {
+    pricingProvider = resolvePricingProvider(dependencies, selectedProviderMode);
+  } catch (error) {
+    const providerFailure = getProviderFailureDetails(error);
+    throw isProviderFailure(error, providerFailure)
+      ? buildResearchProviderFailureJobError(error, selectedProviderMode)
+      : classifyJobError('research_price', error);
+  }
+
   let research: ListingPriceResearchRow | null = null;
   let researchSucceeded = false;
   let providerResult: PricingProviderResult | undefined;
@@ -516,6 +568,7 @@ export async function priceListingNow(
       listingId,
       pricingMode: getPricingMode(pricingProvider, dependencies.pricingAnalyst),
       provider: pricingProvider.name,
+      selectedProviderMode,
     });
 
     research = await dependencies.dataAccess.listingPriceResearch.create({
@@ -524,15 +577,7 @@ export async function priceListingNow(
       status: 'pending',
     });
 
-    providerResult = await pricingProvider.fetchSoldComps(
-      buildPricingProviderInput(
-        listing,
-        listingId,
-        pricingProvider.name === APIFY_PROVIDER_NAME
-          ? APIFY_SOLD_COMP_REQUEST_COUNT
-          : undefined
-      )
-    );
+    providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
     rawCompCount = providerResult.soldComps.length;
 
     const normalized = runNormalizeComps(providerResult.soldComps);
@@ -553,6 +598,7 @@ export async function priceListingNow(
       provider: providerResult.provider,
       query: redactSensitiveText(providerResult.query),
       rawCompCount,
+      selectedProviderMode,
     });
     const deterministicSuggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
 
@@ -682,11 +728,13 @@ export async function priceListingNow(
       suggestedPrice: finalSuggestedPrice,
     };
   } catch (error) {
-    let jobError =
-      pricingProvider.name === APIFY_PROVIDER_NAME
-        ? buildResearchProviderFailureJobError(error, pricingProvider.name)
-        : classifyJobError('research_price', error);
     const providerFailure = getProviderFailureDetails(error);
+    let jobError =
+      error instanceof SidecarJobError
+        ? error
+        : isProviderFailure(error, providerFailure)
+          ? buildResearchProviderFailureJobError(error, pricingProvider.name)
+          : classifyJobError('research_price', error);
     const provider =
       providerResult?.provider ??
       providerFailure.provider ??
@@ -735,6 +783,7 @@ export async function priceListingNow(
       providerFailureMessage: providerFailure.providerFailureMessage,
       query,
       rawCompCount,
+      selectedProviderMode,
       workflowSafe: true,
     });
 
@@ -777,13 +826,14 @@ export async function runResearchPriceJob(
       listing: result.listing,
     };
   } catch (error) {
-    const jobError = classifyJobError(job.job_type, error);
+    const jobError =
+      error instanceof SidecarJobError ? error : classifyJobError(job.job_type, error);
     if (jobError.code === JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED) {
-      jobLogger.info('Skipped research_price job because pricing service is disabled.', {
+      jobLogger.info('Skipped research_price job because pricing provider mode is off.', {
         event: 'research_price_disabled',
         jobId: job.id,
         listingId,
-        pricingServiceEnabled: false,
+        pricingProviderMode: 'off',
       });
     }
 

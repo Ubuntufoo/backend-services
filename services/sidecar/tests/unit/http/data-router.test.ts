@@ -90,7 +90,7 @@ const appSettingsRow = {
   max_order_syncs_per_day: 25,
   merchant_location_key: null,
   office_location_name: null,
-  pricing_service_enabled: true,
+  pricing_provider_mode: 'soldcomps',
   processed_folder_path: '/processed',
   r2_retention_days_after_sold: 30,
   updated_at: '2026-05-17T00:00:00.000Z',
@@ -1339,22 +1339,39 @@ describe('data API router', () => {
     });
   });
 
-  it('updates pricing_service_enabled through app settings', async () => {
+  it('normalizes pricing provider mode in app settings responses', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get = vi.fn(async () => ({
+      ...appSettingsRow,
+      pricing_provider_mode: null,
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/app-settings');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 'default',
+      pricing_provider_mode: 'soldcomps',
+    });
+  });
+
+  it('updates pricing_provider_mode through app settings', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
     const response = await request(app).patch('/api/app-settings').send({
-      pricingServiceEnabled: false,
+      pricingProviderMode: 'off',
     });
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       id: 'default',
-      pricing_service_enabled: false,
+      pricing_provider_mode: 'off',
     });
     expect(dataAccess.appSettings.update).toHaveBeenCalledWith(
       {
-        pricing_service_enabled: false,
+        pricing_provider_mode: 'off',
       },
       'default'
     );
@@ -1364,17 +1381,45 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/app-settings').send({
-      pricingServiceEnabled: 'false',
+    const invalidModeResponse = await request(app).patch('/api/app-settings').send({
+      pricingProviderMode: 'fixture',
     });
+    const legacyFieldResponse = await request(app).patch('/api/app-settings').send({
+      pricingServiceEnabled: false,
+    });
+    const emptyBodyResponse = await request(app).patch('/api/app-settings').send({});
 
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({
+    expect(invalidModeResponse.status).toBe(400);
+    expect(invalidModeResponse.body).toEqual({
       error: 'invalid_request',
       details: [
         {
-          message: 'pricingServiceEnabled must be a boolean',
-          path: 'pricingServiceEnabled',
+          message: "Invalid enum value. Expected 'off' | 'soldcomps' | 'apify', received 'fixture'",
+          path: 'pricingProviderMode',
+        },
+      ],
+    });
+    expect(legacyFieldResponse.status).toBe(400);
+    expect(legacyFieldResponse.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: 'pricingProviderMode is required',
+          path: 'pricingProviderMode',
+        },
+        {
+          message: "Unrecognized key(s) in object: 'pricingServiceEnabled'",
+          path: '',
+        },
+      ],
+    });
+    expect(emptyBodyResponse.status).toBe(400);
+    expect(emptyBodyResponse.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: 'pricingProviderMode is required',
+          path: 'pricingProviderMode',
         },
       ],
     });

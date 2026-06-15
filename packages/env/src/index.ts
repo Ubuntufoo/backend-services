@@ -67,6 +67,27 @@ export const supabaseEnvSchema = z.object({
 
 export type SupabaseEnv = z.infer<typeof supabaseEnvSchema>;
 
+export const apifyPricingEnvSchema = z.object({
+  APIFY_PRICE_ACTOR_ID: requiredNonEmptyString('APIFY_PRICE_ACTOR_ID'),
+  APIFY_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
+    'APIFY_PRICE_TIMEOUT_SECONDS',
+    '120'
+  ),
+  APIFY_TOKEN: requiredNonEmptyString('APIFY_TOKEN'),
+});
+
+export type ApifyPricingEnv = z.infer<typeof apifyPricingEnvSchema>;
+
+export const soldCompsPricingEnvSchema = z.object({
+  SOLDCOMPS_API_KEY: requiredNonEmptyString('SOLDCOMPS_API_KEY'),
+  SOLDCOMPS_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
+    'SOLDCOMPS_PRICE_TIMEOUT_SECONDS',
+    '120'
+  ),
+});
+
+export type SoldCompsPricingEnv = z.infer<typeof soldCompsPricingEnvSchema>;
+
 const rawR2EnvSchema = z
   .object({
     R2_ACCOUNT_ID: requiredNonEmptyString('R2_ACCOUNT_ID'),
@@ -294,5 +315,25 @@ export function loadSidecarRootEnv(
     ...options,
     serviceName: 'sidecar',
     schema: sidecarRootEnvSchema,
+  });
+}
+
+export function loadApifyPricingEnv(
+  options: Omit<LoadEnvOptions<typeof apifyPricingEnvSchema>, 'serviceName' | 'schema'> = {}
+): ApifyPricingEnv {
+  return loadEnv({
+    ...options,
+    serviceName: 'sidecar pricing apify',
+    schema: apifyPricingEnvSchema,
+  });
+}
+
+export function loadSoldCompsPricingEnv(
+  options: Omit<LoadEnvOptions<typeof soldCompsPricingEnvSchema>, 'serviceName' | 'schema'> = {}
+): SoldCompsPricingEnv {
+  return loadEnv({
+    ...options,
+    serviceName: 'sidecar pricing soldcomps',
+    schema: soldCompsPricingEnvSchema,
   });
 }

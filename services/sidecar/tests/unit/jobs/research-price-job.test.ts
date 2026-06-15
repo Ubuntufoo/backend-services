@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import { priceListingNow } from '@/jobs/research-price-job.js';
-import { ApifyPricingProviderError } from '@/pricing/index.js';
+import { ApifyPricingProviderError, SoldCompsPricingProviderError } from '@/pricing/index.js';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -91,7 +91,7 @@ function createAppSettings(
     created_at: '2026-06-11T12:00:00.000Z',
     ebay_policy_ids: {},
     id: 'app-settings-id',
-    pricing_service_enabled: true,
+    pricing_provider_mode: 'soldcomps',
     updated_at: '2026-06-11T12:00:00.000Z',
     ...overrides,
   } as AppSettingsRow;
@@ -158,7 +158,7 @@ describe('priceListingNow', () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
       listing,
-      createAppSettings({ pricing_service_enabled: false })
+      createAppSettings({ pricing_provider_mode: 'off' })
     );
     const createPricingProvider = vi.fn();
 
@@ -170,6 +170,9 @@ describe('priceListingNow', () => {
       })
     ).rejects.toMatchObject({
       code: JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
+      context: expect.objectContaining({
+        pricing_provider_mode: 'off',
+      }),
     });
 
     expect(createPricingProvider).not.toHaveBeenCalled();
@@ -245,9 +248,9 @@ describe('priceListingNow', () => {
     expect(fetchSoldComps).toHaveBeenCalledWith(
       expect.objectContaining({
         listingId: listing.listing_id,
-        requestedCompCount: 20,
       })
     );
+    expect(fetchSoldComps.mock.calls[0]?.[0]).not.toHaveProperty('requestedCompCount');
     expect(spies.create).toHaveBeenCalledWith({
       listing_id: listing.listing_id,
       provider: 'apify',
@@ -267,7 +270,38 @@ describe('priceListingNow', () => {
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
-  it('uses canonical 20-count requestedCompCount for normal apify pricing path', async () => {
+  it('allows apify pricing mode without preflight rejection', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'apify' })
+    );
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: 'query',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
+              { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
+              { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(spies.create).toHaveBeenCalledTimes(1);
+    expect(spies.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not inject shared requestedCompCount into apify provider input', async () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(listing);
     const fetchSoldComps = vi.fn().mockResolvedValue({
@@ -295,12 +329,12 @@ describe('priceListingNow', () => {
     expect(fetchSoldComps).toHaveBeenCalledWith(
       expect.objectContaining({
         listingId: listing.listing_id,
-        requestedCompCount: 20,
       })
     );
+    expect(fetchSoldComps.mock.calls[0]?.[0]).not.toHaveProperty('requestedCompCount');
   });
 
-  it('uses canonical 20-count default in normal apify job path even when env override is set', async () => {
+  it('does not inject shared requestedCompCount even when APIFY_MIN_SOLD_COMPS env override exists', async () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(listing);
     const fetchSoldComps = vi.fn().mockResolvedValue({
@@ -338,9 +372,9 @@ describe('priceListingNow', () => {
     expect(fetchSoldComps).toHaveBeenCalledWith(
       expect.objectContaining({
         listingId: listing.listing_id,
-        requestedCompCount: 20,
       })
     );
+    expect(fetchSoldComps.mock.calls[0]?.[0]).not.toHaveProperty('requestedCompCount');
   });
 
   it('does not cap over-returned comps after fetch in canonical path', async () => {
@@ -485,6 +519,90 @@ describe('priceListingNow', () => {
     );
   });
 
+  it('uses persisted default soldcomps mode when app settings row missing', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(listing, null);
+    const resolvePricingProvider = vi.fn().mockReturnValue({
+      fetchSoldComps: vi.fn().mockResolvedValue({
+        fetchedAt: '2026-06-12T10:05:00.000Z',
+        provider: 'soldcomps',
+        query: 'query',
+        rawResult: { provider: 'soldcomps' },
+        soldComps: [
+          { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
+          { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
+          { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+        ],
+      }),
+      name: 'soldcomps',
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      resolvePricingProvider,
+    });
+
+    expect(resolvePricingProvider).toHaveBeenCalledWith('soldcomps');
+    expect(result.provider).toBe('soldcomps');
+  });
+
+  it('uses persisted apify mode for runtime provider resolution', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'apify' })
+    );
+    const resolvePricingProvider = vi.fn().mockReturnValue({
+      fetchSoldComps: vi.fn().mockResolvedValue({
+        fetchedAt: '2026-06-12T10:05:00.000Z',
+        provider: 'apify',
+        query: 'query',
+        rawResult: { provider: 'apify' },
+        soldComps: [
+          { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
+          { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
+          { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+        ],
+      }),
+      name: 'apify',
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      resolvePricingProvider,
+    });
+
+    expect(resolvePricingProvider).toHaveBeenCalledWith('apify');
+    expect(result.provider).toBe('apify');
+  });
+
+  it('fails selected soldcomps mode clearly without fixture fallback when config missing', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+        pricingProviderEnv: {},
+      })
+    ).rejects.toMatchObject({
+      category: 'user_fixable',
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      context: expect.objectContaining({
+        provider: 'soldcomps',
+        provider_failure_category: 'auth_config',
+        provider_failure_code: 'soldcomps_config_invalid',
+      }),
+    });
+
+    expect(spies.create).not.toHaveBeenCalled();
+    expect(spies.markFailed).not.toHaveBeenCalled();
+    expect(spies.update).not.toHaveBeenCalled();
+  });
+
   it('classifies and redacts provider failure', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(listing);
@@ -524,5 +642,40 @@ describe('priceListingNow', () => {
         code: 'apify_auth_failed',
       }),
     });
+  });
+
+  it('classifies soldcomps typed provider failure through provider-neutral path', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        createPricingProvider: () =>
+          ({
+            fetchSoldComps: vi.fn().mockRejectedValue(
+              new SoldCompsPricingProviderError(
+                'soldcomps_rate_limited',
+                'rate_limit',
+                'Bearer soldcomps-secret token=soldcomps-secret',
+                'player=victor'
+              )
+            ),
+            name: 'soldcomps',
+          }) as never,
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      category: 'recoverable',
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      context: expect.objectContaining({
+        provider: 'soldcomps',
+        provider_failure_category: 'rate_limit',
+        provider_failure_code: 'soldcomps_rate_limited',
+      }),
+    });
+
+    const markFailedInput = spies.markFailed.mock.calls[0]?.[0];
+    expect(JSON.stringify(markFailedInput)).not.toContain('soldcomps-secret');
   });
 });

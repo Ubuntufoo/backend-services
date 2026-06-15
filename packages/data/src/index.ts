@@ -87,10 +87,12 @@ export {
 } from './client.js';
 export {
   DEFAULT_APP_SETTINGS_ID,
-  DEFAULT_PRICING_SERVICE_ENABLED,
+  DEFAULT_PRICING_PROVIDER_MODE,
   createAppSettings,
+  getPricingProviderMode,
   getAppSettings,
-  isPricingServiceEnabled,
+  isPricingEnabled,
+  isPricingProviderModeEnabled,
   updateAppSettings,
 } from './repositories/app-settings.js';
 export {
