@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type {
+  NormalizeSoldCompsContext,
   NormalizeSoldCompsResult,
   NormalizedMoneyValue,
   NormalizedSoldComp,
@@ -35,25 +36,39 @@ const INVALID_TITLE_PATTERNS = [
     reason: REJECTION_REASONS.excludedGradedListing,
   },
   {
-    pattern: /\byou\s+pick\b/i,
+    pattern: /\byou[\s-]+pick\b/i,
     reason: REJECTION_REASONS.excludedSelectionListing,
   },
   {
-    pattern: /\bcomplete\s+your\s+set\b/i,
+    pattern: /\bpick[\s-]+your\b/i,
     reason: REJECTION_REASONS.excludedSelectionListing,
   },
   {
-    pattern: /\bpick\s+choose\b/i,
+    pattern: /\bchoose\b/i,
+    reason: REJECTION_REASONS.excludedSelectionListing,
+  },
+  {
+    pattern: /\bcomplete[\s-]+your[\s-]+set\b/i,
+    reason: REJECTION_REASONS.excludedSelectionListing,
+  },
+  {
+    pattern: /\bpick[\s-]+choose\b/i,
     reason: REJECTION_REASONS.excludedSelectionListing,
   },
 ] as const;
 
-export function normalizeSoldComps(rawSoldComps: RawSoldComp[]): NormalizeSoldCompsResult {
+const CARD_NUMBER_RANGE_PATTERN = /#?\s*(\d{1,4})\s*-\s*(\d{1,4})\b/i;
+
+export function normalizeSoldComps(
+  rawSoldComps: RawSoldComp[],
+  context: NormalizeSoldCompsContext = {}
+): NormalizeSoldCompsResult {
   const comps: NormalizedSoldComp[] = [];
   const rejected: NormalizeSoldCompsResult['rejected'] = [];
+  const exactCardNumber = getExactTargetCardNumber(context);
 
   rawSoldComps.forEach((rawComp, index) => {
-    const normalized = normalizeSoldComp(rawComp);
+    const normalized = normalizeSingleSoldComp(rawComp, exactCardNumber);
 
     if ('reason' in normalized) {
       rejected.push({ index, reason: normalized.reason, title: normalized.title });
@@ -73,12 +88,21 @@ export function normalizeSoldComps(rawSoldComps: RawSoldComp[]): NormalizeSoldCo
 function normalizeSoldComp(rawComp: RawSoldComp):
   | Omit<NormalizedSoldComp, 'id' | 'source'>
   | { reason: string; title: string | null } {
+  return normalizeSingleSoldComp(rawComp, null);
+}
+
+function normalizeSingleSoldComp(
+  rawComp: RawSoldComp,
+  exactTargetCardNumber: string | null
+):
+  | Omit<NormalizedSoldComp, 'id' | 'source'>
+  | { reason: string; title: string | null } {
   const title = rawComp.title.trim();
   if (title.length === 0) {
     return { reason: REJECTION_REASONS.blankTitle, title: null };
   }
 
-  const invalidTitleReason = getInvalidTitleReason(title);
+  const invalidTitleReason = getInvalidTitleReason(title, exactTargetCardNumber);
   if (invalidTitleReason) {
     return { reason: invalidTitleReason, title };
   }
@@ -125,14 +149,67 @@ function normalizeSoldComp(rawComp: RawSoldComp):
   };
 }
 
-function getInvalidTitleReason(title: string): string | null {
+function getInvalidTitleReason(title: string, exactTargetCardNumber: string | null): string | null {
   for (const { pattern, reason } of INVALID_TITLE_PATTERNS) {
     if (pattern.test(title)) {
       return reason;
     }
   }
 
+  if (exactTargetCardNumber && containsSelectionRangeForExactCard(title, exactTargetCardNumber)) {
+    return REJECTION_REASONS.excludedSelectionListing;
+  }
+
   return null;
+}
+
+function getExactTargetCardNumber(context: NormalizeSoldCompsContext): string | null {
+  const rawCardNumber = context.itemSpecifics?.['Card Number'];
+  const candidates = Array.isArray(rawCardNumber)
+    ? rawCardNumber
+    : typeof rawCardNumber === 'string'
+      ? [rawCardNumber]
+      : [];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeExactCardNumber(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function normalizeExactCardNumber(value: string): string | null {
+  const normalized = value.trim().replace(/^#\s*/, '');
+
+  if (!/^\d{1,4}[a-z]?$/i.test(normalized)) {
+    return null;
+  }
+
+  return normalized.toUpperCase();
+}
+
+function containsSelectionRangeForExactCard(title: string, exactTargetCardNumber: string): boolean {
+  const rangeMatch = title.match(CARD_NUMBER_RANGE_PATTERN);
+  if (!rangeMatch) {
+    return false;
+  }
+
+  if (!/^\d+$/.test(exactTargetCardNumber)) {
+    return true;
+  }
+
+  const exactValue = Number.parseInt(exactTargetCardNumber, 10);
+  const start = Number.parseInt(rangeMatch[1] ?? '', 10);
+  const end = Number.parseInt(rangeMatch[2] ?? '', 10);
+
+  if (![exactValue, start, end].every(Number.isFinite)) {
+    return true;
+  }
+
+  return start !== exactValue || end !== exactValue;
 }
 
 function normalizeMoneyValue(value: { value: number; currency: string }): NormalizedMoneyValue | null {

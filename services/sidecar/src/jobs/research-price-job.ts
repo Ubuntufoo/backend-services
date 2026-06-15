@@ -90,6 +90,7 @@ export interface PriceListingNowResult {
   listingPriceResearchUpdated: boolean;
   provider: string;
   rawCompCount: number;
+  selectedProviderMode: LivePricingProviderMode;
   suggestedPrice: number;
 }
 
@@ -171,11 +172,6 @@ function buildPricingResearchRawResult(
       acceptedCount: normalized.comps.length,
       rawCount: rawCompCount,
       rejected: normalized.rejected,
-      sampleAcceptedTitles: normalized.comps.slice(0, 3).map((comp) => comp.title),
-      sampleRejectedTitles: normalized.rejected
-        .map((entry) => entry.title)
-        .filter((title): title is string => Boolean(title))
-        .slice(0, 3),
     },
   });
 }
@@ -240,7 +236,8 @@ function getProviderFailureDetails(error: unknown): {
 
 function buildResearchProviderFailureJobError(
   error: unknown,
-  fallbackProvider: string
+  fallbackProvider: string,
+  selectedProviderMode?: LivePricingProviderMode
 ): SidecarJobError {
   const failure = getProviderFailureDetails(error);
   const category =
@@ -259,6 +256,7 @@ function buildResearchProviderFailureJobError(
     Object.fromEntries(
       Object.entries({
         provider: failure.provider ?? fallbackProvider,
+        pricing_provider_mode: selectedProviderMode,
         provider_failure_category: failure.providerFailureCategory,
         provider_failure_code: failure.providerFailureCode,
         query: failure.query,
@@ -550,7 +548,7 @@ export async function priceListingNow(
   } catch (error) {
     const providerFailure = getProviderFailureDetails(error);
     throw isProviderFailure(error, providerFailure)
-      ? buildResearchProviderFailureJobError(error, selectedProviderMode)
+      ? buildResearchProviderFailureJobError(error, selectedProviderMode, selectedProviderMode)
       : classifyJobError('research_price', error);
   }
 
@@ -580,7 +578,10 @@ export async function priceListingNow(
     providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
     rawCompCount = providerResult.soldComps.length;
 
-    const normalized = runNormalizeComps(providerResult.soldComps);
+    const normalized = runNormalizeComps(
+      providerResult.soldComps,
+      buildPricingProviderInput(listing, listingId)
+    );
     normalizedCompCount = normalized.comps.length;
     const stats = runComputeStats(normalized.comps);
     const pricingRawResult = buildPricingResearchRawResult(
@@ -725,6 +726,7 @@ export async function priceListingNow(
       listingPriceResearchUpdated: true,
       provider: providerResult.provider,
       rawCompCount,
+      selectedProviderMode,
       suggestedPrice: finalSuggestedPrice,
     };
   } catch (error) {
@@ -733,7 +735,7 @@ export async function priceListingNow(
       error instanceof SidecarJobError
         ? error
         : isProviderFailure(error, providerFailure)
-          ? buildResearchProviderFailureJobError(error, pricingProvider.name)
+          ? buildResearchProviderFailureJobError(error, pricingProvider.name, selectedProviderMode)
           : classifyJobError('research_price', error);
     const provider =
       providerResult?.provider ??

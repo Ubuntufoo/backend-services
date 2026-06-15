@@ -13,11 +13,8 @@ import {
   type ResearchPriceJobDependencies,
 } from '@/jobs/research-price-job.js';
 import {
-  createApifyPricingProvider,
-  parseRuntimeApifyConfig,
   redactSensitiveText,
-  type ApifyPricingProviderConfig,
-  type PricingProvider,
+  type LivePricingProviderMode,
 } from '@/pricing/index.js';
 
 interface StreamCapture {
@@ -26,12 +23,12 @@ interface StreamCapture {
 
 interface PriceOneListingCliDependencies {
   createDataAccess?: () => Pick<SidecarDataAccess, 'appSettings' | 'listingPriceResearch' | 'listings'>;
-  createProvider?: (config: ApifyPricingProviderConfig) => PricingProvider;
   runPriceListingNow?: (
     listingId: string,
     dependencies: ResearchPriceJobDependencies,
     options: PriceListingNowOptions
   ) => Promise<PriceListingNowResult>;
+  resolvePricingProvider?: ResearchPriceJobDependencies['resolvePricingProvider'];
 }
 
 interface ParsedArgsSuccess {
@@ -46,6 +43,7 @@ interface ParsedArgsFailure {
 }
 
 type ParsedArgs = ParsedArgsFailure | ParsedArgsSuccess;
+type SelectedProviderModeForCli = LivePricingProviderMode | 'off';
 
 function createStreamCapture(): StreamCapture {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
@@ -129,56 +127,20 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-function buildConfigFailurePayload(checkName: string, message: string): Record<string, unknown> {
-  return {
-    failure: {
-      category: 'auth_config',
-      code: checkName,
-      message: redactSensitiveText(message),
-    },
-    overallStatus: 'fail',
-    provider: 'apify',
-  };
-}
-
-function buildProviderConfig(env: NodeJS.ProcessEnv): ApifyPricingProviderConfig {
-  const config = parseRuntimeApifyConfig(env);
-
-  if (!config.enabled) {
-    throw buildConfigFailurePayload('apify_enabled', 'APIFY_ENABLED=true required.');
-  }
-
-  if (!config.token) {
-    throw buildConfigFailurePayload('apify_token', 'APIFY_TOKEN required when APIFY_ENABLED=true.');
-  }
-
-  if (!config.actorId) {
-    throw buildConfigFailurePayload(
-      'apify_actor_id',
-      'APIFY_PRICE_ACTOR_ID required when APIFY_ENABLED=true.'
-    );
-  }
-
-  if (config.timeoutSeconds.value === null) {
-    throw buildConfigFailurePayload(
-      'apify_price_timeout_seconds',
-      config.timeoutSeconds.issues[0] ?? 'APIFY_PRICE_TIMEOUT_SECONDS invalid.'
-    );
-  }
-
-  return {
-    actorId: config.actorId,
-    timeoutSeconds: config.timeoutSeconds.value,
-    token: config.token,
-  };
-}
-
 function toFailurePayload(error: unknown, listingId?: string): Record<string, unknown> {
   const errorRecord = typeof error === 'object' && error !== null ? error : {};
-  const provider =
+  const actualProvider =
     typeof (errorRecord as { provider?: unknown }).provider === 'string'
-      ? ((errorRecord as { provider: string }).provider ?? 'apify')
-      : 'apify';
+      ? (errorRecord as { provider: string }).provider
+      : typeof (errorRecord as { context?: { provider?: unknown } }).context?.provider === 'string'
+        ? ((errorRecord as { context: { provider: string } }).context.provider ?? undefined)
+        : undefined;
+  const selectedProviderMode =
+    typeof (errorRecord as { context?: { pricing_provider_mode?: unknown } }).context
+      ?.pricing_provider_mode === 'string'
+      ? ((errorRecord as { context: { pricing_provider_mode: LivePricingProviderMode } }).context
+          .pricing_provider_mode ?? undefined)
+      : undefined;
   const category =
     typeof (errorRecord as { category?: unknown }).category === 'string'
       ? (errorRecord as { category: string }).category
@@ -199,6 +161,8 @@ function toFailurePayload(error: unknown, listingId?: string): Record<string, un
 
   return {
     ...(listingId ? { listing_id: listingId } : {}),
+    ...(selectedProviderMode ? { selected_provider_mode: selectedProviderMode } : {}),
+    ...(actualProvider ? { actual_provider: actualProvider } : {}),
     failure: {
       ...(category ? { category } : {}),
       ...(code ? { code } : {}),
@@ -207,31 +171,37 @@ function toFailurePayload(error: unknown, listingId?: string): Record<string, un
     },
     listing_price_updated: false,
     overallStatus: 'fail',
-    provider,
+    workflow_safe: true,
   };
 }
 
-function buildSkippedPayload(listingId: string, message: string): Record<string, unknown> {
+function buildSkippedPayload(
+  listingId: string,
+  message: string,
+  selectedProviderMode: SelectedProviderModeForCli = 'off'
+): Record<string, unknown> {
   return {
     db_updated: false,
     listing_id: listingId,
     listing_price_updated: false,
     message: redactSensitiveText(message),
     overallStatus: 'skipped',
-    provider: 'apify',
+    selected_provider_mode: selectedProviderMode,
     suggested_price: 'no price produced',
+    workflow_safe: true,
   };
 }
 
 function buildSuccessPayload(listingId: string, result: PriceListingNowResult): Record<string, unknown> {
   return {
     accepted_comp_count: result.acceptedCompCount,
+    actual_provider: result.provider,
     db_updated: result.listingPriceResearchUpdated,
     listing_id: listingId,
     listing_price_updated: result.listing.price === result.suggestedPrice,
     overallStatus: 'pass',
-    provider: result.provider,
     raw_comp_count: result.rawCompCount,
+    selected_provider_mode: result.selectedProviderMode,
     suggested_price: result.suggestedPrice ?? 'no price produced',
   };
 }
@@ -268,13 +238,13 @@ export async function runPriceOneListingCli(
     const dataAccess =
       dependencies.createDataAccess?.() ?? createSidecarDataAccess(process.env);
     const runPriceNow = dependencies.runPriceListingNow ?? priceListingNow;
-    const config = buildProviderConfig(process.env);
     const result = await runPriceNow(parsedArgs.listingId, {
-      createPricingProvider: () => {
-        return dependencies.createProvider?.(config) ?? createApifyPricingProvider(config);
-      },
       dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],
       now: () => new Date(),
+      pricingProviderEnv: process.env,
+      ...(dependencies.resolvePricingProvider
+        ? { resolvePricingProvider: dependencies.resolvePricingProvider }
+        : {}),
     }, {
       executionSource: 'cli',
     });
@@ -290,7 +260,22 @@ export async function runPriceOneListingCli(
       error.code === JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED &&
       parsedArgs.ok
     ) {
-      console.log(JSON.stringify(buildSkippedPayload(parsedArgs.listingId, error.message), null, 2));
+      const selectedProviderModeRecord =
+        typeof error === 'object' && error !== null
+          ? (error as { context?: { pricing_provider_mode?: unknown } })
+          : {};
+      const selectedProviderMode =
+        typeof selectedProviderModeRecord.context?.pricing_provider_mode === 'string'
+          ? (selectedProviderModeRecord.context
+              .pricing_provider_mode as SelectedProviderModeForCli)
+          : 'off';
+      console.log(
+        JSON.stringify(
+          buildSkippedPayload(parsedArgs.listingId, error.message, selectedProviderMode),
+          null,
+          2
+        )
+      );
       return;
     }
 

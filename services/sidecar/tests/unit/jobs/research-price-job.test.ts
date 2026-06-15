@@ -504,16 +504,22 @@ describe('priceListingNow', () => {
     );
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
-        raw_result_json: expect.objectContaining({
-          normalization: expect.objectContaining({
-            acceptedCount: 3,
-            rawCount: 5,
-            sampleRejectedTitles: [
-              '1955 Topps #98 Johnny Riddle PSA 5',
-              '1955 Topps #98 Johnny Riddle complete your set',
-            ],
-          }),
-        }),
+            raw_result_json: expect.objectContaining({
+              normalization: expect.objectContaining({
+                acceptedCount: 3,
+                rawCount: 5,
+                rejected: expect.arrayContaining([
+                  expect.objectContaining({
+                    reason: 'excluded_graded_listing',
+                    title: '1955 Topps #98 Johnny Riddle PSA 5',
+                  }),
+                  expect.objectContaining({
+                    reason: 'excluded_selection_listing',
+                    title: '1955 Topps #98 Johnny Riddle complete your set',
+                  }),
+                ]),
+              }),
+            }),
         sold_count: 3,
       })
     );

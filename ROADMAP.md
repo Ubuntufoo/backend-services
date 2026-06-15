@@ -51,9 +51,9 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9J.1 | BE/Pricing | Extract provider-neutral sold-comps query builder | Apify and SoldComps can reuse canonical trading-card query construction without provider-specific duplication |
 | 9J.2 | BE/SoldComps | Add SoldComps provider adapter and config | SoldComps authenticates, requests 50 comps, maps responses into the shared pricing contract, and classifies failures safely |
 | 9J.3 | BE/API | Replace pricing boolean with provider-mode setting | App settings persist and expose `off`, `soldcomps`, or `apify`; migrate the legacy boolean safely; `soldcomps` is the default enabled mode and the persisted mode becomes the sole runtime authority |
-COMPLETED TASKS COMMENTED OUT -->
 | 9J.4 | BE/Pricing | Add provider resolver and wire queued pricing | Normal queued `research_price` jobs resolve the persisted mode, use SoldComps by default, classify either live provider safely, and never silently use fixtures; provider fallback remains deferred |
-| 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused config diagnostics and smoke coverage; output identifies the selected and actual provider |
+<!-- | 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused config diagnostics and smoke coverage; output identifies the selected and actual provider | -->
+COMPLETED TASKS COMMENTED OUT -->
 | 9J.6 | FE | Add pricing provider dashboard selector | Dashboard segmented control selects Pricing Off, SoldComps, or Apify; reflects persisted mode and handles loading, saving, disabled, and backend configuration-error states |
 | 9J.7 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove `off` skips enqueue/execution safely, each live mode selects the intended provider, failures remain workflow-safe, and queued jobs never silently use fixtures |
 | 9J.8 | BE/Pricing | Harden price update policy | Listing price updates only after a validated positive result and successfully stored research row, regardless of selected provider |

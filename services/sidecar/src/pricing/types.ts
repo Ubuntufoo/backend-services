@@ -46,6 +46,11 @@ export interface NormalizeSoldCompsRejectedRow {
   title: string | null;
 }
 
+export interface NormalizeSoldCompsContext {
+  itemSpecifics?: PricingProviderInput['itemSpecifics'];
+  title?: string;
+}
+
 export interface NormalizeSoldCompsResult {
   comps: NormalizedSoldComp[];
   rejected: NormalizeSoldCompsRejectedRow[];

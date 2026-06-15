@@ -1,6 +1,7 @@
 import {
   createFixturePricingProvider,
   normalizeSoldComps,
+  type NormalizeSoldCompsContext,
   type RawSoldComp,
 } from '@/pricing/index.js';
 
@@ -133,19 +134,56 @@ describe('normalizeSoldComps', () => {
     ['1955 Topps #98 Johnny Riddle SGC 4', 'excluded_graded_listing'],
     ['1955 Topps #98 Johnny Riddle BGS 7.5', 'excluded_graded_listing'],
     ['1955 Topps #98 Johnny Riddle slabbed', 'excluded_graded_listing'],
-    ['1955 Topps #98 Johnny Riddle You Pick', 'excluded_selection_listing'],
-    ['1955 Topps #98 Johnny Riddle complete your set', 'excluded_selection_listing'],
-    ['1955 Topps #98 Johnny Riddle pick choose', 'excluded_selection_listing'],
-  ])('rejects filtered title "%s"', (title, reason) => {
+  ])('rejects graded/filtered title "%s"', (title, reason) => {
     const normalized = normalizeSoldComps([buildRawComp({ title })]);
 
     expect(normalized.comps).toEqual([]);
     expect(normalized.rejected).toEqual([{ index: 0, reason, title }]);
   });
 
+  it.each([
+    '1955 Topps #98 Johnny Riddle You Pick',
+    '1955 Topps #98 Johnny Riddle you-pick',
+    '1955 Topps #98 Johnny Riddle pick your card',
+    '1955 Topps #98 Johnny Riddle choose your card',
+    '1955 Topps #98 Johnny Riddle choose from dropdown',
+    '1955 Topps #98 Johnny Riddle complete your set',
+    '1955 Topps #98 Johnny Riddle complete-your-set',
+    '1955 Topps #98 Johnny Riddle pick choose',
+  ])('rejects broad-selection title "%s"', (title) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'excluded_selection_listing', title },
+    ]);
+  });
+
+  it('rejects exact invalid broad-selection title from live smoke finding', () => {
+    const title = '1955 Topps Baseball #1-210 You-Pick. Complete-Your-Set. Combined Shipping.';
+
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'excluded_selection_listing', title },
+    ]);
+  });
+
+  it('rejects card-number range selection title when target card number is exact', () => {
+    const title = '1955 Topps Baseball #1-210 Combined Shipping';
+
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'excluded_selection_listing', title },
+    ]);
+  });
+
   it('keeps valid raw exact-card comp title', () => {
     const title = '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+';
-    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
 
     expect(normalized.rejected).toEqual([]);
     expect(normalized.comps[0]?.title).toBe(title);
@@ -153,10 +191,20 @@ describe('normalizeSoldComps', () => {
 
   it('accepts exact-card set-break comp title', () => {
     const title = '1955 Topps Set Break #98 Johnny Riddle VG-VGEX St Louis Cardinals';
-    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
 
     expect(normalized.rejected).toEqual([]);
     expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('rejects set-break title when broad-selection wording also present', () => {
+    const title = '1955 Topps Set Break #98 Johnny Riddle You Pick';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'excluded_selection_listing', title },
+    ]);
   });
 
   it('generates deterministic ids across repeated normalization', () => {
@@ -207,5 +255,18 @@ function buildRawComp(overrides: Partial<RawSoldComp> = {}): RawSoldComp {
     condition: 'Near Mint',
     listingUrl: 'https://example.com/item/123',
     ...overrides,
+  };
+}
+
+function buildExactCardContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '98',
+      Manufacturer: 'Topps',
+      Player: 'Johnny Riddle',
+      Set: 'Topps',
+      Year: '1955',
+    },
+    title: '1955 Topps Johnny Riddle #98',
   };
 }
