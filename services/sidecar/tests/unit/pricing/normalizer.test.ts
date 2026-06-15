@@ -207,6 +207,145 @@ describe('normalizeSoldComps', () => {
     ]);
   });
 
+  it.each([
+    ['1984 Fleer - Darryl Strawberry #599 (RC)', 'exact_year_mismatch'],
+    ['1996 Fleer - Darryl Strawberry #198', 'exact_year_mismatch'],
+    ['1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card', 'exact_set_mismatch'],
+    ['1987 Fleer Magic Mets SuperStar Special #629 Mets Carter Gooden Strawberry', 'exact_player_mismatch'],
+    ['1997 Donruss Darryl Strawberry #261 New York Yankees', 'exact_set_mismatch'],
+    ['1995 Ultra #244 Darryl Strawberry San Francisco Giants', 'exact_set_mismatch'],
+  ])('rejects exact-card mismatch title "%s"', (title, reason) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildDarrylStrawberryContext());
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([{ index: 0, reason, title }]);
+  });
+
+  it.each([
+    '1997 Fleer Darryl Strawberry #179',
+    '1997 Fleer Darryl Strawberry',
+    'Fleer Darryl Strawberry #179',
+    '1997 Fleer Set Break #179 Darryl Strawberry',
+    '1997 Fleer RC Darryl Strawberry #179',
+  ])('accepts exact-card title "%s"', (title) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildDarrylStrawberryContext());
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('accepts matching target parallel after canonical set phrase', () => {
+    const title = '1997 Fleer Ultra Gold Medallion Darryl Strawberry #G106';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], {
+      itemSpecifics: {
+        'Card Number': 'G106',
+        'Parallel/Variety': 'Gold Medallion',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer Ultra',
+        Year: '1997',
+      },
+      title: '1997 Fleer Ultra Gold Medallion Darryl Strawberry #G106',
+    });
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('accepts matching target insert after canonical set phrase', () => {
+    const title = '2023 Panini Prizm Silver Victor Wembanyama #136';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], {
+      itemSpecifics: {
+        'Card Number': '136',
+        'Insert Set': 'Silver',
+        Player: 'Victor Wembanyama',
+        Set: 'Panini Prizm',
+        Year: '2023',
+      },
+      title: '2023 Panini Prizm Silver Victor Wembanyama #136',
+    });
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('rejects unrelated product-line suffix despite missing parallel target', () => {
+    const title = '1997 Fleer Ultra Darryl Strawberry #179';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildDarrylStrawberryContext());
+
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'exact_set_mismatch', title },
+    ]);
+  });
+
+  it('uses title fallback for target year/card number when item specifics omit them', () => {
+    const normalized = normalizeSoldComps(
+      [buildRawComp({ title: '1996 Fleer Darryl Strawberry #198' })],
+      {
+        itemSpecifics: {
+          Manufacturer: 'Fleer',
+          Player: 'Darryl Strawberry',
+        },
+        title: 'Darryl Strawberry 1997 Fleer #179',
+      }
+    );
+
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'exact_year_mismatch', title: '1996 Fleer Darryl Strawberry #198' },
+    ]);
+  });
+
+  it('rejects explicit alphanumeric card-number mismatch', () => {
+    const normalized = normalizeSoldComps(
+      [buildRawComp({ title: '1997 Fleer Darryl Strawberry #G106' })],
+      {
+        itemSpecifics: {
+          'Card Number': 'US250',
+          Manufacturer: 'Fleer',
+          Player: 'Darryl Strawberry',
+          Year: '1997',
+        },
+        title: '1997 Fleer Darryl Strawberry #US250',
+      }
+    );
+
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'exact_card_number_mismatch', title: '1997 Fleer Darryl Strawberry #G106' },
+    ]);
+  });
+
+  it('accepts explicit four-digit card number without false year mismatch', () => {
+    const title = '1997 Fleer Darryl Strawberry #2023';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], {
+      itemSpecifics: {
+        'Card Number': '2023',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      title: '1997 Fleer Darryl Strawberry #2023',
+    });
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('rejects genuine conflicting four-digit year outside explicit card-number marker', () => {
+    const title = '1996 Fleer Darryl Strawberry #2023';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], {
+      itemSpecifics: {
+        'Card Number': '2023',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      title: '1997 Fleer Darryl Strawberry #2023',
+    });
+
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'exact_year_mismatch', title },
+    ]);
+  });
+
   it('generates deterministic ids across repeated normalization', () => {
     const rawComp = buildRawComp({
       title: ' Stable Title ',
@@ -268,5 +407,18 @@ function buildExactCardContext(): NormalizeSoldCompsContext {
       Year: '1955',
     },
     title: '1955 Topps Johnny Riddle #98',
+  };
+}
+
+function buildDarrylStrawberryContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '179',
+      Manufacturer: 'Fleer',
+      Player: 'Darryl Strawberry',
+      Set: 'Fleer',
+      Year: '1997',
+    },
+    title: '1997 Fleer Darryl Strawberry #179',
   };
 }

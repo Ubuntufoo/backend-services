@@ -3,6 +3,8 @@
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import { getPricingProviderMode, type ListingPriceResearchRow } from '@ebay-inventory/data';
+
 import { loadRootEnvironment } from '@/config/env-paths.js';
 import { createSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
@@ -32,6 +34,7 @@ interface PriceOneListingCliDependencies {
 }
 
 interface ParsedArgsSuccess {
+  force: boolean;
   listingId: string;
   ok: true;
 }
@@ -72,13 +75,14 @@ function parseNonEmptyValue(value: string | undefined, name: string): string {
 
 function buildUsage(): { command: string; selectors: string[] } {
   return {
-    command: 'pnpm pricing:price-one -- --listing-id <listing_id>',
-    selectors: ['--listing-id <listing_id>'],
+    command: 'pnpm pricing:price-one -- --listing-id <listing_id> [--force]',
+    selectors: ['--listing-id <listing_id>', '--force'],
   };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const normalizedArgv = argv[0] === '--' ? argv.slice(1) : argv;
+  let force = false;
   const listingIds: string[] = [];
 
   for (let index = 0; index < normalizedArgv.length; index += 1) {
@@ -95,6 +99,11 @@ function parseArgs(argv: string[]): ParsedArgs {
         };
       }
       index += 1;
+      continue;
+    }
+
+    if (current === '--force') {
+      force = true;
       continue;
     }
 
@@ -122,6 +131,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   return {
+    force,
     listingId: listingIds[0],
     ok: true,
   };
@@ -178,7 +188,8 @@ function toFailurePayload(error: unknown, listingId?: string): Record<string, un
 function buildSkippedPayload(
   listingId: string,
   message: string,
-  selectedProviderMode: SelectedProviderModeForCli = 'off'
+  selectedProviderMode: SelectedProviderModeForCli = 'off',
+  extras: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
     db_updated: false,
@@ -189,7 +200,55 @@ function buildSkippedPayload(
     selected_provider_mode: selectedProviderMode,
     suggested_price: 'no price produced',
     workflow_safe: true,
+    ...extras,
   };
+}
+
+async function getSelectedProviderModeForCli(
+  dataAccess: Pick<SidecarDataAccess, 'appSettings'>
+): Promise<SelectedProviderModeForCli> {
+  const getAppSettings = dataAccess?.appSettings?.get;
+
+  if (typeof getAppSettings !== 'function') {
+    return 'soldcomps';
+  }
+
+  return getPricingProviderMode(await getAppSettings());
+}
+
+function buildExistingResearchSkippedPayload(
+  listingId: string,
+  selectedProviderMode: SelectedProviderModeForCli,
+  research: ListingPriceResearchRow
+): Record<string, unknown> {
+  return buildSkippedPayload(
+    listingId,
+    `Skipped pricing. Existing succeeded research result "${research.id}" already recorded for this listing.`,
+    selectedProviderMode,
+    {
+      actual_provider: research.provider,
+      existing_research_created_at: research.created_at,
+      existing_research_id: research.id,
+      skip_reason: 'existing_succeeded_research',
+      suggested_price: research.suggested_price ?? 'no price produced',
+    }
+  );
+}
+
+function buildActiveJobSkippedPayload(
+  listingId: string,
+  selectedProviderMode: SelectedProviderModeForCli,
+  activeJobId: string
+): Record<string, unknown> {
+  return buildSkippedPayload(
+    listingId,
+    `Skipped pricing. Active research_price job "${activeJobId}" already queued or running for this listing.`,
+    selectedProviderMode,
+    {
+      active_job_id: activeJobId,
+      skip_reason: 'active_research_price_job',
+    }
+  );
 }
 
 function buildSuccessPayload(listingId: string, result: PriceListingNowResult): Record<string, unknown> {
@@ -204,6 +263,38 @@ function buildSuccessPayload(listingId: string, result: PriceListingNowResult): 
     selected_provider_mode: result.selectedProviderMode,
     suggested_price: result.suggestedPrice ?? 'no price produced',
   };
+}
+
+async function getDuplicatePricingPayload(
+  listingId: string,
+  force: boolean,
+  dataAccess: Pick<SidecarDataAccess, 'appSettings' | 'jobs' | 'listingPriceResearch'>
+): Promise<Record<string, unknown> | null> {
+  if (force) {
+    return null;
+  }
+
+  const selectedProviderMode = await getSelectedProviderModeForCli(dataAccess);
+  const getActiveResearchPriceByListingId = dataAccess?.jobs?.getActiveResearchPriceByListingId;
+  if (typeof getActiveResearchPriceByListingId === 'function') {
+    const activeJob = await getActiveResearchPriceByListingId(listingId);
+
+    if (activeJob) {
+      return buildActiveJobSkippedPayload(listingId, selectedProviderMode, activeJob.id);
+    }
+  }
+
+  const getLatestByListingId = dataAccess?.listingPriceResearch?.getLatestByListingId;
+  if (typeof getLatestByListingId !== 'function') {
+    return null;
+  }
+
+  const latestResearch = await getLatestByListingId(listingId);
+  if (latestResearch?.status === 'succeeded') {
+    return buildExistingResearchSkippedPayload(listingId, selectedProviderMode, latestResearch);
+  }
+
+  return null;
 }
 
 export async function runPriceOneListingCli(
@@ -237,6 +328,18 @@ export async function runPriceOneListingCli(
 
     const dataAccess =
       dependencies.createDataAccess?.() ?? createSidecarDataAccess(process.env);
+    const duplicatePayload = await getDuplicatePricingPayload(
+      parsedArgs.listingId,
+      parsedArgs.force,
+      dataAccess as Pick<SidecarDataAccess, 'appSettings' | 'jobs' | 'listingPriceResearch'>
+    );
+
+    if (duplicatePayload) {
+      capture.restore();
+      console.log(JSON.stringify(duplicatePayload, null, 2));
+      return;
+    }
+
     const runPriceNow = dependencies.runPriceListingNow ?? priceListingNow;
     const result = await runPriceNow(parsedArgs.listingId, {
       dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],

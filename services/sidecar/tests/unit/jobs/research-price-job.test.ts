@@ -97,6 +97,18 @@ function createAppSettings(
   } as AppSettingsRow;
 }
 
+function createVictorComp(
+  price: number,
+  soldDate: string,
+  title = '2023 Panini Prizm Victor Wembanyama #136'
+) {
+  return {
+    price: { currency: 'USD', value: price },
+    soldDate,
+    title,
+  };
+}
+
 function createDataAccess(listing: ListingRow | null, appSettings = createAppSettings()) {
   const getByListingId = vi.fn().mockResolvedValue(listing);
   const update = vi.fn().mockImplementation(async (_listingId: string, changes: { price?: number }) =>
@@ -211,26 +223,10 @@ describe('priceListingNow', () => {
         actorId: 'actor-123',
       },
       soldComps: [
-        {
-          price: { currency: 'USD', value: 20 },
-          soldDate: '2026-06-01T10:00:00.000Z',
-          title: 'Comp A',
-        },
-        {
-          price: { currency: 'USD', value: 22 },
-          soldDate: '2026-05-31T10:00:00.000Z',
-          title: 'Comp B',
-        },
-        {
-          price: { currency: 'USD', value: 24 },
-          soldDate: '2026-05-30T10:00:00.000Z',
-          title: 'Comp C',
-        },
-        {
-          price: { currency: 'USD', value: 26 },
-          soldDate: '2026-05-29T10:00:00.000Z',
-          title: 'Comp D',
-        },
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(26, '2026-05-29T10:00:00.000Z', '2023 Panini Prizm RC Victor Wembanyama #136'),
       ],
     });
 
@@ -286,9 +282,9 @@ describe('priceListingNow', () => {
             query: 'query',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
-              { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
-              { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+              createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+              createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+              createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
             ],
           }),
           name: 'apify',
@@ -310,9 +306,9 @@ describe('priceListingNow', () => {
       query: 'query',
       rawResult: { actorId: 'actor-123' },
       soldComps: [
-        { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
-        { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
-        { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
       ],
     });
 
@@ -343,9 +339,9 @@ describe('priceListingNow', () => {
       query: 'query',
       rawResult: { actorId: 'actor-123' },
       soldComps: [
-        { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
-        { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
-        { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
       ],
     });
     const originalEnv = process.env.APIFY_MIN_SOLD_COMPS;
@@ -383,7 +379,7 @@ describe('priceListingNow', () => {
     const soldComps = Array.from({ length: 12 }, (_value, index) => ({
       price: { currency: 'USD', value: 20 + index },
       soldDate: `2026-06-${String(index + 1).padStart(2, '0')}T10:00:00.000Z`,
-      title: `Comp ${index + 1}`,
+      title: `2023 Panini Prizm Victor Wembanyama #136 Variant ${index + 1}`,
     }));
 
     const result = await priceListingNow(listing.listing_id, {
@@ -525,6 +521,102 @@ describe('priceListingNow', () => {
     );
   });
 
+  it('persists exact-card mismatch reasons and excludes rejected comps from stats', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      title: '1997 Fleer Darryl Strawberry #179',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const analyze = vi.fn().mockResolvedValue({
+      modelName: 'test-analyst',
+      prompt: { systemInstruction: 'system', userPrompt: 'prompt' },
+      rawOutput: {},
+      reasoning: {
+        compNotes: [],
+        confidence: 'medium',
+        priceExplanation: 'Used exact comps only.',
+        rejectedCompIds: [],
+        selectedCompIds: [],
+        suggestedPrice: 15,
+      },
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: 'Darryl Strawberry 1997 Fleer #179',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 10 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '1997 Fleer Darryl Strawberry #179',
+              },
+              {
+                price: { currency: 'USD', value: 14 },
+                soldDate: '2026-05-31T10:00:00.000Z',
+                title: '1997 Fleer Set Break #179 Darryl Strawberry',
+              },
+              {
+                price: { currency: 'USD', value: 99 },
+                soldDate: '2026-05-30T10:00:00.000Z',
+                title: '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: {
+        analyze,
+        name: 'test-analyst',
+      },
+    });
+
+    expect(
+      analyze.mock.calls[0]?.[0]?.comps.map((comp: { title: string }) => comp.title)
+    ).toEqual([
+      '1997 Fleer Darryl Strawberry #179',
+      '1997 Fleer Set Break #179 Darryl Strawberry',
+    ]);
+    expect(analyze).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stats: expect.objectContaining({
+          highSoldPrice: 14,
+          lowSoldPrice: 10,
+          soldCount: 2,
+        }),
+      })
+    );
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        raw_result_json: expect.objectContaining({
+          normalization: expect.objectContaining({
+            acceptedCount: 2,
+            rawCount: 3,
+            rejected: expect.arrayContaining([
+              expect.objectContaining({
+                reason: 'exact_set_mismatch',
+                title: '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
+              }),
+            ]),
+          }),
+        }),
+        sold_count: 2,
+      })
+    );
+  });
+
   it('uses persisted default soldcomps mode when app settings row missing', async () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(listing, null);
@@ -535,9 +627,9 @@ describe('priceListingNow', () => {
         query: 'query',
         rawResult: { provider: 'soldcomps' },
         soldComps: [
-          { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
-          { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
-          { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+          createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
         ],
       }),
       name: 'soldcomps',
@@ -566,9 +658,9 @@ describe('priceListingNow', () => {
         query: 'query',
         rawResult: { provider: 'apify' },
         soldComps: [
-          { price: { currency: 'USD', value: 20 }, soldDate: '2026-06-01T10:00:00.000Z', title: 'Comp A' },
-          { price: { currency: 'USD', value: 22 }, soldDate: '2026-05-31T10:00:00.000Z', title: 'Comp B' },
-          { price: { currency: 'USD', value: 24 }, soldDate: '2026-05-30T10:00:00.000Z', title: 'Comp C' },
+          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+          createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
         ],
       }),
       name: 'apify',

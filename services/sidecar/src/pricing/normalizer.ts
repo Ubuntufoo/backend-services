@@ -7,6 +7,10 @@ import type {
   NormalizedSoldComp,
   RawSoldComp,
 } from './types.js';
+import {
+  buildExactCardTitleTarget,
+  getExactCardTitleMismatchReason,
+} from './exact-card-title.js';
 
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
 const ISO_SOLD_DATE_PATTERN =
@@ -65,10 +69,10 @@ export function normalizeSoldComps(
 ): NormalizeSoldCompsResult {
   const comps: NormalizedSoldComp[] = [];
   const rejected: NormalizeSoldCompsResult['rejected'] = [];
-  const exactCardNumber = getExactTargetCardNumber(context);
+  const exactCardTarget = buildExactCardTitleTarget(context);
 
   rawSoldComps.forEach((rawComp, index) => {
-    const normalized = normalizeSingleSoldComp(rawComp, exactCardNumber);
+    const normalized = normalizeSingleSoldComp(rawComp, exactCardTarget);
 
     if ('reason' in normalized) {
       rejected.push({ index, reason: normalized.reason, title: normalized.title });
@@ -88,12 +92,12 @@ export function normalizeSoldComps(
 function normalizeSoldComp(rawComp: RawSoldComp):
   | Omit<NormalizedSoldComp, 'id' | 'source'>
   | { reason: string; title: string | null } {
-  return normalizeSingleSoldComp(rawComp, null);
+  return normalizeSingleSoldComp(rawComp, buildExactCardTitleTarget({}));
 }
 
 function normalizeSingleSoldComp(
   rawComp: RawSoldComp,
-  exactTargetCardNumber: string | null
+  exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>
 ):
   | Omit<NormalizedSoldComp, 'id' | 'source'>
   | { reason: string; title: string | null } {
@@ -102,7 +106,7 @@ function normalizeSingleSoldComp(
     return { reason: REJECTION_REASONS.blankTitle, title: null };
   }
 
-  const invalidTitleReason = getInvalidTitleReason(title, exactTargetCardNumber);
+  const invalidTitleReason = getInvalidTitleReason(title, exactCardTarget);
   if (invalidTitleReason) {
     return { reason: invalidTitleReason, title };
   }
@@ -149,46 +153,26 @@ function normalizeSingleSoldComp(
   };
 }
 
-function getInvalidTitleReason(title: string, exactTargetCardNumber: string | null): string | null {
+function getInvalidTitleReason(
+  title: string,
+  exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>
+): string | null {
   for (const { pattern, reason } of INVALID_TITLE_PATTERNS) {
     if (pattern.test(title)) {
       return reason;
     }
   }
 
-  if (exactTargetCardNumber && containsSelectionRangeForExactCard(title, exactTargetCardNumber)) {
+  if (exactCardTarget.cardNumber && containsSelectionRangeForExactCard(title, exactCardTarget.cardNumber)) {
     return REJECTION_REASONS.excludedSelectionListing;
   }
 
-  return null;
-}
-
-function getExactTargetCardNumber(context: NormalizeSoldCompsContext): string | null {
-  const rawCardNumber = context.itemSpecifics?.['Card Number'];
-  const candidates = Array.isArray(rawCardNumber)
-    ? rawCardNumber
-    : typeof rawCardNumber === 'string'
-      ? [rawCardNumber]
-      : [];
-
-  for (const candidate of candidates) {
-    const normalized = normalizeExactCardNumber(candidate);
-    if (normalized) {
-      return normalized;
-    }
+  const exactCardMismatchReason = getExactCardTitleMismatchReason(title, exactCardTarget);
+  if (exactCardMismatchReason) {
+    return exactCardMismatchReason;
   }
 
   return null;
-}
-
-function normalizeExactCardNumber(value: string): string | null {
-  const normalized = value.trim().replace(/^#\s*/, '');
-
-  if (!/^\d{1,4}[a-z]?$/i.test(normalized)) {
-    return null;
-  }
-
-  return normalized.toUpperCase();
 }
 
 function containsSelectionRangeForExactCard(title: string, exactTargetCardNumber: string): boolean {

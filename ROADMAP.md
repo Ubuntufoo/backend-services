@@ -52,12 +52,16 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9J.2 | BE/SoldComps | Add SoldComps provider adapter and config | SoldComps authenticates, requests 50 comps, maps responses into the shared pricing contract, and classifies failures safely |
 | 9J.3 | BE/API | Replace pricing boolean with provider-mode setting | App settings persist and expose `off`, `soldcomps`, or `apify`; migrate the legacy boolean safely; `soldcomps` is the default enabled mode and the persisted mode becomes the sole runtime authority |
 | 9J.4 | BE/Pricing | Add provider resolver and wire queued pricing | Normal queued `research_price` jobs resolve the persisted mode, use SoldComps by default, classify either live provider safely, and never silently use fixtures; provider fallback remains deferred |
-<!-- | 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused config diagnostics and smoke coverage; output identifies the selected and actual provider | -->
+| 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused config diagnostics and smoke coverage; output identifies the selected and actual provider |
+| 9J.6 | BE/SoldComps | Improve SoldComps keyword query with negative modifiers | Raw-card SoldComps queries append provider-supported exclusions for graded, signed/autographed, and broad-selection listings while preserving valid rookie/RC and set-break comps |
+| 9J.7 | BE/Pricing | Add exact-card title validation before stats | Normalization rejects comps with mismatched player, year, set/manufacturer, or explicit card number before deterministic stats are calculated; missing title card numbers remain allowed |
 COMPLETED TASKS COMMENTED OUT -->
-| 9J.6 | FE | Add pricing provider dashboard selector | Dashboard segmented control selects Pricing Off, SoldComps, or Apify; reflects persisted mode and handles loading, saving, disabled, and backend configuration-error states |
-| 9J.7 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove `off` skips enqueue/execution safely, each live mode selects the intended provider, failures remain workflow-safe, and queued jobs never silently use fixtures |
-| 9J.8 | BE/Pricing | Harden price update policy | Listing price updates only after a validated positive result and successfully stored research row, regardless of selected provider |
-| 9J.9 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
+| 9J.8 | BE/Pricing | Keep LLM as optional price reasoning only | Deterministic stats remain the sole suggested-price authority; optional LLM output may explain or assess comps but cannot override the stored or listing price |
+| 9J.9 | FE | Add pricing provider dashboard selector | Dashboard segmented control selects Pricing Off, SoldComps, or Apify; reflects persisted mode and handles loading, saving, disabled, and backend configuration-error states |
+| 9J.10 | FE | Add keyword modifier inputs per listing | Users can specify search criteria for pricing queries that include the default "-<modifier>" keywords |
+| 9J.11 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove `off` skips enqueue/execution safely, each live mode selects the intended provider, failures remain workflow-safe, and queued jobs never silently use fixtures |
+| 9J.12 | BE/Pricing | Harden price update policy | Listing price updates only after a validated positive result and successfully stored research row, regardless of selected provider |
+| 9J.13 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
 | 9H.1 | $BE/API$ | Expose latest pricing research on listings API | FE can later display pricing context without direct table access |
 | 9H.2 | $FE$ | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |
 | 9H.3 | BE/FE | Display pricing failures without blocking approval | Rate-limit/provider failures are visible but do not block export |

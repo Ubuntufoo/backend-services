@@ -1,4 +1,4 @@
-import type { ListingRow } from '@ebay-inventory/data';
+import type { JobRow, ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -58,6 +58,53 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   };
 }
 
+function createResearch(overrides: Partial<ListingPriceResearchRow> = {}): ListingPriceResearchRow {
+  return {
+    comps: [],
+    confidence: 'medium',
+    created_at: '2026-06-15T21:04:42.994Z',
+    error_code: null,
+    error_message: null,
+    id: 'listing-price-research-id',
+    listing_id: 'Single-000123',
+    llm_price_explanation: null,
+    llm_reasoning_json: {},
+    llm_rejected_comp_ids: [],
+    llm_selected_comp_ids: [],
+    median_sold_price: 3.11,
+    pricing_model_name: 'deterministic-fixture-v1',
+    provider: 'soldcomps',
+    query: 'query',
+    raw_result_json: {},
+    sold_count: 49,
+    status: 'succeeded',
+    suggested_price: 3.11,
+    updated_at: '2026-06-15T21:04:46.496Z',
+    ...overrides,
+  };
+}
+
+function createJob(overrides: Partial<JobRow> = {}): JobRow {
+  return {
+    attempts: 0,
+    created_at: '2026-06-15T21:04:36.425Z',
+    gemini_attempt_count: 0,
+    gemini_attempts: [],
+    gemini_selected_model: null,
+    id: 'research-price-job-id',
+    job_type: 'research_price',
+    last_error: null,
+    last_error_at: null,
+    last_error_code: null,
+    listing_id: 'Single-000123',
+    max_attempts: 1,
+    next_run_at: null,
+    status: 'queued',
+    updated_at: '2026-06-15T21:04:36.425Z',
+    ...overrides,
+  };
+}
+
 describe('price one listing script', () => {
   let originalEnv: NodeJS.ProcessEnv;
   let originalExitCode: number | undefined;
@@ -97,7 +144,7 @@ describe('price one listing script', () => {
       },
       overallStatus: 'fail',
       usage: {
-        selectors: ['--listing-id <listing_id>'],
+        selectors: ['--listing-id <listing_id>', '--force'],
       },
     });
     expect(process.exitCode).toBe(1);
@@ -160,6 +207,111 @@ describe('price one listing script', () => {
       suggested_price: 27.5,
     });
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('skips duplicate pricing when active research_price job already exists', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runPriceListingNow = vi.fn();
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess: () =>
+        ({
+          appSettings: {
+            get: vi.fn().mockResolvedValue({ pricing_provider_mode: 'soldcomps' }),
+          },
+          jobs: {
+            getActiveResearchPriceByListingId: vi.fn().mockResolvedValue(createJob()),
+          },
+          listingPriceResearch: {
+            getLatestByListingId: vi.fn(),
+          },
+        }) as never,
+      runPriceListingNow,
+    });
+
+    const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+
+    expect(runPriceListingNow).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      active_job_id: 'research-price-job-id',
+      db_updated: false,
+      listing_id: 'Single-000123',
+      message: 'Skipped pricing. Active research_price job "research-price-job-id" already queued or running for this listing.',
+      overallStatus: 'skipped',
+      selected_provider_mode: 'soldcomps',
+      skip_reason: 'active_research_price_job',
+      suggested_price: 'no price produced',
+      workflow_safe: true,
+    });
+  });
+
+  it('skips duplicate pricing when latest succeeded research already exists', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const runPriceListingNow = vi.fn();
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess: () =>
+        ({
+          appSettings: {
+            get: vi.fn().mockResolvedValue({ pricing_provider_mode: 'soldcomps' }),
+          },
+          jobs: {
+            getActiveResearchPriceByListingId: vi.fn().mockResolvedValue(null),
+          },
+          listingPriceResearch: {
+            getLatestByListingId: vi.fn().mockResolvedValue(createResearch()),
+          },
+        }) as never,
+      runPriceListingNow,
+    });
+
+    const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+
+    expect(runPriceListingNow).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      actual_provider: 'soldcomps',
+      db_updated: false,
+      existing_research_id: 'listing-price-research-id',
+      listing_id: 'Single-000123',
+      overallStatus: 'skipped',
+      selected_provider_mode: 'soldcomps',
+      skip_reason: 'existing_succeeded_research',
+      suggested_price: 3.11,
+      workflow_safe: true,
+    });
+  });
+
+  it('bypasses duplicate-skip guard when --force supplied', async () => {
+    const runPriceListingNow = vi.fn().mockResolvedValue({
+      acceptedCompCount: 3,
+      listing: createListing({ price: 27.5 }),
+      listingPriceResearchUpdated: true,
+      provider: 'soldcomps',
+      rawCompCount: 5,
+      selectedProviderMode: 'soldcomps',
+      suggestedPrice: 27.5,
+    });
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--force'], {
+      createDataAccess: () =>
+        ({
+          appSettings: {
+            get: vi.fn().mockResolvedValue({ pricing_provider_mode: 'soldcomps' }),
+          },
+          jobs: {
+            getActiveResearchPriceByListingId: vi.fn().mockResolvedValue(createJob()),
+          },
+          listingPriceResearch: {
+            getLatestByListingId: vi.fn().mockResolvedValue(createResearch()),
+          },
+        }) as never,
+      runPriceListingNow,
+    });
+
+    expect(runPriceListingNow).toHaveBeenCalledTimes(1);
   });
 
   it('passes explicit provider resolver override into canonical pricing function', async () => {

@@ -28,8 +28,10 @@ import {
   createSupabaseServiceClient,
   getAppSettings,
   getActiveGenerateAiJobByListingId,
+  getActiveResearchPriceJobByListingId,
   getJobById,
   getOrCreateDailyUsage,
+  getLatestListingPriceResearchByListingId,
   getListingByOfferId,
   getListingByListingId,
   getOrderByOrderId,
@@ -128,6 +130,7 @@ export interface SidecarDataAccess {
     enqueueResearchPrice(listingId: string): Promise<EnqueueResearchPriceJobResult>;
     fail(jobId: string, error: JobErrorUpdateInput): Promise<JobRow>;
     getActiveGenerateAiByListingId(listingId: string): Promise<JobRow | null>;
+    getActiveResearchPriceByListingId(listingId: string): Promise<JobRow | null>;
     getById(jobId: string): Promise<JobRow | null>;
     listDueQueued(now: string, options?: ListDueQueuedJobsOptions): Promise<JobRow[]>;
     listByListingId(listingId: string): Promise<JobRow[]>;
@@ -165,6 +168,7 @@ export interface SidecarDataAccess {
   };
   listingPriceResearch: {
     create(input: ListingPriceResearchInsert): Promise<ListingPriceResearchRow>;
+    getLatestByListingId(listingId: string): Promise<ListingPriceResearchRow | null>;
     markFailed(
       input: Parameters<typeof markListingPriceResearchFailed>[1]
     ): Promise<ListingPriceResearchRow>;
@@ -231,6 +235,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     },
     listingPriceResearch: {
       create: async (input) => await createListingPriceResearch(client, input),
+      getLatestByListingId: async (listingId) =>
+        await getLatestListingPriceResearchByListingId(client, listingId),
       markFailed: async (input) => await markListingPriceResearchFailed(client, input),
       markSucceeded: async (input) => await markListingPriceResearchSucceeded(client, input),
     },
@@ -245,6 +251,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       fail: async (jobId, error) => await failJob(client, jobId, error),
       getActiveGenerateAiByListingId: async (listingId) =>
         await getActiveGenerateAiJobByListingId(client, listingId),
+      getActiveResearchPriceByListingId: async (listingId) =>
+        await getActiveResearchPriceJobByListingId(client, listingId),
       getById: async (jobId) => await getJobById(client, jobId),
       listDueQueued: async (now, options) => await listDueQueuedJobs(client, now, options),
       listByListingId: async (listingId) => await listJobsByListingId(client, listingId),
