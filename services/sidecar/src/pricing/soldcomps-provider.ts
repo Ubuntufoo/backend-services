@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { SOLDCOMPS_API_BASE_URL, SOLDCOMPS_SOLD_COMP_REQUEST_COUNT } from './soldcomps-config.js';
-import { buildSoldCompsQuery } from './sold-comps-query.js';
+import { buildSoldCompsKeyword } from './soldcomps-keyword.js';
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
 const SOLDCOMPS_PROVIDER_NAME = 'soldcomps';
@@ -146,7 +146,7 @@ export function buildSoldCompsRequestParams(input: PricingProviderInput): SoldCo
   return {
     count: input.requestedCompCount ?? SOLDCOMPS_SOLD_COMP_REQUEST_COUNT,
     ebaySite: 'ebay.com',
-    keyword: buildSoldCompsQuery(input),
+    keyword: buildSoldCompsKeyword(input),
     page: 1,
     sortOrder: 'endedRecently',
   };

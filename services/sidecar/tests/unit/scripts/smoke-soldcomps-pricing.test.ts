@@ -80,7 +80,7 @@ describe('smoke soldcomps pricing script', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('uses production soldcomps adapter shape and requests 50 comps by default', async () => {
+  it('uses production soldcomps adapter shape, requests 50 comps by default, surfaces raw-card modifiers', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const runRequest = vi.fn().mockResolvedValue({
       body: {
@@ -141,7 +141,11 @@ describe('smoke soldcomps pricing script', () => {
             }),
           },
           listings: {
-            getByListingId: vi.fn().mockResolvedValue(createListing()),
+            getByListingId: vi.fn().mockResolvedValue(
+              createListing({
+                condition_id: '4000',
+              })
+            ),
           },
         }) as never,
       resolvePricingProvider: () => provider,
@@ -151,6 +155,8 @@ describe('smoke soldcomps pricing script', () => {
       expect.objectContaining({
         count: 50,
         page: 1,
+        query:
+          'Johnny Riddle 1955 Topps #98 -"you pick" -"pick your" -"complete your set" -choose -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -GMA -KSA -ISA -WCG -BCCG -Beckett',
       })
     );
 
@@ -171,6 +177,7 @@ describe('smoke soldcomps pricing script', () => {
       soldCompCount: 1,
     });
     expect(payload.rawResultSummary.input.request.count).toBe(50);
+    expect(payload.rawResultSummary.input.request.keyword).toContain('-"you pick"');
     expect(process.exitCode).toBeUndefined();
   });
 

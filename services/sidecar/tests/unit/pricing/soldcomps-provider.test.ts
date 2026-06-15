@@ -12,6 +12,7 @@ import {
   parseSoldCompsResponse,
   redactSoldCompsSensitiveText,
 } from '@/pricing/index.js';
+import { buildSoldCompsKeyword } from '@/pricing/soldcomps-keyword.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,6 +65,72 @@ describe('SoldComps pricing provider', () => {
     });
   });
 
+  it('appends stable negative modifiers for raw single-card searches only', () => {
+    expect(
+      buildSoldCompsRequestParams({
+        ...baseInput,
+        conditionId: '4000',
+        title: 'Darryl Strawberry 1997 Fleer #179',
+        itemSpecifics: {
+          'Card Number': '179',
+          Manufacturer: 'Fleer',
+          Player: 'Darryl Strawberry',
+          Set: 'Fleer',
+          Year: '1997',
+        },
+      }).keyword
+    ).toBe(
+      'Darryl Strawberry 1997 Fleer #179 -"you pick" -"pick your" -"complete your set" -choose -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+    );
+  });
+
+  it('does not append raw-card grading exclusions for graded targets', () => {
+    expect(buildSoldCompsRequestParams(baseInput).keyword).toBe('Johnny Riddle 1955 Topps #98 graded');
+  });
+
+  it('keeps rookie, RC, and set-break comps allowed in raw SoldComps keywords', () => {
+    const keyword = buildSoldCompsRequestParams({
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Victor Wembanyama 2023 Panini Prizm #136 Rookie RC Set Break',
+    }).keyword;
+
+    expect(keyword).not.toContain('-rookie');
+    expect(keyword).not.toContain('-RC');
+    expect(keyword).not.toContain('-set break');
+    expect(keyword).not.toContain('-set-break');
+  });
+
+  it('keeps modifiers stable and avoids duplicate equivalent negatives', () => {
+    const rawInput = {
+      categoryId: '261328',
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      listingId: 'LIST-DUPES',
+      listingType: 'single',
+      requestedCompCount: 20,
+      title: 'Darryl Strawberry 1997 Fleer #179',
+    } as const;
+
+    const keyword = buildSoldCompsKeyword(
+      rawInput,
+      'Darryl Strawberry 1997 Fleer #179 -"you pick" -signed -PSA'
+    );
+
+    expect(keyword).toBe(
+      'Darryl Strawberry 1997 Fleer #179 -"you pick" -signed -PSA -"pick your" -"complete your set" -choose -auto -autograph -graded -slab -slabbed -BGS -SGC -CGC -CSG -TAG -HGA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+    );
+    expect(keyword.match(/-"you pick"/g)).toHaveLength(1);
+    expect(keyword.match(/-signed/g)).toHaveLength(1);
+    expect(keyword.match(/-PSA/g)).toHaveLength(1);
+  });
+
   it('sends bearer-auth request against v1 scrape endpoint', async () => {
     const fetch = vi.fn(async () => ({
       headers: new Headers({
@@ -103,6 +170,42 @@ describe('SoldComps pricing provider', () => {
     expect(requestUrl).toContain('page=1');
     expect(requestUrl).toContain('ebaySite=ebay.com');
     expect(requestUrl).toContain('sortOrder=endedRecently');
+  });
+
+  it('preserves quoted negative phrases through URLSearchParams encoding', async () => {
+    const fetch = vi.fn(async () => ({
+      headers: new Headers(),
+      json: async () => soldCompsFixture,
+      ok: true,
+      status: 200,
+    })) as typeof globalThis.fetch;
+    const provider = createSoldCompsPricingProvider(
+      {
+        apiKey: 'sc_secret-token',
+      },
+      { fetch }
+    );
+
+    await provider.fetchSoldComps({
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      requestedCompCount: undefined,
+    });
+
+    const requestUrl = String(fetch.mock.calls[0]?.[0]);
+    expect(requestUrl).toContain('keyword=Darryl+Strawberry+1997+Fleer+%23179');
+    expect(requestUrl).toContain('-%22you+pick%22');
+    expect(requestUrl).toContain('-%22pick+your%22');
+    expect(requestUrl).toContain('-%22complete+your+set%22');
+    expect(requestUrl).toContain('-Beckett');
   });
 
   it('maps SoldComps payload into internal sold comps', () => {
