@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ApifyPricingProviderError,
   buildApifyActorInput,
+  buildSoldCompsQuery,
   createApifyPricingProvider,
   normalizeSoldComps,
   parseApifyActorOutput,
@@ -46,7 +47,7 @@ describe('Apify pricing provider', () => {
       count: 9,
       ebaySite: 'ebay.com',
       itemCondition: 'used',
-      keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
+      keywords: [buildSoldCompsQuery(baseInput)],
       sortOrder: 'endedRecently',
     });
   });

@@ -49,7 +49,15 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9G.6 | BE/Pricing | Normalize Apify trading-card pricing queries | Sold-comps queries use concise canonical metadata and avoid duplicate player/year/card-number terms |
 | 9G.7 | BE/Pricing | Simplify Apify sold-comp request count source | Normal Apify pricing paths request 20 comps from one canonical constant; diagnostic env checks stay isolated |
  COMPLETED TASKS COMMENTED OUT -->
-| 9G.5 | BE/Pricing | Harden price update policy | Listing price updates only from validated positive pricing results with stored research rows |
+| 9J.1 | BE/Pricing | Extract provider-neutral sold-comps query builder | Apify and SoldComps can reuse canonical trading-card query construction without provider-specific duplication |
+| 9J.2 | BE/SoldComps | Add SoldComps provider adapter and config | SoldComps authenticates, requests 50 comps, maps responses into the shared pricing contract, and classifies failures safely |
+| 9J.3 | BE/Pricing | Harden price update policy | Listing price updates only from validated positive pricing results with stored research rows |
+| 9J.4 | BE/Pricing | Make SoldComps the default live pricing provider | Normal queued `research_price` jobs use SoldComps; provider fallback remains deferred |
+| 9J.5 | BE/Ops | Switch `pricing:price-one` to SoldComps | One-listing live pricing uses SoldComps with focused diagnostics, smoke coverage, and no Apify dependency |
+| 9J.6 | BE/API | Replace pricing boolean with provider-mode setting | App settings persist and expose `off`, `soldcomps`, or `apify`; SoldComps is the default enabled mode |
+| 9J.7 | FE | Add pricing provider dashboard selector | Dashboard control selects Pricing Off, SoldComps, or Apify and reflects the persisted backend mode |
+| 9J.8 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove each configured mode selects the intended provider and queued jobs never silently use fixtures |
+| 9J.9 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
 | 9H.1 | $BE/API$ | Expose latest pricing research on listings API | FE can later display pricing context without direct table access |
 | 9H.2 | $FE$ | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |
 | 9H.3 | BE/FE | Display pricing failures without blocking approval | Rate-limit/provider failures are visible but do not block export |
