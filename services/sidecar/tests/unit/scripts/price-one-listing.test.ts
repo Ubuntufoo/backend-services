@@ -7,10 +7,22 @@ import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
 const { loadRootEnvironmentMock } = vi.hoisted(() => ({
   loadRootEnvironmentMock: vi.fn(),
 }));
+const { createProductionPricingAnalystMock } = vi.hoisted(() => ({
+  createProductionPricingAnalystMock: vi.fn(),
+}));
 
 vi.mock('@/config/env-paths.js', () => ({
   loadRootEnvironment: loadRootEnvironmentMock,
 }));
+
+vi.mock('@/pricing/index.js', async () => {
+  const actual = await vi.importActual<typeof import('@/pricing/index.js')>('@/pricing/index.js');
+
+  return {
+    ...actual,
+    createProductionPricingAnalyst: createProductionPricingAnalystMock,
+  };
+});
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -112,6 +124,11 @@ describe('price one listing script', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    createProductionPricingAnalystMock.mockReset();
+    createProductionPricingAnalystMock.mockReturnValue({
+      analyze: vi.fn(),
+      name: 'google_pricing_reasoning',
+    });
     originalEnv = { ...process.env };
     originalExitCode = process.exitCode;
     process.exitCode = undefined;
@@ -207,6 +224,72 @@ describe('price one listing script', () => {
       suggested_price: 27.5,
     });
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('default cli path injects production pricing analyst into canonical pricing call', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const dataAccess = {
+      aiModelRoutes: {
+        resolveForTask: vi.fn(),
+      },
+      appSettings: {
+        get: vi.fn().mockResolvedValue({ pricing_provider_mode: 'soldcomps' }),
+      },
+      dailyUsage: {
+        incrementGeminiCallsUsed: vi.fn(),
+      },
+      jobs: {
+        getActiveResearchPriceByListingId: vi.fn().mockResolvedValue(null),
+      },
+      listingPriceResearch: {
+        getLatestByListingId: vi.fn().mockResolvedValue(null),
+      },
+      listings: {},
+    } as never;
+    const mockedPriceListingNow = vi.fn().mockResolvedValue({
+      acceptedCompCount: 3,
+      listing: createListing({ price: 27.5 }),
+      listingPriceResearchUpdated: true,
+      provider: 'soldcomps',
+      rawCompCount: 5,
+      selectedProviderMode: 'soldcomps',
+      suggestedPrice: 27.5,
+    });
+
+    vi.doMock('@/jobs/research-price-job.js', async () => {
+      const actual =
+        await vi.importActual<typeof import('@/jobs/research-price-job.js')>(
+          '@/jobs/research-price-job.js'
+        );
+
+      return {
+        ...actual,
+        priceListingNow: mockedPriceListingNow,
+      };
+    });
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess: () => dataAccess,
+    });
+
+    expect(createProductionPricingAnalystMock).toHaveBeenCalledWith({
+      dataAccess,
+      now: expect.any(Function),
+    });
+    expect(mockedPriceListingNow).toHaveBeenCalledWith(
+      'Single-000123',
+      expect.objectContaining({
+        dataAccess,
+        pricingAnalyst: expect.objectContaining({
+          name: 'google_pricing_reasoning',
+        }),
+      }),
+      {
+        executionSource: 'cli',
+      }
+    );
+    expect(logSpy).toHaveBeenCalled();
   });
 
   it('skips duplicate pricing when active research_price job already exists', async () => {

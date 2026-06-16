@@ -16,6 +16,7 @@ import {
 } from '@/jobs/research-price-job.js';
 import {
   redactSensitiveText,
+  createProductionPricingAnalyst,
   type LivePricingProviderMode,
 } from '@/pricing/index.js';
 
@@ -24,7 +25,10 @@ interface StreamCapture {
 }
 
 interface PriceOneListingCliDependencies {
-  createDataAccess?: () => Pick<SidecarDataAccess, 'appSettings' | 'listingPriceResearch' | 'listings'>;
+  createDataAccess?: () => Pick<
+    SidecarDataAccess,
+    'aiModelRoutes' | 'appSettings' | 'dailyUsage' | 'jobs' | 'listingPriceResearch' | 'listings'
+  >;
   runPriceListingNow?: (
     listingId: string,
     dependencies: ResearchPriceJobDependencies,
@@ -341,10 +345,18 @@ export async function runPriceOneListingCli(
     }
 
     const runPriceNow = dependencies.runPriceListingNow ?? priceListingNow;
+    const pricingAnalyst =
+      dependencies.runPriceListingNow === undefined
+        ? createProductionPricingAnalyst({
+            dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],
+            now: () => new Date(),
+          })
+        : undefined;
     const result = await runPriceNow(parsedArgs.listingId, {
       dataAccess: dataAccess as ResearchPriceJobDependencies['dataAccess'],
       now: () => new Date(),
       pricingProviderEnv: process.env,
+      ...(pricingAnalyst ? { pricingAnalyst } : {}),
       ...(dependencies.resolvePricingProvider
         ? { resolvePricingProvider: dependencies.resolvePricingProvider }
         : {}),

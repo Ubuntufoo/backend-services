@@ -1,10 +1,19 @@
-import type { AppSettingsRow, ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
+import type {
+  AppSettingsRow,
+  ListingPriceResearchRow,
+  ListingRow,
+  ResolvedAiModelRoute,
+} from '@ebay-inventory/data';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import { priceListingNow } from '@/jobs/research-price-job.js';
-import { ApifyPricingProviderError, SoldCompsPricingProviderError } from '@/pricing/index.js';
+import {
+  ApifyPricingProviderError,
+  createProductionPricingAnalyst,
+  SoldCompsPricingProviderError,
+} from '@/pricing/index.js';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -123,7 +132,38 @@ function createNormalizedComp(id: string, title: string, totalPrice: number) {
   };
 }
 
-function createDataAccess(listing: ListingRow | null, appSettings = createAppSettings()) {
+function createResolvedAiModelRoute(
+  overrides: Partial<ResolvedAiModelRoute> = {}
+): ResolvedAiModelRoute {
+  return {
+    displayName: 'Gemma 4 31B IT',
+    fallbackOnQuotaExceeded: true,
+    fallbackOnRateLimit: true,
+    fallbackOnUnavailable: true,
+    freeTierStatus: 'verified_paid_only',
+    isFreeTierEligible: false,
+    modelName: 'gemma-4-31b-it',
+    provider: 'google',
+    requestsPerDay: 1500,
+    requestsPerMinute: 15,
+    routeOrder: 1,
+    supportsImages: false,
+    supportsJsonOutput: true,
+    supportsStructuredOutput: true,
+    supportsText: true,
+    taskType: 'pricing_reasoning',
+    ...overrides,
+  };
+}
+
+function createDataAccess(
+  listing: ListingRow | null,
+  appSettings = createAppSettings(),
+  options: {
+    aiModelRouteError?: Error;
+    aiModelRoutes?: ResolvedAiModelRoute[];
+  } = {}
+) {
   const getByListingId = vi.fn().mockResolvedValue(listing);
   const update = vi.fn().mockImplementation(async (_listingId: string, changes: { price?: number }) =>
     createListing({
@@ -153,11 +193,41 @@ function createDataAccess(listing: ListingRow | null, appSettings = createAppSet
       suggested_price: input.suggested_price,
     })
   );
+  const resolveForTask = vi.fn().mockImplementation(async () => {
+    if (options.aiModelRouteError) {
+      throw options.aiModelRouteError;
+    }
+
+    return options.aiModelRoutes ?? [createResolvedAiModelRoute()];
+  });
+  const incrementGeminiCallsUsed = vi.fn().mockResolvedValue({
+    effectiveLimit: 500,
+    resource: 'gemini',
+    source: 'app_settings',
+    updatedUsage: {
+      gemini_calls_used: 1,
+      gemini_daily_limit: 500,
+      order_sync_count: 0,
+      usage_date: '2026-06-12',
+    },
+    usage: {
+      gemini_calls_used: 0,
+      gemini_daily_limit: 500,
+      order_sync_count: 0,
+      usage_date: '2026-06-12',
+    },
+  });
 
   return {
     dataAccess: {
+      aiModelRoutes: {
+        resolveForTask,
+      },
       appSettings: {
         get: vi.fn().mockResolvedValue(appSettings),
+      },
+      dailyUsage: {
+        incrementGeminiCallsUsed,
       },
       listingPriceResearch: {
         create,
@@ -172,8 +242,10 @@ function createDataAccess(listing: ListingRow | null, appSettings = createAppSet
     spies: {
       create,
       getByListingId,
+      incrementGeminiCallsUsed,
       markFailed,
       markSucceeded,
+      resolveForTask,
       update,
     },
   };
@@ -564,9 +636,9 @@ describe('priceListingNow', () => {
       reasoning: {
         compNotes: [],
         confidence: 'medium',
-        conditionAdjustedPrice: 12,
-        conditionAdjustmentPercent: 0,
-        conditionAdjustmentReason: 'Exact target accepted.',
+        conditionAdjustedPrice: null,
+        conditionAdjustmentPercent: null,
+        conditionAdjustmentReason: 'Condition adjustment unavailable.',
         priceExplanation: 'Used exact comps only.',
         rejectedCompIds: [],
         selectedCompIds: [],
@@ -609,12 +681,16 @@ describe('priceListingNow', () => {
       },
     });
 
-    expect(analyze).not.toHaveBeenCalled();
+    expect(analyze).toHaveBeenCalledTimes(1);
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         llm_reasoning_json: expect.objectContaining({
+          modelName: 'test-analyst',
           fallback: 'condition_adjustment_not_allowed',
-          status: 'not_attempted',
+          reasoning: expect.objectContaining({
+            conditionAdjustedPrice: null,
+          }),
+          status: 'succeeded',
         }),
       })
     );
@@ -633,6 +709,167 @@ describe('priceListingNow', () => {
           }),
         }),
         sold_count: 2,
+      })
+    );
+  });
+
+  it('uses production pricing analyst route and persists non-empty llm reasoning when analyst available', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '12',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1952',
+      },
+      title: '1952 Topps #12 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [
+        createNormalizedComp('comp-1', '1952 Topps #12 Sample Player VG-EX', 5.89),
+        createNormalizedComp('comp-2', '1952 Topps #12 Sample Player VG/EX', 5.89),
+        createNormalizedComp('comp-3', '1952 Topps #12 Sample Player low grade', 4.7),
+        createNormalizedComp('comp-4', '1952 Topps #12 Sample Player EX', 6.1),
+      ],
+      rejected: [],
+    });
+    const productionAnalyst = createProductionPricingAnalyst({
+      dataAccess,
+      executeModel: vi.fn(async ({ model, prompt }) => ({
+        rawOutput: { model, prompt },
+        text: JSON.stringify({
+          confidence: 'medium',
+          conditionAdjustedPrice: 5.63,
+          conditionAdjustmentPercent: -0.1,
+          conditionAdjustmentReason: 'Exact target accepted.',
+          priceExplanation: 'Deterministic target accepted from explicit condition evidence.',
+          rejectedCompIds: [],
+          selectedCompIds: ['comp-1', 'comp-2', 'comp-3', 'comp-4'],
+        }),
+      })),
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1952 Topps #12 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
+              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
+              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: productionAnalyst,
+    });
+
+    expect(result.suggestedPrice).toBe(5.63);
+    expect(spies.resolveForTask).toHaveBeenCalledWith({
+      freeTierOnly: true,
+      provider: 'google',
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'pricing_reasoning',
+    });
+    expect(spies.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm_reasoning_json: expect.objectContaining({
+          fallback: null,
+          modelName: 'gemma-4-31b-it',
+          reasoning: expect.objectContaining({
+            conditionAdjustedPrice: 5.63,
+            confidence: 'medium',
+          }),
+          status: 'succeeded',
+        }),
+        pricing_model_name: 'gemma-4-31b-it',
+        suggested_price: 5.63,
+      })
+    );
+  });
+
+  it('falls back deterministically when pricing_reasoning route missing', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '12',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1952',
+      },
+      title: '1952 Topps #12 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing, createAppSettings(), {
+      aiModelRoutes: [],
+    });
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [
+        createNormalizedComp('comp-1', '1952 Topps #12 Sample Player VG-EX', 5.89),
+        createNormalizedComp('comp-2', '1952 Topps #12 Sample Player VG/EX', 5.89),
+        createNormalizedComp('comp-3', '1952 Topps #12 Sample Player low grade', 4.7),
+        createNormalizedComp('comp-4', '1952 Topps #12 Sample Player EX', 6.1),
+      ],
+      rejected: [],
+    });
+    const executeModel = vi.fn(async () => ({
+      rawOutput: {},
+      text: '{}',
+    }));
+    const productionAnalyst = createProductionPricingAnalyst({
+      dataAccess,
+      executeModel,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1952 Topps #12 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
+              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
+              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: productionAnalyst,
+    });
+
+    expect(result.suggestedPrice).toBe(5.89);
+    expect(executeModel).not.toHaveBeenCalled();
+    expect(spies.incrementGeminiCallsUsed).not.toHaveBeenCalled();
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm_reasoning_json: expect.objectContaining({
+          analyst: 'google_pricing_reasoning',
+          fallback: 'llm_analysis_failed',
+          status: 'failed',
+        }),
+        pricing_model_name: null,
+        suggested_price: 5.89,
       })
     );
   });

@@ -28,6 +28,7 @@ import {
   type PublishListingDependencies,
   type PublishListingResult,
 } from '@/ebay/publish-listing.js';
+import { createProductionPricingAnalyst } from '@/pricing/index.js';
 import {
   classifyJobError,
   createRetryExhaustedError,
@@ -1113,11 +1114,21 @@ export async function runSidecarJob(
         prepareRecordCreatedListings: runPrepareRecordCreatedListings,
       });
     case RESEARCH_PRICE_JOB_TYPE:
+      {
+        const runtimePricingAnalyst =
+          options.researchPrice?.pricingAnalyst ??
+          createProductionPricingAnalyst({
+            dataAccess,
+            now,
+          });
+
       return await runResearchPriceJob(runnableJob, {
         ...options.researchPrice,
         dataAccess,
         now,
+        pricingAnalyst: runtimePricingAnalyst,
       });
+      }
     default: {
       const errorAt = asIsoTimestamp(now);
       const error = new SidecarJobError(

@@ -32,6 +32,7 @@ import {
   type PricingProviderInput,
   type PricingProviderResult,
   type PricingStatsResult,
+  ProductionPricingAnalystError,
 } from '@/pricing/index.js';
 import { createLogger } from '@/utils/logger.js';
 import {
@@ -44,7 +45,6 @@ import {
 const APIFY_PROVIDER_NAME = 'apify';
 const FIXTURE_PROVIDER_NAME = 'fixture';
 const SOLDCOMPS_PROVIDER_NAME = 'soldcomps';
-const PRICING_MODEL_NAME = 'deterministic-fixture-v1';
 const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([
   APIFY_PROVIDER_NAME,
   FIXTURE_PROVIDER_NAME,
@@ -356,12 +356,14 @@ function buildSucceededLlmReasoningJson(
 function buildFailedLlmReasoningJson(
   analyst: PricingAnalyst,
   fallbackReason: string,
-  error: unknown
+  error: unknown,
+  modelName?: string | null
 ): Json {
   return asJson({
     analyst: analyst.name,
     error: asCompactErrorMessage(error),
     fallback: fallbackReason,
+    ...(modelName ? { modelName } : {}),
     status: 'failed',
   });
 }
@@ -394,6 +396,29 @@ function getLlmFallbackReason(error: unknown): string {
   }
 
   return 'llm_analysis_failed';
+}
+
+function getLlmStatusForLog(
+  pricingAnalyst: PricingAnalyst | undefined,
+  llmReasoningJson: Json
+): 'failed' | 'not_attempted' | 'succeeded' {
+  if (!pricingAnalyst) {
+    return 'not_attempted';
+  }
+
+  if (
+    typeof llmReasoningJson === 'object' &&
+    llmReasoningJson !== null &&
+    !Array.isArray(llmReasoningJson) &&
+    'status' in llmReasoningJson
+  ) {
+    const status = (llmReasoningJson as { status?: unknown }).status;
+    if (status === 'failed' || status === 'not_attempted' || status === 'succeeded') {
+      return status;
+    }
+  }
+
+  return 'succeeded';
 }
 
 function normalizeConditionAdjustedPrice(value: unknown): number | null {
@@ -566,14 +591,14 @@ async function markResearchFailedSafely(
     ...(providerResult ? { providerResult: providerResult.rawResult } : {}),
   };
 
-  await dataAccess.listingPriceResearch.markFailed({
-    error_code: error.code,
-    error_message: asCompactErrorMessage(error.message),
-    id: research.id,
-    llm_reasoning_json: {},
-    pricing_model_name: PRICING_MODEL_NAME,
-    raw_result_json: asJson(failureContext),
-  });
+    await dataAccess.listingPriceResearch.markFailed({
+      error_code: error.code,
+      error_message: asCompactErrorMessage(error.message),
+      id: research.id,
+      llm_reasoning_json: {},
+      pricing_model_name: null,
+      raw_result_json: asJson(failureContext),
+    });
 }
 
 export async function priceListingNow(
@@ -680,53 +705,54 @@ export async function priceListingNow(
     let llmSelectedCompIds: Json = [];
     let llmRejectedCompIds: Json = [];
     let llmPriceExplanation: string | null = null;
-    let pricingModelName: string | null = PRICING_MODEL_NAME;
+    let pricingModelName: string | null = null;
     let llmConditionAdjustedPrice: number | null = null;
     let fallbackReason: string | null = deterministicFallbackReason;
 
     if (dependencies.pricingAnalyst) {
-      if (conditionAdjustment.allowedAdjustment.eligible) {
-        try {
-          const analystResult = await dependencies.pricingAnalyst.analyze(
-            buildPricingAnalystInput(listing, listingId, normalized.comps, stats, conditionAdjustment)
-          );
+      try {
+        const analystResult = await dependencies.pricingAnalyst.analyze(
+          buildPricingAnalystInput(listing, listingId, normalized.comps, stats, conditionAdjustment)
+        );
 
-          llmConditionAdjustedPrice = normalizeConditionAdjustedPrice(
-            analystResult.reasoning.conditionAdjustedPrice
-          );
-          fallbackReason =
-            llmConditionAdjustedPrice === null ? 'llm_condition_adjusted_price_null' : null;
-          llmReasoningJson = buildSucceededLlmReasoningJson(
-            analystResult,
-            fallbackReason,
-            conditionAdjustment
-          );
-          llmSelectedCompIds = asJson(analystResult.reasoning.selectedCompIds);
-          llmRejectedCompIds = asJson(analystResult.reasoning.rejectedCompIds);
-          llmPriceExplanation = analystResult.reasoning.priceExplanation;
-          pricingModelName = analystResult.modelName;
-        } catch (error) {
-          fallbackReason = getLlmFallbackReason(error);
-          llmReasoningJson = buildFailedLlmReasoningJson(
-            dependencies.pricingAnalyst,
-            fallbackReason,
-            error
-          );
-          jobLogger.warn('Fell back to deterministic research_price after LLM failure.', {
-            analyst: dependencies.pricingAnalyst.name,
-            compactErrorMessage: asCompactErrorMessage(error),
-            deterministicSuggestedPrice,
-            event: 'research_price_llm_fallback',
-            fallbackReason,
-            jobId: options.jobId,
-            listingId,
-          });
-        }
-      } else {
-        llmReasoningJson = buildSkippedLlmReasoningJson(
-          fallbackReason ?? 'condition_adjustment_not_allowed',
+        llmConditionAdjustedPrice = normalizeConditionAdjustedPrice(
+          analystResult.reasoning.conditionAdjustedPrice
+        );
+        fallbackReason =
+          llmConditionAdjustedPrice === null
+            ? conditionAdjustment.allowedAdjustment.eligible
+              ? 'llm_condition_adjusted_price_null'
+              : deterministicFallbackReason
+            : null;
+        llmReasoningJson = buildSucceededLlmReasoningJson(
+          analystResult,
+          fallbackReason,
           conditionAdjustment
         );
+        llmSelectedCompIds = asJson(analystResult.reasoning.selectedCompIds);
+        llmRejectedCompIds = asJson(analystResult.reasoning.rejectedCompIds);
+        llmPriceExplanation = analystResult.reasoning.priceExplanation;
+        pricingModelName = analystResult.modelName;
+      } catch (error) {
+        fallbackReason = getLlmFallbackReason(error);
+        pricingModelName =
+          error instanceof ProductionPricingAnalystError ? error.modelName ?? null : pricingModelName;
+        llmReasoningJson = buildFailedLlmReasoningJson(
+          dependencies.pricingAnalyst,
+          fallbackReason,
+          error,
+          pricingModelName
+        );
+        jobLogger.warn('Fell back to deterministic research_price after LLM failure.', {
+          analyst: dependencies.pricingAnalyst.name,
+          compactErrorMessage: asCompactErrorMessage(error),
+          deterministicSuggestedPrice,
+          event: 'research_price_llm_fallback',
+          fallbackReason,
+          jobId: options.jobId,
+          listingId,
+          pricingModelName: pricingModelName ?? undefined,
+        });
       }
     } else if (fallbackReason !== null) {
       llmReasoningJson = buildSkippedLlmReasoningJson(fallbackReason, conditionAdjustment);
@@ -786,11 +812,7 @@ export async function priceListingNow(
       listingId,
       listingPriceUpdated: pricedListing.price === finalSuggestedPrice,
       llmFallbackReason: fallbackReason ?? undefined,
-      llmStatus: dependencies.pricingAnalyst
-        ? fallbackReason === 'llm_analysis_failed'
-          ? 'failed'
-          : 'succeeded'
-        : 'not_attempted',
+      llmStatus: getLlmStatusForLog(dependencies.pricingAnalyst, llmReasoningJson),
       normalizedCompCount,
       pricingModelName,
       rawCompCount,

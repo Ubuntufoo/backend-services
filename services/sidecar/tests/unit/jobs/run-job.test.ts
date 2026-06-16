@@ -11,6 +11,7 @@ const jobLoggerDebug = vi.hoisted(() => vi.fn());
 const jobLoggerError = vi.hoisted(() => vi.fn());
 const jobLoggerInfo = vi.hoisted(() => vi.fn());
 const jobLoggerWarn = vi.hoisted(() => vi.fn());
+const createProductionPricingAnalystMock = vi.hoisted(() => vi.fn());
 const resolveProductionPricingProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/utils/logger.js', async () => {
@@ -34,6 +35,7 @@ vi.mock('@/pricing/index.js', async () => {
 
   return {
     ...actual,
+    createProductionPricingAnalyst: createProductionPricingAnalystMock,
     resolveProductionPricingProvider: resolveProductionPricingProviderMock,
   };
 });
@@ -132,11 +134,32 @@ const queuedResearchPriceJob: JobRow = {
 };
 
 beforeEach(() => {
+  createProductionPricingAnalystMock.mockReset();
   jobLoggerDebug.mockReset();
   jobLoggerError.mockReset();
   jobLoggerInfo.mockReset();
   jobLoggerWarn.mockReset();
   resolveProductionPricingProviderMock.mockReset();
+  createProductionPricingAnalystMock.mockImplementation(() => ({
+    analyze: vi.fn(async () => ({
+      modelName: 'gemma-4-31b-it',
+      prompt: {
+        systemInstruction: 'system',
+        userPrompt: 'prompt',
+      },
+      rawOutput: { provider: 'google' },
+      reasoning: {
+        confidence: 'high',
+        conditionAdjustedPrice: null,
+        conditionAdjustmentPercent: null,
+        conditionAdjustmentReason: 'Deterministic median should remain final.',
+        priceExplanation: 'Deterministic median should remain final.',
+        rejectedCompIds: [],
+        selectedCompIds: [],
+      },
+    })),
+    name: 'google_pricing_reasoning',
+  }));
   resolveProductionPricingProviderMock.mockImplementation(() => createFixturePricingProvider());
 });
 
@@ -299,6 +322,67 @@ function expectPriceOnlyUpdateWrites(
   }
 }
 
+function createStableResearchPriceComps() {
+  return [
+    {
+      condition: null,
+      id: 'comp-1',
+      listingUrl: null,
+      price: { currency: 'USD', value: 5.89 },
+      shippingPrice: null,
+      soldDate: '2026-06-01T10:00:00.000Z',
+      source: 'provider' as const,
+      title: '1952 Topps #12 Sample Player VG-EX',
+      totalPrice: { currency: 'USD', value: 5.89 },
+    },
+    {
+      condition: null,
+      id: 'comp-2',
+      listingUrl: null,
+      price: { currency: 'USD', value: 5.89 },
+      shippingPrice: null,
+      soldDate: '2026-05-31T10:00:00.000Z',
+      source: 'provider' as const,
+      title: '1952 Topps #12 Sample Player VG/EX',
+      totalPrice: { currency: 'USD', value: 5.89 },
+    },
+    {
+      condition: null,
+      id: 'comp-3',
+      listingUrl: null,
+      price: { currency: 'USD', value: 4.7 },
+      shippingPrice: null,
+      soldDate: '2026-05-30T10:00:00.000Z',
+      source: 'provider' as const,
+      title: '1952 Topps #12 Sample Player low grade',
+      totalPrice: { currency: 'USD', value: 4.7 },
+    },
+    {
+      condition: null,
+      id: 'comp-4',
+      listingUrl: null,
+      price: { currency: 'USD', value: 6.1 },
+      shippingPrice: null,
+      soldDate: '2026-05-29T10:00:00.000Z',
+      source: 'provider' as const,
+      title: '1952 Topps #12 Sample Player EX',
+      totalPrice: { currency: 'USD', value: 6.1 },
+    },
+  ];
+}
+
+function createStableResearchPriceStats() {
+  return {
+    currency: 'USD',
+    deterministicSuggestedPrice: 5.89,
+    highSoldPrice: 6.1,
+    ignored: [],
+    lowSoldPrice: 4.7,
+    medianSoldPrice: 5.89,
+    soldCount: 4,
+  };
+}
+
 function expectDeterministicLlmFallbackPersistence(params: {
   dataAccess: SidecarDataAccess;
   listing: ListingRow;
@@ -322,12 +406,12 @@ function expectDeterministicLlmFallbackPersistence(params: {
     llm_reasoning_json: {
       analyst: 'fixture',
       error: expect.any(String),
-      fallback: 'llm_analysis_failed',
+      fallback: expect.stringMatching(/^llm_/),
       status: 'failed',
     },
     llm_rejected_comp_ids: [],
     llm_selected_comp_ids: [],
-    pricing_model_name: 'deterministic-fixture-v1',
+    pricing_model_name: null,
     suggested_price: result.listing?.price,
   });
   expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
@@ -338,13 +422,20 @@ function expectDeterministicLlmFallbackPersistence(params: {
       priceExplanation: expect.anything(),
       selectedCompIds: expect.anything(),
       rejectedCompIds: expect.anything(),
-      suggestedPrice: expect.anything(),
+      conditionAdjustedPrice: expect.anything(),
     }),
   });
   expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
   expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   expectNoWorkflowErrorFieldsWritten(
     vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
+  );
+  expect(jobLoggerInfo).toHaveBeenCalledWith(
+    'Succeeded research_price job.',
+    expect.objectContaining({
+      llmFallbackReason: expect.stringMatching(/^llm_/),
+      llmStatus: 'failed',
+    })
   );
 }
 
@@ -3020,6 +3111,11 @@ describe('runSidecarJob', () => {
         dataAccess,
         now: () => new Date('2026-05-20T13:00:00.000Z'),
         researchPrice: {
+          computeStats: vi.fn(() => createStableResearchPriceStats()),
+          normalizeComps: vi.fn(() => ({
+            comps: createStableResearchPriceComps(),
+            rejected: [],
+          })),
           pricingProvider: fixtureProvider,
         },
       });
@@ -3048,12 +3144,21 @@ describe('runSidecarJob', () => {
               source: 'provider',
             }),
           ]),
-          llm_price_explanation: null,
-          llm_reasoning_json: {},
+          llm_price_explanation: 'Deterministic median should remain final.',
+          llm_reasoning_json: {
+            fallback: 'condition_adjustment_not_allowed',
+            modelName: 'gemma-4-31b-it',
+            reasoning: expect.objectContaining({
+              conditionAdjustedPrice: null,
+              confidence: 'high',
+              priceExplanation: 'Deterministic median should remain final.',
+            }),
+            status: 'succeeded',
+          },
           llm_rejected_comp_ids: [],
           llm_selected_comp_ids: [],
           median_sold_price: expect.any(Number),
-          pricing_model_name: 'deterministic-fixture-v1',
+          pricing_model_name: 'gemma-4-31b-it',
           query: expect.any(String),
           raw_result_json: expect.objectContaining({
             provider: 'fixture',
@@ -3084,23 +3189,28 @@ describe('runSidecarJob', () => {
       );
       expect(result.listing?.price).not.toBe(listing.price);
       expect(writeOrder).toEqual(['research_success', 'listing_update']);
+      expect(createProductionPricingAnalystMock).toHaveBeenCalledWith({
+        dataAccess,
+        now: expect.any(Function),
+      });
       expect(jobLoggerInfo).toHaveBeenCalledWith(
         'Started research_price job.',
         expect.objectContaining({
           event: 'research_price_started',
           jobId: 'job-research-price',
           listingId: 'LIST-001',
-          pricingMode: 'fixture',
+          pricingMode: 'llm_assisted',
           provider: 'fixture',
         })
       );
       expect(jobLoggerInfo).toHaveBeenCalledWith(
         'Completed research_price provider fetch.',
         expect.objectContaining({
+          acceptedCompCount: 4,
           event: 'research_price_provider_result',
           jobId: 'job-research-price',
           listingId: 'LIST-001',
-          normalizedCompCount: 11,
+          normalizedCompCount: 4,
           provider: 'fixture',
           rawCompCount: 12,
           selectedProviderMode: 'soldcomps',
@@ -3115,10 +3225,10 @@ describe('runSidecarJob', () => {
           finalSuggestedPrice: markSucceededInput?.suggested_price,
           jobId: 'job-research-price',
           listingId: 'LIST-001',
-          llmStatus: 'not_attempted',
-          normalizedCompCount: 11,
-          pricingModelName: 'deterministic-fixture-v1',
-          soldCount: 11,
+          llmStatus: 'succeeded',
+          normalizedCompCount: 4,
+          pricingModelName: 'gemma-4-31b-it',
+          soldCount: 4,
         })
       );
       expect(jobLoggerInfo).not.toHaveBeenCalledWith(
@@ -3129,11 +3239,12 @@ describe('runSidecarJob', () => {
       );
     });
 
-    it('uses valid analyst suggested price as final price and persists llm fields', async () => {
+    it('preserves explicit injected fixture analyst override over default production analyst', async () => {
       const listing = createListingRow({
         category_id: '261328',
         condition_id: '2750',
         item_specifics: {
+          'Card Condition': 'VERY_GOOD',
           'Card Number': '136',
           Manufacturer: 'Panini',
           Player: 'Victor Wembanyama',
@@ -3163,10 +3274,12 @@ describe('runSidecarJob', () => {
           rawOutput: {},
           reasoning: {
             confidence: 'medium' as const,
+            conditionAdjustedPrice: 14.44,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Exact target accepted.',
             priceExplanation: 'Selected comps support tighter midpoint.',
             rejectedCompIds: input.comps.slice(2).map((comp) => comp.id),
             selectedCompIds: input.comps.slice(0, 2).map((comp) => comp.id),
-            suggestedPrice: 14.44,
           },
         })),
         name: 'fixture',
@@ -3176,6 +3289,11 @@ describe('runSidecarJob', () => {
         dataAccess,
         now: () => new Date('2026-05-20T13:00:00.000Z'),
         researchPrice: {
+          computeStats: vi.fn(() => createStableResearchPriceStats()),
+          normalizeComps: vi.fn(() => ({
+            comps: createStableResearchPriceComps(),
+            rejected: [],
+          })),
           pricingAnalyst,
         },
       });
@@ -3194,22 +3312,22 @@ describe('runSidecarJob', () => {
       const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
         .calls[0]?.[0];
       expect(markSucceededInput).toMatchObject({
-        confidence: 'high',
+        confidence: 'medium',
         llm_price_explanation: 'Selected comps support tighter midpoint.',
         llm_reasoning_json: {
           fallback: null,
           modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
           reasoning: {
+            conditionAdjustedPrice: 14.44,
             confidence: 'medium',
             priceExplanation: 'Selected comps support tighter midpoint.',
-            suggestedPrice: 14.44,
           },
           status: 'succeeded',
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
         suggested_price: 14.44,
       });
-      expect(markSucceededInput?.confidence).toBe('high');
+      expect(markSucceededInput?.confidence).toBe('medium');
       expect(markSucceededInput?.llm_reasoning_json).toMatchObject({
         reasoning: {
           confidence: 'medium',
@@ -3242,10 +3360,14 @@ describe('runSidecarJob', () => {
           pricingModelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
         })
       );
+      expect(createProductionPricingAnalystMock).not.toHaveBeenCalled();
     });
 
-    it('falls back to deterministic price when analyst returns suggestedPrice null and still persists reasoning', async () => {
+    it('falls back to deterministic price when analyst returns null conditionAdjustedPrice and still persists reasoning', async () => {
       const listing = createListingRow({
+        item_specifics: {
+          'Card Condition': 'VERY_GOOD',
+        },
         last_error_at: '2026-05-19T12:00:00.000Z',
         last_error_code: 'existing_error',
         last_error_context: { source: 'publish' },
@@ -3269,10 +3391,12 @@ describe('runSidecarJob', () => {
           rawOutput: {},
           reasoning: {
             confidence: 'medium' as const,
+            conditionAdjustedPrice: null,
+            conditionAdjustmentPercent: null,
+            conditionAdjustmentReason: 'Comps useful, but no safe override.',
             priceExplanation: 'Comps useful, but no safe override.',
             rejectedCompIds: input.comps.slice(1).map((comp) => comp.id),
             selectedCompIds: input.comps.slice(0, 1).map((comp) => comp.id),
-            suggestedPrice: null,
           },
         })),
         name: 'fixture',
@@ -3282,6 +3406,11 @@ describe('runSidecarJob', () => {
         dataAccess,
         now: () => new Date('2026-05-20T13:00:00.000Z'),
         researchPrice: {
+          computeStats: vi.fn(() => createStableResearchPriceStats()),
+          normalizeComps: vi.fn(() => ({
+            comps: createStableResearchPriceComps(),
+            rejected: [],
+          })),
           pricingAnalyst,
         },
       });
@@ -3299,33 +3428,33 @@ describe('runSidecarJob', () => {
       const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
         .calls[0]?.[0];
       expect(markSucceededInput).toMatchObject({
-        confidence: 'high',
+        confidence: 'medium',
         llm_price_explanation: 'Comps useful, but no safe override.',
         llm_reasoning_json: {
-          fallback: 'llm_suggested_price_null',
+          fallback: 'llm_condition_adjusted_price_null',
           modelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
           reasoning: {
+            conditionAdjustedPrice: null,
             confidence: 'medium',
             priceExplanation: 'Comps useful, but no safe override.',
             rejectedCompIds: expect.arrayContaining([expect.any(String)]),
             selectedCompIds: expect.arrayContaining([expect.any(String)]),
-            suggestedPrice: null,
           },
           status: 'succeeded',
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
       });
-      expect(markSucceededInput?.confidence).toBe('high');
+      expect(markSucceededInput?.confidence).toBe('medium');
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
       expect(markSucceededInput?.llm_selected_comp_ids).toEqual([expect.any(String)]);
-      expect(markSucceededInput?.llm_rejected_comp_ids).toHaveLength(10);
+      expect(markSucceededInput?.llm_rejected_comp_ids).toHaveLength(3);
       expect(jobLoggerInfo).toHaveBeenCalledWith(
-        'Fell back to deterministic research_price after null LLM price.',
+        'Fell back to deterministic research_price after null LLM condition adjustment.',
         expect.objectContaining({
           deterministicSuggestedPrice: markSucceededInput?.suggested_price,
           event: 'research_price_llm_fallback',
-          fallbackReason: 'llm_suggested_price_null',
+          fallbackReason: 'llm_condition_adjusted_price_null',
           jobId: 'job-research-price',
           listingId: 'LIST-001',
           pricingModelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
@@ -3342,10 +3471,12 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 9.99,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Below deterministic floor.',
             priceExplanation: 'Below deterministic floor.',
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 9.99,
           },
         }),
       ],
@@ -3355,10 +3486,12 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Invented comp ids.',
             priceExplanation: 'Invented comp ids.',
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['missing-comp'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3368,10 +3501,12 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Selected comp duplicated in rejected list.',
             priceExplanation: 'Selected comp duplicated in rejected list.',
             rejectedCompIds: ['comp-1'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3381,10 +3516,12 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Duplicate comp ids.',
             priceExplanation: 'Duplicate comp ids.',
             rejectedCompIds: ['comp-2', 'comp-2'],
             selectedCompIds: ['comp-1', 'comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3394,10 +3531,12 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'certain',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Invalid confidence.',
             priceExplanation: 'Invalid confidence.',
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3407,10 +3546,12 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Oversized explanation.',
             priceExplanation: 'x'.repeat(501),
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3420,23 +3561,27 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Recommendation language.',
             priceExplanation: 'Sell as single based on comps.',
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
       [
-        'suggestedPrice string',
+        'conditionAdjustedPrice string',
         createFixtureLlmPricingAnalyst({
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'String price.',
             priceExplanation: 'String price.',
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: '15.13',
+            conditionAdjustedPrice: '15.13',
           },
         }),
       ],
@@ -3446,9 +3591,11 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Missing selected ids.',
             priceExplanation: 'Missing selected ids.',
             rejectedCompIds: ['comp-2'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3458,9 +3605,11 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Missing rejected ids.',
             priceExplanation: 'Missing rejected ids.',
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3469,10 +3618,12 @@ describe('runSidecarJob', () => {
         createFixtureLlmPricingAnalyst({
           mode: 'custom',
           rawOutput: {
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Missing confidence.',
             priceExplanation: 'Missing confidence.',
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3482,9 +3633,10 @@ describe('runSidecarJob', () => {
           mode: 'custom',
           rawOutput: {
             confidence: 'medium',
+            conditionAdjustedPrice: 15.13,
+            conditionAdjustmentPercent: 0,
             rejectedCompIds: ['comp-2'],
             selectedCompIds: ['comp-1'],
-            suggestedPrice: 15.13,
           },
         }),
       ],
@@ -3547,10 +3699,12 @@ describe('runSidecarJob', () => {
           rawOutput: {},
           reasoning: {
             confidence: 'high' as const,
+            conditionAdjustedPrice: 14.44,
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Exact target accepted.',
             priceExplanation: 'Validated comps support tighter midpoint.',
             rejectedCompIds: input.comps.slice(2).map((comp) => comp.id),
             selectedCompIds: input.comps.slice(0, 2).map((comp) => comp.id),
-            suggestedPrice: 14.44,
           },
         })),
         name: 'fixture',
@@ -3570,8 +3724,8 @@ describe('runSidecarJob', () => {
         confidence: 'high',
         llm_reasoning_json: {
           reasoning: {
+            conditionAdjustedPrice: 14.44,
             confidence: 'high',
-            suggestedPrice: 14.44,
           },
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
@@ -3904,7 +4058,7 @@ describe('runSidecarJob', () => {
         expect.objectContaining({
           error_code: 'research_price_suggested_price_invalid',
           llm_reasoning_json: {},
-          pricing_model_name: 'deterministic-fixture-v1',
+          pricing_model_name: null,
         })
       );
       expect(dataAccess.listings.update).not.toHaveBeenCalled();
@@ -4038,6 +4192,11 @@ describe('runSidecarJob', () => {
         dataAccess,
         now: () => new Date('2026-05-20T13:00:00.000Z'),
         researchPrice: {
+          computeStats: vi.fn(() => createStableResearchPriceStats()),
+          normalizeComps: vi.fn(() => ({
+            comps: createStableResearchPriceComps(),
+            rejected: [],
+          })),
           pricingProvider: {
             fetchSoldComps,
             name: 'apify',
@@ -4065,7 +4224,7 @@ describe('runSidecarJob', () => {
         'Started research_price job.',
         expect.objectContaining({
           event: 'research_price_started',
-          pricingMode: 'deterministic',
+          pricingMode: 'llm_assisted',
           provider: 'apify',
         })
       );
