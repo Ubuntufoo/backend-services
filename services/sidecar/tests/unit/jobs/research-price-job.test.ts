@@ -777,7 +777,6 @@ describe('priceListingNow', () => {
 
     expect(result.suggestedPrice).toBe(5.63);
     expect(spies.resolveForTask).toHaveBeenCalledWith({
-      freeTierOnly: true,
       provider: 'google',
       requireJsonOutput: true,
       requireStructuredOutput: true,

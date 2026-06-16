@@ -170,14 +170,12 @@ export function createProductionPricingAnalyst(
 }
 
 function buildPricingReasoningRouteResolutionInput(): {
-  freeTierOnly: true;
   provider: typeof AI_PROVIDER_GOOGLE;
   requireJsonOutput: true;
   requireStructuredOutput: true;
   taskType: typeof PRICING_REASONING_ROUTE_TASK_TYPE;
 } {
   return {
-    freeTierOnly: true,
     provider: AI_PROVIDER_GOOGLE,
     requireJsonOutput: true,
     requireStructuredOutput: true,
