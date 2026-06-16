@@ -5,6 +5,7 @@ import {
 } from '@/listings/trading-card-conditions.js';
 
 import type { PricingProviderInput } from './types.js';
+import { extractSeasonStartYear, normalizeSeasonRanges } from './season-range.js';
 
 const PLAYER_ITEM_SPECIFIC_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
 const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
@@ -105,11 +106,12 @@ const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader', 'Graded'] as
 const GRADE_ITEM_SPECIFIC_KEYS = ['Grade', 'Card Grade'] as const;
 
 export function buildSoldCompsQuery(input: PricingProviderInput): string {
-  const title = input.title.trim();
+  const rawTitle = input.title.trim();
   const terms = new QueryTermAccumulator();
-  const isLot = isLotListing(input, title);
   const player = getPlayer(input.itemSpecifics);
-  const primaryYear = getPrimaryYear(input.itemSpecifics, title);
+  const primaryYear = getPrimaryYear(input.itemSpecifics, rawTitle);
+  const title = normalizeSeasonRanges(rawTitle, { targetYear: primaryYear });
+  const isLot = isLotListing(input, title);
   const manufacturer = getManufacturer(input.itemSpecifics);
   const cardNumber = getCardNumber(input.itemSpecifics, title, primaryYear);
 
@@ -220,7 +222,11 @@ function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], ti
 }
 
 function extractYear(value: string | undefined): string | undefined {
-  return value?.match(/\b(19\d{2}|20\d{2})\b/)?.[1];
+  if (!value) {
+    return undefined;
+  }
+
+  return value.match(/\b(19\d{2}|20\d{2})\b/)?.[1] ?? extractSeasonStartYear(value) ?? undefined;
 }
 
 function getManufacturer(itemSpecifics: PricingProviderInput['itemSpecifics']): string | undefined {
@@ -391,7 +397,7 @@ function cleanSetLineValue(
     primaryYear?: string;
   }
 ): string | undefined {
-  let normalized = value.trim();
+  let normalized = normalizeSeasonRanges(value.trim(), { targetYear: context.primaryYear });
 
   if (!normalized) {
     return undefined;

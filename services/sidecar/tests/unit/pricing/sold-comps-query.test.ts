@@ -73,6 +73,25 @@ describe('buildSoldCompsQuery', () => {
     ).toBe('Johnny Riddle 1955 Topps #98');
   });
 
+  it.each([
+    ['1993-94 NBA Hoops Michael Jordan #536', 'Michael Jordan 1993 NBA Hoops #536'],
+    ['92-93 NBA Hoops Michael Jordan #536', 'Michael Jordan 1992 NBA Hoops #536'],
+  ])('normalizes season range in query title "%s"', (title, expectedQuery) => {
+    expect(
+      buildSoldCompsQuery({
+        ...baseInput,
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '536',
+          Manufacturer: 'NBA Hoops',
+          Player: 'Michael Jordan',
+          Set: 'NBA Hoops',
+        },
+        title,
+      })
+    ).toBe(expectedQuery);
+  });
+
   it('does not infer bare title numbers as card numbers without explicit marker', () => {
     expect(
       buildSoldCompsQuery({

@@ -14,6 +14,7 @@ const GRADED_PROVIDER_TERMS = [
   'CSG',
   'TAG',
   'HGA',
+  'MBA',
   'GMA',
   'KSA',
   'ISA',
@@ -42,8 +43,10 @@ const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader'] as const;
 const GRADE_ITEM_SPECIFIC_KEYS = ['Grade', 'Card Grade'] as const;
 const BOOLEAN_GRADED_ITEM_SPECIFIC_KEYS = ['Graded'] as const;
 
-export function buildSoldCompsKeyword(input: PricingProviderInput, positiveQuery = buildSoldCompsQuery(input)): string {
-
+export function buildSoldCompsKeyword(
+  input: PricingProviderInput,
+  positiveQuery = buildSoldCompsQuery(input)
+): string {
   if (!shouldAppendRawCardModifiers(input)) {
     return positiveQuery;
   }

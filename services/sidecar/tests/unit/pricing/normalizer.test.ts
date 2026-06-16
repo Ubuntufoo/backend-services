@@ -181,6 +181,16 @@ describe('normalizeSoldComps', () => {
     ]);
   });
 
+  it.each([
+    ['1991-92 NBA Hoops Michael Jordan #536 All-Time Stat Leaders', '1991'],
+    ['92-93 NBA Hoops Michael Jordan #536 All-Time Stat Leaders', '1992'],
+  ])('accepts exact-card season range title "%s" as start year %s', (title, year) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildMichaelJordanHoopsContext(year));
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
   it('keeps valid raw exact-card comp title', () => {
     const title = '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+';
     const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
@@ -420,5 +430,18 @@ function buildDarrylStrawberryContext(): NormalizeSoldCompsContext {
       Year: '1997',
     },
     title: '1997 Fleer Darryl Strawberry #179',
+  };
+}
+
+function buildMichaelJordanHoopsContext(year: string): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '536',
+      Manufacturer: 'NBA Hoops',
+      Player: 'Michael Jordan',
+      Set: 'NBA Hoops',
+      Year: year,
+    },
+    title: `${year} NBA Hoops Michael Jordan #536 All-Time Stat Leaders`,
   };
 }

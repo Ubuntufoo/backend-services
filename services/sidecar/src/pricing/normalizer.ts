@@ -11,6 +11,7 @@ import {
   buildExactCardTitleTarget,
   getExactCardTitleMismatchReason,
 } from './exact-card-title.js';
+import { normalizeSeasonRanges } from './season-range.js';
 
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
 const ISO_SOLD_DATE_PATTERN =
@@ -163,11 +164,13 @@ function getInvalidTitleReason(
     }
   }
 
-  if (exactCardTarget.cardNumber && containsSelectionRangeForExactCard(title, exactCardTarget.cardNumber)) {
+  const validationTitle = normalizeSeasonRanges(title, { targetYear: exactCardTarget.year });
+
+  if (exactCardTarget.cardNumber && containsSelectionRangeForExactCard(validationTitle, exactCardTarget.cardNumber)) {
     return REJECTION_REASONS.excludedSelectionListing;
   }
 
-  const exactCardMismatchReason = getExactCardTitleMismatchReason(title, exactCardTarget);
+  const exactCardMismatchReason = getExactCardTitleMismatchReason(validationTitle, exactCardTarget);
   if (exactCardMismatchReason) {
     return exactCardMismatchReason;
   }
