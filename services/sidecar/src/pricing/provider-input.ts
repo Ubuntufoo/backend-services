@@ -1,5 +1,14 @@
 import type { ListingRow } from '@ebay-inventory/data';
 
+import {
+  GRADED_TRADING_CARD_CONDITION_ID,
+  RAW_TRADING_CARD_CONDITION_ID,
+  TRADING_CARD_CONDITION_ASPECT_KEY,
+  getSavedRawCardConditionToken,
+  isTradingCardCategoryId,
+} from '@/listings/trading-card-conditions.js';
+
+import type { NormalizeSoldCompsContext } from './types.js';
 import type { PricingProviderInput } from './types.js';
 
 function asNonEmptyString(value: unknown): string | undefined {
@@ -78,4 +87,74 @@ export function buildPricingProviderInput(
     ...(requestedCompCount === undefined ? {} : { requestedCompCount }),
     title,
   };
+}
+
+export function buildNormalizeSoldCompsContext(
+  listing: ListingRow,
+  listingId: string
+): NormalizeSoldCompsContext {
+  const providerInput = buildPricingProviderInput(listing, listingId);
+
+  return {
+    ...providerInput,
+    rawCardSingleShippingDefaults: shouldUseRawCardSingleShippingDefaults(listing, providerInput),
+  };
+}
+
+function shouldUseRawCardSingleShippingDefaults(
+  listing: ListingRow,
+  providerInput: PricingProviderInput
+): boolean {
+  if (providerInput.listingType !== 'single') {
+    return false;
+  }
+
+  const normalizedConditionId = providerInput.conditionId?.trim();
+  if (normalizedConditionId === GRADED_TRADING_CARD_CONDITION_ID) {
+    return false;
+  }
+
+  const isTradingCard = isTradingCardCategoryId(providerInput.categoryId);
+  const hasSavedRawCondition = getSavedRawCardConditionToken(listing.item_specifics) !== null;
+  const isRawTradingCardCondition = normalizedConditionId === RAW_TRADING_CARD_CONDITION_ID;
+
+  if (!isTradingCard || (!hasSavedRawCondition && !isRawTradingCardCondition)) {
+    return false;
+  }
+
+  return !hasExplicitGrade(providerInput.itemSpecifics);
+}
+
+function hasExplicitGrade(itemSpecifics: PricingProviderInput['itemSpecifics']): boolean {
+  if (!itemSpecifics) {
+    return false;
+  }
+
+  for (const key of ['Professional Grader', 'Grader', 'Grade', 'Card Grade'] as const) {
+    const value = itemSpecifics[key];
+    for (const entry of Array.isArray(value) ? value : [value]) {
+      if (typeof entry === 'string' && entry.trim().length > 0) {
+        return true;
+      }
+    }
+  }
+
+  const gradedValue = itemSpecifics.Graded;
+  for (const entry of Array.isArray(gradedValue) ? gradedValue : [gradedValue]) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+
+    const normalized = entry.trim().toLowerCase();
+    if (normalized === 'yes' || normalized === 'true' || normalized === 'graded') {
+      return true;
+    }
+  }
+
+  const cardCondition = itemSpecifics[TRADING_CARD_CONDITION_ASPECT_KEY];
+  if (typeof cardCondition === 'string' && cardCondition.trim().toLowerCase() === 'graded') {
+    return true;
+  }
+
+  return false;
 }

@@ -80,7 +80,7 @@ describe('SoldComps pricing provider', () => {
         },
       }).keyword
     ).toBe(
-      'Darryl Strawberry 1997 Fleer #179 -"you pick" -"pick your" -"complete your set" -choose -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett'
     );
   });
 
@@ -124,7 +124,7 @@ describe('SoldComps pricing provider', () => {
     );
 
     expect(keyword).toBe(
-      'Darryl Strawberry 1997 Fleer #179 -"you pick" -signed -PSA -"pick your" -"complete your set" -choose -auto -autograph -graded -slab -slabbed -BGS -SGC -CGC -CSG -TAG -HGA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+      'Darryl Strawberry 1997 Fleer #179 -"you pick" -signed -PSA -pick -choose -complete -lot -auto -autograph -graded -slab -slabbed -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett'
     );
     expect(keyword.match(/-"you pick"/g)).toHaveLength(1);
     expect(keyword.match(/-signed/g)).toHaveLength(1);
@@ -172,7 +172,7 @@ describe('SoldComps pricing provider', () => {
     expect(requestUrl).toContain('sortOrder=endedRecently');
   });
 
-  it('preserves quoted negative phrases through URLSearchParams encoding', async () => {
+  it('preserves compact negative modifiers through URLSearchParams encoding', async () => {
     const fetch = vi.fn(async () => ({
       headers: new Headers(),
       json: async () => soldCompsFixture,
@@ -202,9 +202,10 @@ describe('SoldComps pricing provider', () => {
 
     const requestUrl = String(fetch.mock.calls[0]?.[0]);
     expect(requestUrl).toContain('keyword=Darryl+Strawberry+1997+Fleer+%23179');
-    expect(requestUrl).toContain('-%22you+pick%22');
-    expect(requestUrl).toContain('-%22pick+your%22');
-    expect(requestUrl).toContain('-%22complete+your+set%22');
+    expect(requestUrl).toContain('-pick');
+    expect(requestUrl).toContain('-choose');
+    expect(requestUrl).toContain('-complete');
+    expect(requestUrl).toContain('-lot');
     expect(requestUrl).toContain('-Beckett');
   });
 

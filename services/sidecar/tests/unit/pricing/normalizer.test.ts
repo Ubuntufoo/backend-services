@@ -1,4 +1,5 @@
 import {
+  computePricingStats,
   createFixturePricingProvider,
   normalizeSoldComps,
   type NormalizeSoldCompsContext,
@@ -87,6 +88,126 @@ describe('normalizeSoldComps', () => {
 
     expect(missingShipping.comps[0]?.totalPrice).toEqual({ value: 10, currency: 'USD' });
     expect(nullShipping.comps[0]?.totalPrice).toEqual({ value: 10, currency: 'USD' });
+  });
+
+  it.each([
+    [1, 15, 1, 2],
+    [5, 15, 1.25, 6.25],
+    [10, 15, 2, 12],
+    [17.5, 15, 2.75, 20.25],
+  ])(
+    'replaces provider shipping for eligible raw-card singles under $20: price=%s provider=%s default=%s total=%s',
+    (price, providerShipping, expectedShipping, expectedTotal) => {
+      const normalized = normalizeSoldComps(
+        [
+          buildRawComp({
+            price: { value: price, currency: 'USD' },
+            shippingPrice: { value: providerShipping, currency: 'USD' },
+          }),
+        ],
+        buildRawCardSingleContext()
+      );
+
+      expect(normalized.comps[0]?.shippingPrice).toEqual({ currency: 'USD', value: expectedShipping });
+      expect(normalized.comps[0]?.totalPrice).toEqual({ currency: 'USD', value: expectedTotal });
+    }
+  );
+
+  it.each([undefined, null, { value: 0, currency: 'USD' }, { value: 3.25, currency: 'USD' }])(
+    'replaces free/null/provider shipping for eligible raw-card singles: %o',
+    (shippingPrice) => {
+      const normalized = normalizeSoldComps(
+        [
+          buildRawComp({
+            price: { value: 5, currency: 'USD' },
+            shippingPrice,
+          }),
+        ],
+        buildRawCardSingleContext()
+      );
+
+      expect(normalized.comps[0]?.shippingPrice).toEqual({ currency: 'USD', value: 1.25 });
+      expect(normalized.comps[0]?.totalPrice).toEqual({ currency: 'USD', value: 6.25 });
+    }
+  );
+
+  it('does not replace provider shipping for lot context', () => {
+    const normalized = normalizeSoldComps(
+      [
+        buildRawComp({
+          price: { value: 5, currency: 'USD' },
+          shippingPrice: { value: 15, currency: 'USD' },
+        }),
+      ],
+      buildLotContext()
+    );
+
+    expect(normalized.comps[0]?.shippingPrice).toEqual({ currency: 'USD', value: 15 });
+    expect(normalized.comps[0]?.totalPrice).toEqual({ currency: 'USD', value: 20 });
+  });
+
+  it('does not replace provider shipping for explicit graded context', () => {
+    const normalized = normalizeSoldComps(
+      [
+        buildRawComp({
+          title: 'Sample Raw Title',
+          price: { value: 5, currency: 'USD' },
+          shippingPrice: { value: 15, currency: 'USD' },
+        }),
+      ],
+      buildExplicitGradedContext()
+    );
+
+    expect(normalized.comps[0]?.shippingPrice).toEqual({ currency: 'USD', value: 15 });
+    expect(normalized.comps[0]?.totalPrice).toEqual({ currency: 'USD', value: 20 });
+  });
+
+  it('keeps provider shipping unchanged for eligible raw-card singles at $20+', () => {
+    const normalized = normalizeSoldComps(
+      [
+        buildRawComp({
+          price: { value: 20, currency: 'USD' },
+          shippingPrice: { value: 15, currency: 'USD' },
+        }),
+      ],
+      buildRawCardSingleContext()
+    );
+
+    expect(normalized.comps[0]?.shippingPrice).toEqual({ currency: 'USD', value: 15 });
+    expect(normalized.comps[0]?.totalPrice).toEqual({ currency: 'USD', value: 35 });
+  });
+
+  it('feeds corrected totals into median stats', () => {
+    const normalized = normalizeSoldComps(
+      [
+        buildRawComp({
+          title: 'Comp A',
+          price: { value: 1, currency: 'USD' },
+          shippingPrice: { value: 15, currency: 'USD' },
+        }),
+        buildRawComp({
+          title: 'Comp B',
+          price: { value: 5, currency: 'USD' },
+          shippingPrice: { value: 15, currency: 'USD' },
+        }),
+        buildRawComp({
+          title: 'Comp C',
+          price: { value: 10, currency: 'USD' },
+          shippingPrice: { value: 15, currency: 'USD' },
+        }),
+      ],
+      buildRawCardSingleContext()
+    );
+    const stats = computePricingStats(normalized.comps);
+
+    expect(normalized.comps.map((comp) => comp.totalPrice.value)).toEqual([2, 6.25, 12]);
+    expect(stats).toMatchObject({
+      deterministicSuggestedPrice: 6.25,
+      highSoldPrice: 12,
+      lowSoldPrice: 2,
+      medianSoldPrice: 6.25,
+      soldCount: 3,
+    });
   });
 
   it('normalizes valid soldDate to iso string', () => {
@@ -443,5 +564,26 @@ function buildMichaelJordanHoopsContext(year: string): NormalizeSoldCompsContext
       Year: year,
     },
     title: `${year} NBA Hoops Michael Jordan #536 All-Time Stat Leaders`,
+  };
+}
+
+function buildRawCardSingleContext(): NormalizeSoldCompsContext {
+  return {
+    rawCardSingleShippingDefaults: true,
+    title: '1955 Topps Johnny Riddle #98',
+  };
+}
+
+function buildLotContext(): NormalizeSoldCompsContext {
+  return {
+    rawCardSingleShippingDefaults: false,
+    title: '1955 Topps Johnny Riddle lot',
+  };
+}
+
+function buildExplicitGradedContext(): NormalizeSoldCompsContext {
+  return {
+    rawCardSingleShippingDefaults: false,
+    title: '1955 Topps Johnny Riddle PSA 5',
   };
 }

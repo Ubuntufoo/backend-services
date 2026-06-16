@@ -47,6 +47,7 @@ export interface NormalizeSoldCompsRejectedRow {
 }
 
 export interface NormalizeSoldCompsContext {
+  rawCardSingleShippingDefaults?: boolean;
   itemSpecifics?: PricingProviderInput['itemSpecifics'];
   title?: string;
 }

@@ -10,6 +10,7 @@ import type { EnvSource } from '@ebay-inventory/env';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  buildNormalizeSoldCompsContext,
   buildPricingProviderInput,
   buildPricingTitleFromItemSpecifics,
   computeConditionAdjustmentSummary,
@@ -657,10 +658,7 @@ export async function priceListingNow(
     providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
     rawCompCount = providerResult.soldComps.length;
 
-    const normalized = runNormalizeComps(
-      providerResult.soldComps,
-      buildPricingProviderInput(listing, listingId)
-    );
+    const normalized = runNormalizeComps(providerResult.soldComps, buildNormalizeSoldCompsContext(listing, listingId));
     normalizedCompCount = normalized.comps.length;
     const stats = runComputeStats(normalized.comps);
     const pricingRawResult = buildPricingResearchRawResult(

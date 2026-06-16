@@ -89,7 +89,9 @@ export function getListingConditionForAdjustment(
   return getSavedRawCardConditionToken(itemSpecifics ?? null);
 }
 
-function parseListingConditionSignal(listingCondition: string | null | undefined): ConditionSignal | null {
+function parseListingConditionSignal(
+  listingCondition: string | null | undefined
+): ConditionSignal | null {
   if (typeof listingCondition !== 'string') {
     return null;
   }
@@ -172,10 +174,10 @@ function buildAllowedAdjustment(input: {
     return ineligibleAdjustment('comp_condition_median_unavailable');
   }
 
-  const rawPercent = Math.tanh(input.conditionDelta / 2.5) * 0.22;
-  const clampedPercent = clamp(rawPercent, -0.25, 0.2);
-  const baseLowerBound = input.deterministicMedianPrice * 0.7;
-  const baseUpperBound = input.deterministicMedianPrice * 1.2;
+  const rawPercent = Math.tanh(input.conditionDelta / 2.0) * 0.28;
+  const clampedPercent = clamp(rawPercent, -0.35, 0.35);
+  const baseLowerBound = input.deterministicMedianPrice * 0.65;
+  const baseUpperBound = input.deterministicMedianPrice * 1.35;
   let curvePrice = input.deterministicMedianPrice * (1 + clampedPercent);
 
   const normalizedLow = normalizePrice(input.stats.lowSoldPrice);

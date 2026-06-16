@@ -24,10 +24,10 @@ const GRADED_PROVIDER_TERMS = [
 ] as const;
 
 const RAW_CARD_NEGATIVE_MODIFIERS = [
-  '-"you pick"',
-  '-"pick your"',
-  '-"complete your set"',
+  '-pick',
   '-choose',
+  '-complete',
+  '-lot',
   '-signed',
   '-auto',
   '-autograph',

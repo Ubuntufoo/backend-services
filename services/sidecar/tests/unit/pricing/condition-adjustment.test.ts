@@ -34,7 +34,7 @@ describe('computeConditionAdjustmentSummary', () => {
       minPrice: expect.any(Number),
       maxPrice: expect.any(Number),
       reason: 'eligible',
-      targetPrice: 5.63,
+      targetPrice: 5.49,
     });
   });
 
@@ -60,7 +60,11 @@ describe('computeConditionAdjustmentSummary', () => {
   it('treats missing listing token as unknown', () => {
     const summary = computeConditionAdjustmentSummary({
       listingCondition: null,
-      comps: [buildComp('comp-1', 'Card A EX', 10), buildComp('comp-2', 'Card B EX', 11), buildComp('comp-3', 'Card C EX', 12)],
+      comps: [
+        buildComp('comp-1', 'Card A EX', 10),
+        buildComp('comp-2', 'Card B EX', 11),
+        buildComp('comp-3', 'Card C EX', 12),
+      ],
       stats: buildStats(),
     });
 

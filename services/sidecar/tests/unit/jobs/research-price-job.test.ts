@@ -741,7 +741,7 @@ describe('priceListingNow', () => {
         rawOutput: { model, prompt },
         text: JSON.stringify({
           confidence: 'medium',
-          conditionAdjustedPrice: 5.63,
+          conditionAdjustedPrice: 5.49,
           conditionAdjustmentPercent: -0.1,
           conditionAdjustmentReason: 'Exact target accepted.',
           priceExplanation: 'Deterministic target accepted from explicit condition evidence.',
@@ -775,7 +775,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.63);
+    expect(result.suggestedPrice).toBe(5.49);
     expect(spies.resolveForTask).toHaveBeenCalledWith({
       provider: 'google',
       requireJsonOutput: true,
@@ -789,13 +789,120 @@ describe('priceListingNow', () => {
           fallback: null,
           modelName: 'gemma-4-31b-it',
           reasoning: expect.objectContaining({
-            conditionAdjustedPrice: 5.63,
+            conditionAdjustedPrice: 5.49,
             confidence: 'medium',
           }),
           status: 'succeeded',
         }),
         pricing_model_name: 'gemma-4-31b-it',
-        suggested_price: 5.63,
+        suggested_price: 5.49,
+      })
+    );
+  });
+
+  it('passes raw-card single shipping-default context into normalization', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps',
+        Year: '1955',
+      },
+      title: '1955 Topps #98 Johnny Riddle',
+    });
+    const { dataAccess } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [createNormalizedComp('comp-1', '1955 Topps #98 Johnny Riddle', 6.25)],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1955 Topps #98 Johnny Riddle',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 5 },
+                shippingPrice: { currency: 'USD', value: 15 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '1955 Topps #98 Johnny Riddle',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(normalizeComps).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        conditionId: '4000',
+        listingType: 'single',
+        rawCardSingleShippingDefaults: true,
+      })
+    );
+  });
+
+  it('does not enable raw-card single shipping defaults for explicit graded listings', async () => {
+    const listing = createListing({
+      condition_id: '2750',
+      item_specifics: {
+        'Card Number': '136',
+        Grade: '9',
+        Manufacturer: 'Panini',
+        Player: 'Victor Wembanyama',
+        'Professional Grader': 'PSA',
+        Set: 'Prizm',
+        Year: '2023',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama PSA 9 #136',
+    });
+    const { dataAccess } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama PSA 9 #136', 35)],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '2023 Panini Prizm Victor Wembanyama PSA 9 #136',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 20 },
+                shippingPrice: { currency: 'USD', value: 15 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '2023 Panini Prizm Victor Wembanyama PSA 9 #136',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(normalizeComps).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        conditionId: '2750',
+        listingType: 'single',
+        rawCardSingleShippingDefaults: false,
       })
     );
   });

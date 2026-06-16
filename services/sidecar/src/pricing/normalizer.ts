@@ -73,7 +73,7 @@ export function normalizeSoldComps(
   const exactCardTarget = buildExactCardTitleTarget(context);
 
   rawSoldComps.forEach((rawComp, index) => {
-    const normalized = normalizeSingleSoldComp(rawComp, exactCardTarget);
+    const normalized = normalizeSingleSoldComp(rawComp, exactCardTarget, context);
 
     if ('reason' in normalized) {
       rejected.push({ index, reason: normalized.reason, title: normalized.title });
@@ -93,12 +93,13 @@ export function normalizeSoldComps(
 function normalizeSoldComp(rawComp: RawSoldComp):
   | Omit<NormalizedSoldComp, 'id' | 'source'>
   | { reason: string; title: string | null } {
-  return normalizeSingleSoldComp(rawComp, buildExactCardTitleTarget({}));
+  return normalizeSingleSoldComp(rawComp, buildExactCardTitleTarget({}), {});
 }
 
 function normalizeSingleSoldComp(
   rawComp: RawSoldComp,
-  exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>
+  exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>,
+  context: NormalizeSoldCompsContext
 ):
   | Omit<NormalizedSoldComp, 'id' | 'source'>
   | { reason: string; title: string | null } {
@@ -123,6 +124,15 @@ function normalizeSingleSoldComp(
     if (!shippingPrice || shippingPrice.value < 0) {
       return { reason: REJECTION_REASONS.invalidShipping, title };
     }
+  }
+
+  const estimatedShipping =
+    context.rawCardSingleShippingDefaults === true ? estimateRawCardSingleShipping(price.value) : null;
+  if (estimatedShipping !== null) {
+    shippingPrice = {
+      currency: price.currency,
+      value: estimatedShipping,
+    };
   }
 
   const soldDate = normalizeSoldDate(rawComp.soldDate);
@@ -152,6 +162,30 @@ function normalizeSingleSoldComp(
     condition,
     listingUrl,
   };
+}
+
+function estimateRawCardSingleShipping(price: number): number | null {
+  if (!Number.isFinite(price) || price < 0) {
+    return null;
+  }
+
+  if (price < 3) {
+    return 1;
+  }
+
+  if (price < 8) {
+    return 1.25;
+  }
+
+  if (price < 15) {
+    return 2;
+  }
+
+  if (price < 20) {
+    return 2.75;
+  }
+
+  return null;
 }
 
 function getInvalidTitleReason(
