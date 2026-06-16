@@ -158,7 +158,6 @@ const researchPriceJobRow: JobRow = {
 
 const listingPriceResearchRow: ListingPriceResearchRow = {
   comps: [],
-  confidence: null,
   created_at: '2026-06-09T12:00:00.000Z',
   error_code: null,
   error_message: null,
@@ -167,15 +166,15 @@ const listingPriceResearchRow: ListingPriceResearchRow = {
   llm_price_explanation: null,
   llm_reasoning_json: {},
   llm_rejected_comp_ids: [],
-  llm_selected_comp_ids: [],
   median_sold_price: null,
+  suggested_price: null,
+  confidence: null,
   pricing_model_name: null,
   provider: 'apify',
   query: null,
   raw_result_json: {},
   sold_count: null,
   status: 'pending',
-  suggested_price: null,
   updated_at: '2026-06-09T12:00:00.000Z',
 };
 

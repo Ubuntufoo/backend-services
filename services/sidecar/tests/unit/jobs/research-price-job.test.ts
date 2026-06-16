@@ -70,7 +70,6 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
 function createResearchRow(overrides: Partial<ListingPriceResearchRow> = {}): ListingPriceResearchRow {
   return {
     comps: [],
-    confidence: null,
     created_at: '2026-06-11T12:05:00.000Z',
     error_code: null,
     error_message: null,
@@ -79,15 +78,15 @@ function createResearchRow(overrides: Partial<ListingPriceResearchRow> = {}): Li
     llm_price_explanation: null,
     llm_reasoning_json: {},
     llm_rejected_comp_ids: [],
-    llm_selected_comp_ids: [],
     median_sold_price: null,
+    suggested_price: null,
+    confidence: null,
     pricing_model_name: null,
     provider: 'apify',
     query: null,
     raw_result_json: {},
     sold_count: null,
     status: 'pending',
-    suggested_price: null,
     updated_at: '2026-06-11T12:05:00.000Z',
     ...overrides,
   };
@@ -524,6 +523,8 @@ describe('priceListingNow', () => {
             provider: 'apify',
             query: 'Johnny Riddle 1955 Topps #98',
             rawResult: {
+              keyword: 'Johnny Riddle 1955 Topps #98',
+              query: 'Johnny Riddle 1955 Topps #98',
               output: {
                 itemCount: 5,
                 sampleTitles: [
@@ -595,25 +596,34 @@ describe('priceListingNow', () => {
     );
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
-            raw_result_json: expect.objectContaining({
-              normalization: expect.objectContaining({
-                acceptedCount: 3,
-                rawCount: 5,
-                rejected: expect.arrayContaining([
-                  expect.objectContaining({
-                    reason: 'excluded_graded_listing',
-                    title: '1955 Topps #98 Johnny Riddle PSA 5',
-                  }),
-                  expect.objectContaining({
-                    reason: 'excluded_selection_listing',
-                    title: '1955 Topps #98 Johnny Riddle complete your set',
-                  }),
-                ]),
+        raw_result_json: expect.objectContaining({
+          normalization: expect.objectContaining({
+            acceptedCount: 3,
+            rawCount: 5,
+            rejected: expect.arrayContaining([
+              expect.objectContaining({
+                reason: 'excluded_graded_listing',
+                title: '1955 Topps #98 Johnny Riddle PSA 5',
               }),
-            }),
+              expect.objectContaining({
+                reason: 'excluded_selection_listing',
+                title: '1955 Topps #98 Johnny Riddle complete your set',
+              }),
+            ]),
+          }),
+        }),
         sold_count: 3,
       })
     );
+    const markSucceededInput = spies.markSucceeded.mock.calls[0]?.[0];
+    expect(markSucceededInput?.raw_result_json).toMatchObject({
+      output: {
+        itemCount: 5,
+      },
+      query: 'Johnny Riddle 1955 Topps #98',
+    });
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('keyword');
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('output.sampleTitles');
   });
 
   it('persists exact-card mismatch reasons and excludes rejected comps from stats', async () => {

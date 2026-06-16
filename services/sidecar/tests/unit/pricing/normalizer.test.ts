@@ -328,6 +328,18 @@ describe('normalizeSoldComps', () => {
     expect(normalized.comps[0]?.title).toBe(title);
   });
 
+  it.each([
+    'Topps 1983 Topps Ryne Sandberg #83 Rookie Base Set Chicago Cubs Card',
+    '1983 Topps - Ryne Sandberg Chicago Cubs #83 (RC) Base Set Baseball Card',
+    'Topps 1983 Ryne Sandberg Rookie #83 Base Set Chicago Cubs Baseball',
+    '1983 TOPPS ROOKIE CHICAGO CUBS 3RD BASE #83 RYNE SANDBERG BASEBALL CARD IN CASE',
+  ])('accepts generic base/base-set exact-card title "%s"', (title) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildRyneSandbergContext());
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
   it('rejects set-break title when broad-selection wording also present', () => {
     const title = '1955 Topps Set Break #98 Johnny Riddle You Pick';
     const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
@@ -564,6 +576,19 @@ function buildMichaelJordanHoopsContext(year: string): NormalizeSoldCompsContext
       Year: year,
     },
     title: `${year} NBA Hoops Michael Jordan #536 All-Time Stat Leaders`,
+  };
+}
+
+function buildRyneSandbergContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '83',
+      Manufacturer: 'Topps',
+      Player: 'Ryne Sandberg',
+      Set: 'Base Set',
+      Year: '1983',
+    },
+    title: '1983 Topps Ryne Sandberg #83 Base Set',
   };
 }
 

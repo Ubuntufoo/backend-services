@@ -14,6 +14,7 @@ const TITLE_CARD_NUMBER_PATTERNS = [
 ] as const;
 const YEAR_PATTERN = /\b(19\d{2}|20\d{2})\b/g;
 const SET_NOISE_TOKENS = new Set([
+  'base',
   'baseball',
   'basketball',
   'break',

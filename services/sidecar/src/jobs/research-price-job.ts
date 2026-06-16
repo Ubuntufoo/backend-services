@@ -160,6 +160,33 @@ function asJson(value: unknown): Json {
   return value as Json;
 }
 
+function sanitizePersistedPricingRawResult(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizePersistedPricingRawResult(entry));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const query = asNonEmptyString(value.query);
+  const keyword = asNonEmptyString(value.keyword);
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => {
+      if (key === 'sampleTitles') {
+        return [];
+      }
+
+      if (key === 'keyword' && query && keyword === query) {
+        return [];
+      }
+
+      return [[key, sanitizePersistedPricingRawResult(entry)]];
+    })
+  );
+}
+
 function buildPricingResearchRawResult(
   providerRawResult: unknown,
   rawCompCount: number,
@@ -171,7 +198,7 @@ function buildPricingResearchRawResult(
       : { providerRawResult };
 
   return asJson({
-    ...base,
+    ...(sanitizePersistedPricingRawResult(base) as Record<string, unknown>),
     normalization: {
       acceptedCount: normalized.comps.length,
       rawCount: rawCompCount,
@@ -700,7 +727,6 @@ export async function priceListingNow(
     const deterministicFallbackReason = getConditionAdjustmentFallbackReason(conditionAdjustment);
 
     let llmReasoningJson: Json = {};
-    let llmSelectedCompIds: Json = [];
     let llmRejectedCompIds: Json = [];
     let llmPriceExplanation: string | null = null;
     let pricingModelName: string | null = null;
@@ -727,7 +753,6 @@ export async function priceListingNow(
           fallbackReason,
           conditionAdjustment
         );
-        llmSelectedCompIds = asJson(analystResult.reasoning.selectedCompIds);
         llmRejectedCompIds = asJson(analystResult.reasoning.rejectedCompIds);
         llmPriceExplanation = analystResult.reasoning.priceExplanation;
         pricingModelName = analystResult.modelName;
@@ -780,18 +805,17 @@ export async function priceListingNow(
 
     await dependencies.dataAccess.listingPriceResearch.markSucceeded({
       comps: asJson(normalized.comps),
-      confidence: confidence.confidence,
       id: research.id,
       llm_price_explanation: llmPriceExplanation,
       llm_reasoning_json: llmReasoningJson,
       llm_rejected_comp_ids: llmRejectedCompIds,
-      llm_selected_comp_ids: llmSelectedCompIds,
       median_sold_price: stats.medianSoldPrice,
+      suggested_price: finalSuggestedPrice,
       pricing_model_name: pricingModelName,
+      confidence: confidence.confidence,
       query: providerResult.query,
       raw_result_json: pricingRawResult,
       sold_count: stats.soldCount,
-      suggested_price: finalSuggestedPrice,
     });
     researchSucceeded = true;
 

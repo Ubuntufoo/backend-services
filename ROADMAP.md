@@ -63,7 +63,9 @@ COMPLETED TASKS COMMENTED OUT -->
 | 9J.12 | FE | Add keyword modifier inputs per listing | Users can specify search criteria for pricing queries that include the default "-<modifier>" keywords. This allows for more targeted and accurate pricing results for graded slabs, prizms, variants |
 | 9J.13 | BE/Tests | Add multi-provider selection and runtime wiring coverage | Tests prove `off` skips enqueue/execution safely, each live mode selects the intended provider, failures remain workflow-safe, and queued jobs never silently use fixtures |
 | 9J.14 | BE/Pricing | Harden price update policy | Listing price updates only after a validated positive result and successfully stored research row, regardless of selected provider |
-| 9J.15 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
+| 9J.15 | BE/DB | Trim pricing research persistence payloads | Completed pricing jobs and `listing_price_research` store lean, non-duplicated pricing data: remove duplicate keyword/query storage, drop unused sample titles, keep selected comp IDs only inside LLM reasoning JSON, and keep price/confidence columns adjacent |
+| 9J.16 | BE/FE | Display SoldComps usage counters | SoldComps `x-usage-used` / `x-usage-limit` headers are captured by the backend and displayed as used/limit in the UI Operational summary alongside Gemini usage |
+| 9J.17 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
 | 9H.1 | $BE/API$ | Expose latest pricing research on listings API | FE can later display pricing context without direct table access |
 | 9H.2 | $FE$ | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |
 | 9H.3 | BE/FE | Display pricing failures without blocking approval | Rate-limit/provider failures are visible but do not block export |

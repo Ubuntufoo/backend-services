@@ -10,17 +10,16 @@ import { requireOptionalResult, requireSingleResult, type SingleResult } from '.
 export interface MarkListingPriceResearchSucceededInput {
   id: string;
   comps?: Json;
-  confidence?: string | null;
   llm_price_explanation?: string | null;
   llm_reasoning_json?: Json;
   llm_rejected_comp_ids?: Json;
-  llm_selected_comp_ids?: Json;
   median_sold_price?: number | null;
+  suggested_price?: number | null;
+  confidence?: string | null;
   pricing_model_name?: string | null;
   query?: string | null;
   raw_result_json?: Json;
   sold_count?: number | null;
-  suggested_price?: number | null;
 }
 
 export interface MarkListingPriceResearchFailedInput {
@@ -70,7 +69,6 @@ export async function markListingPriceResearchSucceeded(
     error_message: null,
     status: 'succeeded',
     ...(input.comps !== undefined ? { comps: input.comps } : {}),
-    ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
     ...(input.llm_price_explanation !== undefined
       ? { llm_price_explanation: input.llm_price_explanation }
       : {}),
@@ -80,19 +78,17 @@ export async function markListingPriceResearchSucceeded(
     ...(input.llm_rejected_comp_ids !== undefined
       ? { llm_rejected_comp_ids: input.llm_rejected_comp_ids }
       : {}),
-    ...(input.llm_selected_comp_ids !== undefined
-      ? { llm_selected_comp_ids: input.llm_selected_comp_ids }
-      : {}),
     ...(input.median_sold_price !== undefined
       ? { median_sold_price: input.median_sold_price }
       : {}),
+    ...(input.suggested_price !== undefined ? { suggested_price: input.suggested_price } : {}),
+    ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
     ...(input.pricing_model_name !== undefined
       ? { pricing_model_name: input.pricing_model_name }
       : {}),
     ...(input.query !== undefined ? { query: input.query } : {}),
     ...(input.raw_result_json !== undefined ? { raw_result_json: input.raw_result_json } : {}),
     ...(input.sold_count !== undefined ? { sold_count: input.sold_count } : {}),
-    ...(input.suggested_price !== undefined ? { suggested_price: input.suggested_price } : {}),
   };
 
   const result = (await client

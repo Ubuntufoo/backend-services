@@ -259,7 +259,6 @@ function createListingPriceResearchRow(
 ): ListingPriceResearchRow {
   return {
     comps: [],
-    confidence: null,
     created_at: '2026-05-20T13:00:00.000Z',
     error_code: null,
     error_message: null,
@@ -268,15 +267,15 @@ function createListingPriceResearchRow(
     llm_price_explanation: null,
     llm_reasoning_json: {},
     llm_rejected_comp_ids: [],
-    llm_selected_comp_ids: [],
     median_sold_price: null,
+    suggested_price: null,
+    confidence: null,
     pricing_model_name: null,
     provider: 'fixture',
     query: null,
     raw_result_json: {},
     sold_count: null,
     status: 'pending',
-    suggested_price: null,
     updated_at: '2026-05-20T13:00:00.000Z',
     ...overrides,
   };
@@ -410,7 +409,6 @@ function expectDeterministicLlmFallbackPersistence(params: {
       status: 'failed',
     },
     llm_rejected_comp_ids: [],
-    llm_selected_comp_ids: [],
     pricing_model_name: null,
     suggested_price: result.listing?.price,
   });
@@ -3156,7 +3154,6 @@ describe('runSidecarJob', () => {
             status: 'succeeded',
           },
           llm_rejected_comp_ids: [],
-          llm_selected_comp_ids: [],
           median_sold_price: expect.any(Number),
           pricing_model_name: 'gemma-4-31b-it',
           query: expect.any(String),
@@ -3331,12 +3328,9 @@ describe('runSidecarJob', () => {
       expect(markSucceededInput?.llm_reasoning_json).toMatchObject({
         reasoning: {
           confidence: 'medium',
+          selectedCompIds: expect.arrayContaining([expect.any(String)]),
         },
       });
-      expect(markSucceededInput?.llm_selected_comp_ids).toHaveLength(2);
-      expect(markSucceededInput?.llm_selected_comp_ids).toEqual(
-        expect.arrayContaining([expect.any(String)])
-      );
       expect(markSucceededInput?.llm_rejected_comp_ids).toEqual(
         expect.arrayContaining([expect.any(String)])
       );
@@ -3447,7 +3441,11 @@ describe('runSidecarJob', () => {
       expect(markSucceededInput?.confidence).toBe('medium');
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
-      expect(markSucceededInput?.llm_selected_comp_ids).toEqual([expect.any(String)]);
+      expect(markSucceededInput?.llm_reasoning_json).toMatchObject({
+        reasoning: {
+          selectedCompIds: [expect.any(String)],
+        },
+      });
       expect(markSucceededInput?.llm_rejected_comp_ids).toHaveLength(3);
       expect(jobLoggerInfo).toHaveBeenCalledWith(
         'Fell back to deterministic research_price after null LLM condition adjustment.',
