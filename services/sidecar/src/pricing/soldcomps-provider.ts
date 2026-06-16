@@ -2,7 +2,13 @@ import { z } from 'zod';
 
 import { SOLDCOMPS_API_BASE_URL, SOLDCOMPS_SOLD_COMP_REQUEST_COUNT } from './soldcomps-config.js';
 import { buildSoldCompsKeyword } from './soldcomps-keyword.js';
-import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
+import type {
+  PricingProvider,
+  PricingProviderInput,
+  PricingProviderResult,
+  RawSoldComp,
+  SoldCompsUsageSnapshot,
+} from './types.js';
 
 const SOLDCOMPS_PROVIDER_NAME = 'soldcomps';
 const DEFAULT_TIMEOUT_SECONDS = 120;
@@ -178,6 +184,7 @@ export function parseSoldCompsResponse(
 
   const soldComps = parsed.items.map((item) => toRawSoldComp(item, parsed.keyword));
   const fetchedAt = meta.fetchedAt ?? new Date().toISOString();
+  const usage = parseSoldCompsUsageHeaders(meta.responseHeaders, fetchedAt);
 
   return {
     fetchedAt,
@@ -198,7 +205,9 @@ export function parseSoldCompsResponse(
       },
       responseHeaders: sanitizeHeaders(meta.responseHeaders),
       status: meta.status,
+      usage,
     },
+    soldCompsUsage: usage,
     soldComps,
   };
 }
@@ -441,6 +450,59 @@ function sanitizeHeaders(headers: Record<string, string> | undefined): Record<st
   return Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key, redactSoldCompsSensitiveText(value)])
   );
+}
+
+function parseUsageHeaderValue(value: string | undefined): number | null | 'invalid' {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return 'invalid';
+  }
+
+  const parsed = Number(trimmed);
+
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+    return 'invalid';
+  }
+
+  return parsed;
+}
+
+export function parseSoldCompsUsageHeaders(
+  headers: Record<string, string> | undefined,
+  updatedAt: string
+): SoldCompsUsageSnapshot {
+  const used = parseUsageHeaderValue(headers?.['x-usage-used']);
+  const limit = parseUsageHeaderValue(headers?.['x-usage-limit']);
+
+  if (used === 'invalid' || limit === 'invalid') {
+    return {
+      limit: null,
+      source: 'malformed',
+      updatedAt,
+      used: null,
+    };
+  }
+
+  if (used === null && limit === null) {
+    return {
+      limit: null,
+      source: 'missing',
+      updatedAt,
+      used: null,
+    };
+  }
+
+  return {
+    limit,
+    source: 'headers',
+    updatedAt,
+    used,
+  };
 }
 
 export function redactSoldCompsSensitiveText(value: string): string {

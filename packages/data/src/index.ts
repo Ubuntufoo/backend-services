@@ -93,7 +93,9 @@ export {
   getAppSettings,
   isPricingEnabled,
   isPricingProviderModeEnabled,
+  parseSoldCompsUsageSnapshot,
   updateAppSettings,
+  type SoldCompsUsageSnapshot,
 } from './repositories/app-settings.js';
 export {
   DEFAULT_ORDER_SYNC_DAILY_LIMIT,

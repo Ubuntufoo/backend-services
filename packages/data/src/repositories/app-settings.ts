@@ -15,6 +15,13 @@ export const DEFAULT_PRICING_PROVIDER_MODE: PricingProviderMode = 'soldcomps';
 const ENABLED_PRICING_PROVIDER_MODES = new Set<PricingProviderMode>(['soldcomps', 'apify']);
 const PRICING_PROVIDER_MODE_SET = new Set<string>(PRICING_PROVIDER_MODES);
 
+export interface SoldCompsUsageSnapshot {
+  limit: number | null;
+  source: 'headers' | 'malformed' | 'missing';
+  updatedAt: string;
+  used: number | null;
+}
+
 type PricingAppSettingsLike = {
   pricing_provider_mode?: AppSettingsRow['pricing_provider_mode'] | null;
   pricing_service_enabled?: boolean | null;
@@ -45,6 +52,48 @@ export function isPricingEnabled(
   appSettings: PricingAppSettingsLike
 ): boolean {
   return isPricingProviderModeEnabled(getPricingProviderMode(appSettings));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeNullableInteger(value: unknown): number | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return undefined;
+  }
+
+  return value;
+}
+
+export function parseSoldCompsUsageSnapshot(value: unknown): SoldCompsUsageSnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const updatedAt = typeof value.updatedAt === 'string' ? value.updatedAt.trim() : '';
+  const used = normalizeNullableInteger(value.used);
+  const limit = normalizeNullableInteger(value.limit);
+  const source = value.source;
+
+  if (!updatedAt || (used === undefined && limit === undefined)) {
+    return null;
+  }
+
+  if (source !== 'headers' && source !== 'malformed' && source !== 'missing') {
+    return null;
+  }
+
+  return {
+    limit: limit ?? null,
+    source,
+    updatedAt,
+    used: used ?? null,
+  };
 }
 
 export async function createAppSettings(

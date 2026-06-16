@@ -212,6 +212,7 @@ const appSettingsRow: AppSettingsRow = {
   pricing_provider_mode: 'soldcomps',
   processed_folder_path: '/processed',
   r2_retention_days_after_sold: 30,
+  soldcomps_usage_snapshot: null,
   updated_at: '2026-05-17T00:00:00.000Z',
 };
 

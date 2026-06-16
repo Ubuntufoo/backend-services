@@ -1,4 +1,5 @@
 import {
+  DEFAULT_APP_SETTINGS_ID,
   getPricingProviderMode,
   isPricingEnabled,
   type JobRow,
@@ -33,6 +34,7 @@ import {
   type PricingProviderInput,
   type PricingProviderResult,
   type PricingStatsResult,
+  type SoldCompsUsageSnapshot,
   ProductionPricingAnalystError,
 } from '@/pricing/index.js';
 import { createLogger } from '@/utils/logger.js';
@@ -475,6 +477,31 @@ function buildResearchPriceError(
   );
 }
 
+async function persistSoldCompsUsageSnapshot(
+  dataAccess: SidecarDataAccess,
+  snapshot: SoldCompsUsageSnapshot | null | undefined
+): Promise<void> {
+  if (!snapshot) {
+    return;
+  }
+
+  try {
+    await dataAccess.appSettings.update(
+      {
+        soldcomps_usage_snapshot: asJson(snapshot),
+      },
+      DEFAULT_APP_SETTINGS_ID
+    );
+  } catch (error) {
+    jobLogger.warn('Failed to persist SoldComps usage snapshot.', {
+      compactErrorMessage: asCompactErrorMessage(error),
+      event: 'research_price_soldcomps_usage_snapshot_persist_failed',
+      snapshotSource: snapshot.source,
+      snapshotUpdatedAt: snapshot.updatedAt,
+    });
+  }
+}
+
 async function getEnabledPricingProviderMode(
   dependencies: ResearchPriceJobDependencies,
   options: PriceListingNowOptions = {}
@@ -683,6 +710,12 @@ export async function priceListingNow(
     });
 
     providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
+    if (providerResult.provider === SOLDCOMPS_PROVIDER_NAME) {
+      await persistSoldCompsUsageSnapshot(
+        dependencies.dataAccess,
+        providerResult.soldCompsUsage ?? null
+      );
+    }
     rawCompCount = providerResult.soldComps.length;
 
     const normalized = runNormalizeComps(providerResult.soldComps, buildNormalizeSoldCompsContext(listing, listingId));

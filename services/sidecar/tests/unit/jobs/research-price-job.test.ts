@@ -216,6 +216,10 @@ function createDataAccess(
       usage_date: '2026-06-12',
     },
   });
+  const updateAppSettings = vi.fn().mockImplementation(async (changes) => ({
+    ...(appSettings ?? createAppSettings()),
+    ...changes,
+  }));
 
   return {
     dataAccess: {
@@ -224,6 +228,7 @@ function createDataAccess(
       },
       appSettings: {
         get: vi.fn().mockResolvedValue(appSettings),
+        update: updateAppSettings,
       },
       dailyUsage: {
         incrementGeminiCallsUsed,
@@ -245,6 +250,7 @@ function createDataAccess(
       markFailed,
       markSucceeded,
       resolveForTask,
+      updateAppSettings,
       update,
     },
   };
@@ -1205,13 +1211,19 @@ describe('priceListingNow', () => {
 
   it('uses persisted default soldcomps mode when app settings row missing', async () => {
     const listing = createListing();
-    const { dataAccess } = createDataAccess(listing, null);
+    const { dataAccess, spies } = createDataAccess(listing, null);
     const resolvePricingProvider = vi.fn().mockReturnValue({
       fetchSoldComps: vi.fn().mockResolvedValue({
         fetchedAt: '2026-06-12T10:05:00.000Z',
         provider: 'soldcomps',
         query: 'query',
         rawResult: { provider: 'soldcomps' },
+        soldCompsUsage: {
+          limit: 50,
+          source: 'headers',
+          updatedAt: '2026-06-12T10:05:00.000Z',
+          used: 43,
+        },
         soldComps: [
           createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
           createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
@@ -1229,6 +1241,154 @@ describe('priceListingNow', () => {
 
     expect(resolvePricingProvider).toHaveBeenCalledWith('soldcomps');
     expect(result.provider).toBe('soldcomps');
+    expect(spies.updateAppSettings).toHaveBeenCalledWith(
+      {
+        soldcomps_usage_snapshot: {
+          limit: 50,
+          source: 'headers',
+          updatedAt: '2026-06-12T10:05:00.000Z',
+          used: 43,
+        },
+      },
+      'default'
+    );
+  });
+
+  it('persists null-safe SoldComps usage snapshot when headers missing or malformed', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+    const fetchSoldComps = vi
+      .fn()
+      .mockResolvedValueOnce({
+        fetchedAt: '2026-06-12T10:05:00.000Z',
+        provider: 'soldcomps',
+        query: 'query',
+        rawResult: { provider: 'soldcomps' },
+        soldCompsUsage: {
+          limit: null,
+          source: 'missing',
+          updatedAt: '2026-06-12T10:05:00.000Z',
+          used: null,
+        },
+        soldComps: [
+          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+          createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+        ],
+      })
+      .mockResolvedValueOnce({
+        fetchedAt: '2026-06-12T10:06:00.000Z',
+        provider: 'soldcomps',
+        query: 'query',
+        rawResult: { provider: 'soldcomps' },
+        soldCompsUsage: {
+          limit: null,
+          source: 'malformed',
+          updatedAt: '2026-06-12T10:06:00.000Z',
+          used: null,
+        },
+        soldComps: [
+          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+          createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+        ],
+      });
+
+    await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider: {
+        fetchSoldComps,
+        name: 'soldcomps',
+      } as never,
+    });
+
+    await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider: {
+        fetchSoldComps,
+        name: 'soldcomps',
+      } as never,
+    });
+
+    expect(spies.updateAppSettings).toHaveBeenNthCalledWith(
+      1,
+      {
+        soldcomps_usage_snapshot: {
+          limit: null,
+          source: 'missing',
+          updatedAt: '2026-06-12T10:05:00.000Z',
+          used: null,
+        },
+      },
+      'default'
+    );
+    expect(spies.updateAppSettings).toHaveBeenNthCalledWith(
+      2,
+      {
+        soldcomps_usage_snapshot: {
+          limit: null,
+          source: 'malformed',
+          updatedAt: '2026-06-12T10:06:00.000Z',
+          used: null,
+        },
+      },
+      'default'
+    );
+  });
+
+  it('keeps pricing success path when SoldComps usage snapshot persistence fails', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+    spies.updateAppSettings.mockRejectedValueOnce(new Error('app settings write failed'));
+
+    const result = await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider: {
+        fetchSoldComps: vi.fn().mockResolvedValue({
+          fetchedAt: '2026-06-12T10:05:00.000Z',
+          provider: 'soldcomps',
+          query: 'query',
+          rawResult: { provider: 'soldcomps' },
+          soldCompsUsage: {
+            limit: 50,
+            source: 'headers',
+            updatedAt: '2026-06-12T10:05:00.000Z',
+            used: 43,
+          },
+          soldComps: [
+            createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+            createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+            createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+          ],
+        }),
+        name: 'soldcomps',
+      } as never,
+    });
+
+    expect(result).toMatchObject({
+      listingPriceResearchUpdated: true,
+      provider: 'soldcomps',
+      selectedProviderMode: 'soldcomps',
+      suggestedPrice: expect.any(Number),
+    });
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, {
+      price: result.suggestedPrice,
+    });
+    expect(spies.updateAppSettings).toHaveBeenCalledWith(
+      {
+        soldcomps_usage_snapshot: {
+          limit: 50,
+          source: 'headers',
+          updatedAt: '2026-06-12T10:05:00.000Z',
+          used: 43,
+        },
+      },
+      'default'
+    );
   });
 
   it('uses persisted apify mode for runtime provider resolution', async () => {

@@ -225,12 +225,20 @@ export interface PricingConfidenceResult {
   reasons: string[];
 }
 
+export interface SoldCompsUsageSnapshot {
+  limit: number | null;
+  source: 'headers' | 'malformed' | 'missing';
+  updatedAt: string;
+  used: number | null;
+}
+
 export interface PricingProviderResult {
   provider: string;
   query: string;
   soldComps: RawSoldComp[];
   rawResult: unknown;
   fetchedAt: string;
+  soldCompsUsage?: SoldCompsUsageSnapshot | null;
 }
 
 export interface PricingProvider {

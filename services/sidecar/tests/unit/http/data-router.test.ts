@@ -93,6 +93,12 @@ const appSettingsRow = {
   pricing_provider_mode: 'soldcomps',
   processed_folder_path: '/processed',
   r2_retention_days_after_sold: 30,
+  soldcomps_usage_snapshot: {
+    limit: 50,
+    source: 'headers',
+    updatedAt: '2026-06-16T16:30:00.000Z',
+    used: 43,
+  },
   updated_at: '2026-05-17T00:00:00.000Z',
 };
 
@@ -1321,7 +1327,17 @@ describe('data API router', () => {
     const response = await request(app).get('/api/app-settings');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual(appSettingsRow);
+    expect(response.body).toEqual({
+      ...Object.fromEntries(
+        Object.entries(appSettingsRow).filter(([key]) => key !== 'soldcomps_usage_snapshot')
+      ),
+      soldcomps_usage: {
+        limit: 50,
+        updatedAt: '2026-06-16T16:30:00.000Z',
+        used: 43,
+      },
+    });
+    expect(response.body).not.toHaveProperty('soldcomps_usage_snapshot');
     expect(dataAccess.appSettings.get).toHaveBeenCalledWith('default');
   });
 
@@ -1353,7 +1369,29 @@ describe('data API router', () => {
     expect(response.body).toMatchObject({
       id: 'default',
       pricing_provider_mode: 'soldcomps',
+      soldcomps_usage: {
+        limit: 50,
+        updatedAt: '2026-06-16T16:30:00.000Z',
+        used: 43,
+      },
     });
+  });
+
+  it('returns null public SoldComps usage when persisted snapshot malformed', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get = vi.fn(async () => ({
+      ...appSettingsRow,
+      soldcomps_usage_snapshot: {
+        limit: 'fifty',
+      },
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/app-settings');
+
+    expect(response.status).toBe(200);
+    expect(response.body.soldcomps_usage).toBeNull();
+    expect(response.body).not.toHaveProperty('soldcomps_usage_snapshot');
   });
 
   it('updates pricing_provider_mode through app settings', async () => {

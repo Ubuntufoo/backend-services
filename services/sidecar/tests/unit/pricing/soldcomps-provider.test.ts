@@ -9,6 +9,7 @@ import {
   buildSoldCompsQuery,
   buildSoldCompsRequestParams,
   createSoldCompsPricingProvider,
+  parseSoldCompsUsageHeaders,
   parseSoldCompsResponse,
   redactSoldCompsSensitiveText,
 } from '@/pricing/index.js';
@@ -135,7 +136,7 @@ describe('SoldComps pricing provider', () => {
     const fetch = vi.fn(async () => ({
       headers: new Headers({
         'x-usage-limit': '2000',
-        'x-usage-remaining': '1999',
+        'x-usage-used': '43',
       }),
       json: async () => soldCompsFixture,
       ok: true,
@@ -222,7 +223,7 @@ describe('SoldComps pricing provider', () => {
       },
       responseHeaders: {
         'x-usage-limit': '2000',
-        'x-usage-remaining': '1999',
+        'x-usage-used': '43',
       },
       status: 200,
     });
@@ -274,9 +275,49 @@ describe('SoldComps pricing provider', () => {
       },
       responseHeaders: {
         'x-usage-limit': '2000',
-        'x-usage-remaining': '1999',
+        'x-usage-used': '43',
       },
       status: 200,
+      usage: {
+        limit: 2000,
+        source: 'headers',
+        updatedAt: '2026-06-15T12:00:00.000Z',
+        used: 43,
+      },
+    });
+    expect(result.soldCompsUsage).toEqual({
+      limit: 2000,
+      source: 'headers',
+      updatedAt: '2026-06-15T12:00:00.000Z',
+      used: 43,
+    });
+  });
+
+  it('returns missing usage snapshot when SoldComps headers absent', () => {
+    expect(
+      parseSoldCompsUsageHeaders(undefined, '2026-06-15T12:00:00.000Z')
+    ).toEqual({
+      limit: null,
+      source: 'missing',
+      updatedAt: '2026-06-15T12:00:00.000Z',
+      used: null,
+    });
+  });
+
+  it('returns malformed usage snapshot when SoldComps headers invalid', () => {
+    expect(
+      parseSoldCompsUsageHeaders(
+        {
+          'x-usage-limit': '50',
+          'x-usage-used': 'forty-three',
+        },
+        '2026-06-15T12:00:00.000Z'
+      )
+    ).toEqual({
+      limit: null,
+      source: 'malformed',
+      updatedAt: '2026-06-15T12:00:00.000Z',
+      used: null,
     });
   });
 

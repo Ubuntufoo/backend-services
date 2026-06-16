@@ -3,11 +3,13 @@ import {
   DEFAULT_APP_SETTINGS_ID,
   ListingWorkflowTransitionConflictError,
   getPricingProviderMode,
+  parseSoldCompsUsageSnapshot,
   type ListingInsert,
   type AppSettingsRow,
   type ListingUpdate,
 } from '@ebay-inventory/data';
 import type { GeminiUsageLastAttempt } from '@ebay-inventory/data';
+import type { SoldCompsUsageSnapshot } from '@ebay-inventory/data';
 import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -160,10 +162,34 @@ function mapSellerEditableListingFields(
   };
 }
 
-function serializeAppSettings(appSettings: AppSettingsRow): AppSettingsRow {
+interface AppSettingsApiResponse extends Omit<AppSettingsRow, 'soldcomps_usage_snapshot'> {
+  pricing_provider_mode: ReturnType<typeof getPricingProviderMode>;
+  soldcomps_usage: Pick<SoldCompsUsageSnapshot, 'limit' | 'updatedAt' | 'used'> | null;
+}
+
+function mapSoldCompsUsageSnapshot(
+  appSettings: AppSettingsRow
+): AppSettingsApiResponse['soldcomps_usage'] {
+  const snapshot = parseSoldCompsUsageSnapshot(appSettings.soldcomps_usage_snapshot);
+
+  if (!snapshot) {
+    return null;
+  }
+
   return {
-    ...appSettings,
+    limit: snapshot.limit,
+    updatedAt: snapshot.updatedAt,
+    used: snapshot.used,
+  };
+}
+
+function serializeAppSettings(appSettings: AppSettingsRow): AppSettingsApiResponse {
+  const { soldcomps_usage_snapshot: _soldCompsUsageSnapshot, ...rest } = appSettings;
+
+  return {
+    ...rest,
     pricing_provider_mode: getPricingProviderMode(appSettings),
+    soldcomps_usage: mapSoldCompsUsageSnapshot(appSettings),
   };
 }
 

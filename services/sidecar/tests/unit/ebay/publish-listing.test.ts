@@ -108,6 +108,7 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     merchant_location_key: 'warehouse-1',
     office_location_name: null,
     processed_folder_path: '/processed',
+    soldcomps_usage_snapshot: null,
     r2_retention_days_after_sold: 30,
     updated_at: '2026-05-24T11:00:00.000Z',
     ...overrides,
