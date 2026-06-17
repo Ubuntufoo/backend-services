@@ -340,6 +340,20 @@ describe('normalizeSoldComps', () => {
     expect(normalized.comps[0]?.title).toBe(title);
   });
 
+  it.each([
+    '1977 TOPPS BSKT. #20 PETE MARAVICH',
+    'Pete Maravich #20 1977 Topps New Orleans Jazz Basketball Card NBA NM',
+    '1977-78 Topps BSKB - #20 Pete Maravich/Jazz G/VG',
+    'Pete Maravich 1977 Topps All-Star #20 HOF',
+    '1977-78 Topps White Backs #20 Pete Maravich New Orleans Jazz',
+    '1977-78 Topps NBA #20 Pete Maravich New Orleans Jazz Hawks HOF',
+  ])('accepts descriptor-heavy generic exact-card title "%s"', (title) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildPeteMaravichContext());
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
   it('rejects set-break title when broad-selection wording also present', () => {
     const title = '1955 Topps Set Break #98 Johnny Riddle You Pick';
     const normalized = normalizeSoldComps([buildRawComp({ title })], buildExactCardContext());
@@ -417,6 +431,15 @@ describe('normalizeSoldComps', () => {
 
     expect(normalized.rejected).toEqual([
       { index: 0, reason: 'exact_set_mismatch', title },
+    ]);
+  });
+
+  it('rejects mixed-year multi-card generic-set title', () => {
+    const title = 'Topps 1977 Pete Maravich #20 And Topps 1978 Pete Maravich #80 Set Good';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildPeteMaravichContext());
+
+    expect(normalized.rejected).toEqual([
+      { index: 0, reason: 'exact_year_mismatch', title },
     ]);
   });
 
@@ -589,6 +612,19 @@ function buildRyneSandbergContext(): NormalizeSoldCompsContext {
       Year: '1983',
     },
     title: '1983 Topps Ryne Sandberg #83 Base Set',
+  };
+}
+
+function buildPeteMaravichContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '20',
+      Manufacturer: 'Topps',
+      Player: 'Pete Maravich',
+      Set: 'Topps',
+      Year: '1977',
+    },
+    title: '1977 Topps Pete Maravich #20',
   };
 }
 

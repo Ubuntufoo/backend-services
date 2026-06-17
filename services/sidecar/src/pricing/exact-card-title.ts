@@ -31,6 +31,40 @@ const SET_NOISE_TOKENS = new Set([
   'tcg',
   'trading',
 ]);
+const GENERIC_SET_FALLBACK_PHRASES = new Set([
+  'donruss',
+  'fleer',
+  'hoops',
+  'nba hoops',
+  'panini',
+  'score',
+  'skybox',
+  'topps',
+  'upper deck',
+]);
+const CONFLICTING_SET_LINE_TOKENS = new Set([
+  'archives',
+  'bowman',
+  'chrome',
+  'finest',
+  'flashback',
+  'gallery',
+  'heritage',
+  'metal',
+  'mosaic',
+  'optic',
+  'platinum',
+  'prizm',
+  'refractor',
+  'select',
+  'showcase',
+  'stadium',
+  'studio',
+  'tiffany',
+  'traded',
+  'ultra',
+  'update',
+]);
 
 export interface ExactCardTitleTarget {
   cardNumber: string | null;
@@ -76,7 +110,11 @@ export function getExactCardTitleMismatchReason(
     return EXACT_CARD_REJECTION_REASONS.playerMismatch;
   }
 
-  if (target.setPhrase && !matchesSetIdentity(tokens, target.setPhrase, target.playerPhrase, target.parallelPhrases)) {
+  if (
+    target.setPhrase &&
+    !matchesSetIdentity(tokens, target.setPhrase, target.playerPhrase, target.parallelPhrases) &&
+    !matchesRelaxedGenericSetIdentity(title, tokens, target)
+  ) {
     return EXACT_CARD_REJECTION_REASONS.setMismatch;
   }
 
@@ -234,6 +272,65 @@ function matchesSetIdentity(
       /^[a-z]{0,4}\d{1,4}[a-z]{0,4}$/i.test(nextToken)
     );
   });
+}
+
+function matchesRelaxedGenericSetIdentity(
+  title: string,
+  tokens: string[],
+  target: ExactCardTitleTarget
+): boolean {
+  if (!target.setPhrase || !target.cardNumber || !target.year) {
+    return false;
+  }
+
+  const targetTokens = compactSetTokens(tokenizeTitle(target.setPhrase));
+  if (!isGenericSetFallbackEligible(targetTokens)) {
+    return false;
+  }
+
+  if (extractExplicitCardNumber(title) !== target.cardNumber) {
+    return false;
+  }
+
+  if (!getTitleYearCandidates(title).includes(target.year)) {
+    return false;
+  }
+
+  const phraseIndexes = findPhraseIndexes(tokens, targetTokens);
+  if (phraseIndexes.length === 0) {
+    return false;
+  }
+
+  const playerTokens = target.playerPhrase ? tokenizeTitle(target.playerPhrase) : [];
+  return phraseIndexes.some((startIndex) =>
+    !hasConflictingSetLineTokens(tokens.slice(startIndex + targetTokens.length), playerTokens)
+  );
+}
+
+function isGenericSetFallbackEligible(targetTokens: string[]): boolean {
+  if (targetTokens.length === 0) {
+    return false;
+  }
+
+  return GENERIC_SET_FALLBACK_PHRASES.has(targetTokens.join(' '));
+}
+
+function hasConflictingSetLineTokens(nextTokens: string[], playerTokens: string[]): boolean {
+  for (const token of nextTokens) {
+    if (
+      token === playerTokens[0] ||
+      /^\d{4}$/.test(token) ||
+      /^[a-z]{0,4}\d{1,4}[a-z]{0,4}$/i.test(token)
+    ) {
+      return false;
+    }
+
+    if (CONFLICTING_SET_LINE_TOKENS.has(token)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function compactSetTokens(tokens: string[]): string[] {
