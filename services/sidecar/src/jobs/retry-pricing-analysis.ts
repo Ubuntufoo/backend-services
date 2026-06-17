@@ -25,13 +25,12 @@ import { createLogger } from '@/utils/logger.js';
 
 const retryLogger = createLogger('RetryPricingAnalysis');
 
-const PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE =
-  new Set<PricingAnalysisWarningReason>([
-    'llm_analysis_failed',
-    'llm_condition_adjusted_price_invalid',
-    'llm_condition_adjusted_price_out_of_window',
-    'llm_condition_adjusted_price_null',
-  ]);
+const PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE = new Set<PricingAnalysisWarningReason>([
+  'llm_analysis_failed',
+  'llm_condition_adjusted_price_invalid',
+  'llm_condition_adjusted_price_out_of_window',
+  'llm_condition_adjusted_price_null',
+]);
 
 const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
   'Player',
@@ -104,9 +103,7 @@ function normalizeSuggestedPrice(value: unknown): number | null {
   return Number.isSafeInteger(cents) ? normalized : null;
 }
 
-function parsePricingAnalysisWarnings(
-  llmReasoningJson: unknown
-): PricingAnalysisWarning[] {
+function parsePricingAnalysisWarnings(llmReasoningJson: unknown): PricingAnalysisWarning[] {
   const reasoning = asRecord(llmReasoningJson);
   const rawWarnings = reasoning?.warnings;
   if (!Array.isArray(rawWarnings)) {
@@ -126,14 +123,7 @@ function parsePricingAnalysisWarnings(
     const summary = asString(record.summary);
     const retryable = asBoolean(record.retryable);
 
-    if (
-      !analyst ||
-      !code ||
-      !reason ||
-      severity !== 'warning' ||
-      !summary ||
-      retryable === null
-    ) {
+    if (!analyst || !code || !reason || severity !== 'warning' || !summary || retryable === null) {
       return [];
     }
 
@@ -152,9 +142,7 @@ function parsePricingAnalysisWarnings(
 
 function hasRetryablePricingAnalysisWarning(llmReasoningJson: unknown): boolean {
   return parsePricingAnalysisWarnings(llmReasoningJson).some(
-    (warning) =>
-      warning.retryable &&
-      PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE.has(warning.reason)
+    (warning) => warning.retryable && PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE.has(warning.reason)
   );
 }
 
@@ -218,9 +206,7 @@ function rebuildPricingAnalystInput(
         asNonEmptyString(listing.title) ??
         buildPricingTitleFromItemSpecifics(itemSpecifics) ??
         listing.listing_id,
-      facts: buildLlmPricingFacts(
-        itemSpecifics as Record<string, unknown> | undefined
-      ),
+      facts: buildLlmPricingFacts(itemSpecifics as Record<string, unknown> | undefined),
     },
     stats,
     comps: [...comps],
@@ -230,9 +216,7 @@ function rebuildPricingAnalystInput(
 
 // -- Warning / reasoning helpers (mirrors research-price-job internals) -----
 
-function getPricingAnalysisWarningSummary(
-  reason: PricingAnalysisWarningReason
-): string {
+function getPricingAnalysisWarningSummary(reason: PricingAnalysisWarningReason): string {
   switch (reason) {
     case 'llm_analysis_failed':
       return 'LLM pricing analysis failed. Deterministic price used.';
@@ -287,10 +271,7 @@ function buildLlmFailureDiagnostics(
   error: unknown,
   modelName?: string | null
 ): PricingAnalystFailureDiagnostics {
-  if (
-    error instanceof ProductionPricingAnalystError &&
-    error.failureDiagnostics
-  ) {
+  if (error instanceof ProductionPricingAnalystError && error.failureDiagnostics) {
     return error.failureDiagnostics;
   }
 
@@ -299,15 +280,11 @@ function buildLlmFailureDiagnostics(
   return {
     causes: [fallbackCause],
     ...(fallbackCause.errorCode ? { errorCode: fallbackCause.errorCode } : {}),
-    ...(fallbackCause.errorStatus
-      ? { errorStatus: fallbackCause.errorStatus }
-      : {}),
+    ...(fallbackCause.errorStatus ? { errorStatus: fallbackCause.errorStatus } : {}),
     ...(modelName ? { modelName } : {}),
     ...(fallbackCause.reason ? { reason: fallbackCause.reason } : {}),
     retryable: false,
-    ...(fallbackCause.statusCode !== undefined
-      ? { statusCode: fallbackCause.statusCode }
-      : {}),
+    ...(fallbackCause.statusCode !== undefined ? { statusCode: fallbackCause.statusCode } : {}),
   };
 }
 
@@ -350,8 +327,7 @@ function buildSucceededLlmReasoningJson(
     conditionAdjustment.deterministicMedianPrice !== null
       ? Number(
           (
-            normalizedConditionAdjustedPrice /
-            conditionAdjustment.deterministicMedianPrice -
+            normalizedConditionAdjustedPrice / conditionAdjustment.deterministicMedianPrice -
             1
           ).toFixed(4)
         )
@@ -393,9 +369,7 @@ function getLlmFallbackReason(error: unknown): string {
   return 'llm_analysis_failed';
 }
 
-function isConditionAdjustmentNotAllowed(
-  conditionAdjustment: ConditionAdjustmentSummary
-): boolean {
+function isConditionAdjustmentNotAllowed(conditionAdjustment: ConditionAdjustmentSummary): boolean {
   return !conditionAdjustment.allowedAdjustment.eligible;
 }
 
@@ -445,15 +419,11 @@ export async function retryPricingAnalysis(
   // 1. Validate listing exists
   const listing = await dataAccess.listings.getByListingId(listingId);
   if (!listing) {
-    throw new RetryPricingAnalysisError(
-      `Listing "${listingId}" was not found.`,
-      'not_found'
-    );
+    throw new RetryPricingAnalysisError(`Listing "${listingId}" was not found.`, 'not_found');
   }
 
   // 2. Validate latest successful pricing research exists
-  const latestResearch =
-    await dataAccess.listingPriceResearch.getLatestByListingId(listingId);
+  const latestResearch = await dataAccess.listingPriceResearch.getLatestByListingId(listingId);
   if (!latestResearch) {
     throw new RetryPricingAnalysisError(
       `Listing "${listingId}" has no pricing research to retry.`,
@@ -507,12 +477,7 @@ export async function retryPricingAnalysis(
   });
 
   // 8. Build analyst input and re-run
-  const analystInput = rebuildPricingAnalystInput(
-    listing,
-    comps,
-    stats,
-    conditionAdjustment
-  );
+  const analystInput = rebuildPricingAnalystInput(listing, comps, stats, conditionAdjustment);
 
   let analystResult: PricingAnalystResult;
   let llmReasoningJson: Json;
@@ -556,9 +521,7 @@ export async function retryPricingAnalysis(
   } catch (error) {
     fallbackReason = getLlmFallbackReason(error);
     pricingModelName =
-      error instanceof ProductionPricingAnalystError
-        ? error.modelName ?? null
-        : null;
+      error instanceof ProductionPricingAnalystError ? (error.modelName ?? null) : null;
 
     llmReasoningJson = buildFailedLlmReasoningJson(
       pricingAnalyst,
@@ -567,21 +530,17 @@ export async function retryPricingAnalysis(
       pricingModelName
     );
 
-    retryLogger.warn(
-      'Pricing analysis retry failed with model/provider error.',
-      {
-        compactErrorMessage: asCompactErrorMessage(error),
-        event: 'retry_pricing_analysis_failed',
-        fallbackReason,
-        listingId,
-        pricingModelName: pricingModelName ?? undefined,
-      }
-    );
+    retryLogger.warn('Pricing analysis retry failed with model/provider error.', {
+      compactErrorMessage: asCompactErrorMessage(error),
+      event: 'retry_pricing_analysis_failed',
+      fallbackReason,
+      listingId,
+      pricingModelName: pricingModelName ?? undefined,
+    });
   }
 
   // 9. Determine if warning was resolved
-  const warningResolved =
-    fallbackReason === null && llmConditionAdjustedPrice !== null;
+  const warningResolved = fallbackReason === null && llmConditionAdjustedPrice !== null;
 
   // 10. Persist updated llm_reasoning_json on the research row
   const rejectedCompIds = warningResolved
@@ -593,22 +552,19 @@ export async function retryPricingAnalysis(
 
   await dataAccess.listingPriceResearch.markSucceeded({
     comps: (latestResearch.comps ?? asJson(comps)) as Json,
-    confidence:
-      latestResearch.confidence ?? (stats.soldCount > 0 ? 'medium' : 'low'),
+    confidence: latestResearch.confidence ?? (stats.soldCount > 0 ? 'medium' : 'low'),
     id: latestResearch.id,
     llm_price_explanation: priceExplanation,
     llm_reasoning_json: llmReasoningJson,
     llm_rejected_comp_ids: rejectedCompIds,
-    median_sold_price:
-      stats.medianSoldPrice ?? latestResearch.median_sold_price,
+    median_sold_price: stats.medianSoldPrice ?? latestResearch.median_sold_price,
     pricing_model_name: pricingModelName ?? latestResearch.pricing_model_name,
     query: latestResearch.query ?? undefined,
     raw_result_json: (latestResearch.raw_result_json ?? {}) as Json,
     sold_count: stats.soldCount,
     suggested_price: warningResolved
       ? llmConditionAdjustedPrice!
-      : (latestResearch.suggested_price ??
-          stats.deterministicSuggestedPrice),
+      : (latestResearch.suggested_price ?? stats.deterministicSuggestedPrice),
   });
 
   // 11. Update listing price only if retry produced a valid condition-adjusted

@@ -258,13 +258,21 @@ function createDependencies(
     update: ReturnType<typeof vi.fn>;
     pricingAnalyst: PricingAnalyst;
   }> = {}
-): { dependencies: RetryPricingAnalysisDependencies; spies: Record<string, ReturnType<typeof vi.fn>> } {
+): {
+  dependencies: RetryPricingAnalysisDependencies;
+  spies: Record<string, ReturnType<typeof vi.fn>>;
+} {
   const markSucceeded = overrides.markSucceeded ?? vi.fn().mockResolvedValue(createResearchRow());
-  const update = overrides.update ?? vi.fn().mockImplementation(async (_listingId: string, changes: { price?: number }) =>
-    createListing({ price: changes.price ?? 23.0 })
-  );
+  const update =
+    overrides.update ??
+    vi
+      .fn()
+      .mockImplementation(async (_listingId: string, changes: { price?: number }) =>
+        createListing({ price: changes.price ?? 23.0 })
+      );
   const getByListingId = overrides.getByListingId ?? vi.fn().mockResolvedValue(createListing());
-  const getLatestByListingId = overrides.getLatestByListingId ?? vi.fn().mockResolvedValue(createResearchRow());
+  const getLatestByListingId =
+    overrides.getLatestByListingId ?? vi.fn().mockResolvedValue(createResearchRow());
 
   return {
     dependencies: {
@@ -295,13 +303,11 @@ describe('retryPricingAnalysis', () => {
       getByListingId: vi.fn().mockResolvedValue(null),
     });
 
-    await expect(
-      retryPricingAnalysis('Single-404', dependencies)
-    ).rejects.toThrow(RetryPricingAnalysisError);
+    await expect(retryPricingAnalysis('Single-404', dependencies)).rejects.toThrow(
+      RetryPricingAnalysisError
+    );
 
-    await expect(
-      retryPricingAnalysis('Single-404', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-404', dependencies)).rejects.toMatchObject({
       code: 'not_found',
       message: 'Listing "Single-404" was not found.',
     });
@@ -312,9 +318,7 @@ describe('retryPricingAnalysis', () => {
       getLatestByListingId: vi.fn().mockResolvedValue(null),
     });
 
-    await expect(
-      retryPricingAnalysis('Single-000123', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-000123', dependencies)).rejects.toMatchObject({
       code: 'no_research',
       message: 'Listing "Single-000123" has no pricing research to retry.',
     });
@@ -322,14 +326,10 @@ describe('retryPricingAnalysis', () => {
 
   it('throws research_not_succeeded when latest research is not succeeded', async () => {
     const { dependencies } = createDependencies({
-      getLatestByListingId: vi.fn().mockResolvedValue(
-        createResearchRow({ status: 'failed' })
-      ),
+      getLatestByListingId: vi.fn().mockResolvedValue(createResearchRow({ status: 'failed' })),
     });
 
-    await expect(
-      retryPricingAnalysis('Single-000123', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-000123', dependencies)).rejects.toMatchObject({
       code: 'research_not_succeeded',
     });
   });
@@ -348,9 +348,7 @@ describe('retryPricingAnalysis', () => {
       ),
     });
 
-    await expect(
-      retryPricingAnalysis('Single-000123', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-000123', dependencies)).rejects.toMatchObject({
       code: 'no_retryable_warning',
     });
   });
@@ -375,33 +373,28 @@ describe('retryPricingAnalysis', () => {
       ),
     });
 
-    await expect(
-      retryPricingAnalysis('Single-000123', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-000123', dependencies)).rejects.toMatchObject({
       code: 'no_retryable_warning',
     });
   });
 
   it('throws no_comps when research has no persisted comps', async () => {
     const { dependencies } = createDependencies({
-      getLatestByListingId: vi.fn().mockResolvedValue(
-        createResearchRow({ comps: [] })
-      ),
+      getLatestByListingId: vi.fn().mockResolvedValue(createResearchRow({ comps: [] })),
     });
 
-    await expect(
-      retryPricingAnalysis('Single-000123', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-000123', dependencies)).rejects.toMatchObject({
       code: 'no_comps',
     });
   });
 
   it('throws no_analyst when no pricing analyst is available', async () => {
     const markSucceeded = vi.fn().mockResolvedValue(createResearchRow());
-    const update = vi.fn().mockImplementation(
-      async (_listingId: string, changes: { price?: number }) =>
+    const update = vi
+      .fn()
+      .mockImplementation(async (_listingId: string, changes: { price?: number }) =>
         createListing({ price: changes.price ?? 23.0 })
-    );
+      );
     const getByListingId = vi.fn().mockResolvedValue(createListing());
     const getLatestByListingId = vi.fn().mockResolvedValue(createResearchRow());
 
@@ -419,9 +412,7 @@ describe('retryPricingAnalysis', () => {
       pricingAnalyst: undefined,
     };
 
-    await expect(
-      retryPricingAnalysis('Single-000123', dependencies)
-    ).rejects.toMatchObject({
+    await expect(retryPricingAnalysis('Single-000123', dependencies)).rejects.toMatchObject({
       code: 'no_analyst',
     });
   });
@@ -507,10 +498,11 @@ describe('retryPricingAnalysis', () => {
     };
 
     const markSucceeded = vi.fn().mockResolvedValue(researchWithConditions);
-    const update = vi.fn().mockImplementation(
-      async (_listingId: string, changes: { price?: number }) =>
+    const update = vi
+      .fn()
+      .mockImplementation(async (_listingId: string, changes: { price?: number }) =>
         createListing({ price: changes.price ?? 23.0 })
-    );
+      );
     const getByListingId = vi.fn().mockResolvedValue(listingWithCondition);
     const getLatestByListingId = vi.fn().mockResolvedValue(researchWithConditions);
 
@@ -584,9 +576,7 @@ describe('retryPricingAnalysis', () => {
       status: 'succeeded',
     });
     // Verify it's one of the two expected fallback reasons
-    const fallback = (
-      markSucceededInput.llm_reasoning_json as Record<string, unknown>
-    ).fallback;
+    const fallback = (markSucceededInput.llm_reasoning_json as Record<string, unknown>).fallback;
     expect(
       fallback === 'llm_condition_adjusted_price_null' ||
         fallback === 'condition_adjustment_not_allowed'
@@ -687,10 +677,11 @@ describe('retryPricingAnalysis', () => {
       },
     });
     const markSucceeded = vi.fn().mockResolvedValue(researchWithConditions);
-    const update = vi.fn().mockImplementation(
-      async (_listingId: string, changes: { price?: number }) =>
+    const update = vi
+      .fn()
+      .mockImplementation(async (_listingId: string, changes: { price?: number }) =>
         createListing({ price: changes.price ?? 23.0 })
-    );
+      );
     const getByListingId = vi.fn().mockResolvedValue(listingWithCondition);
     const getLatestByListingId = vi.fn().mockResolvedValue(researchWithConditions);
 
@@ -719,15 +710,13 @@ describe('retryPricingAnalysis', () => {
       status: 'succeeded',
       fallback: 'llm_condition_adjusted_price_out_of_window',
     });
-    const reasoningJson =
-      markSucceededInput.llm_reasoning_json as Record<string, unknown>;
+    const reasoningJson = markSucceededInput.llm_reasoning_json as Record<string, unknown>;
     const warnings = reasoningJson.warnings as Array<Record<string, unknown>>;
     expect(warnings[0]).toMatchObject({
       code: 'llm_condition_adjusted_price_out_of_window',
       reason: 'llm_condition_adjusted_price_out_of_window',
       severity: 'warning',
-      summary:
-        'LLM returned off-target condition-adjusted price. Deterministic price used.',
+      summary: 'LLM returned off-target condition-adjusted price. Deterministic price used.',
     });
 
     // Suggested price must remain previous/deterministic, not 999
@@ -773,8 +762,7 @@ describe('retryPricingAnalysis', () => {
     expect(result.listing.price).toBe(23.0);
 
     const markSucceededInput = spies.markSucceeded.mock.calls[0]?.[0];
-    const reasoningJson =
-      markSucceededInput.llm_reasoning_json as Record<string, unknown>;
+    const reasoningJson = markSucceededInput.llm_reasoning_json as Record<string, unknown>;
     // negative normalizes to null; adjustment isn't eligible with no condition
     // signals → condition_adjustment_not_allowed
     expect(reasoningJson.fallback).toBe('condition_adjustment_not_allowed');

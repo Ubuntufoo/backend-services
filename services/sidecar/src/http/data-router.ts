@@ -33,10 +33,7 @@ import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options
 import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow } from '@/jobs/manual-retry.js';
-import {
-  retryPricingAnalysis,
-  RetryPricingAnalysisError,
-} from '@/jobs/retry-pricing-analysis.js';
+import { retryPricingAnalysis, RetryPricingAnalysisError } from '@/jobs/retry-pricing-analysis.js';
 import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
 import { createProductionPricingAnalyst } from '@/pricing/index.js';
 import type { PricingAnalyst } from '@/pricing/index.js';
@@ -46,11 +43,7 @@ export interface DataApiRouterOptions {
   pricingAnalyst?: PricingAnalyst;
 }
 
-function parseOrSend<T>(
-  res: Response,
-  schema: ZodType<T>,
-  input: unknown
-): T | undefined {
+function parseOrSend<T>(res: Response, schema: ZodType<T>, input: unknown): T | undefined {
   const parsed = schema.safeParse(input);
 
   if (parsed.success) {
@@ -100,7 +93,8 @@ function sendRouteError(res: Response, error: unknown): void {
   }
 
   res.status(statusCode).json({
-    error: statusCode === 400 ? 'invalid_request' : statusCode === 404 ? 'not_found' : 'server_error',
+    error:
+      statusCode === 400 ? 'invalid_request' : statusCode === 404 ? 'not_found' : 'server_error',
     message: responseMessage,
   });
 }
@@ -297,8 +291,9 @@ function buildListingInsert(input: CreateListingRequest): ListingInsert {
   return {
     ...mappedFields,
     image_urls: input.imageUrls ?? [],
-    item_specifics:
-      (mappedFields.item_specifics ?? input.itemSpecifics ?? {}) as ListingInsert['item_specifics'],
+    item_specifics: (mappedFields.item_specifics ??
+      input.itemSpecifics ??
+      {}) as ListingInsert['item_specifics'],
     listing_id: listingId,
     r2_object_keys: [],
     status: initialWorkflowState.status,
@@ -630,10 +625,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         });
 
         res.status(200).json({
-          listing: await serializeListingWithLatestPricingAnalysis(
-            dataAccess,
-            result.listing
-          ),
+          listing: await serializeListingWithLatestPricingAnalysis(dataAccess, result.listing),
           warning_resolved: result.warningResolved,
         });
       } catch (error) {

@@ -245,10 +245,7 @@ function createDataAccess(): SidecarDataAccess {
   };
 }
 
-function createApp(
-  dataAccess: SidecarDataAccess,
-  pricingAnalyst?: PricingAnalyst
-): Express {
+function createApp(dataAccess: SidecarDataAccess, pricingAnalyst?: PricingAnalyst): Express {
   const app = express();
   app.use(express.json());
   app.use('/api', createDataApiRouter({ dataAccess, pricingAnalyst }));
@@ -290,7 +287,9 @@ describe('data API router', () => {
       ],
     });
     expect(dataAccess.listings.list).toHaveBeenCalledOnce();
-    expect(dataAccess.listingPriceResearch.listLatestByListingIds).toHaveBeenCalledWith(['LIST-001']);
+    expect(dataAccess.listingPriceResearch.listLatestByListingIds).toHaveBeenCalledWith([
+      'LIST-001',
+    ]);
   });
 
   it('fetches one listing by listing id', async () => {
@@ -310,7 +309,9 @@ describe('data API router', () => {
 
   it('returns Gemini daily usage summary', async () => {
     const dataAccess = createDataAccess();
-    dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt = vi.fn(async () => geminiUsageLastAttempt);
+    dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt = vi.fn(
+      async () => geminiUsageLastAttempt
+    );
     const app = createApp(dataAccess);
 
     const response = await request(app).get('/api/gemini-usage');
@@ -440,8 +441,12 @@ describe('data API router', () => {
 
   it('exposes sanitized pricing analysis warnings on listing responses', async () => {
     const dataAccess = createDataAccess();
-    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => latestPricingResearchRow);
-    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [latestPricingResearchRow]);
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+      async () => latestPricingResearchRow
+    );
+    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [
+      latestPricingResearchRow,
+    ]);
     const app = createApp(dataAccess);
 
     const listResponse = await request(app).get('/api/listings');
@@ -509,15 +514,17 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).post('/api/listings').send({
-      itemSpecifics: {
-        Brand: 'Acme',
-        Manufacturer: 'Acme',
-      },
-      pricingModifierOptions: {
-        excludeAutographs: false,
-      },
-    });
+    const response = await request(app)
+      .post('/api/listings')
+      .send({
+        itemSpecifics: {
+          Brand: 'Acme',
+          Manufacturer: 'Acme',
+        },
+        pricingModifierOptions: {
+          excludeAutographs: false,
+        },
+      });
 
     expect(response.status).toBe(201);
     expect(dataAccess.listings.create).toHaveBeenCalledWith(
@@ -607,9 +614,11 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001').send({
-      imageUrls: ['https://example.com/front.jpg'],
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        imageUrls: ['https://example.com/front.jpg'],
+      });
 
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('invalid_request');
@@ -620,20 +629,22 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001').send({
-      categoryId: 'CATEGORY-001',
-      conditionNotes: 'Minor wear',
-      conditionId: 'CONDITION-001',
-      description: 'Updated description',
-      itemSpecifics: { Brand: 'Acme' },
-      price: 19.99,
-      pricingModifierOptions: {
-        excludeAutographs: false,
-        excludeGraded: true,
-      },
-      sellerHints: 'Ship in original packaging',
-      title: 'Updated title',
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        categoryId: 'CATEGORY-001',
+        conditionNotes: 'Minor wear',
+        conditionId: 'CONDITION-001',
+        description: 'Updated description',
+        itemSpecifics: { Brand: 'Acme' },
+        price: 19.99,
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: true,
+        },
+        sellerHints: 'Ship in original packaging',
+        title: 'Updated title',
+      });
 
     expect(response.status).toBe(200);
     expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
@@ -659,13 +670,15 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001').send({
-      itemSpecifics: {
-        Brand: 'Topps',
-        Manufacturer: 'Topps',
-        skuCategoryCode: 'BSKBL',
-      },
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        itemSpecifics: {
+          Brand: 'Topps',
+          Manufacturer: 'Topps',
+          skuCategoryCode: 'BSKBL',
+        },
+      });
 
     expect(response.status).toBe(200);
     expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
@@ -688,12 +701,14 @@ describe('data API router', () => {
     }));
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001').send({
-      pricingModifierOptions: {
-        excludeAutographs: false,
-        excludeGraded: false,
-      },
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: false,
+        },
+      });
 
     expect(response.status).toBe(200);
     expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
@@ -713,12 +728,14 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001').send({
-      itemSpecifics: {
-        skuCategoryCode: 'BSKBL',
-      },
-      sku: 'BSKBL-Single-000001',
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        itemSpecifics: {
+          skuCategoryCode: 'BSKBL',
+        },
+        sku: 'BSKBL-Single-000001',
+      });
 
     expect(response.status).toBe(400);
     expect(response.body).toEqual({
@@ -759,9 +776,11 @@ describe('data API router', () => {
     }));
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001/image-urls').send({
-      imageUrls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001/image-urls')
+      .send({
+        imageUrls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+      });
 
     expect(response.status).toBe(200);
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
@@ -782,9 +801,11 @@ describe('data API router', () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-001/image-urls').send({
-      imageUrls: ['file:///tmp/front.jpg'],
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-001/image-urls')
+      .send({
+        imageUrls: ['file:///tmp/front.jpg'],
+      });
 
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('invalid_request');
@@ -797,9 +818,11 @@ describe('data API router', () => {
     dataAccess.listings.getByListingId = vi.fn(async () => null);
     const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/listings/LIST-404/image-urls').send({
-      imageUrls: ['https://example.com/front.jpg'],
-    });
+    const response = await request(app)
+      .patch('/api/listings/LIST-404/image-urls')
+      .send({
+        imageUrls: ['https://example.com/front.jpg'],
+      });
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({
@@ -1756,49 +1779,45 @@ describe('data API router', () => {
           'Card Condition': 'EXCELLENT',
         },
       }));
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
-        async () => ({
-          ...retryableResearchRow,
-          comps: [
-            {
-              condition: null,
-              id: 'comp-c1',
-              listingUrl: null,
-              price: { currency: 'USD', value: 22 },
-              shippingPrice: null,
-              soldDate: '2026-06-01T10:00:00.000Z',
-              source: 'provider',
-              title: 'Test Comp 1 EX',
-              totalPrice: { currency: 'USD', value: 22 },
-            },
-            {
-              condition: null,
-              id: 'comp-c2',
-              listingUrl: null,
-              price: { currency: 'USD', value: 22 },
-              shippingPrice: null,
-              soldDate: '2026-05-31T10:00:00.000Z',
-              source: 'provider',
-              title: 'Test Comp 2 EX',
-              totalPrice: { currency: 'USD', value: 22 },
-            },
-            {
-              condition: null,
-              id: 'comp-c3',
-              listingUrl: null,
-              price: { currency: 'USD', value: 22 },
-              shippingPrice: null,
-              soldDate: '2026-05-30T10:00:00.000Z',
-              source: 'provider',
-              title: 'Test Comp 3 EX',
-              totalPrice: { currency: 'USD', value: 22 },
-            },
-          ],
-        })
-      );
-      dataAccess.listingPriceResearch.markSucceeded = vi.fn(
-        async () => retryableResearchRow
-      );
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...retryableResearchRow,
+        comps: [
+          {
+            condition: null,
+            id: 'comp-c1',
+            listingUrl: null,
+            price: { currency: 'USD', value: 22 },
+            shippingPrice: null,
+            soldDate: '2026-06-01T10:00:00.000Z',
+            source: 'provider',
+            title: 'Test Comp 1 EX',
+            totalPrice: { currency: 'USD', value: 22 },
+          },
+          {
+            condition: null,
+            id: 'comp-c2',
+            listingUrl: null,
+            price: { currency: 'USD', value: 22 },
+            shippingPrice: null,
+            soldDate: '2026-05-31T10:00:00.000Z',
+            source: 'provider',
+            title: 'Test Comp 2 EX',
+            totalPrice: { currency: 'USD', value: 22 },
+          },
+          {
+            condition: null,
+            id: 'comp-c3',
+            listingUrl: null,
+            price: { currency: 'USD', value: 22 },
+            shippingPrice: null,
+            soldDate: '2026-05-30T10:00:00.000Z',
+            source: 'provider',
+            title: 'Test Comp 3 EX',
+            totalPrice: { currency: 'USD', value: 22 },
+          },
+        ],
+      }));
+      dataAccess.listingPriceResearch.markSucceeded = vi.fn(async () => retryableResearchRow);
       dataAccess.listings.update = vi.fn(async (_listingId, changes) => ({
         ...listingRow,
         ...changes,
@@ -1858,9 +1877,7 @@ describe('data API router', () => {
 
     it('returns 422 when no pricing research exists', async () => {
       const dataAccess = createDataAccess();
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
-        async () => null
-      );
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => null);
       const app = createApp(dataAccess);
 
       const response = await request(app)
@@ -1875,12 +1892,10 @@ describe('data API router', () => {
 
     it('returns 422 when latest research is not succeeded', async () => {
       const dataAccess = createDataAccess();
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
-        async () => ({
-          ...retryableResearchRow,
-          status: 'failed',
-        })
-      );
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...retryableResearchRow,
+        status: 'failed',
+      }));
       const app = createApp(dataAccess);
 
       const response = await request(app)
@@ -1895,15 +1910,13 @@ describe('data API router', () => {
 
     it('returns 409 when no retryable warnings exist', async () => {
       const dataAccess = createDataAccess();
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
-        async () => ({
-          ...retryableResearchRow,
-          llm_reasoning_json: {
-            status: 'succeeded',
-            warnings: [],
-          },
-        })
-      );
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...retryableResearchRow,
+        llm_reasoning_json: {
+          status: 'succeeded',
+          warnings: [],
+        },
+      }));
       const app = createApp(dataAccess);
 
       const response = await request(app)
@@ -1918,12 +1931,10 @@ describe('data API router', () => {
 
     it('returns 422 when research has no persisted comps', async () => {
       const dataAccess = createDataAccess();
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
-        async () => ({
-          ...retryableResearchRow,
-          comps: [],
-        })
-      );
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...retryableResearchRow,
+        comps: [],
+      }));
       const app = createApp(dataAccess);
 
       const response = await request(app)
