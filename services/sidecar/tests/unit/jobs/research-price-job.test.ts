@@ -169,33 +169,46 @@ function createDataAccess(
   } = {}
 ) {
   const getByListingId = vi.fn().mockResolvedValue(listing);
+  const operationLog: string[] = [];
   const update = vi.fn().mockImplementation(async (_listingId: string, changes: { price?: number }) =>
-    createListing({
-      ...(listing ?? createListing()),
-      price: changes.price ?? listing?.price ?? null,
-    })
+    {
+      operationLog.push('listing.update');
+      return createListing({
+        ...(listing ?? createListing()),
+        price: changes.price ?? listing?.price ?? null,
+      });
+    }
   );
-  const create = vi.fn().mockResolvedValue(createResearchRow());
+  const create = vi.fn().mockImplementation(async () => {
+    operationLog.push('research.create');
+    return createResearchRow();
+  });
   const markFailed = vi.fn().mockImplementation(async (input) =>
-    createResearchRow({
-      error_code: input.error_code,
-      error_message: input.error_message,
-      id: input.id,
-      raw_result_json: input.raw_result_json,
-      status: 'failed',
-    })
+    {
+      operationLog.push('research.markFailed');
+      return createResearchRow({
+        error_code: input.error_code,
+        error_message: input.error_message,
+        id: input.id,
+        raw_result_json: input.raw_result_json,
+        status: 'failed',
+      });
+    }
   );
   const markSucceeded = vi.fn().mockImplementation(async (input) =>
-    createResearchRow({
-      confidence: input.confidence,
-      id: input.id,
-      median_sold_price: input.median_sold_price,
-      query: input.query,
-      raw_result_json: input.raw_result_json,
-      sold_count: input.sold_count,
-      status: 'succeeded',
-      suggested_price: input.suggested_price,
-    })
+    {
+      operationLog.push('research.markSucceeded');
+      return createResearchRow({
+        confidence: input.confidence,
+        id: input.id,
+        median_sold_price: input.median_sold_price,
+        query: input.query,
+        raw_result_json: input.raw_result_json,
+        sold_count: input.sold_count,
+        status: 'succeeded',
+        suggested_price: input.suggested_price,
+      });
+    }
   );
   const resolveForTask = vi.fn().mockImplementation(async () => {
     if (options.aiModelRouteError) {
@@ -257,6 +270,7 @@ function createDataAccess(
       resolveForTask,
       updateAppSettings,
       update,
+      operationLog,
     },
   };
 }
@@ -352,6 +366,11 @@ describe('priceListingNow', () => {
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, {
       price: result.suggestedPrice,
     });
+    expect(spies.operationLog).toEqual([
+      'research.create',
+      'research.markSucceeded',
+      'listing.update',
+    ]);
     expect(result).toMatchObject({
       acceptedCompCount: expect.any(Number),
       listingPriceResearchUpdated: true,
@@ -360,6 +379,52 @@ describe('priceListingNow', () => {
       suggestedPrice: expect.any(Number),
     });
     expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('does not update listing price when markSucceeded rejects and throws safely', async () => {
+    const listing = createListing({ price: 19.99 });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const fetchSoldComps = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+      rawResult: {
+        actorId: 'actor-123',
+      },
+      soldComps: [
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(26, '2026-05-29T10:00:00.000Z', '2023 Panini Prizm RC Victor Wembanyama #136'),
+      ],
+    });
+    spies.markSucceeded.mockImplementationOnce(async () => {
+      throw new Error('write succeeded row failed');
+    });
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        createPricingProvider: () =>
+          ({
+            fetchSoldComps,
+            name: 'apify',
+          }) as never,
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      message: 'write succeeded row failed',
+    });
+
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+    expect(spies.update).not.toHaveBeenCalled();
+    expect(spies.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+        error_message: 'write succeeded row failed',
+      })
+    );
   });
 
   it('uses persisted pricing modifier options when building provider query', async () => {
@@ -411,6 +476,56 @@ describe('priceListingNow', () => {
           excludeGraded: false,
           excludeVariants: true,
         },
+      })
+    );
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('rejects %s deterministic suggested prices before research success or listing update', async (_label, value) => {
+    const listing = createListing({ price: 19.99 });
+    const { dataAccess, spies } = createDataAccess(listing);
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        createPricingProvider: () =>
+          ({
+            fetchSoldComps: vi.fn().mockResolvedValue({
+              fetchedAt: '2026-06-12T10:05:00.000Z',
+              provider: 'fixture',
+              query: 'query',
+              rawResult: {},
+              soldComps: [
+                createVictorComp(20, '2026-06-01T10:00:00.000Z'),
+                createVictorComp(22, '2026-05-31T10:00:00.000Z'),
+              ],
+            }),
+            name: 'fixture',
+          }) as never,
+        computeStats: vi.fn(() => ({
+          currency: 'USD',
+          deterministicSuggestedPrice: value,
+          highSoldPrice: 22,
+          ignored: [],
+          lowSoldPrice: 20,
+          medianSoldPrice: 21,
+          soldCount: 2,
+        })),
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+    });
+
+    expect(spies.markSucceeded).not.toHaveBeenCalled();
+    expect(spies.update).not.toHaveBeenCalled();
+    expect(spies.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
       })
     );
   });

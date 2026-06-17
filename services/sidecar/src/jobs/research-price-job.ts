@@ -158,6 +158,28 @@ function normalizeSuggestedPrice(value: unknown): number | null {
   return Number.isSafeInteger(cents) ? normalized : null;
 }
 
+function assertValidSuggestedPrice(
+  listingId: string,
+  value: unknown,
+  source: 'deterministic' | 'final'
+): number {
+  const normalized = normalizeSuggestedPrice(value);
+
+  if (normalized !== null) {
+    return normalized;
+  }
+
+  const detail =
+    source === 'deterministic'
+      ? 'a deterministic suggested price'
+      : 'a valid final suggested price';
+
+  throw buildResearchPriceError(
+    JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+    `Listing "${listingId}" did not produce ${detail}.`
+  );
+}
+
 function asJson(value: unknown): Json {
   return value as Json;
 }
@@ -702,6 +724,39 @@ async function markResearchFailedSafely(
     });
 }
 
+async function persistSucceededResearch(
+  dataAccess: SidecarDataAccess,
+  input: {
+    confidence: string;
+    comps: Json;
+    llmPriceExplanation: string | null;
+    llmReasoningJson: Json;
+    llmRejectedCompIds: Json;
+    medianSoldPrice: number;
+    pricingModelName: string | null;
+    query: string;
+    rawResultJson: Json;
+    researchId: string;
+    soldCount: number;
+    suggestedPrice: number;
+  }
+): Promise<void> {
+  await dataAccess.listingPriceResearch.markSucceeded({
+    comps: input.comps,
+    confidence: input.confidence,
+    id: input.researchId,
+    llm_price_explanation: input.llmPriceExplanation,
+    llm_reasoning_json: input.llmReasoningJson,
+    llm_rejected_comp_ids: input.llmRejectedCompIds,
+    median_sold_price: input.medianSoldPrice,
+    pricing_model_name: input.pricingModelName,
+    query: input.query,
+    raw_result_json: input.rawResultJson,
+    sold_count: input.soldCount,
+    suggested_price: input.suggestedPrice,
+  });
+}
+
 export async function priceListingNow(
   listingId: string,
   dependencies: ResearchPriceJobDependencies,
@@ -784,14 +839,11 @@ export async function priceListingNow(
       rawCompCount,
       selectedProviderMode,
     });
-    const deterministicSuggestedPrice = normalizeSuggestedPrice(stats.deterministicSuggestedPrice);
-
-    if (deterministicSuggestedPrice === null) {
-      throw buildResearchPriceError(
-        JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
-        `Listing "${listingId}" did not produce a deterministic suggested price.`
-      );
-    }
+    const deterministicSuggestedPrice = assertValidSuggestedPrice(
+      listingId,
+      stats.deterministicSuggestedPrice,
+      'deterministic'
+    );
 
     const confidence = runComputeConfidence({
       comps: normalized.comps,
@@ -871,33 +923,30 @@ export async function priceListingNow(
       });
     }
 
-    const finalSuggestedPrice = normalizeSuggestedPrice(
-      llmConditionAdjustedPrice ?? deterministicSuggestedPrice
+    const finalSuggestedPrice = assertValidSuggestedPrice(
+      listingId,
+      llmConditionAdjustedPrice ?? deterministicSuggestedPrice,
+      'final'
     );
 
-    if (finalSuggestedPrice === null) {
-      throw buildResearchPriceError(
-        JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
-        `Listing "${listingId}" did not produce a valid final suggested price.`
-      );
-    }
-
-    await dependencies.dataAccess.listingPriceResearch.markSucceeded({
-      comps: asJson(normalized.comps),
-      id: research.id,
-      llm_price_explanation: llmPriceExplanation,
-      llm_reasoning_json: llmReasoningJson,
-      llm_rejected_comp_ids: llmRejectedCompIds,
-      median_sold_price: stats.medianSoldPrice,
-      suggested_price: finalSuggestedPrice,
-      pricing_model_name: pricingModelName,
-      confidence: confidence.confidence,
-      query: providerResult.query,
-      raw_result_json: pricingRawResult,
-      sold_count: stats.soldCount,
-    });
+    await persistSucceededResearch(
+      dependencies.dataAccess,
+      {
+        comps: asJson(normalized.comps),
+        confidence: confidence.confidence,
+        llmPriceExplanation,
+        llmReasoningJson,
+        llmRejectedCompIds,
+        medianSoldPrice: stats.medianSoldPrice,
+        pricingModelName,
+        query: providerResult.query,
+        rawResultJson: pricingRawResult,
+        researchId: research.id,
+        soldCount: stats.soldCount,
+        suggestedPrice: finalSuggestedPrice,
+      }
+    );
     researchSucceeded = true;
-
     const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
       price: finalSuggestedPrice,
     });
