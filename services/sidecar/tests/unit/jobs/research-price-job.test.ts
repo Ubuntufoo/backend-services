@@ -1525,6 +1525,101 @@ describe('priceListingNow', () => {
     );
   });
 
+  it('persists rich retryable LLM failure diagnostics without secrets', async () => {
+    const listing = createListing({
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '12',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1952',
+      },
+      title: '1952 Topps #12 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [
+        createNormalizedComp('comp-1', '1952 Topps #12 Sample Player VG-EX', 5.89),
+        createNormalizedComp('comp-2', '1952 Topps #12 Sample Player VG/EX', 5.89),
+        createNormalizedComp('comp-3', '1952 Topps #12 Sample Player low grade', 4.7),
+        createNormalizedComp('comp-4', '1952 Topps #12 Sample Player EX', 6.1),
+      ],
+      rejected: [],
+    });
+    const executeModel = vi.fn().mockRejectedValue(
+      new Error('Pricing request failed. apiKey=secret-value', {
+        cause: new Error('Model overloaded due to high demand. authorization=Bearer test-token', {
+          cause: {
+            code: 503,
+            message: 'Service unavailable. authorization: Bearer nested-token',
+            reason: 'HIGH_DEMAND',
+            status: 'UNAVAILABLE',
+          },
+        }),
+      })
+    );
+    const productionAnalyst = createProductionPricingAnalyst({
+      dataAccess,
+      executeModel,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1952 Topps #12 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
+              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
+              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: productionAnalyst,
+    });
+
+    expect(result.suggestedPrice).toBe(5.89);
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm_reasoning_json: expect.objectContaining({
+          analyst: 'google_pricing_reasoning',
+          fallback: 'llm_analysis_failed',
+          failure: expect.objectContaining({
+            errorStatus: 'UNAVAILABLE',
+            modelName: 'gemma-4-31b-it',
+            provider: 'google',
+            reason: 'HIGH_DEMAND',
+            retryable: true,
+            statusCode: 503,
+          }),
+          modelName: 'gemma-4-31b-it',
+          status: 'failed',
+        }),
+        pricing_model_name: 'gemma-4-31b-it',
+        suggested_price: 5.89,
+      })
+    );
+
+    const markSucceededInput = spies.markSucceeded.mock.calls.at(-1)?.[0];
+    const persistedReasoning = JSON.stringify(markSucceededInput?.llm_reasoning_json);
+
+    expect(persistedReasoning).not.toContain('secret-value');
+    expect(persistedReasoning).not.toContain('test-token');
+    expect(persistedReasoning).not.toContain('nested-token');
+    expect(persistedReasoning).not.toContain('authorization');
+    expect(persistedReasoning).not.toContain('apiKey');
+  });
+
   it('uses persisted default soldcomps mode when app settings row missing', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(listing, null);

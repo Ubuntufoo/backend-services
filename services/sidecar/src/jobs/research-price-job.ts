@@ -25,6 +25,8 @@ import {
   type ConditionAdjustmentSummary,
   type LlmPricingPromptFactKey,
   type LlmPricingPromptFacts,
+  type PricingAnalystFailureCause,
+  type PricingAnalystFailureDiagnostics,
   type LivePricingProviderMode,
   type PricingAnalyst,
   type PricingAnalystInput,
@@ -177,6 +179,17 @@ function assertValidSuggestedPrice(
   throw buildResearchPriceError(
     JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
     `Listing "${listingId}" did not produce ${detail}.`
+  );
+}
+
+function assertMedianSoldPrice(listingId: string, value: number | null): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  throw buildResearchPriceError(
+    JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+    `Listing "${listingId}" did not produce a valid median sold price.`
   );
 }
 
@@ -457,13 +470,44 @@ function buildFailedLlmReasoningJson(
   error: unknown,
   modelName?: string | null
 ): Json {
+  const failure = buildLlmFailureDiagnostics(error, modelName);
+
   return asJson({
     analyst: analyst.name,
     error: asCompactErrorMessage(error),
     fallback: fallbackReason,
+    failure,
     ...(modelName ? { modelName } : {}),
     status: 'failed',
   });
+}
+
+function buildLlmFailureDiagnostics(
+  error: unknown,
+  modelName?: string | null
+): PricingAnalystFailureDiagnostics {
+  if (error instanceof ProductionPricingAnalystError && error.failureDiagnostics) {
+    return error.failureDiagnostics;
+  }
+
+  const fallbackCause = buildFallbackFailureCause(error);
+
+  return {
+    causes: [fallbackCause],
+    ...(fallbackCause.errorCode ? { errorCode: fallbackCause.errorCode } : {}),
+    ...(fallbackCause.errorStatus ? { errorStatus: fallbackCause.errorStatus } : {}),
+    ...(modelName ? { modelName } : {}),
+    ...(fallbackCause.reason ? { reason: fallbackCause.reason } : {}),
+    retryable: false,
+    ...(fallbackCause.statusCode !== undefined ? { statusCode: fallbackCause.statusCode } : {}),
+  };
+}
+
+function buildFallbackFailureCause(error: unknown): PricingAnalystFailureCause {
+  return {
+    message: asCompactErrorMessage(error),
+    ...(error instanceof Error ? { name: error.name } : {}),
+  };
 }
 
 function buildSkippedLlmReasoningJson(fallbackReason: string, conditionAdjustment: ConditionAdjustmentSummary): Json {
@@ -928,6 +972,7 @@ export async function priceListingNow(
       llmConditionAdjustedPrice ?? deterministicSuggestedPrice,
       'final'
     );
+    const medianSoldPrice = assertMedianSoldPrice(listingId, stats.medianSoldPrice);
 
     await persistSucceededResearch(
       dependencies.dataAccess,
@@ -937,7 +982,7 @@ export async function priceListingNow(
         llmPriceExplanation,
         llmReasoningJson,
         llmRejectedCompIds,
-        medianSoldPrice: stats.medianSoldPrice,
+        medianSoldPrice,
         pricingModelName,
         query: providerResult.query,
         rawResultJson: pricingRawResult,

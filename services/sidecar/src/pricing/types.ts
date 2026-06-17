@@ -213,6 +213,26 @@ export interface PricingAnalystResult {
   rawOutput: unknown;
 }
 
+export interface PricingAnalystFailureCause {
+  errorCode?: string;
+  errorStatus?: string;
+  message: string;
+  name?: string;
+  reason?: string;
+  statusCode?: number;
+}
+
+export interface PricingAnalystFailureDiagnostics {
+  causes: PricingAnalystFailureCause[];
+  errorCode?: string;
+  errorStatus?: string;
+  modelName?: string;
+  provider?: string;
+  reason?: string;
+  retryable: boolean;
+  statusCode?: number;
+}
+
 export interface PricingAnalyst {
   readonly name: string;
   analyze(input: PricingAnalystInput): Promise<PricingAnalystResult>;
