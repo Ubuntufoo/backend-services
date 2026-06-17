@@ -94,6 +94,16 @@ const PARALLEL_TERMS = [
   'Purple',
   'Orange',
 ] as const;
+const PARALLEL_PLACEHOLDER_VALUES = new Set([
+  'base',
+  'base set',
+  'n/a',
+  'na',
+  'none',
+  'not applicable',
+  'standard',
+  'unknown',
+]);
 const GRADE_PATTERN = /\b(PSA|BGS|SGC|CGC|CSG|TAG|HGA)\s*(10|[1-9](?:\.\d)?)\b/i;
 const TITLE_CARD_NUMBER_PATTERNS = [
   /\bCard\s*#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
@@ -303,6 +313,10 @@ function getParallelSignals(itemSpecifics: PricingProviderInput['itemSpecifics']
 
   for (const key of PARALLEL_FACET_ITEM_SPECIFIC_KEYS) {
     for (const value of normalizeSpecificValue(itemSpecifics?.[key])) {
+      if (isPlaceholderParallelValue(value)) {
+        continue;
+      }
+
       const extracted = extractParallelTerms(value);
       if (extracted.length === 0) {
         terms.add(value);
@@ -316,6 +330,10 @@ function getParallelSignals(itemSpecifics: PricingProviderInput['itemSpecifics']
   }
 
   for (const value of getSpecificValues(itemSpecifics, PARALLEL_ITEM_SPECIFIC_KEYS)) {
+    if (isPlaceholderParallelValue(value)) {
+      continue;
+    }
+
     for (const term of extractParallelTerms(value)) {
       terms.add(term);
     }
@@ -330,6 +348,11 @@ function getParallelSignals(itemSpecifics: PricingProviderInput['itemSpecifics']
 
 function extractParallelTerms(value: string): string[] {
   return PARALLEL_TERMS.filter((term) => includesWholeTerm(value, term));
+}
+
+function isPlaceholderParallelValue(value: string): boolean {
+  const normalized = value.trim().replace(/\s+/g, ' ').toLowerCase();
+  return PARALLEL_PLACEHOLDER_VALUES.has(normalized);
 }
 
 function includesWholeTerm(source: string, candidate: string): boolean {

@@ -85,6 +85,28 @@ describe('SoldComps pricing provider', () => {
     );
   });
 
+  it('keeps placeholder parallel facets out of SoldComps keyword', () => {
+    expect(
+      buildSoldCompsRequestParams({
+        ...baseInput,
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '125',
+          'Insert Set': 'N/A',
+          Manufacturer: 'Topps',
+          'Parallel/Variety': 'Base',
+          Player: 'John Hadl',
+          Set: 'Topps Football',
+          Year: '1967',
+        },
+        listingId: 'Single-000014',
+        title: 'John Hadl 1967 Topps #125',
+      }).keyword
+    ).toBe(
+      'John Hadl 1967 Topps Football #125 -pick -choose -complete -lot -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+    );
+  });
+
   it('does not append raw-card grading exclusions for graded targets', () => {
     expect(buildSoldCompsRequestParams(baseInput).keyword).toBe('Johnny Riddle 1955 Topps #98 graded');
   });

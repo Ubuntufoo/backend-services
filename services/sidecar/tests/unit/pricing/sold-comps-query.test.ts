@@ -58,6 +58,28 @@ describe('buildSoldCompsQuery', () => {
     ).toBe('Victor Wembanyama 2023 Panini Prizm #136 Silver');
   });
 
+  it('drops placeholder parallel facets like Base and N/A', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '125',
+          'Insert Set': 'N/A',
+          Manufacturer: 'Topps',
+          'Parallel/Variety': 'Base',
+          Player: 'John Hadl',
+          Set: 'Topps Football',
+          Year: '1967',
+        },
+        listingId: 'Single-000014',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'John Hadl 1967 Topps #125',
+      })
+    ).toBe('John Hadl 1967 Topps Football #125');
+  });
+
   it('uses explicit title card-number markers when specifics omit card number', () => {
     expect(
       buildSoldCompsQuery({
