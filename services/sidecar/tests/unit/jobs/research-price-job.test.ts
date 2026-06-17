@@ -935,7 +935,7 @@ describe('priceListingNow', () => {
             rejectedCount: 1,
             rejected: expect.arrayContaining([
               expect.objectContaining({
-                reason: 'exact_set_mismatch',
+                reason: 'exact_card_number_mismatch',
                 title: '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
               }),
             ]),

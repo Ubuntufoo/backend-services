@@ -1,3 +1,4 @@
+import { extractSeasonStartYear } from './season-range.js';
 import type { NormalizeSoldCompsContext, PricingProviderInput } from './types.js';
 
 const PLAYER_ITEM_SPECIFIC_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
@@ -42,30 +43,6 @@ const GENERIC_SET_FALLBACK_PHRASES = new Set([
   'topps',
   'upper deck',
 ]);
-const CONFLICTING_SET_LINE_TOKENS = new Set([
-  'archives',
-  'bowman',
-  'chrome',
-  'finest',
-  'flashback',
-  'gallery',
-  'heritage',
-  'metal',
-  'mosaic',
-  'optic',
-  'platinum',
-  'prizm',
-  'refractor',
-  'select',
-  'showcase',
-  'stadium',
-  'studio',
-  'tiffany',
-  'traded',
-  'ultra',
-  'update',
-]);
-
 export interface ExactCardTitleTarget {
   cardNumber: string | null;
   parallelPhrases: string[];
@@ -123,7 +100,7 @@ export function getExactCardTitleMismatchReason(
   }
 
   if (target.cardNumber) {
-    const extractedCardNumber = extractExplicitCardNumber(title);
+    const extractedCardNumber = extractTitleCardNumber(title, target);
     if (extractedCardNumber && extractedCardNumber !== target.cardNumber) {
       return EXACT_CARD_REJECTION_REASONS.cardNumberMismatch;
     }
@@ -188,8 +165,9 @@ function normalizePhrase(value: string): string | null {
 }
 
 function normalizeYear(value: string): string | null {
-  const match = value.trim().match(/^(19\d{2}|20\d{2})$/);
-  return match?.[1] ?? null;
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(19\d{2}|20\d{2})$/);
+  return match?.[1] ?? extractSeasonStartYear(trimmed) ?? null;
 }
 
 function normalizeCardNumber(value: string): string | null {
@@ -222,6 +200,25 @@ function extractExplicitCardNumber(title: string): string | null {
   }
 
   return null;
+}
+
+function extractTitleCardNumber(title: string, target: ExactCardTitleTarget): string | null {
+  const explicitCardNumber = extractExplicitCardNumber(title);
+  if (explicitCardNumber) {
+    return explicitCardNumber;
+  }
+
+  const yearCandidates = new Set(getTitleYearCandidates(title));
+  const cardNumberCandidates = tokenizeTitle(title)
+    .map((token) => normalizeCardNumber(token))
+    .filter((token): token is string => token !== null)
+    .filter((token) => !yearCandidates.has(token));
+
+  if (target.cardNumber && cardNumberCandidates.includes(target.cardNumber)) {
+    return target.cardNumber;
+  }
+
+  return cardNumberCandidates[0] ?? null;
 }
 
 function stripExplicitCardNumberSpans(title: string): string {
@@ -279,16 +276,12 @@ function matchesRelaxedGenericSetIdentity(
   tokens: string[],
   target: ExactCardTitleTarget
 ): boolean {
-  if (!target.setPhrase || !target.cardNumber || !target.year) {
+  if (!target.setPhrase || !target.year) {
     return false;
   }
 
   const targetTokens = compactSetTokens(tokenizeTitle(target.setPhrase));
   if (!isGenericSetFallbackEligible(targetTokens)) {
-    return false;
-  }
-
-  if (extractExplicitCardNumber(title) !== target.cardNumber) {
     return false;
   }
 
@@ -301,10 +294,7 @@ function matchesRelaxedGenericSetIdentity(
     return false;
   }
 
-  const playerTokens = target.playerPhrase ? tokenizeTitle(target.playerPhrase) : [];
-  return phraseIndexes.some((startIndex) =>
-    !hasConflictingSetLineTokens(tokens.slice(startIndex + targetTokens.length), playerTokens)
-  );
+  return true;
 }
 
 function isGenericSetFallbackEligible(targetTokens: string[]): boolean {
@@ -313,24 +303,6 @@ function isGenericSetFallbackEligible(targetTokens: string[]): boolean {
   }
 
   return GENERIC_SET_FALLBACK_PHRASES.has(targetTokens.join(' '));
-}
-
-function hasConflictingSetLineTokens(nextTokens: string[], playerTokens: string[]): boolean {
-  for (const token of nextTokens) {
-    if (
-      token === playerTokens[0] ||
-      /^\d{4}$/.test(token) ||
-      /^[a-z]{0,4}\d{1,4}[a-z]{0,4}$/i.test(token)
-    ) {
-      return false;
-    }
-
-    if (CONFLICTING_SET_LINE_TOKENS.has(token)) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 function compactSetTokens(tokens: string[]): string[] {

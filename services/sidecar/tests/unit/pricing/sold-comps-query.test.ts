@@ -20,7 +20,7 @@ describe('buildSoldCompsQuery', () => {
   };
 
   it('builds canonical query for graded single-card listing', () => {
-    expect(buildSoldCompsQuery(baseInput)).toBe('Victor Wembanyama 2023 Panini Prizm #136 PSA 10');
+    expect(buildSoldCompsQuery(baseInput)).toBe('Victor Wembanyama 2023 Panini Prizm 136 PSA 10');
   });
 
   it('preserves Johnny Riddle canonical query exactly', () => {
@@ -40,7 +40,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
       })
-    ).toBe('Johnny Riddle 1955 Topps #98');
+    ).toBe('Johnny Riddle 1955 Topps 98');
   });
 
   it('strips noisy sport terms from set values', () => {
@@ -61,7 +61,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: '1966 Topps Football #125 John Hadl',
       })
-    ).toBe('John Hadl 1966 Topps #125');
+    ).toBe('John Hadl 1966 Topps 125');
   });
 
   it('strips noisy role fragments instead of mining title leftovers', () => {
@@ -81,7 +81,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
       })
-    ).toBe('Johnny Riddle 1955 Topps #98');
+    ).toBe('Johnny Riddle 1955 Topps 98');
   });
 
   it('strips noisy position fragments from structured product values', () => {
@@ -101,7 +101,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Darryl Strawberry 1997 Fleer #179 3rd Base',
       })
-    ).toBe('Darryl Strawberry 1997 Fleer #179');
+    ).toBe('Darryl Strawberry 1997 Fleer 179');
   });
 
   it('normalizes manufacturer and set league suffixes while preserving real multi-token sets', () => {
@@ -121,7 +121,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Michael Jordan 1991 Hoops NBA #536',
       })
-    ).toBe('Michael Jordan 1991 Hoops #536');
+    ).toBe('Michael Jordan 1991 Hoops 536');
     expect(
       buildSoldCompsQuery({
         categoryId: '261328',
@@ -138,7 +138,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Ken Griffey Jr. 1994 Fleer Ultra #45',
       })
-    ).toBe('Ken Griffey Jr. 1994 Fleer Ultra #45');
+    ).toBe('Ken Griffey Jr. 1994 Fleer Ultra 45');
   });
 
   it('uses explicit title card-number markers when specifics omit card number', () => {
@@ -153,12 +153,12 @@ describe('buildSoldCompsQuery', () => {
         },
         title: 'Johnny Riddle 1955 Topps Card No. 98 St. Louis Cardinals Coach',
       })
-    ).toBe('Johnny Riddle 1955 Topps #98');
+    ).toBe('Johnny Riddle 1955 Topps 98');
   });
 
   it.each([
-    ['1993-94 NBA Hoops Michael Jordan #536', 'Michael Jordan 1993 Hoops #536'],
-    ['92-93 NBA Hoops Michael Jordan #536', 'Michael Jordan 1992 Hoops #536'],
+    ['1993-94 NBA Hoops Michael Jordan #536', 'Michael Jordan 1993 Hoops 536'],
+    ['92-93 NBA Hoops Michael Jordan #536', 'Michael Jordan 1992 Hoops 536'],
   ])('normalizes season range in query title "%s"', (title, expectedQuery) => {
     expect(
       buildSoldCompsQuery({
@@ -231,6 +231,23 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
       })
-    ).toBe('Johnny Riddle 1955 Topps #98');
+    ).toBe('Johnny Riddle 1955 Topps 98');
+  });
+
+  it('uses bare card number token for SoldComps exact-card query broadening', () => {
+    expect(
+      buildSoldCompsQuery({
+        ...baseInput,
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '20',
+          Manufacturer: 'Topps',
+          Player: 'Pete Maravich',
+          Set: 'Topps',
+          Year: '1977',
+        },
+        title: 'Pete Maravich 1977 Topps #20',
+      })
+    ).toBe('Pete Maravich 1977 Topps 20');
   });
 });

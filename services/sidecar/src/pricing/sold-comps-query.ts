@@ -319,7 +319,7 @@ function sanitizeCardNumber(value: string | undefined): string | undefined {
 }
 
 function formatCardNumber(value: string | undefined): string | undefined {
-  return value ? `#${value.replace(/^#+/, '')}` : undefined;
+  return value ? value.replace(/^#+/, '') : undefined;
 }
 
 function includesWholeTerm(source: string, candidate: string): boolean {

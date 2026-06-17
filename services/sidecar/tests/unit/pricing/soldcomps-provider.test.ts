@@ -87,7 +87,7 @@ describe('SoldComps pricing provider', () => {
         },
       }).keyword
     ).toBe(
-      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
+      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
   });
 
@@ -108,12 +108,12 @@ describe('SoldComps pricing provider', () => {
         title: '1966 Topps Football #125 John Hadl',
       }).keyword
     ).toBe(
-      'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
+      'John Hadl 1966 Topps 125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
   });
 
   it('does not append raw-card grading exclusions for graded targets', () => {
-    expect(buildSoldCompsRequestParams(baseInput).keyword).toBe('Johnny Riddle 1955 Topps #98 graded');
+    expect(buildSoldCompsRequestParams(baseInput).keyword).toBe('Johnny Riddle 1955 Topps 98 graded');
   });
 
   it('keeps rookie, RC, and set-break comps allowed in raw SoldComps keywords', () => {
@@ -177,7 +177,7 @@ describe('SoldComps pricing provider', () => {
           Year: '1997',
         },
       }).keyword
-    ).toBe('Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot');
+    ).toBe('Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot');
   });
 
   it('sends bearer-auth request against v1 scrape endpoint', async () => {
@@ -214,7 +214,7 @@ describe('SoldComps pricing provider', () => {
       })
     );
     const requestUrl = String(fetch.mock.calls[0]?.[0]);
-    expect(requestUrl).toContain('keyword=Johnny+Riddle+1955+Topps+%2398');
+    expect(requestUrl).toContain('keyword=Johnny+Riddle+1955+Topps+98');
     expect(requestUrl).toContain('count=50');
     expect(requestUrl).toContain('page=1');
     expect(requestUrl).toContain('ebaySite=ebay.com');
@@ -250,7 +250,7 @@ describe('SoldComps pricing provider', () => {
     });
 
     const requestUrl = String(fetch.mock.calls[0]?.[0]);
-    expect(requestUrl).toContain('keyword=Darryl+Strawberry+1997+Fleer+%23179');
+    expect(requestUrl).toContain('keyword=Darryl+Strawberry+1997+Fleer+179');
     expect(requestUrl).toContain('-pick');
     expect(requestUrl).toContain('-choose');
     expect(requestUrl).toContain('-complete');

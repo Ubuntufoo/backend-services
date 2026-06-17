@@ -342,8 +342,10 @@ describe('normalizeSoldComps', () => {
 
   it.each([
     '1977 TOPPS BSKT. #20 PETE MARAVICH',
+    '1977 Topps 20 Pete Maravich',
     'Pete Maravich #20 1977 Topps New Orleans Jazz Basketball Card NBA NM',
     '1977-78 Topps BSKB - #20 Pete Maravich/Jazz G/VG',
+    '1977-1978 Topps 20 Pete Maravich',
     'Pete Maravich 1977 Topps All-Star #20 HOF',
     '1977-78 Topps White Backs #20 Pete Maravich New Orleans Jazz',
     '1977-78 Topps NBA #20 Pete Maravich New Orleans Jazz Hawks HOF',
@@ -367,7 +369,7 @@ describe('normalizeSoldComps', () => {
   it.each([
     ['1984 Fleer - Darryl Strawberry #599 (RC)', 'exact_year_mismatch'],
     ['1996 Fleer - Darryl Strawberry #198', 'exact_year_mismatch'],
-    ['1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card', 'exact_set_mismatch'],
+    ['1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card', 'exact_card_number_mismatch'],
     ['1987 Fleer Magic Mets SuperStar Special #629 Mets Carter Gooden Strawberry', 'exact_player_mismatch'],
     ['1997 Donruss Darryl Strawberry #261 New York Yankees', 'exact_set_mismatch'],
     ['1995 Ultra #244 Darryl Strawberry San Francisco Giants', 'exact_set_mismatch'],
@@ -381,6 +383,7 @@ describe('normalizeSoldComps', () => {
   it.each([
     '1997 Fleer Darryl Strawberry #179',
     '1997 Fleer Darryl Strawberry',
+    '1997 Fleer Ultra Darryl Strawberry #179',
     'Fleer Darryl Strawberry #179',
     '1997 Fleer Set Break #179 Darryl Strawberry',
     '1997 Fleer RC Darryl Strawberry #179',
@@ -425,12 +428,14 @@ describe('normalizeSoldComps', () => {
     expect(normalized.comps[0]?.title).toBe(title);
   });
 
-  it('rejects unrelated product-line suffix despite missing parallel target', () => {
-    const title = '1997 Fleer Ultra Darryl Strawberry #179';
+  it.each([
+    '1997 Fleer Ultra Darryl Strawberry #261',
+    '1997 Fleer Ultra Darryl Strawberry 261',
+  ])('rejects conflicting card number even when generic manufacturer expansion matches "%s"', (title) => {
     const normalized = normalizeSoldComps([buildRawComp({ title })], buildDarrylStrawberryContext());
 
     expect(normalized.rejected).toEqual([
-      { index: 0, reason: 'exact_set_mismatch', title },
+      { index: 0, reason: 'exact_card_number_mismatch', title },
     ]);
   });
 

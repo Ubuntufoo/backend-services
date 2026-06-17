@@ -79,7 +79,7 @@ describe('Apify pricing provider', () => {
           count: 9,
           ebaySite: 'ebay.com',
           itemCondition: 'used',
-          keywords: ['Victor Wembanyama 2023 Panini Prizm #136 PSA 10'],
+          keywords: ['Victor Wembanyama 2023 Panini Prizm 136 PSA 10'],
           sortOrder: 'endedRecently',
         },
         diagnosticContext: expect.objectContaining({
@@ -107,7 +107,7 @@ describe('Apify pricing provider', () => {
       conditionId: '4000',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 PSA 10']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm 136 PSA 10']);
     expect(actorInput.keywords[0]).not.toContain('category:183050');
     expect(actorInput.keywords[0]).not.toContain('condition:4000');
   });
@@ -129,7 +129,7 @@ describe('Apify pricing provider', () => {
     const actorInput = buildApifyActorInput(input);
 
     expect(actorInput.keywords).toEqual([
-      'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      'John Hadl 1966 Topps 125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
     ]);
   });
 
@@ -165,7 +165,7 @@ describe('Apify pricing provider', () => {
     });
 
     expect(actorInput.keywords).toEqual([
-      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
     ]);
   });
 
@@ -189,7 +189,7 @@ describe('Apify pricing provider', () => {
     });
 
     expect(actorInput.keywords).toEqual([
-      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot',
+      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot',
     ]);
   });
 
@@ -202,7 +202,7 @@ describe('Apify pricing provider', () => {
       },
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 PSA 10']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm 136 PSA 10']);
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
@@ -212,13 +212,13 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 graded']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm 136 graded']);
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
   it.each([
-    ['SGC', '7', 'Victor Wembanyama 2023 Panini Prizm #136 SGC 7'],
-    ['BGS', '9.5', 'Victor Wembanyama 2023 Panini Prizm #136 BGS 9.5'],
+    ['SGC', '7', 'Victor Wembanyama 2023 Panini Prizm 136 SGC 7'],
+    ['BGS', '9.5', 'Victor Wembanyama 2023 Panini Prizm 136 BGS 9.5'],
   ])('uses structured grader+grade signal for %s %s', (grader, grade, expectedQuery) => {
     const actorInput = buildApifyActorInput({
       ...baseInput,
@@ -420,8 +420,8 @@ describe('Apify pricing provider', () => {
     );
 
     expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
-    expect(actorInput.keywords[0]?.match(/#98/g)).toHaveLength(1);
-    expect(actorInput.keywords[0]).not.toContain('98 #98');
+    expect(actorInput.keywords[0]?.match(/\b98\b/g)).toHaveLength(1);
+    expect(actorInput.keywords[0]).not.toContain('#98');
 
     await provider.fetchSoldComps(input);
 
@@ -496,10 +496,10 @@ describe('Apify pricing provider', () => {
     };
 
     expect(buildApifyActorInput(jordanInput).keywords).toEqual([
-      'Michael Jordan 1991 Hoops #536 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      'Michael Jordan 1991 Hoops 536 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
     ]);
     expect(buildApifyActorInput(strawberryInput).keywords).toEqual([
-      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
     ]);
   });
 
