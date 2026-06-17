@@ -162,9 +162,9 @@ function asJson(value: unknown): Json {
   return value as Json;
 }
 
-function sanitizePersistedPricingRawResult(value: unknown): unknown {
+function sanitizePersistedPricingRawResult(value: unknown, canonicalQuery?: string): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizePersistedPricingRawResult(entry));
+    return value.map((entry) => sanitizePersistedPricingRawResult(entry, canonicalQuery));
   }
 
   if (!isRecord(value)) {
@@ -172,6 +172,7 @@ function sanitizePersistedPricingRawResult(value: unknown): unknown {
   }
 
   const query = asNonEmptyString(value.query);
+  const nextCanonicalQuery = query ?? canonicalQuery;
   const keyword = asNonEmptyString(value.keyword);
 
   return Object.fromEntries(
@@ -180,13 +181,55 @@ function sanitizePersistedPricingRawResult(value: unknown): unknown {
         return [];
       }
 
-      if (key === 'keyword' && query && keyword === query) {
+      if (key === 'keyword' && nextCanonicalQuery && keyword === nextCanonicalQuery) {
         return [];
       }
 
-      return [[key, sanitizePersistedPricingRawResult(entry)]];
+      return [[key, sanitizePersistedPricingRawResult(entry, nextCanonicalQuery)]];
     })
   );
+}
+
+function asFiniteNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function buildPricingResearchDiagnostics(
+  providerRawResult: unknown,
+  rawCompCount: number,
+  normalized: ReturnType<typeof normalizeSoldComps>
+): Record<string, boolean | number> {
+  const providerOutput = isRecord(providerRawResult) && isRecord(providerRawResult.output)
+    ? providerRawResult.output
+    : null;
+  const providerReturnedCount =
+    asFiniteNonNegativeInteger(providerOutput?.itemCount) ??
+    (isRecord(providerRawResult)
+      ? asFiniteNonNegativeInteger(providerRawResult.returnedSoldComps)
+      : undefined) ??
+    rawCompCount;
+  const requestedCount =
+    isRecord(providerRawResult) && isRecord(providerRawResult.input) && isRecord(providerRawResult.input.request)
+      ? asFiniteNonNegativeInteger(providerRawResult.input.request.count)
+      : undefined;
+  const providerReportedTotalCount = asFiniteNonNegativeInteger(providerOutput?.totalItems);
+  const providerHasNextPage = asBoolean(providerOutput?.hasNextPage);
+
+  return Object.fromEntries(
+    Object.entries({
+      normalizationAcceptedCount: normalized.comps.length,
+      normalizationInputCount: rawCompCount,
+      normalizationRejectedCount: normalized.rejected.length,
+      providerHasNextPage,
+      providerReportedTotalCount,
+      providerReturnedCount,
+      requestedCount,
+    }).filter(([, value]) => value !== undefined)
+  ) as Record<string, boolean | number>;
 }
 
 function buildPricingResearchRawResult(
@@ -201,9 +244,12 @@ function buildPricingResearchRawResult(
 
   return asJson({
     ...(sanitizePersistedPricingRawResult(base) as Record<string, unknown>),
+    diagnostics: buildPricingResearchDiagnostics(base, rawCompCount, normalized),
     normalization: {
       acceptedCount: normalized.comps.length,
+      inputCount: rawCompCount,
       rawCount: rawCompCount,
+      rejectedCount: normalized.rejected.length,
       rejected: normalized.rejected,
     },
   });

@@ -214,23 +214,24 @@ describe('smoke apify pricing script', () => {
         categoryId: '183050',
         conditionId: '2750',
         listingId: 'Single-000123',
-        requestedCompCount: 20,
       });
 
       return {
         fetchedAt: '2026-06-11T12:05:00.000Z',
         provider: 'apify',
-        query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+        query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136 -pick -choose -complete -lot',
         rawResult: {
           actorId: 'actor-123',
           input: {
             actorInput: {
               count: 20,
-              keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
+              keywords: [
+                '2023 Panini Prizm Victor Wembanyama Rookie Card 136 -pick -choose -complete -lot',
+              ],
               listingId: 'Single-000123',
               title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
             },
-            query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+            query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136 -pick -choose -complete -lot',
           },
           output: {
             itemCount: 4,
@@ -317,9 +318,11 @@ describe('smoke apify pricing script', () => {
         input: {
           actorInput: {
             count: 20,
-            keywords: ['2023 Panini Prizm Victor Wembanyama Rookie Card 136'],
+            keywords: [
+              '2023 Panini Prizm Victor Wembanyama Rookie Card 136 -pick -choose -complete -lot',
+            ],
           },
-          query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+          query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136 -pick -choose -complete -lot',
         },
         output: {
           itemCount: 4,

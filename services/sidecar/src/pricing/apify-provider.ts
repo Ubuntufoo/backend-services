@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createLogger } from '@/utils/logger.js';
 
 import { APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
-import { buildSoldCompsQuery } from './sold-comps-query.js';
+import { buildPricingSearchQuery } from './pricing-search-query.js';
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
 const APIFY_PROVIDER_NAME = 'apify';
@@ -180,7 +180,7 @@ export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInp
     count: input.requestedCompCount ?? APIFY_SOLD_COMP_REQUEST_COUNT,
     ebaySite: 'ebay.com',
     itemCondition: 'used',
-    keywords: [buildSoldCompsQuery(input)],
+    keywords: [buildPricingSearchQuery(input)],
     sortOrder: 'endedRecently',
   };
 }

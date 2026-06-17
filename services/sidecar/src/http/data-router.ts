@@ -26,6 +26,7 @@ import {
   type EditableListingFieldsInput,
   type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
+import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options.js';
 import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow } from '@/jobs/manual-retry.js';
@@ -125,6 +126,11 @@ function sendManualRetryError(res: Response, error: unknown): void {
 }
 
 function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpdate {
+  const itemSpecifics =
+    input.pricingModifierOptions === undefined
+      ? (input.itemSpecifics as ListingUpdate['item_specifics'])
+      : (mergePricingModifierOptions(input.itemSpecifics ?? {}, input.pricingModifierOptions) as ListingUpdate['item_specifics']);
+
   return {
     capture_mode: input.captureMode,
     category_id: input.categoryId,
@@ -135,7 +141,7 @@ function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpd
     estimated_weight_oz: input.estimatedWeightOz,
     handling_days: input.handlingDays,
     image_urls: input.imageUrls,
-    item_specifics: input.itemSpecifics as ListingUpdate['item_specifics'],
+    item_specifics: itemSpecifics,
     listing_type: input.listingType,
     merchant_location_key: input.merchantLocationKey,
     package_type: input.packageType,
@@ -148,14 +154,23 @@ function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpd
 }
 
 function mapSellerEditableListingFields(
-  input: SellerEditableListingFieldsInput
+  input: SellerEditableListingFieldsInput,
+  existingItemSpecifics?: ListingUpdate['item_specifics']
 ): ListingUpdate {
+  const itemSpecifics =
+    input.pricingModifierOptions === undefined
+      ? (input.itemSpecifics as ListingUpdate['item_specifics'])
+      : (mergePricingModifierOptions(
+          input.itemSpecifics ?? existingItemSpecifics ?? {},
+          input.pricingModifierOptions
+        ) as ListingUpdate['item_specifics']);
+
   return {
     category_id: input.categoryId,
     condition_id: input.conditionId,
     condition_notes: input.conditionNotes,
     description: input.description,
-    item_specifics: input.itemSpecifics as ListingUpdate['item_specifics'],
+    item_specifics: itemSpecifics,
     price: input.price,
     seller_hints: input.sellerHints,
     title: input.title,
@@ -239,11 +254,13 @@ function warnGeminiUsageAttemptLookup(error: unknown): void {
 function buildListingInsert(input: CreateListingRequest): ListingInsert {
   const listingId = input.listingId ?? randomUUID();
   const initialWorkflowState = createIdleWorkflowState('record_created');
+  const mappedFields = mapEditableListingFields(input);
 
   return {
-    ...mapEditableListingFields(input),
+    ...mappedFields,
     image_urls: input.imageUrls ?? [],
-    item_specifics: (input.itemSpecifics ?? {}) as ListingInsert['item_specifics'],
+    item_specifics:
+      (mappedFields.item_specifics ?? input.itemSpecifics ?? {}) as ListingInsert['item_specifics'],
     listing_id: listingId,
     r2_object_keys: [],
     status: initialWorkflowState.status,
@@ -343,9 +360,25 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
+      let existingItemSpecifics: ListingUpdate['item_specifics'] | undefined;
+
+      if (body.pricingModifierOptions !== undefined) {
+        const existingListing = await getDataAccess().listings.getByListingId(params.listingId);
+
+        if (!existingListing) {
+          res.status(404).json({
+            error: 'not_found',
+            message: `Listing "${params.listingId}" was not found.`,
+          });
+          return;
+        }
+
+        existingItemSpecifics = existingListing.item_specifics as ListingUpdate['item_specifics'];
+      }
+
       const listing = await getDataAccess().listings.update(
         params.listingId,
-        mapSellerEditableListingFields(body)
+        mapSellerEditableListingFields(body, existingItemSpecifics)
       );
       res.json(listing);
     } catch (error) {

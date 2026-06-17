@@ -41,6 +41,11 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
       Player: 'Victor Wembanyama',
       Set: 'Prizm',
       Year: '2023',
+      pricingModifierOptions: {
+        excludeAutographs: true,
+        excludeGraded: true,
+        excludeVariants: false,
+      },
     },
     last_error_at: null,
     last_error_code: null,
@@ -357,6 +362,59 @@ describe('priceListingNow', () => {
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
+  it('uses persisted pricing modifier options when building provider query', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: false,
+          excludeVariants: true,
+        },
+      },
+      title: 'Darryl Strawberry 1997 Fleer #179',
+    });
+    const { dataAccess } = createDataAccess(listing);
+    const fetchSoldComps = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'soldcomps',
+      query: 'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot',
+      rawResult: {
+        fetchedAt: '2026-06-12T10:05:00.000Z',
+      },
+      soldComps: [
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179 EX'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179 NM'),
+      ],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps,
+          name: 'soldcomps',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(fetchSoldComps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: false,
+          excludeVariants: true,
+        },
+      })
+    );
+  });
+
   it('allows apify pricing mode without preflight rejection', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
@@ -529,8 +587,16 @@ describe('priceListingNow', () => {
             provider: 'apify',
             query: 'Johnny Riddle 1955 Topps #98',
             rawResult: {
-              keyword: 'Johnny Riddle 1955 Topps #98',
-              query: 'Johnny Riddle 1955 Topps #98',
+              input: {
+                query: 'Johnny Riddle 1955 Topps #98',
+                request: {
+                  count: 50,
+                  ebaySite: 'ebay.com',
+                  keyword: 'Johnny Riddle 1955 Topps #98',
+                  page: 1,
+                  sortOrder: 'endedRecently',
+                },
+              },
               output: {
                 itemCount: 5,
                 sampleTitles: [
@@ -603,9 +669,17 @@ describe('priceListingNow', () => {
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         raw_result_json: expect.objectContaining({
+          diagnostics: expect.objectContaining({
+            normalizationAcceptedCount: 3,
+            normalizationInputCount: 5,
+            normalizationRejectedCount: 2,
+            providerReturnedCount: 5,
+          }),
           normalization: expect.objectContaining({
             acceptedCount: 3,
+            inputCount: 5,
             rawCount: 5,
+            rejectedCount: 2,
             rejected: expect.arrayContaining([
               expect.objectContaining({
                 reason: 'excluded_graded_listing',
@@ -623,13 +697,33 @@ describe('priceListingNow', () => {
     );
     const markSucceededInput = spies.markSucceeded.mock.calls[0]?.[0];
     expect(markSucceededInput?.raw_result_json).toMatchObject({
+      diagnostics: {
+        normalizationAcceptedCount: 3,
+        normalizationInputCount: 5,
+        normalizationRejectedCount: 2,
+        providerReturnedCount: 5,
+      },
+      input: {
+        query: 'Johnny Riddle 1955 Topps #98',
+      },
       output: {
         itemCount: 5,
       },
-      query: 'Johnny Riddle 1955 Topps #98',
     });
     expect(markSucceededInput?.raw_result_json).not.toHaveProperty('keyword');
     expect(markSucceededInput?.raw_result_json).not.toHaveProperty('output.sampleTitles');
+    expect(markSucceededInput?.raw_result_json).toMatchObject({
+      input: {
+        query: 'Johnny Riddle 1955 Topps #98',
+        request: {
+          count: 50,
+          ebaySite: 'ebay.com',
+          page: 1,
+          sortOrder: 'endedRecently',
+        },
+      },
+    });
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.request.keyword');
   });
 
   it('persists exact-card mismatch reasons and excludes rejected comps from stats', async () => {
@@ -713,9 +807,17 @@ describe('priceListingNow', () => {
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         raw_result_json: expect.objectContaining({
+          diagnostics: expect.objectContaining({
+            normalizationAcceptedCount: 2,
+            normalizationInputCount: 3,
+            normalizationRejectedCount: 1,
+            providerReturnedCount: 3,
+          }),
           normalization: expect.objectContaining({
             acceptedCount: 2,
+            inputCount: 3,
             rawCount: 3,
+            rejectedCount: 1,
             rejected: expect.arrayContaining([
               expect.objectContaining({
                 reason: 'exact_set_mismatch',
@@ -727,6 +829,105 @@ describe('priceListingNow', () => {
         sold_count: 2,
       })
     );
+  });
+
+  it('persists provider scarcity diagnostics distinctly from normalization counts', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Number': '125',
+        Manufacturer: 'Topps',
+        Player: 'John Hadl',
+        Set: 'Topps Football',
+        Year: '1966',
+      },
+      title: '1966 Topps Football #125 John Hadl',
+    });
+    const { dataAccess, spies } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'soldcomps' })
+    );
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-17T00:38:46.631Z',
+            provider: 'soldcomps',
+            query:
+              'John Hadl 1966 Topps Football #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+            rawResult: {
+              fetchedAt: '2026-06-17T00:38:46.631Z',
+              input: {
+                query:
+                  'John Hadl 1966 Topps Football #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+                request: {
+                  count: 50,
+                  ebaySite: 'ebay.com',
+                  keyword:
+                    'John Hadl 1966 Topps Football #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+                  page: 1,
+                  sortOrder: 'endedRecently',
+                },
+              },
+              output: {
+                hasNextPage: false,
+                itemCount: 6,
+                page: 1,
+                totalItems: 6,
+              },
+            },
+            soldComps: [
+              createVictorComp(12, '2026-06-01T10:00:00.000Z', '1966 Topps Football #125 John Hadl'),
+              createVictorComp(13, '2026-05-31T10:00:00.000Z', '1966 Topps Football #125 John Hadl EX'),
+              createVictorComp(11, '2026-05-30T10:00:00.000Z', '1966 Topps Football #125 John Hadl VG'),
+              createVictorComp(10, '2026-05-29T10:00:00.000Z', '1966 Topps Football #125 John Hadl low grade'),
+              createVictorComp(14, '2026-05-28T10:00:00.000Z', '1966 Topps Football #125 John Hadl sharp'),
+              createVictorComp(9, '2026-05-27T10:00:00.000Z', '1966 Topps Football #125 John Hadl crease'),
+            ],
+          }),
+          name: 'soldcomps',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-17T00:38:46.631Z'),
+    });
+
+    const markSucceededInput = spies.markSucceeded.mock.calls[0]?.[0];
+    expect(markSucceededInput?.raw_result_json).toMatchObject({
+      diagnostics: {
+        normalizationAcceptedCount: 6,
+        normalizationInputCount: 6,
+        normalizationRejectedCount: 0,
+        providerHasNextPage: false,
+        providerReportedTotalCount: 6,
+        providerReturnedCount: 6,
+        requestedCount: 50,
+      },
+      input: {
+        query:
+          'John Hadl 1966 Topps Football #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+        request: {
+          count: 50,
+          ebaySite: 'ebay.com',
+          page: 1,
+          sortOrder: 'endedRecently',
+        },
+      },
+      normalization: {
+        acceptedCount: 6,
+        inputCount: 6,
+        rawCount: 6,
+        rejected: [],
+        rejectedCount: 0,
+      },
+      output: {
+        hasNextPage: false,
+        itemCount: 6,
+        page: 1,
+        totalItems: 6,
+      },
+    });
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.request.keyword');
   });
 
   it('uses production pricing analyst route and persists non-empty llm reasoning when analyst available', async () => {

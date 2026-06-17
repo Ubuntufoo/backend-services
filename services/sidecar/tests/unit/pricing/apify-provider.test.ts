@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ApifyPricingProviderError,
   buildApifyActorInput,
-  buildSoldCompsQuery,
+  buildPricingSearchQuery,
   createApifyPricingProvider,
   normalizeSoldComps,
   parseApifyActorOutput,
@@ -38,6 +38,11 @@ describe('Apify pricing provider', () => {
     },
     listingId: 'LIST-001',
     listingType: 'single' as const,
+    pricingModifierOptions: {
+      excludeAutographs: true,
+      excludeGraded: true,
+      excludeVariants: false,
+    },
     requestedCompCount: 9,
     title: '2023 Panini Prizm Victor Wembanyama Rookie Card PSA 10',
   };
@@ -47,7 +52,7 @@ describe('Apify pricing provider', () => {
       count: 9,
       ebaySite: 'ebay.com',
       itemCondition: 'used',
-      keywords: [buildSoldCompsQuery(baseInput)],
+      keywords: [buildPricingSearchQuery(baseInput)],
       sortOrder: 'endedRecently',
     });
   });
@@ -108,7 +113,7 @@ describe('Apify pricing provider', () => {
   });
 
   it('de-dupes repeated parallel signals across title and specifics', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
@@ -117,13 +122,14 @@ describe('Apify pricing provider', () => {
         'Parallel/Variety': 'Silver Prizm',
       },
       title: '2023 Panini Prizm Victor Wembanyama Silver Prizm Rookie Card',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136 Silver']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
-  it('does not append raw signal for conservative ungraded-card inputs', () => {
-    const actorInput = buildApifyActorInput({
+  it('uses shared raw-card exclusions for conservative ungraded-card inputs', () => {
+    const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
@@ -131,11 +137,55 @@ describe('Apify pricing provider', () => {
         'Card Condition': 'NEAR_MINT_OR_BETTER',
       },
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    };
+    const actorInput = buildApifyActorInput(input);
+
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
+    expect(actorInput.keywords[0]).toContain('-PSA');
+    expect(actorInput.keywords[0]).not.toContain('raw');
+  });
+
+  it('uses shared raw-card exclusions for Apify by default', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm #136']);
-    expect(actorInput.keywords[0]).not.toContain('PSA');
-    expect(actorInput.keywords[0]).not.toContain('raw');
+    expect(actorInput.keywords).toEqual([
+      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+    ]);
+  });
+
+  it('removes graded and autograph exclusions when listing opts out', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      pricingModifierOptions: {
+        excludeAutographs: false,
+        excludeGraded: false,
+        excludeVariants: true,
+      },
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    });
+
+    expect(actorInput.keywords).toEqual([
+      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot',
+    ]);
   });
 
   it('uses graded signal without raw when grader and grade exist', () => {
@@ -179,7 +229,7 @@ describe('Apify pricing provider', () => {
   });
 
   it('builds query without player when missing', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
@@ -189,13 +239,14 @@ describe('Apify pricing provider', () => {
         Year: '2023',
       },
       title: '2023 Panini Prizm Rookie Card',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['2023 Panini Prizm #136']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
   it('omits malformed card number fragments when missing', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
@@ -205,14 +256,15 @@ describe('Apify pricing provider', () => {
         Year: '2023',
       },
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
     expect(actorInput.keywords[0]).not.toContain('# ');
   });
 
   it('uses explicit title card-number markers when specifics omit card number', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
@@ -221,13 +273,14 @@ describe('Apify pricing provider', () => {
         Year: '1955',
       },
       title: 'Johnny Riddle 1955 Topps Card No. 98 St. Louis Cardinals Coach',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
   it('does not infer bare title numbers as card numbers without explicit marker', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
@@ -236,9 +289,10 @@ describe('Apify pricing provider', () => {
         Year: '1955',
       },
       title: 'Johnny Riddle 1955 Topps 98 St. Louis Cardinals Coach',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
   it('keeps lot queries broader and includes lot signal', () => {
@@ -254,7 +308,7 @@ describe('Apify pricing provider', () => {
   });
 
   it('falls back to minimal safe query when identity sparse', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       categoryId: '261328',
       conditionId: null,
       itemSpecifics: undefined,
@@ -262,9 +316,10 @@ describe('Apify pricing provider', () => {
       listingType: 'single',
       requestedCompCount: 20,
       title: 'Vintage trading card',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Vintage']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
   it('uses Apify default requested comp count of 20 when input omits requestedCompCount', () => {
@@ -314,7 +369,7 @@ describe('Apify pricing provider', () => {
   });
 
   it('removes duplicated player/year/card number noise from trading-card query parts', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       categoryId: '261328',
       conditionId: '4000',
       itemSpecifics: {
@@ -327,13 +382,14 @@ describe('Apify pricing provider', () => {
       listingType: 'single',
       requestedCompCount: 20,
       title: '1955 Topps #98 Johnny Riddle St. Louis Cardinals Vintage Baseball Card',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
   it('normalizes hash-prefixed card numbers from specifics and renders one query token', async () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       categoryId: '261328',
       conditionId: '4000',
       itemSpecifics: {
@@ -347,7 +403,8 @@ describe('Apify pricing provider', () => {
       listingType: 'single',
       requestedCompCount: 20,
       title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
     const runActor = vi.fn(async () => soldCompsFixture);
     const provider = createApifyPricingProvider(
       {
@@ -357,32 +414,18 @@ describe('Apify pricing provider', () => {
       { runActor }
     );
 
-    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
     expect(actorInput.keywords[0]?.match(/#98/g)).toHaveLength(1);
     expect(actorInput.keywords[0]).not.toContain('98 #98');
 
-    await provider.fetchSoldComps({
-      categoryId: '261328',
-      conditionId: '4000',
-      itemSpecifics: {
-        'Card Number': '#98',
-        Manufacturer: 'Topps',
-        Player: 'Johnny Riddle',
-        Set: 'Topps Johnny Riddle 98',
-        Year: '1955',
-      },
-      listingId: 'Single-000007',
-      listingType: 'single',
-      requestedCompCount: 20,
-      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-    });
+    await provider.fetchSoldComps(input);
 
     expect(runActor.mock.calls[0][0]).toMatchObject({
       actorInput: {
         count: 20,
         ebaySite: 'ebay.com',
         itemCondition: 'used',
-        keywords: ['Johnny Riddle 1955 Topps #98'],
+        keywords: [buildPricingSearchQuery(input)],
         sortOrder: 'endedRecently',
       },
       diagnosticContext: {
@@ -400,7 +443,7 @@ describe('Apify pricing provider', () => {
   });
 
   it('uses alias fields for canonical query and facets when primary keys absent', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       categoryId: '261328',
       conditionId: '4000',
       itemSpecifics: {
@@ -415,9 +458,10 @@ describe('Apify pricing provider', () => {
       listingType: 'single',
       requestedCompCount: 20,
       title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual(['Johnny Riddle 1955 Topps #98 All-Star']);
+    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
   it('maps actor-native fixture into internal sold comps', () => {

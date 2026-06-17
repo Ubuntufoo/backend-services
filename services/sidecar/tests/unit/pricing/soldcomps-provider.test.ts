@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   SoldCompsPricingProviderError,
+  buildPricingSearchQuery,
   buildSoldCompsQuery,
   buildSoldCompsRequestParams,
   createSoldCompsPricingProvider,
@@ -41,6 +42,11 @@ describe('SoldComps pricing provider', () => {
     },
     listingId: 'LIST-001',
     listingType: 'single' as const,
+    pricingModifierOptions: {
+      excludeAutographs: true,
+      excludeGraded: true,
+      excludeVariants: false,
+    },
     requestedCompCount: 12,
     title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
   };
@@ -49,7 +55,7 @@ describe('SoldComps pricing provider', () => {
     expect(buildSoldCompsRequestParams(baseInput)).toEqual({
       count: 12,
       ebaySite: 'ebay.com',
-      keyword: buildSoldCompsQuery(baseInput),
+      keyword: buildPricingSearchQuery(baseInput),
       page: 1,
       sortOrder: 'endedRecently',
     });
@@ -81,7 +87,7 @@ describe('SoldComps pricing provider', () => {
         },
       }).keyword
     ).toBe(
-      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
   });
 
@@ -103,7 +109,7 @@ describe('SoldComps pricing provider', () => {
         title: 'John Hadl 1967 Topps #125',
       }).keyword
     ).toBe(
-      'John Hadl 1967 Topps Football #125 -pick -choose -complete -lot -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+      'John Hadl 1967 Topps Football #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
   });
 
@@ -143,15 +149,36 @@ describe('SoldComps pricing provider', () => {
 
     const keyword = buildSoldCompsKeyword(
       rawInput,
-      'Darryl Strawberry 1997 Fleer #179 -"you pick" -signed -PSA'
+      'Darryl Strawberry 1997 Fleer #179 -pick -PSA'
     );
 
     expect(keyword).toBe(
-      'Darryl Strawberry 1997 Fleer #179 -"you pick" -signed -PSA -pick -choose -complete -lot -auto -autograph -graded -slab -slabbed -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett'
+      'Darryl Strawberry 1997 Fleer #179 -pick -PSA -choose -complete -lot -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
-    expect(keyword.match(/-"you pick"/g)).toHaveLength(1);
-    expect(keyword.match(/-signed/g)).toHaveLength(1);
+    expect(keyword.match(/-pick/g)).toHaveLength(1);
     expect(keyword.match(/-PSA/g)).toHaveLength(1);
+  });
+
+  it('removes graded and autograph exclusions when listing opts out', () => {
+    expect(
+      buildSoldCompsRequestParams({
+        ...baseInput,
+        conditionId: '4000',
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: false,
+          excludeVariants: true,
+        },
+        title: 'Darryl Strawberry 1997 Fleer #179',
+        itemSpecifics: {
+          'Card Number': '179',
+          Manufacturer: 'Fleer',
+          Player: 'Darryl Strawberry',
+          Set: 'Fleer',
+          Year: '1997',
+        },
+      }).keyword
+    ).toBe('Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot');
   });
 
   it('sends bearer-auth request against v1 scrape endpoint', async () => {

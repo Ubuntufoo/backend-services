@@ -156,7 +156,7 @@ describe('smoke soldcomps pricing script', () => {
         count: 50,
         page: 1,
         query:
-          'Johnny Riddle 1955 Topps #98 -"you pick" -"pick your" -"complete your set" -choose -signed -auto -autograph -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -TAG -HGA -GMA -KSA -ISA -WCG -BCCG -Beckett',
+          'Johnny Riddle 1955 Topps #98 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
       })
     );
 
@@ -177,7 +177,7 @@ describe('smoke soldcomps pricing script', () => {
       soldCompCount: 1,
     });
     expect(payload.rawResultSummary.input.request.count).toBe(50);
-    expect(payload.rawResultSummary.input.request.keyword).toContain('-"you pick"');
+    expect(payload.rawResultSummary.input.request.keyword).toContain('-pick');
     expect(process.exitCode).toBeUndefined();
   });
 

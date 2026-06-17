@@ -1,3 +1,5 @@
+import type { PricingModifierOptions } from '@ebay-inventory/types';
+
 export interface PricingProviderInput {
   listingId: string;
   title: string;
@@ -5,6 +7,7 @@ export interface PricingProviderInput {
   categoryId?: string | null;
   conditionId?: string | null;
   itemSpecifics?: Record<string, string | string[] | null | undefined>;
+  pricingModifierOptions?: PricingModifierOptions;
   requestedCompCount?: number;
 }
 

@@ -398,6 +398,36 @@ describe('data API router', () => {
     );
   });
 
+  it('creates listing with merged pricing modifier defaults preserved in item specifics', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings').send({
+      itemSpecifics: {
+        Brand: 'Acme',
+        Manufacturer: 'Acme',
+      },
+      pricingModifierOptions: {
+        excludeAutographs: false,
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(dataAccess.listings.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item_specifics: {
+          Brand: 'Acme',
+          Manufacturer: 'Acme',
+          pricingModifierOptions: {
+            excludeAutographs: false,
+            excludeGraded: true,
+            excludeVariants: false,
+          },
+        },
+      })
+    );
+  });
+
   it('rejects create requests with unknown fields', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
@@ -490,6 +520,10 @@ describe('data API router', () => {
       description: 'Updated description',
       itemSpecifics: { Brand: 'Acme' },
       price: 19.99,
+      pricingModifierOptions: {
+        excludeAutographs: false,
+        excludeGraded: true,
+      },
       sellerHints: 'Ship in original packaging',
       title: 'Updated title',
     });
@@ -500,7 +534,14 @@ describe('data API router', () => {
       condition_id: 'CONDITION-001',
       condition_notes: 'Minor wear',
       description: 'Updated description',
-      item_specifics: { Brand: 'Acme' },
+      item_specifics: {
+        Brand: 'Acme',
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: true,
+          excludeVariants: false,
+        },
+      },
       price: 19.99,
       seller_hints: 'Ship in original packaging',
       title: 'Updated title',
@@ -525,6 +566,38 @@ describe('data API router', () => {
         Brand: 'Topps',
         Manufacturer: 'Topps',
         skuCategoryCode: 'BSKBL',
+      },
+    });
+  });
+
+  it('merges pricing modifier options into existing listing item specifics on seller patch', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      item_specifics: {
+        Brand: 'Topps',
+        Manufacturer: 'Topps',
+      },
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
+      pricingModifierOptions: {
+        excludeAutographs: false,
+        excludeGraded: false,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Brand: 'Topps',
+        Manufacturer: 'Topps',
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: false,
+          excludeVariants: false,
+        },
       },
     });
   });

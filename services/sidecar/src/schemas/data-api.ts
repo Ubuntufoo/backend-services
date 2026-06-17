@@ -18,6 +18,13 @@ const listingTypeSchema = z.enum(['single', 'lot']);
 const captureModeSchema = z.enum(CAPTURE_MODES);
 
 const itemSpecificsSchema = z.record(z.string(), z.unknown());
+const pricingModifierOptionsSchema = z
+  .object({
+    excludeAutographs: z.boolean().optional(),
+    excludeGraded: z.boolean().optional(),
+    excludeVariants: z.boolean().optional(),
+  })
+  .strict();
 const publicImageUrlSchema = z
   .string({
     required_error: 'imageUrl is required',
@@ -55,6 +62,7 @@ export const editableListingFieldsSchema = z
     merchantLocationKey: nullableTrimmedStringSchema('merchantLocationKey'),
     packageType: nullableTrimmedStringSchema('packageType'),
     price: z.number().finite().nonnegative().nullable().optional(),
+    pricingModifierOptions: pricingModifierOptionsSchema.optional(),
     sellerHints: nullableTrimmedStringSchema('sellerHints'),
     shippingProfile: nullableTrimmedStringSchema('shippingProfile'),
     sku: nullableTrimmedStringSchema('sku'),
@@ -70,6 +78,7 @@ export const sellerEditableListingFieldsSchema = z
     description: nullableTrimmedStringSchema('description'),
     itemSpecifics: itemSpecificsSchema.optional(),
     price: z.number().finite().nonnegative().nullable().optional(),
+    pricingModifierOptions: pricingModifierOptionsSchema.optional(),
     sellerHints: nullableTrimmedStringSchema('sellerHints'),
     title: nullableTrimmedStringSchema('title'),
   })

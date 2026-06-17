@@ -9,6 +9,7 @@ import { createLogger } from '@/utils/logger.js';
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'CategorySuggestion',
   'ConditionSuggestion',
+  'pricingModifierOptions',
   'skuCategoryCode',
 ]);
 const requiredItemSpecificsLogger = createLogger('RequiredItemSpecificsValidation');

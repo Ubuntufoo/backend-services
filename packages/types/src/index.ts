@@ -102,4 +102,24 @@ export const PRICING_PROVIDER_MODES = ['off', 'soldcomps', 'apify'] as const;
 
 export type PricingProviderMode = (typeof PRICING_PROVIDER_MODES)[number];
 
+export const PRICING_MODIFIER_OPTION_KEYS = [
+  'excludeGraded',
+  'excludeAutographs',
+  'excludeVariants',
+] as const;
+
+export type PricingModifierOptionKey = (typeof PRICING_MODIFIER_OPTION_KEYS)[number];
+
+export interface PricingModifierOptions {
+  excludeGraded: boolean;
+  excludeAutographs: boolean;
+  excludeVariants: boolean;
+}
+
+export const DEFAULT_PRICING_MODIFIER_OPTIONS = {
+  excludeGraded: true,
+  excludeAutographs: true,
+  excludeVariants: false,
+} as const satisfies PricingModifierOptions;
+
 export * from './structured-sku.js';

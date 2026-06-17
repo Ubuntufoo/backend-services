@@ -32,6 +32,7 @@ const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'CategorySuggestion',
   'ConditionSuggestion',
+  'pricingModifierOptions',
   'skuCategoryCode',
 ]);
 
