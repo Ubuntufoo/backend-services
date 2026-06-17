@@ -64,8 +64,8 @@ Maintain workflow, pricing, and publish abstractions so listing types can expand
 | 9J.14 | BE/Pricing | Harden price update policy | Listing price updates only after a validated positive result and successfully stored research row, regardless of selected provider |
 | 9J.15 | BE/Pricing | Persist rich LLM failure telemetry | Store nested analyst/provider failure details (provider, model, HTTP status, error code, retryability, and compact cause chain) instead of only a wrapper error message |
 | 9J.16 | BE/Pricing | Classify pricing-analysis warning states | Distinguish deterministic pricing success from LLM-analysis failure; persist structured warning payloads without failing research_price or altering listing workflow |
-COMPLETED TASKS COMMENTED OUT -->
 | 9J.17 | BE/API | Expose pricing-analysis warnings to UI | Listings/API responses expose stable pricing-analysis warning fields so the UI does not need to parse raw `llm_reasoning_json` |
+COMPLETED TASKS COMMENTED OUT -->
 | 9J.18 | FE/Dashboard | Surface pricing-analysis warnings in Operational Summary | Display non-blocking pricing-analysis warnings alongside existing operational issues with concise user-facing messaging |
 | 9J.19 | FE/Dashboard | Add pricing-analysis retry action | Operational Summary warnings include a retry control and refresh warning state after successful rerun |
 | 9J.20 | BE/Pricing | Add pricing-analysis retry workflow | Implement dedicated retry path for failed LLM pricing analysis while preserving the existing deterministic price until retry succeeds |

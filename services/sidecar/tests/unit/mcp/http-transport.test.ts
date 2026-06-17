@@ -279,7 +279,12 @@ describe('HTTP MCP transport', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      listings: [listingRow],
+      listings: [
+        {
+          ...listingRow,
+          pricing_analysis_warnings: [],
+        },
+      ],
     });
   });
 

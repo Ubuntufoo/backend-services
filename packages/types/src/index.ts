@@ -122,4 +122,33 @@ export const DEFAULT_PRICING_MODIFIER_OPTIONS = {
   excludeVariants: false,
 } as const satisfies PricingModifierOptions;
 
+export type PricingAnalysisWarningCode =
+  | 'llm_analysis_failed'
+  | 'llm_condition_adjusted_price_invalid'
+  | 'llm_condition_adjusted_price_out_of_window'
+  | 'llm_condition_adjusted_price_null'
+  | (string & {});
+
+export interface PricingAnalysisWarningFailureSummary {
+  error_code?: string;
+  error_status?: string;
+  provider?: string;
+  reason?: string;
+  retryable?: boolean;
+  status_code?: number;
+}
+
+export interface ListingPricingAnalysisWarning {
+  analyst: string;
+  code: PricingAnalysisWarningCode;
+  failure: PricingAnalysisWarningFailureSummary | null;
+  listing_id: string;
+  model_name: string | null;
+  reason: PricingAnalysisWarningCode;
+  research_id: string;
+  retryable: boolean;
+  severity: 'warning';
+  summary: string;
+}
+
 export * from './structured-sku.js';

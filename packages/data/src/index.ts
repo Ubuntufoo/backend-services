@@ -147,6 +147,7 @@ export {
 export {
   createListingPriceResearch,
   getLatestListingPriceResearchByListingId,
+  listLatestListingPriceResearchByListingIds,
   markListingPriceResearchFailed,
   markListingPriceResearchSucceeded,
   type MarkListingPriceResearchFailedInput,

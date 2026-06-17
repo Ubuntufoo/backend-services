@@ -5,6 +5,7 @@ import {
   getPricingProviderMode,
   parseSoldCompsUsageSnapshot,
   type ListingInsert,
+  type ListingRow,
   type AppSettingsRow,
   type Json,
   type ListingUpdate,
@@ -15,6 +16,7 @@ import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import { getBaseUrl, getOauthBaseUrl } from '@/config/environment.js';
+import { serializeListing } from '@/http/listing-pricing-analysis.js';
 import {
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
@@ -272,14 +274,44 @@ function buildListingInsert(input: CreateListingRequest): ListingInsert {
   };
 }
 
+async function serializeListingWithLatestPricingAnalysis(
+  dataAccess: SidecarDataAccess,
+  listing: ListingRow
+) {
+  const latestResearch = dataAccess.listingPriceResearch?.getLatestByListingId
+    ? await dataAccess.listingPriceResearch.getLatestByListingId(listing.listing_id)
+    : null;
+  return serializeListing(listing, latestResearch);
+}
+
+async function serializeListingsWithLatestPricingAnalysis(
+  dataAccess: SidecarDataAccess,
+  listings: Awaited<ReturnType<SidecarDataAccess['listings']['list']>>
+) {
+  const latestResearchRows = dataAccess.listingPriceResearch?.listLatestByListingIds
+    ? await dataAccess.listingPriceResearch.listLatestByListingIds(
+        listings.map((listing) => listing.listing_id)
+      )
+    : [];
+  const latestResearchByListingId = new Map(
+    latestResearchRows.map((research) => [research.listing_id, research] as const)
+  );
+
+  return listings.map((listing) =>
+    serializeListing(listing, latestResearchByListingId.get(listing.listing_id) ?? null)
+  );
+}
+
 export function createDataApiRouter(options: DataApiRouterOptions = {}): Router {
   const router = Router();
   const getDataAccess = (): SidecarDataAccess => options.dataAccess ?? getSidecarDataAccess();
 
   router.get('/listings', async (_req: Request, res: Response) => {
     try {
+      const dataAccess = getDataAccess();
+      const listings = await dataAccess.listings.list();
       res.json({
-        listings: await getDataAccess().listings.list(),
+        listings: await serializeListingsWithLatestPricingAnalysis(dataAccess, listings),
       });
     } catch (error) {
       sendRouteError(res, error);
@@ -293,7 +325,8 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
-      const listing = await getDataAccess().listings.getByListingId(params.listingId);
+      const dataAccess = getDataAccess();
+      const listing = await dataAccess.listings.getByListingId(params.listingId);
 
       if (!listing) {
         res.status(404).json({
@@ -303,7 +336,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      res.json(listing);
+      res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -345,8 +378,9 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
-      const listing = await getDataAccess().listings.create(buildListingInsert(body));
-      res.status(201).json(listing);
+      const dataAccess = getDataAccess();
+      const listing = await dataAccess.listings.create(buildListingInsert(body));
+      res.status(201).json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -380,11 +414,12 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         existingItemSpecifics = existingListing.item_specifics as ListingUpdate['item_specifics'];
       }
 
-      const listing = await getDataAccess().listings.update(
+      const dataAccess = getDataAccess();
+      const listing = await dataAccess.listings.update(
         params.listingId,
         mapSellerEditableListingFields(body, existingItemSpecifics)
       );
-      res.json(listing);
+      res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -402,7 +437,8 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
-      const listing = await getDataAccess().listings.getByListingId(params.listingId);
+      const dataAccess = getDataAccess();
+      const listing = await dataAccess.listings.getByListingId(params.listingId);
 
       if (!listing) {
         res.status(404).json({
@@ -412,7 +448,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      const updatedListing = await getDataAccess().listings.saveImageMetadata({
+      const updatedListing = await dataAccess.listings.saveImageMetadata({
         listingId: params.listingId,
         imageUrls: body.imageUrls,
         r2ObjectKeys: asStringArray(listing.r2_object_keys),
@@ -422,7 +458,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         throw new Error(`Listing "${params.listingId}" was not updated.`);
       }
 
-      res.json(updatedListing);
+      res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, updatedListing));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -440,20 +476,21 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
+      const dataAccess = getDataAccess();
       const listing =
         body.status === 'approved_for_export' && body.subStatus === 'publish_queued'
-          ? await getDataAccess().listings.approveForExport(params.listingId)
-          : await getDataAccess().listings.updateWorkflowState({
+          ? await dataAccess.listings.approveForExport(params.listingId)
+          : await dataAccess.listings.updateWorkflowState({
               listingId: params.listingId,
               status: body.status,
               subStatus: body.subStatus,
             });
 
       if (listing.status === 'approved_for_export' && listing.sub_status === 'publish_queued') {
-        await getDataAccess().jobs.enqueuePublish(params.listingId);
+        await dataAccess.jobs.enqueuePublish(params.listingId);
       }
 
-      res.json(listing);
+      res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
     } catch (error) {
       sendRouteError(res, error);
     }
@@ -509,7 +546,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       res.status(enqueueResult.alreadyQueued ? 200 : 201).json({
         alreadyQueued: enqueueResult.alreadyQueued,
         job: enqueueResult.job,
-        listing: preparedListing,
+        listing: await serializeListingWithLatestPricingAnalysis(dataAccess, preparedListing),
       });
     } catch (error) {
       sendRouteError(res, error);
@@ -523,12 +560,16 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
     }
 
     try {
+      const dataAccess = getDataAccess();
       const result = await retryListingWorkflow({
-        dataAccess: getDataAccess(),
+        dataAccess,
         listingId: params.listingId,
       });
 
-      res.status(200).json(result);
+      res.status(200).json({
+        ...result,
+        listing: await serializeListingWithLatestPricingAnalysis(dataAccess, result.listing),
+      });
     } catch (error) {
       sendManualRetryError(res, error);
     }

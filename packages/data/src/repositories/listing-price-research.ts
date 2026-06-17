@@ -60,6 +60,35 @@ export async function getLatestListingPriceResearchByListingId(
   return requireOptionalResult(result);
 }
 
+export async function listLatestListingPriceResearchByListingIds(
+  client: SupabaseDataClient,
+  listingIds: string[]
+): Promise<ListingPriceResearchRow[]> {
+  if (listingIds.length === 0) {
+    return [];
+  }
+
+  const result = await client
+    .from('listing_price_research')
+    .select('*')
+    .in('listing_id', listingIds)
+    .order('listing_id', { ascending: true })
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
+
+  const rows = requireOptionalResult(result as SingleResult<ListingPriceResearchRow[]>) ?? [];
+  const seenListingIds = new Set<string>();
+
+  return rows.filter((row) => {
+    if (seenListingIds.has(row.listing_id)) {
+      return false;
+    }
+
+    seenListingIds.add(row.listing_id);
+    return true;
+  });
+}
+
 export async function markListingPriceResearchSucceeded(
   client: SupabaseDataClient,
   input: MarkListingPriceResearchSucceededInput

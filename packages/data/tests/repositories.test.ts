@@ -37,6 +37,7 @@ import {
   getListingByOfferId,
   getJobById,
   getLatestListingPriceResearchByListingId,
+  listLatestListingPriceResearchByListingIds,
   getOrCreateDailyUsage,
   getListingByListingId,
   getOrderByOrderId,
@@ -809,6 +810,59 @@ function createLatestListingPriceResearchLookupClient(
                               })),
                             };
                           }),
+                        };
+                      }
+                    ),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createLatestListingPriceResearchListClient(
+  expectedRows: ListingPriceResearchRow[]
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listing_price_research');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('*');
+
+          return {
+            in: vi.fn((column: string, values: string[]) => {
+              expect(column).toBe('listing_id');
+              expect(values).toEqual(['LIST-001', 'LIST-002']);
+
+              return {
+                order: vi.fn((firstOrderColumn: string, firstOptions: { ascending: boolean }) => {
+                  expect(firstOrderColumn).toBe('listing_id');
+                  expect(firstOptions).toEqual({ ascending: true });
+
+                  return {
+                    order: vi.fn(
+                      (secondOrderColumn: string, secondOptions: { ascending: boolean }) => {
+                        expect(secondOrderColumn).toBe('created_at');
+                        expect(secondOptions).toEqual({ ascending: false });
+
+                        return {
+                          order: vi.fn(
+                            (thirdOrderColumn: string, thirdOptions: { ascending: boolean }) => {
+                              expect(thirdOrderColumn).toBe('id');
+                              expect(thirdOptions).toEqual({ ascending: false });
+
+                              return Promise.resolve({
+                                data: expectedRows,
+                                error: null,
+                              });
+                            }
+                          ),
                         };
                       }
                     ),
@@ -3821,6 +3875,32 @@ describe('shared repositories', () => {
     await expect(getLatestListingPriceResearchByListingId(latestClient, 'LIST-001')).resolves.toEqual(
       listingPriceResearchRow
     );
+
+    const latestRowsClient = createLatestListingPriceResearchListClient([
+      listingPriceResearchRow,
+      {
+        ...listingPriceResearchRow,
+        created_at: '2026-06-08T12:00:00.000Z',
+        id: 'listing-price-research-row-id-older',
+      },
+      {
+        ...listingPriceResearchRow,
+        created_at: '2026-06-09T11:00:00.000Z',
+        id: 'listing-price-research-row-id-2',
+        listing_id: 'LIST-002',
+      },
+    ]);
+    await expect(
+      listLatestListingPriceResearchByListingIds(latestRowsClient, ['LIST-001', 'LIST-002'])
+    ).resolves.toEqual([
+      listingPriceResearchRow,
+      {
+        ...listingPriceResearchRow,
+        created_at: '2026-06-09T11:00:00.000Z',
+        id: 'listing-price-research-row-id-2',
+        listing_id: 'LIST-002',
+      },
+    ]);
 
     const succeededRow: ListingPriceResearchRow = {
       ...listingPriceResearchRow,

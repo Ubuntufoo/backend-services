@@ -56,6 +56,50 @@ const secondListingRow = {
   sku: 'SKU-002',
 };
 
+const pricingWarning = {
+  analyst: 'google_pricing_reasoning',
+  code: 'llm_analysis_failed',
+  failure: {
+    errorCode: 'MODEL_OVERLOADED',
+    errorStatus: 'UNAVAILABLE',
+    message: 'should stay private',
+    provider: 'google',
+    reason: 'HIGH_DEMAND',
+    retryable: true,
+    statusCode: 503,
+  },
+  modelName: 'gemma-4-31b-it',
+  reason: 'llm_analysis_failed',
+  retryable: true,
+  severity: 'warning',
+  summary: 'LLM pricing analysis failed. Deterministic price used.',
+};
+
+const latestPricingResearchRow = {
+  comps: [],
+  confidence: null,
+  created_at: '2026-06-17T16:00:00.000Z',
+  error_code: null,
+  error_message: null,
+  id: 'pricing-research-001',
+  listing_id: 'LIST-001',
+  llm_price_explanation: null,
+  llm_reasoning_json: {
+    failure: pricingWarning.failure,
+    warnings: [pricingWarning],
+  },
+  llm_rejected_comp_ids: [],
+  median_sold_price: null,
+  pricing_model_name: null,
+  provider: 'apify',
+  query: null,
+  raw_result_json: {},
+  sold_count: null,
+  status: 'succeeded',
+  suggested_price: null,
+  updated_at: '2026-06-17T16:00:00.000Z',
+};
+
 const geminiUsageSummary = {
   effectiveLimit: 540,
   remaining: 519,
@@ -179,6 +223,8 @@ function createDataAccess(): SidecarDataAccess {
     },
     listingPriceResearch: {
       create: vi.fn(),
+      getLatestByListingId: vi.fn(async () => null),
+      listLatestByListingIds: vi.fn(async () => []),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
@@ -232,9 +278,15 @@ describe('data API router', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      listings: [listingRow],
+      listings: [
+        {
+          ...listingRow,
+          pricing_analysis_warnings: [],
+        },
+      ],
     });
     expect(dataAccess.listings.list).toHaveBeenCalledOnce();
+    expect(dataAccess.listingPriceResearch.listLatestByListingIds).toHaveBeenCalledWith(['LIST-001']);
   });
 
   it('fetches one listing by listing id', async () => {
@@ -244,8 +296,12 @@ describe('data API router', () => {
     const response = await request(app).get('/api/listings/LIST-001');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual(listingRow);
+    expect(response.body).toEqual({
+      ...listingRow,
+      pricing_analysis_warnings: [],
+    });
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
+    expect(dataAccess.listingPriceResearch.getLatestByListingId).toHaveBeenCalledWith('LIST-001');
   });
 
   it('returns Gemini daily usage summary', async () => {
@@ -365,8 +421,55 @@ describe('data API router', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      listings: [listingRow, secondListingRow],
+      listings: [
+        {
+          ...listingRow,
+          pricing_analysis_warnings: [],
+        },
+        {
+          ...secondListingRow,
+          pricing_analysis_warnings: [],
+        },
+      ],
     });
+  });
+
+  it('exposes sanitized pricing analysis warnings on listing responses', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => latestPricingResearchRow);
+    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [latestPricingResearchRow]);
+    const app = createApp(dataAccess);
+
+    const listResponse = await request(app).get('/api/listings');
+    const detailResponse = await request(app).get('/api/listings/LIST-001');
+
+    const expectedWarning = {
+      analyst: 'google_pricing_reasoning',
+      code: 'llm_analysis_failed',
+      failure: {
+        error_code: 'MODEL_OVERLOADED',
+        error_status: 'UNAVAILABLE',
+        provider: 'google',
+        reason: 'HIGH_DEMAND',
+        retryable: true,
+        status_code: 503,
+      },
+      listing_id: 'LIST-001',
+      model_name: 'gemma-4-31b-it',
+      reason: 'llm_analysis_failed',
+      research_id: 'pricing-research-001',
+      retryable: true,
+      severity: 'warning',
+      summary: 'LLM pricing analysis failed. Deterministic price used.',
+    };
+
+    expect(listResponse.status).toBe(200);
+    expect(detailResponse.status).toBe(200);
+    expect(listResponse.body.listings[0]?.pricing_analysis_warnings).toEqual([expectedWarning]);
+    expect(detailResponse.body.pricing_analysis_warnings).toEqual([expectedWarning]);
+    expect(JSON.stringify(detailResponse.body.pricing_analysis_warnings)).not.toContain(
+      'should stay private'
+    );
   });
 
   it('creates a listing with workflow defaults', async () => {
@@ -666,6 +769,7 @@ describe('data API router', () => {
     expect(response.body).toEqual({
       ...listingRow,
       image_urls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+      pricing_analysis_warnings: [],
       r2_object_keys: ['listings/LIST-001/existing.jpg'],
     });
   });
@@ -833,7 +937,10 @@ describe('data API router', () => {
         status: 'queued',
         updated_at: '2026-05-17T01:00:01.000Z',
       },
-      listing: preparedListing,
+      listing: {
+        ...preparedListing,
+        pricing_analysis_warnings: [],
+      },
     });
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
     expect(dataAccess.listings.prepareForGenerateAi).toHaveBeenCalledOnce();

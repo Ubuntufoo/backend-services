@@ -32,6 +32,7 @@ import {
   getJobById,
   getOrCreateDailyUsage,
   getLatestListingPriceResearchByListingId,
+  listLatestListingPriceResearchByListingIds,
   getListingByOfferId,
   getListingByListingId,
   getOrderByOrderId,
@@ -169,6 +170,7 @@ export interface SidecarDataAccess {
   listingPriceResearch: {
     create(input: ListingPriceResearchInsert): Promise<ListingPriceResearchRow>;
     getLatestByListingId(listingId: string): Promise<ListingPriceResearchRow | null>;
+    listLatestByListingIds(listingIds: string[]): Promise<ListingPriceResearchRow[]>;
     markFailed(
       input: Parameters<typeof markListingPriceResearchFailed>[1]
     ): Promise<ListingPriceResearchRow>;
@@ -237,6 +239,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       create: async (input) => await createListingPriceResearch(client, input),
       getLatestByListingId: async (listingId) =>
         await getLatestListingPriceResearchByListingId(client, listingId),
+      listLatestByListingIds: async (listingIds) =>
+        await listLatestListingPriceResearchByListingIds(client, listingIds),
       markFailed: async (input) => await markListingPriceResearchFailed(client, input),
       markSucceeded: async (input) => await markListingPriceResearchSucceeded(client, input),
     },

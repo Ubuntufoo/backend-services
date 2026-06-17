@@ -40,6 +40,8 @@ const completeJobMock = vi.fn();
 const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
 const getOrCreateDailyUsageMock = vi.fn();
+const getLatestListingPriceResearchByListingIdMock = vi.fn();
+const listLatestListingPriceResearchByListingIdsMock = vi.fn();
 const listDueQueuedJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
 const listStaleRunningJobsMock = vi.fn();
@@ -55,6 +57,9 @@ const getOrderByOrderIdMock = vi.fn();
 const updateOrderMock = vi.fn();
 const createAppSettingsMock = vi.fn();
 const updateAppSettingsMock = vi.fn();
+const createListingPriceResearchMock = vi.fn();
+const markListingPriceResearchFailedMock = vi.fn();
+const markListingPriceResearchSucceededMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
@@ -68,6 +73,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createAppSettings: createAppSettingsMock,
   createJob: createJobMock,
   createListing: createListingMock,
+  createListingPriceResearch: createListingPriceResearchMock,
   approveListingForExport: approveListingForExportMock,
   createOrder: createOrderMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
@@ -81,6 +87,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getAppSettings: getAppSettingsMock,
   getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
+  getLatestListingPriceResearchByListingId: getLatestListingPriceResearchByListingIdMock,
   getOrCreateDailyUsage: getOrCreateDailyUsageMock,
   getListingByOfferId: getListingByOfferIdMock,
   getListingByListingId: getListingByListingIdMock,
@@ -92,10 +99,13 @@ vi.mock('@ebay-inventory/data', () => ({
   listAiModelAttemptsForListings: listAiModelAttemptsForListingsMock,
   listDueQueuedJobs: listDueQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
+  listLatestListingPriceResearchByListingIds: listLatestListingPriceResearchByListingIdsMock,
   listStaleRunningJobs: listStaleRunningJobsMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
   markListingPublishFailed: markListingPublishFailedMock,
+  markListingPriceResearchFailed: markListingPriceResearchFailedMock,
+  markListingPriceResearchSucceeded: markListingPriceResearchSucceededMock,
   markAiModelAttemptFailed: markAiModelAttemptFailedMock,
   markAiModelAttemptSucceeded: markAiModelAttemptSucceededMock,
   resetJobForManualRetry: resetJobForManualRetryMock,
@@ -139,6 +149,8 @@ describe('sidecar data access', () => {
     await dataAccess.listings.getByOfferId('OFFER-001');
     await dataAccess.aiModelAttempts.listByListingIds?.(['LIST-001', 'LIST-002']);
     await dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt();
+    await dataAccess.listingPriceResearch.getLatestByListingId('LIST-001');
+    await dataAccess.listingPriceResearch.listLatestByListingIds(['LIST-001', 'LIST-002']);
     await dataAccess.aiModelRoutes.resolveForTask({
       provider: 'google',
       requireImages: true,
@@ -173,6 +185,11 @@ describe('sidecar data access', () => {
       'LIST-002',
     ]);
     expect(getLatestGeminiUsageAttemptMock).toHaveBeenCalledWith(client);
+    expect(getLatestListingPriceResearchByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(listLatestListingPriceResearchByListingIdsMock).toHaveBeenCalledWith(client, [
+      'LIST-001',
+      'LIST-002',
+    ]);
     expect(resolveAiModelRoutesForTaskMock).toHaveBeenCalledWith(client, {
       provider: 'google',
       requireImages: true,
