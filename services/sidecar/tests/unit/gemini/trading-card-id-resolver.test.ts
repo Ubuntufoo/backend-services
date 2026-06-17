@@ -17,7 +17,31 @@ describe('resolveTradingCardListingIds', () => {
         cardConditionToken: 'VERY_GOOD',
       })
     ).toEqual({
+      category_id: '261328',
+      condition_id: '4000',
+    });
+  });
+
+  it('keeps non-sport trading card singles on the non-sport leaf', () => {
+    expect(
+      resolveTradingCardListingIds(createListing(), {
+        categorySuggestion: 'Non-Sport Trading Card Singles',
+        cardConditionToken: 'VERY_GOOD',
+      })
+    ).toEqual({
       category_id: '183050',
+      condition_id: '4000',
+    });
+  });
+
+  it('keeps ccg individual cards on the ccg leaf', () => {
+    expect(
+      resolveTradingCardListingIds(createListing(), {
+        categorySuggestion: 'CCG Individual Cards',
+        cardConditionToken: 'VERY_GOOD',
+      })
+    ).toEqual({
+      category_id: '183454',
       condition_id: '4000',
     });
   });

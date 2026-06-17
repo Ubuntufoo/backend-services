@@ -18,18 +18,18 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 
 ## Agent File Routing
 
-| Task | Start here |
-| --- | --- |
-| Env/config | `packages/env/src/`, `services/sidecar/src/ebay/config.ts` |
-| Data repositories | `packages/data/src/repositories/` |
-| Job runner/jobs | `services/sidecar/src/jobs/` |
-| Pricing | `services/sidecar/src/pricing/`, `services/sidecar/src/jobs/research-price-job.ts` |
-| eBay publishing/readiness | `services/sidecar/src/ebay/`, `services/sidecar/src/scripts/` |
-| HTTP/API workflow | `services/sidecar/src/http/`, `services/sidecar/src/api/` |
-| Watcher intake | `services/watcher-service/src/` |
-| Image processing | `services/image-service/src/` |
-| Shared contracts | `packages/types/src/` |
-| Supabase schema/migrations | `supabase/migrations/` |
+| Task                       | Start here                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------- |
+| Env/config                 | `packages/env/src/`, `services/sidecar/src/ebay/config.ts`                         |
+| Data repositories          | `packages/data/src/repositories/`                                                  |
+| Job runner/jobs            | `services/sidecar/src/jobs/`                                                       |
+| Pricing                    | `services/sidecar/src/pricing/`, `services/sidecar/src/jobs/research-price-job.ts` |
+| eBay publishing/readiness  | `services/sidecar/src/ebay/`, `services/sidecar/src/scripts/`                      |
+| HTTP/API workflow          | `services/sidecar/src/http/`, `services/sidecar/src/api/`                          |
+| Watcher intake             | `services/watcher-service/src/`                                                    |
+| Image processing           | `services/image-service/src/`                                                      |
+| Shared contracts           | `packages/types/src/`                                                              |
+| Supabase schema/migrations | `supabase/migrations/`                                                             |
 
 ## Validation Commands
 
@@ -55,7 +55,7 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 - Pricing remains sidecar-local.
 - Do not document live Apify pricing as active unless code exists beyond fixture/test scaffolding.
 
-## Do Not Open Unless Needed
+## Do Not Open Unless Needed Or Directed
 
 - `ROADMAP.md`
 - `docs/archive/`

@@ -9,6 +9,7 @@ import type {
 import { ListingWorkflowTransitionConflictError } from '@ebay-inventory/data';
 import { createDataApiRouter } from '@/http/data-router.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+import type { PricingAnalyst } from '@/pricing/index.js';
 
 const listingRow = {
   approved_for_export_at: null,
@@ -244,10 +245,13 @@ function createDataAccess(): SidecarDataAccess {
   };
 }
 
-function createApp(dataAccess: SidecarDataAccess): Express {
+function createApp(
+  dataAccess: SidecarDataAccess,
+  pricingAnalyst?: PricingAnalyst
+): Express {
   const app = express();
   app.use(express.json());
-  app.use('/api', createDataApiRouter({ dataAccess }));
+  app.use('/api', createDataApiRouter({ dataAccess, pricingAnalyst }));
   return app;
 }
 
@@ -1671,6 +1675,265 @@ describe('data API router', () => {
     expect(response.body).toEqual({
       error: 'server_error',
       message: 'An unexpected server error occurred.',
+    });
+  });
+
+  describe('retry-pricing-analysis', () => {
+    const retryWarning = {
+      analyst: 'google_pricing_reasoning',
+      code: 'llm_analysis_failed',
+      failure: {
+        errorCode: 'MODEL_OVERLOADED',
+        errorStatus: 'UNAVAILABLE',
+        provider: 'google',
+        retryable: true,
+        statusCode: 503,
+      },
+      modelName: 'gemma-4-31b-it',
+      reason: 'llm_analysis_failed',
+      retryable: true,
+      severity: 'warning' as const,
+      summary: 'LLM pricing analysis failed. Deterministic price used.',
+    };
+
+    const retryableResearchRow = {
+      ...latestPricingResearchRow,
+      comps: [
+        {
+          condition: null,
+          id: 'comp-1',
+          listingUrl: null,
+          price: { currency: 'USD', value: 20 },
+          shippingPrice: null,
+          soldDate: '2026-06-01T10:00:00.000Z',
+          source: 'provider',
+          title: 'Test Comp 1',
+          totalPrice: { currency: 'USD', value: 20 },
+        },
+        {
+          condition: null,
+          id: 'comp-2',
+          listingUrl: null,
+          price: { currency: 'USD', value: 22 },
+          shippingPrice: null,
+          soldDate: '2026-05-31T10:00:00.000Z',
+          source: 'provider',
+          title: 'Test Comp 2',
+          totalPrice: { currency: 'USD', value: 22 },
+        },
+        {
+          condition: null,
+          id: 'comp-3',
+          listingUrl: null,
+          price: { currency: 'USD', value: 24 },
+          shippingPrice: null,
+          soldDate: '2026-05-30T10:00:00.000Z',
+          source: 'provider',
+          title: 'Test Comp 3',
+          totalPrice: { currency: 'USD', value: 24 },
+        },
+      ],
+      listing_id: 'LIST-001',
+      llm_reasoning_json: {
+        fallback: 'llm_analysis_failed',
+        modelName: 'gemma-4-31b-it',
+        status: 'succeeded',
+        warnings: [retryWarning],
+      },
+      median_sold_price: 22,
+      sold_count: 3,
+      status: 'succeeded',
+      suggested_price: 22,
+    };
+
+    it('returns warning_resolved true and updated listing on successful retry', async () => {
+      const dataAccess = createDataAccess();
+      // Use listing with condition token and comps with condition terms so
+      // the allowed-adjustment window is eligible.
+      dataAccess.listings.getByListingId = vi.fn(async () => ({
+        ...listingRow,
+        item_specifics: {
+          'Card Condition': 'EXCELLENT',
+        },
+      }));
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => ({
+          ...retryableResearchRow,
+          comps: [
+            {
+              condition: null,
+              id: 'comp-c1',
+              listingUrl: null,
+              price: { currency: 'USD', value: 22 },
+              shippingPrice: null,
+              soldDate: '2026-06-01T10:00:00.000Z',
+              source: 'provider',
+              title: 'Test Comp 1 EX',
+              totalPrice: { currency: 'USD', value: 22 },
+            },
+            {
+              condition: null,
+              id: 'comp-c2',
+              listingUrl: null,
+              price: { currency: 'USD', value: 22 },
+              shippingPrice: null,
+              soldDate: '2026-05-31T10:00:00.000Z',
+              source: 'provider',
+              title: 'Test Comp 2 EX',
+              totalPrice: { currency: 'USD', value: 22 },
+            },
+            {
+              condition: null,
+              id: 'comp-c3',
+              listingUrl: null,
+              price: { currency: 'USD', value: 22 },
+              shippingPrice: null,
+              soldDate: '2026-05-30T10:00:00.000Z',
+              source: 'provider',
+              title: 'Test Comp 3 EX',
+              totalPrice: { currency: 'USD', value: 22 },
+            },
+          ],
+        })
+      );
+      dataAccess.listingPriceResearch.markSucceeded = vi.fn(
+        async () => retryableResearchRow
+      );
+      dataAccess.listings.update = vi.fn(async (_listingId, changes) => ({
+        ...listingRow,
+        ...changes,
+        listing_id: 'LIST-001',
+        price: changes.price ?? 22,
+      }));
+
+      const mockAnalyst: PricingAnalyst = {
+        analyze: vi.fn().mockResolvedValue({
+          modelName: 'gemma-4-31b-it',
+          prompt: { systemInstruction: 'test', userPrompt: 'test' },
+          rawOutput: {},
+          reasoning: {
+            ambiguousConditionTerms: [],
+            compNotes: [],
+            conditionAdjustedPrice: 22, // same as deterministic median → delta=0 → target=22
+            conditionAdjustmentPercent: 0,
+            conditionAdjustmentReason: 'Same condition.',
+            confidence: 'high' as const,
+            priceExplanation: 'No adjustment needed.',
+            rejectedCompIds: [],
+            reviewWarnings: [],
+            selectedCompIds: ['comp-c1', 'comp-c2', 'comp-c3'],
+          },
+        }),
+        name: 'google_pricing_reasoning',
+      };
+
+      const app = createApp(dataAccess, mockAnalyst);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/retry-pricing-analysis')
+        .send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.warning_resolved).toBe(true);
+      expect(response.body.listing).toMatchObject({
+        listing_id: 'LIST-001',
+        price: 22,
+      });
+    });
+
+    it('returns 404 when listing does not exist', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => null);
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-404/retry-pricing-analysis')
+        .send({});
+
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({
+        error: 'not_found',
+      });
+    });
+
+    it('returns 422 when no pricing research exists', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => null
+      );
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/retry-pricing-analysis')
+        .send({});
+
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'no_research',
+      });
+    });
+
+    it('returns 422 when latest research is not succeeded', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => ({
+          ...retryableResearchRow,
+          status: 'failed',
+        })
+      );
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/retry-pricing-analysis')
+        .send({});
+
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'research_not_succeeded',
+      });
+    });
+
+    it('returns 409 when no retryable warnings exist', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => ({
+          ...retryableResearchRow,
+          llm_reasoning_json: {
+            status: 'succeeded',
+            warnings: [],
+          },
+        })
+      );
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/retry-pricing-analysis')
+        .send({});
+
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({
+        error: 'no_retryable_warning',
+      });
+    });
+
+    it('returns 422 when research has no persisted comps', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => ({
+          ...retryableResearchRow,
+          comps: [],
+        })
+      );
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/retry-pricing-analysis')
+        .send({});
+
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'no_comps',
+      });
     });
   });
 });

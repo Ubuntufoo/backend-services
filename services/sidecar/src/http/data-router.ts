@@ -33,10 +33,17 @@ import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options
 import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow } from '@/jobs/manual-retry.js';
+import {
+  retryPricingAnalysis,
+  RetryPricingAnalysisError,
+} from '@/jobs/retry-pricing-analysis.js';
 import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
+import { createProductionPricingAnalyst } from '@/pricing/index.js';
+import type { PricingAnalyst } from '@/pricing/index.js';
 
 export interface DataApiRouterOptions {
   dataAccess?: SidecarDataAccess;
+  pricingAnalyst?: PricingAnalyst;
 }
 
 function parseOrSend<T>(
@@ -123,6 +130,31 @@ function sendManualRetryError(res: Response, error: unknown): void {
       });
       return;
     }
+  }
+
+  sendRouteError(res, error);
+}
+
+function sendPricingAnalysisRetryError(res: Response, error: unknown): void {
+  if (error instanceof RetryPricingAnalysisError) {
+    const statusCode =
+      error.code === 'not_found'
+        ? 404
+        : error.code === 'no_research' ||
+            error.code === 'research_not_succeeded' ||
+            error.code === 'no_comps'
+          ? 422
+          : error.code === 'no_retryable_warning'
+            ? 409
+            : error.code === 'no_analyst'
+              ? 503
+              : 500;
+
+    res.status(statusCode).json({
+      error: error.code,
+      message: error.message,
+    });
+    return;
   }
 
   sendRouteError(res, error);
@@ -574,6 +606,41 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       sendManualRetryError(res, error);
     }
   });
+
+  router.post(
+    '/listings/:listingId/retry-pricing-analysis',
+    async (req: Request, res: Response) => {
+      const params = parseOrSend(res, listingIdParamsSchema, req.params);
+      if (!params) {
+        return;
+      }
+
+      try {
+        const dataAccess = getDataAccess();
+        const pricingAnalyst =
+          options.pricingAnalyst ??
+          createProductionPricingAnalyst({
+            dataAccess,
+            now: () => new Date(),
+          });
+
+        const result = await retryPricingAnalysis(params.listingId, {
+          dataAccess,
+          pricingAnalyst,
+        });
+
+        res.status(200).json({
+          listing: await serializeListingWithLatestPricingAnalysis(
+            dataAccess,
+            result.listing
+          ),
+          warning_resolved: result.warningResolved,
+        });
+      } catch (error) {
+        sendPricingAnalysisRetryError(res, error);
+      }
+    }
+  );
 
   router.get('/app-settings', async (_req: Request, res: Response) => {
     try {
