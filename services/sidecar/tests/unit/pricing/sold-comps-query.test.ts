@@ -43,41 +43,102 @@ describe('buildSoldCompsQuery', () => {
     ).toBe('Johnny Riddle 1955 Topps #98');
   });
 
-  it('de-dupes repeated parallel signals across title and specifics', () => {
-    expect(
-      buildSoldCompsQuery({
-        ...baseInput,
-        conditionId: '4000',
-        itemSpecifics: {
-          ...baseInput.itemSpecifics,
-          Features: ['Silver', 'Prizm'],
-          'Parallel/Variety': 'Silver Prizm',
-        },
-        title: '2023 Panini Prizm Victor Wembanyama Silver Prizm Rookie Card',
-      })
-    ).toBe('Victor Wembanyama 2023 Panini Prizm #136 Silver');
-  });
-
-  it('drops placeholder parallel facets like Base and N/A', () => {
+  it('strips noisy sport terms from set values', () => {
     expect(
       buildSoldCompsQuery({
         categoryId: '261328',
         conditionId: '4000',
         itemSpecifics: {
           'Card Number': '125',
-          'Insert Set': 'N/A',
           Manufacturer: 'Topps',
-          'Parallel/Variety': 'Base',
           Player: 'John Hadl',
           Set: 'Topps Football',
-          Year: '1967',
+          Sport: 'Football',
+          Year: '1966',
         },
         listingId: 'Single-000014',
         listingType: 'single',
         requestedCompCount: 20,
-        title: 'John Hadl 1967 Topps #125',
+        title: '1966 Topps Football #125 John Hadl',
       })
-    ).toBe('John Hadl 1967 Topps Football #125');
+    ).toBe('John Hadl 1966 Topps #125');
+  });
+
+  it('strips noisy role fragments instead of mining title leftovers', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '#98',
+          Manufacturer: 'Topps',
+          Player: 'Johnny Riddle',
+          Set: 'Topps Johnny Riddle 98 Coach',
+          Year: '1955',
+        },
+        listingId: 'Single-000007',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+      })
+    ).toBe('Johnny Riddle 1955 Topps #98');
+  });
+
+  it('strips noisy position fragments from structured product values', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '179',
+          Manufacturer: 'Fleer',
+          Player: 'Darryl Strawberry',
+          Set: 'Fleer 3rd Base',
+          Year: '1997',
+        },
+        listingId: 'Single-000179',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Darryl Strawberry 1997 Fleer #179 3rd Base',
+      })
+    ).toBe('Darryl Strawberry 1997 Fleer #179');
+  });
+
+  it('normalizes manufacturer and set league suffixes while preserving real multi-token sets', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '536',
+          Manufacturer: 'Hoops NBA',
+          Player: 'Michael Jordan',
+          Set: 'Hoops NBA',
+          Year: '1991',
+        },
+        listingId: 'Single-000536',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Michael Jordan 1991 Hoops NBA #536',
+      })
+    ).toBe('Michael Jordan 1991 Hoops #536');
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '45',
+          Manufacturer: 'Fleer',
+          Player: 'Ken Griffey Jr.',
+          Set: 'Fleer Ultra',
+          Year: '1994',
+        },
+        listingId: 'Single-000045',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Ken Griffey Jr. 1994 Fleer Ultra #45',
+      })
+    ).toBe('Ken Griffey Jr. 1994 Fleer Ultra #45');
   });
 
   it('uses explicit title card-number markers when specifics omit card number', () => {
@@ -96,8 +157,8 @@ describe('buildSoldCompsQuery', () => {
   });
 
   it.each([
-    ['1993-94 NBA Hoops Michael Jordan #536', 'Michael Jordan 1993 NBA Hoops #536'],
-    ['92-93 NBA Hoops Michael Jordan #536', 'Michael Jordan 1992 NBA Hoops #536'],
+    ['1993-94 NBA Hoops Michael Jordan #536', 'Michael Jordan 1993 Hoops #536'],
+    ['92-93 NBA Hoops Michael Jordan #536', 'Michael Jordan 1992 Hoops #536'],
   ])('normalizes season range in query title "%s"', (title, expectedQuery) => {
     expect(
       buildSoldCompsQuery({
@@ -162,8 +223,6 @@ describe('buildSoldCompsQuery', () => {
         itemSpecifics: {
           Athlete: 'Johnny Riddle',
           Brand: 'Topps',
-          'Card Manufacturer': 'Topps',
-          'Insert Set': 'All-Star',
           Product: 'Johnny Riddle 1955 Topps 98',
           Season: '1955',
         },
@@ -172,6 +231,6 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
       })
-    ).toBe('Johnny Riddle 1955 Topps #98 All-Star');
+    ).toBe('Johnny Riddle 1955 Topps #98');
   });
 });

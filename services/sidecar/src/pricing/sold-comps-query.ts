@@ -12,7 +12,6 @@ const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
 const MANUFACTURER_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Card Manufacturer', 'Brand'] as const;
 const SET_LINE_ITEM_SPECIFIC_KEYS = ['Set', 'Series', 'Product', 'Product Line'] as const;
 const CARD_NUMBER_ITEM_SPECIFIC_KEYS = ['Card Number'] as const;
-const PARALLEL_FACET_ITEM_SPECIFIC_KEYS = ['Parallel/Variety', 'Insert Set'] as const;
 const QUERY_TITLE_STOPWORDS = new Set([
   'and',
   'baseball',
@@ -36,74 +35,61 @@ const QUERY_TITLE_STOPWORDS = new Set([
   'the',
   'trading',
 ]);
-const PARALLEL_ITEM_SPECIFIC_KEYS = [
-  'Parallel/Variety',
-  'Insert Set',
+const SPECIAL_CHARACTERISTIC_ITEM_SPECIFIC_KEYS = [
+  'Autographed',
   'Features',
-  'Series',
-  'Product',
-  'Product Line',
+  'Signed By',
+  'Signed',
   'Variation',
 ] as const;
-const PARALLEL_TERMS = [
-  'Topps Chrome',
-  'Bowman Chrome',
-  'Rated Rookie',
-  'Blue Velocity',
-  'Red Ice',
-  'Pink Ice',
-  'Fast Break',
-  'Tiger Stripe',
-  'Cracked Ice',
-  'Photo Variation',
-  'X-Fractor',
-  'Die-Cut',
-  'Prizm',
-  'Silver',
-  'Refractor',
-  'Mosaic',
-  'Optic',
-  'Select',
-  'Chrome',
-  'Concourse',
-  'Courtside',
-  'Genesis',
-  'Checkerboard',
-  'Kaboom',
-  'Downtown',
-  'Color Blast',
-  'Shimmer',
-  'Sparkle',
-  'Disco',
-  'Mojo',
-  'Scope',
-  'Impact',
-  'Holo',
-  'Foil',
-  'Negative',
-  'Sepia',
-  'Hyper',
-  'Wave',
-  'Pink',
-  'Gold',
-  'Green',
-  'Blue',
-  'Red',
-  'Black',
-  'White',
-  'Purple',
-  'Orange',
+const NOISY_QUERY_PHRASES = [
+  '3rd base',
+  'first base',
+  'left field',
+  'right field',
+  'second base',
+  'short stop',
+  'third base',
 ] as const;
-const PARALLEL_PLACEHOLDER_VALUES = new Set([
+const NOISY_QUERY_TERMS = new Set([
   'base',
-  'base set',
-  'n/a',
-  'na',
-  'none',
-  'not applicable',
-  'standard',
-  'unknown',
+  'baseball',
+  'basketball',
+  'card',
+  'cards',
+  'catcher',
+  'coach',
+  'football',
+  'franchise',
+  'goalie',
+  'guard',
+  'hockey',
+  'manager',
+  'mlb',
+  'nba',
+  'nfl',
+  'nhl',
+  'outfield',
+  'pitcher',
+  'position',
+  'qb',
+  'quarterback',
+  'rb',
+  'receiver',
+  'running',
+  'season',
+  'soccer',
+  'sport',
+  'sports',
+  'team',
+  'trading',
+  'wr',
 ]);
+const AUTOGRAPH_PATTERNS = [
+  /\bauto(?:graph|graphed)?\b/i,
+  /\bautographed\b/i,
+  /\bsigned\b/i,
+] as const;
 const GRADE_PATTERN = /\b(PSA|BGS|SGC|CGC|CSG|TAG|HGA)\s*(10|[1-9](?:\.\d)?)\b/i;
 const TITLE_CARD_NUMBER_PATTERNS = [
   /\bCard\s*#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
@@ -122,23 +108,19 @@ export function buildSoldCompsQuery(input: PricingProviderInput): string {
   const primaryYear = getPrimaryYear(input.itemSpecifics, rawTitle);
   const title = normalizeSeasonRanges(rawTitle, { targetYear: primaryYear });
   const isLot = isLotListing(input, title);
-  const manufacturer = getManufacturer(input.itemSpecifics);
+  const manufacturer = getManufacturer(input.itemSpecifics, { primaryYear });
   const cardNumber = getCardNumber(input.itemSpecifics, title, primaryYear);
 
   terms.add(player);
   terms.add(primaryYear);
-  terms.add(manufacturer);
-  terms.add(getSetLine(input.itemSpecifics, title, { cardNumber, manufacturer, player, primaryYear }));
+  terms.add(getProductLine(input.itemSpecifics, title, { cardNumber, manufacturer, player, primaryYear }));
 
   if (!isLot) {
     terms.add(formatCardNumber(cardNumber));
   }
 
-  for (const token of getParallelSignals(input.itemSpecifics, title)) {
-    terms.add(token);
-  }
-
   terms.add(getGradingSignal(input));
+  terms.add(getAutographSignal(input.itemSpecifics, title));
 
   if (isLot) {
     terms.add('lot');
@@ -239,8 +221,49 @@ function extractYear(value: string | undefined): string | undefined {
   return value.match(/\b(19\d{2}|20\d{2})\b/)?.[1] ?? extractSeasonStartYear(value) ?? undefined;
 }
 
-function getManufacturer(itemSpecifics: PricingProviderInput['itemSpecifics']): string | undefined {
-  return getFirstSpecificValue(itemSpecifics, MANUFACTURER_ITEM_SPECIFIC_KEYS);
+function getManufacturer(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  context: { primaryYear?: string }
+): string | undefined {
+  for (const value of getSpecificValues(itemSpecifics, MANUFACTURER_ITEM_SPECIFIC_KEYS)) {
+    const normalized = cleanStructuredValue(value, { primaryYear: context.primaryYear });
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+}
+
+function getProductLine(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  title: string,
+  context: {
+    cardNumber?: string;
+    manufacturer?: string;
+    player?: string;
+    primaryYear?: string;
+  }
+): string | undefined {
+  const setLine = getSetLine(itemSpecifics, title, context);
+
+  if (!setLine) {
+    return context.manufacturer;
+  }
+
+  if (!context.manufacturer) {
+    return setLine;
+  }
+
+  if (containsWholePhrase(setLine, context.manufacturer)) {
+    return setLine;
+  }
+
+  if (containsWholePhrase(context.manufacturer, setLine)) {
+    return context.manufacturer;
+  }
+
+  return `${context.manufacturer} ${setLine}`;
 }
 
 function getSetLine(
@@ -253,27 +276,18 @@ function getSetLine(
     primaryYear?: string;
   }
 ): string | undefined {
-  const terms = new QueryTermAccumulator();
-
   for (const value of getSpecificValues(itemSpecifics, SET_LINE_ITEM_SPECIFIC_KEYS)) {
-    terms.add(cleanSetLineValue(value, context));
-  }
-
-  if (!terms.isEmpty()) {
-    return terms.toString();
+    const cleaned = cleanSetLineValue(value, context);
+    if (cleaned) {
+      return cleaned;
+    }
   }
 
   if (context.manufacturer) {
     return undefined;
   }
 
-  return tokenizeTitle(title)
-    .filter((token) => !/^\d{4}$/.test(token))
-    .filter((token) => !context.player || !includesWholeTerm(context.player, token))
-    .filter((token) => !context.manufacturer || !includesWholeTerm(context.manufacturer, token))
-    .filter((token) => token !== context.cardNumber)
-    .slice(0, 4)
-    .join(' ');
+  return extractSetLineFromTitle(title, context);
 }
 
 function getCardNumber(
@@ -306,53 +320,6 @@ function sanitizeCardNumber(value: string | undefined): string | undefined {
 
 function formatCardNumber(value: string | undefined): string | undefined {
   return value ? `#${value.replace(/^#+/, '')}` : undefined;
-}
-
-function getParallelSignals(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string[] {
-  const terms = new QueryTermAccumulator();
-
-  for (const key of PARALLEL_FACET_ITEM_SPECIFIC_KEYS) {
-    for (const value of normalizeSpecificValue(itemSpecifics?.[key])) {
-      if (isPlaceholderParallelValue(value)) {
-        continue;
-      }
-
-      const extracted = extractParallelTerms(value);
-      if (extracted.length === 0) {
-        terms.add(value);
-        continue;
-      }
-
-      for (const term of extracted) {
-        terms.add(term);
-      }
-    }
-  }
-
-  for (const value of getSpecificValues(itemSpecifics, PARALLEL_ITEM_SPECIFIC_KEYS)) {
-    if (isPlaceholderParallelValue(value)) {
-      continue;
-    }
-
-    for (const term of extractParallelTerms(value)) {
-      terms.add(term);
-    }
-  }
-
-  for (const term of extractParallelTerms(title)) {
-    terms.add(term);
-  }
-
-  return terms.toArray();
-}
-
-function extractParallelTerms(value: string): string[] {
-  return PARALLEL_TERMS.filter((term) => includesWholeTerm(value, term));
-}
-
-function isPlaceholderParallelValue(value: string): boolean {
-  const normalized = value.trim().replace(/\s+/g, ' ').toLowerCase();
-  return PARALLEL_PLACEHOLDER_VALUES.has(normalized);
 }
 
 function includesWholeTerm(source: string, candidate: string): boolean {
@@ -420,6 +387,27 @@ function cleanSetLineValue(
     primaryYear?: string;
   }
 ): string | undefined {
+  return cleanStructuredValue(value, context);
+}
+
+function removeWholePhrase(source: string, candidate: string): string {
+  const escaped = escapeRegExp(candidate).replace(/\s+/g, '\\s+');
+  return source.replace(new RegExp(`(?:^|\\s)${escaped}(?=$|\\s)`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function cleanStructuredValue(
+  value: string,
+  context: {
+    cardNumber?: string;
+    manufacturer?: string;
+    player?: string;
+    primaryYear?: string;
+  }
+): string | undefined {
   let normalized = normalizeSeasonRanges(value.trim(), { targetYear: context.primaryYear });
 
   if (!normalized) {
@@ -448,18 +436,69 @@ function cleanSetLineValue(
   normalized = normalized.replace(/\b(19\d{2}|20\d{2})\b/g, ' ');
   normalized = normalized.replace(SERIAL_NUMBER_PATTERN, ' ');
   normalized = normalized.replace(/\bCard\s*(?:No\.?|Number)\s*#?\s*[A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4}\b/gi, ' ');
+  normalized = stripNoisyQueryTerms(normalized);
   normalized = normalized.replace(/\s+/g, ' ').trim();
 
   return normalized || undefined;
 }
 
-function removeWholePhrase(source: string, candidate: string): string {
-  const escaped = escapeRegExp(candidate).replace(/\s+/g, '\\s+');
-  return source.replace(new RegExp(`(?:^|\\s)${escaped}(?=$|\\s)`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
+function extractSetLineFromTitle(
+  title: string,
+  context: {
+    cardNumber?: string;
+    manufacturer?: string;
+    player?: string;
+    primaryYear?: string;
+  }
+): string | undefined {
+  const cleaned = cleanStructuredValue(title, context);
+  if (!cleaned) {
+    return undefined;
+  }
+
+  const tokens = tokenizeTitle(cleaned).filter((token) => !isNoisyQueryToken(token));
+  return tokens.slice(0, 3).join(' ') || undefined;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function stripNoisyQueryTerms(value: string): string {
+  let normalized = value;
+
+  for (const phrase of NOISY_QUERY_PHRASES) {
+    normalized = removeWholePhrase(normalized, phrase);
+  }
+
+  const tokens = normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0)
+    .filter((token) => !isNoisyQueryToken(token));
+
+  return tokens.join(' ');
+}
+
+function isNoisyQueryToken(token: string): boolean {
+  return NOISY_QUERY_TERMS.has(token.toLowerCase());
+}
+
+function getAutographSignal(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  title: string
+): string | undefined {
+  for (const pattern of AUTOGRAPH_PATTERNS) {
+    if (pattern.test(title)) {
+      return 'autograph';
+    }
+  }
+
+  for (const key of SPECIAL_CHARACTERISTIC_ITEM_SPECIFIC_KEYS) {
+    for (const value of normalizeSpecificValue(itemSpecifics?.[key])) {
+      if (AUTOGRAPH_PATTERNS.some((pattern) => pattern.test(value))) {
+        return 'autograph';
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function normalizeGrader(value: string | undefined): string | undefined {

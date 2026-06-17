@@ -112,20 +112,25 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords[0]).not.toContain('condition:4000');
   });
 
-  it('de-dupes repeated parallel signals across title and specifics', () => {
+  it('keeps shared cleaned query output for noisy sport-set inputs', () => {
     const input = {
       ...baseInput,
       conditionId: '4000',
       itemSpecifics: {
-        ...baseInput.itemSpecifics,
-        Features: ['Silver', 'Prizm'],
-        'Parallel/Variety': 'Silver Prizm',
+        'Card Number': '125',
+        Manufacturer: 'Topps',
+        Player: 'John Hadl',
+        Set: 'Topps Football',
+        Sport: 'Football',
+        Year: '1966',
       },
-      title: '2023 Panini Prizm Victor Wembanyama Silver Prizm Rookie Card',
+      title: '1966 Topps Football #125 John Hadl',
     };
     const actorInput = buildApifyActorInput(input);
 
-    expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
+    expect(actorInput.keywords).toEqual([
+      'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+    ]);
   });
 
   it('uses shared raw-card exclusions for conservative ungraded-card inputs', () => {
@@ -462,6 +467,40 @@ describe('Apify pricing provider', () => {
     const actorInput = buildApifyActorInput(input);
 
     expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
+  });
+
+  it('keeps shared cleaned query output for noisy league and position values', () => {
+    const jordanInput = {
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '536',
+        Manufacturer: 'Hoops NBA',
+        Player: 'Michael Jordan',
+        Set: 'Hoops NBA',
+        Year: '1991',
+      },
+      title: 'Michael Jordan 1991 Hoops NBA #536',
+    };
+    const strawberryInput = {
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer 3rd Base',
+        Year: '1997',
+      },
+      title: 'Darryl Strawberry 1997 Fleer #179 3rd Base',
+    };
+
+    expect(buildApifyActorInput(jordanInput).keywords).toEqual([
+      'Michael Jordan 1991 Hoops #536 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+    ]);
+    expect(buildApifyActorInput(strawberryInput).keywords).toEqual([
+      'Darryl Strawberry 1997 Fleer #179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+    ]);
   });
 
   it('maps actor-native fixture into internal sold comps', () => {

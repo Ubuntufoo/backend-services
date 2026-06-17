@@ -6,6 +6,7 @@ import {
   parseSoldCompsUsageSnapshot,
   type ListingInsert,
   type AppSettingsRow,
+  type Json,
   type ListingUpdate,
 } from '@ebay-inventory/data';
 import type { GeminiUsageLastAttempt } from '@ebay-inventory/data';
@@ -129,7 +130,10 @@ function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpd
   const itemSpecifics =
     input.pricingModifierOptions === undefined
       ? (input.itemSpecifics as ListingUpdate['item_specifics'])
-      : (mergePricingModifierOptions(input.itemSpecifics ?? {}, input.pricingModifierOptions) as ListingUpdate['item_specifics']);
+      : (mergePricingModifierOptions(
+          (input.itemSpecifics ?? {}) as Json,
+          input.pricingModifierOptions
+        ) as ListingUpdate['item_specifics']);
 
   return {
     capture_mode: input.captureMode,
@@ -161,7 +165,7 @@ function mapSellerEditableListingFields(
     input.pricingModifierOptions === undefined
       ? (input.itemSpecifics as ListingUpdate['item_specifics'])
       : (mergePricingModifierOptions(
-          input.itemSpecifics ?? existingItemSpecifics ?? {},
+          (input.itemSpecifics ?? existingItemSpecifics ?? {}) as Json,
           input.pricingModifierOptions
         ) as ListingUpdate['item_specifics']);
 

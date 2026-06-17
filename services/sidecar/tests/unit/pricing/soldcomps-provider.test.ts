@@ -91,25 +91,24 @@ describe('SoldComps pricing provider', () => {
     );
   });
 
-  it('keeps placeholder parallel facets out of SoldComps keyword', () => {
+  it('keeps noisy sport terms out of SoldComps keyword', () => {
     expect(
       buildSoldCompsRequestParams({
         ...baseInput,
         conditionId: '4000',
         itemSpecifics: {
           'Card Number': '125',
-          'Insert Set': 'N/A',
           Manufacturer: 'Topps',
-          'Parallel/Variety': 'Base',
           Player: 'John Hadl',
           Set: 'Topps Football',
-          Year: '1967',
+          Sport: 'Football',
+          Year: '1966',
         },
         listingId: 'Single-000014',
-        title: 'John Hadl 1967 Topps #125',
+        title: '1966 Topps Football #125 John Hadl',
       }).keyword
     ).toBe(
-      'John Hadl 1967 Topps Football #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
+      'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
   });
 
