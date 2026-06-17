@@ -110,6 +110,42 @@ export interface PriceListingNowResult {
   suggestedPrice: number;
 }
 
+interface ProviderRoutingFailureDetails {
+  message: string;
+  provider: string;
+  providerFailureCategory?: string;
+  providerFailureCode?: string;
+  query?: string;
+  workflowSafe?: boolean;
+}
+
+interface ProviderRoutingDiagnostics {
+  actualProvider?: string;
+  fallbackAttempted: boolean;
+  fallbackProvider?: string;
+  fallbackSucceeded: boolean;
+  firstProviderFailure?: ProviderRoutingFailureDetails;
+  selectedProvider: string;
+  selectedProviderMode: LivePricingProviderMode;
+}
+
+class ProviderFallbackExecutionError extends Error {
+  readonly pricingProvider: PricingProvider;
+  readonly providerRouting: ProviderRoutingDiagnostics;
+
+  constructor(
+    message: string,
+    pricingProvider: PricingProvider,
+    providerRouting: ProviderRoutingDiagnostics,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = 'ProviderFallbackExecutionError';
+    this.pricingProvider = pricingProvider;
+    this.providerRouting = providerRouting;
+  }
+}
+
 function getResearchPriceLogMessage(
   phase: 'failed' | 'started' | 'succeeded',
   executionSource: PriceListingNowOptions['executionSource']
@@ -278,7 +314,8 @@ function buildPricingResearchDiagnostics(
 function buildPricingResearchRawResult(
   providerRawResult: unknown,
   rawCompCount: number,
-  normalized: ReturnType<typeof normalizeSoldComps>
+  normalized: ReturnType<typeof normalizeSoldComps>,
+  providerRouting: ProviderRoutingDiagnostics
 ): Json {
   const base =
     typeof providerRawResult === 'object' && providerRawResult !== null && !Array.isArray(providerRawResult)
@@ -295,6 +332,7 @@ function buildPricingResearchRawResult(
       rejectedCount: normalized.rejected.length,
       rejected: normalized.rejected,
     },
+    providerRouting: buildProviderRoutingRawResult(providerRouting),
   });
 }
 
@@ -385,6 +423,61 @@ function buildResearchProviderFailureJobError(
         workflow_safe: failure.workflowSafe ?? true,
       }).filter(([, value]) => value !== undefined)
     ) as Record<string, Json>
+  );
+}
+
+function buildProviderRoutingFailureDetails(
+  error: unknown,
+  fallbackProvider: string
+): ProviderRoutingFailureDetails {
+  const failure = getProviderFailureDetails(error);
+
+  return {
+    message: failure.providerFailureMessage,
+    provider: failure.provider ?? fallbackProvider,
+    ...(failure.providerFailureCategory
+      ? { providerFailureCategory: failure.providerFailureCategory }
+      : {}),
+    ...(failure.providerFailureCode ? { providerFailureCode: failure.providerFailureCode } : {}),
+    ...(failure.query ? { query: failure.query } : {}),
+    ...(failure.workflowSafe !== undefined ? { workflowSafe: failure.workflowSafe } : {}),
+  };
+}
+
+function buildProviderRoutingRawResult(
+  providerRouting: ProviderRoutingDiagnostics
+): Record<string, boolean | string | Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries({
+      actualProvider: providerRouting.actualProvider,
+      fallbackAttempted: providerRouting.fallbackAttempted,
+      fallbackProvider: providerRouting.fallbackProvider,
+      fallbackSucceeded: providerRouting.fallbackSucceeded,
+      firstProviderFailure: providerRouting.firstProviderFailure,
+      selectedProvider: providerRouting.selectedProvider,
+      selectedProviderMode: providerRouting.selectedProviderMode,
+    }).filter(([, value]) => value !== undefined)
+  ) as Record<string, boolean | string | Record<string, unknown>>;
+}
+
+function attachProviderRoutingContext(
+  jobError: SidecarJobError,
+  providerRouting: ProviderRoutingDiagnostics
+): SidecarJobError {
+  return new SidecarJobError(
+    jobError.code,
+    jobError.category,
+    jobError.message,
+    {
+      ...jobError.context,
+      actual_provider: providerRouting.actualProvider ?? null,
+      fallback_attempted: providerRouting.fallbackAttempted,
+      fallback_provider: providerRouting.fallbackProvider ?? null,
+      fallback_succeeded: providerRouting.fallbackSucceeded,
+      selected_provider: providerRouting.selectedProvider,
+      selected_provider_mode: providerRouting.selectedProviderMode,
+    },
+    { cause: jobError }
   );
 }
 
@@ -741,6 +834,117 @@ function resolvePricingProvider(
   );
 }
 
+function getFallbackProviderMode(
+  selectedProviderMode: LivePricingProviderMode
+): LivePricingProviderMode {
+  return selectedProviderMode === SOLDCOMPS_PROVIDER_NAME
+    ? APIFY_PROVIDER_NAME
+    : SOLDCOMPS_PROVIDER_NAME;
+}
+
+function resolvePricingProviderForMode(
+  dependencies: ResearchPriceJobDependencies,
+  requestedProviderMode: LivePricingProviderMode,
+  selectedProviderMode: LivePricingProviderMode
+): PricingProvider {
+  if (requestedProviderMode === selectedProviderMode) {
+    return resolvePricingProvider(dependencies, selectedProviderMode);
+  }
+
+  if (dependencies.resolvePricingProvider) {
+    return assertSupportedPricingProvider(dependencies.resolvePricingProvider(requestedProviderMode));
+  }
+
+  if (dependencies.pricingProvider?.name === requestedProviderMode) {
+    return assertSupportedPricingProvider(dependencies.pricingProvider);
+  }
+
+  if (dependencies.createPricingProvider) {
+    const provider = dependencies.createPricingProvider();
+    if (provider.name === requestedProviderMode) {
+      return assertSupportedPricingProvider(provider);
+    }
+  }
+
+  return assertSupportedPricingProvider(
+    resolveProductionPricingProvider({
+      env: dependencies.pricingProviderEnv,
+      mode: requestedProviderMode,
+    })
+  );
+}
+
+async function fetchProviderResultWithFallback(
+  listing: ListingRow,
+  listingId: string,
+  dependencies: ResearchPriceJobDependencies,
+  selectedProviderMode: LivePricingProviderMode
+): Promise<{
+  pricingProvider: PricingProvider;
+  providerResult: PricingProviderResult;
+  providerRouting: ProviderRoutingDiagnostics;
+}> {
+  const pricingProvider = resolvePricingProviderForMode(
+    dependencies,
+    selectedProviderMode,
+    selectedProviderMode
+  );
+  const providerRouting: ProviderRoutingDiagnostics = {
+    actualProvider: pricingProvider.name,
+    fallbackAttempted: false,
+    fallbackSucceeded: false,
+    selectedProvider: pricingProvider.name,
+    selectedProviderMode,
+  };
+  const providerInput = buildPricingProviderInput(listing, listingId);
+
+  try {
+    const providerResult = await pricingProvider.fetchSoldComps(providerInput);
+    providerRouting.actualProvider = providerResult.provider;
+    return { pricingProvider, providerResult, providerRouting };
+  } catch (error) {
+    const fallbackProviderMode = getFallbackProviderMode(selectedProviderMode);
+    providerRouting.fallbackProvider = fallbackProviderMode;
+    providerRouting.firstProviderFailure = buildProviderRoutingFailureDetails(
+      error,
+      pricingProvider.name
+    );
+    jobLogger.warn('Primary research_price provider failed. Attempting fallback provider.', {
+      event: 'research_price_provider_fallback_started',
+      fallbackProvider: fallbackProviderMode,
+      firstProvider: pricingProvider.name,
+      listingId,
+      providerFailureCategory: providerRouting.firstProviderFailure.providerFailureCategory,
+      providerFailureCode: providerRouting.firstProviderFailure.providerFailureCode,
+      providerFailureMessage: providerRouting.firstProviderFailure.message,
+      query: providerRouting.firstProviderFailure.query,
+      selectedProviderMode,
+    });
+
+    const fallbackProvider = resolvePricingProviderForMode(
+      dependencies,
+      fallbackProviderMode,
+      selectedProviderMode
+    );
+    providerRouting.fallbackProvider = fallbackProvider.name;
+    providerRouting.fallbackAttempted = true;
+
+    try {
+      const providerResult = await fallbackProvider.fetchSoldComps(providerInput);
+      providerRouting.actualProvider = providerResult.provider;
+      providerRouting.fallbackSucceeded = true;
+      return { pricingProvider, providerResult, providerRouting };
+    } catch (fallbackError) {
+      throw new ProviderFallbackExecutionError(
+        asCompactErrorMessage(fallbackError),
+        pricingProvider,
+        providerRouting,
+        { cause: fallbackError instanceof Error ? fallbackError : undefined }
+      );
+    }
+  }
+}
+
 function assertResearchPriceListingEligible(listing: ListingRow): void {
   if (listing.listing_type !== 'single') {
     throw buildResearchPriceError(
@@ -802,7 +1006,8 @@ async function markResearchFailedSafely(
   dataAccess: SidecarDataAccess,
   research: ListingPriceResearchRow | null,
   error: SidecarJobError,
-  providerResult?: PricingProviderResult
+  providerResult?: PricingProviderResult,
+  providerRouting?: ProviderRoutingDiagnostics
 ): Promise<void> {
   if (!research) {
     return;
@@ -821,16 +1026,17 @@ async function markResearchFailedSafely(
       }).filter(([, value]) => value !== undefined)
     ),
     ...(providerResult ? { providerResult: providerResult.rawResult } : {}),
+    ...(providerRouting ? { providerRouting: buildProviderRoutingRawResult(providerRouting) } : {}),
   };
 
-    await dataAccess.listingPriceResearch.markFailed({
-      error_code: error.code,
-      error_message: asCompactErrorMessage(error.message),
-      id: research.id,
-      llm_reasoning_json: {},
-      pricing_model_name: null,
-      raw_result_json: asJson(failureContext),
-    });
+  await dataAccess.listingPriceResearch.markFailed({
+    error_code: error.code,
+    error_message: asCompactErrorMessage(error.message),
+    id: research.id,
+    llm_reasoning_json: {},
+    pricing_model_name: null,
+    raw_result_json: asJson(failureContext),
+  });
 }
 
 async function persistSucceededResearch(
@@ -885,10 +1091,16 @@ export async function priceListingNow(
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
   const runComputeStats = dependencies.computeStats ?? computePricingStats;
   const runComputeConfidence = dependencies.computeConfidence ?? computePricingConfidence;
+  let resolvedProvider: PricingProvider;
   let pricingProvider: PricingProvider;
 
   try {
-    pricingProvider = resolvePricingProvider(dependencies, selectedProviderMode);
+    resolvedProvider = resolvePricingProviderForMode(
+      dependencies,
+      selectedProviderMode,
+      selectedProviderMode
+    );
+    pricingProvider = resolvedProvider;
   } catch (error) {
     const providerFailure = getProviderFailureDetails(error);
     throw isProviderFailure(error, providerFailure)
@@ -898,6 +1110,7 @@ export async function priceListingNow(
 
   let research: ListingPriceResearchRow | null = null;
   let researchSucceeded = false;
+  let providerRouting: ProviderRoutingDiagnostics | undefined;
   let providerResult: PricingProviderResult | undefined;
   let rawCompCount = 0;
   let normalizedCompCount = 0;
@@ -908,18 +1121,23 @@ export async function priceListingNow(
       executionSource: options.executionSource ?? 'job',
       jobId: options.jobId,
       listingId,
-      pricingMode: getPricingMode(pricingProvider, dependencies.pricingAnalyst),
-      provider: pricingProvider.name,
+      pricingMode: getPricingMode(resolvedProvider, dependencies.pricingAnalyst),
+      provider: resolvedProvider.name,
       selectedProviderMode,
     });
 
     research = await dependencies.dataAccess.listingPriceResearch.create({
       listing_id: listingId,
-      provider: pricingProvider.name,
+      provider: resolvedProvider.name,
       status: 'pending',
     });
 
-    providerResult = await pricingProvider.fetchSoldComps(buildPricingProviderInput(listing, listingId));
+    ({ pricingProvider, providerResult, providerRouting } = await fetchProviderResultWithFallback(
+      listing,
+      listingId,
+      dependencies,
+      selectedProviderMode
+    ));
     if (providerResult.provider === SOLDCOMPS_PROVIDER_NAME) {
       await persistSoldCompsUsageSnapshot(
         dependencies.dataAccess,
@@ -934,12 +1152,17 @@ export async function priceListingNow(
     const pricingRawResult = buildPricingResearchRawResult(
       providerResult.rawResult,
       rawCompCount,
-      normalized
+      normalized,
+      providerRouting
     );
     jobLogger.info('Completed research_price provider fetch.', {
       acceptedCompCount: normalizedCompCount,
+      actualProvider: providerRouting.actualProvider,
       event: 'research_price_provider_result',
       executionSource: options.executionSource ?? 'job',
+      fallbackAttempted: providerRouting.fallbackAttempted,
+      fallbackProvider: providerRouting.fallbackProvider,
+      fallbackSucceeded: providerRouting.fallbackSucceeded,
       jobId: options.jobId,
       listingId,
       normalizedCompCount,
@@ -1068,6 +1291,9 @@ export async function priceListingNow(
       deterministicSuggestedPrice,
       event: 'research_price_succeeded',
       executionSource: options.executionSource ?? 'job',
+      fallbackAttempted: providerRouting.fallbackAttempted,
+      fallbackProvider: providerRouting.fallbackProvider,
+      fallbackSucceeded: providerRouting.fallbackSucceeded,
       finalSuggestedPrice,
       jobId: options.jobId,
       listingId,
@@ -1090,36 +1316,59 @@ export async function priceListingNow(
       suggestedPrice: finalSuggestedPrice,
     };
   } catch (error) {
-    const providerFailure = getProviderFailureDetails(error);
+    const caughtError =
+      error instanceof ProviderFallbackExecutionError
+        ? (error.cause ?? error)
+        : error;
+    if (error instanceof ProviderFallbackExecutionError) {
+      pricingProvider = error.pricingProvider;
+      providerRouting = error.providerRouting;
+    }
+    const providerFailure = getProviderFailureDetails(caughtError);
     let jobError =
-      error instanceof SidecarJobError
-        ? error
-        : isProviderFailure(error, providerFailure)
-          ? buildResearchProviderFailureJobError(error, pricingProvider.name, selectedProviderMode)
-          : classifyJobError('research_price', error);
+      caughtError instanceof SidecarJobError
+        ? caughtError
+        : isProviderFailure(caughtError, providerFailure)
+          ? buildResearchProviderFailureJobError(
+              caughtError,
+              pricingProvider.name,
+              selectedProviderMode
+            )
+          : classifyJobError('research_price', caughtError);
+    if (providerRouting) {
+      jobError = attachProviderRoutingContext(jobError, providerRouting);
+    }
     const provider =
       providerResult?.provider ??
       providerFailure.provider ??
-      (error instanceof SidecarJobError ? asNonEmptyString(error.context.provider) : undefined) ??
+      (caughtError instanceof SidecarJobError
+        ? asNonEmptyString(caughtError.context.provider)
+        : undefined) ??
       pricingProvider.name;
     const providerFailureCategory =
       providerFailure.providerFailureCategory ??
-      (error instanceof SidecarJobError
-        ? asNonEmptyString(error.context.provider_failure_category)
+      (caughtError instanceof SidecarJobError
+        ? asNonEmptyString(caughtError.context.provider_failure_category)
         : undefined);
     const providerFailureCode =
       providerFailure.providerFailureCode ??
-      (error instanceof SidecarJobError
-        ? asNonEmptyString(error.context.provider_failure_code)
+      (caughtError instanceof SidecarJobError
+        ? asNonEmptyString(caughtError.context.provider_failure_code)
         : undefined);
     const query =
       (providerResult?.query ? redactSensitiveText(providerResult.query) : undefined) ??
       providerFailure.query ??
-      (error instanceof SidecarJobError ? asNonEmptyString(error.context.query) : undefined);
+      (caughtError instanceof SidecarJobError ? asNonEmptyString(caughtError.context.query) : undefined);
 
     try {
       if (!researchSucceeded) {
-        await markResearchFailedSafely(dependencies.dataAccess, research, jobError, providerResult);
+        await markResearchFailedSafely(
+          dependencies.dataAccess,
+          research,
+          jobError,
+          providerResult,
+          providerRouting
+        );
       }
     } catch (cleanupError) {
       jobError = new SidecarJobError(

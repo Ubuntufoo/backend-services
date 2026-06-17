@@ -1881,6 +1881,201 @@ describe('priceListingNow', () => {
     expect(result.provider).toBe('apify');
   });
 
+  it('falls back from soldcomps to apify when selected provider call fails', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'soldcomps' })
+    );
+    const soldCompsFetch = vi.fn().mockRejectedValue(
+      new SoldCompsPricingProviderError(
+        'soldcomps_provider_failure',
+        'provider_failure',
+        'SoldComps upstream failed',
+        'victor query'
+      )
+    );
+    const apifyFetch = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: 'query',
+      rawResult: { actorId: 'actor-123' },
+      soldComps: [
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+      ],
+    });
+    const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+      mode === 'soldcomps'
+        ? ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+        : ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
+    );
+
+    const result = await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      resolvePricingProvider,
+    });
+
+    expect(resolvePricingProvider.mock.calls.map(([mode]) => mode)).toEqual(
+      expect.arrayContaining(['soldcomps', 'apify'])
+    );
+    expect(soldCompsFetch).toHaveBeenCalledTimes(1);
+    expect(apifyFetch).toHaveBeenCalledTimes(1);
+    expect(spies.create).toHaveBeenCalledWith({
+      listing_id: listing.listing_id,
+      provider: 'soldcomps',
+      status: 'pending',
+    });
+    expect(result).toMatchObject({
+      provider: 'apify',
+      selectedProviderMode: 'soldcomps',
+    });
+    expect(spies.markSucceeded.mock.calls[0]?.[0]?.raw_result_json).toMatchObject({
+      providerRouting: {
+        actualProvider: 'apify',
+        fallbackAttempted: true,
+        fallbackProvider: 'apify',
+        fallbackSucceeded: true,
+        firstProviderFailure: {
+          message: 'SoldComps upstream failed',
+          provider: 'soldcomps',
+          providerFailureCategory: 'provider_failure',
+          providerFailureCode: 'soldcomps_provider_failure',
+          query: 'victor query',
+        },
+        selectedProvider: 'soldcomps',
+        selectedProviderMode: 'soldcomps',
+      },
+    });
+  });
+
+  it('falls back from apify to soldcomps and persists soldcomps usage snapshot', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'apify' })
+    );
+    const apifyFetch = vi.fn().mockRejectedValue(
+      new ApifyPricingProviderError(
+        'apify_provider_failure',
+        'provider_failure',
+        'Apify upstream failed',
+        'apify query'
+      )
+    );
+    const soldCompsFetch = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'soldcomps',
+      query: 'query',
+      rawResult: {
+        input: { query: 'query' },
+        output: { itemCount: 3 },
+      },
+      soldComps: [
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+      ],
+      soldCompsUsage: {
+        limit: 50,
+        source: 'headers',
+        updatedAt: '2026-06-12T10:05:00.000Z',
+        used: 10,
+      },
+    });
+    const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+      mode === 'apify'
+        ? ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
+        : ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+    );
+
+    const result = await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      resolvePricingProvider,
+    });
+
+    expect(result).toMatchObject({
+      provider: 'soldcomps',
+      selectedProviderMode: 'apify',
+    });
+    expect(spies.updateAppSettings).toHaveBeenCalledWith(
+      {
+        soldcomps_usage_snapshot: {
+          limit: 50,
+          source: 'headers',
+          updatedAt: '2026-06-12T10:05:00.000Z',
+          used: 10,
+        },
+      },
+      'default'
+    );
+    expect(spies.markSucceeded.mock.calls[0]?.[0]?.raw_result_json).toMatchObject({
+      providerRouting: {
+        actualProvider: 'soldcomps',
+        fallbackAttempted: true,
+        fallbackProvider: 'soldcomps',
+        fallbackSucceeded: true,
+        firstProviderFailure: {
+          message: 'Apify upstream failed',
+          provider: 'apify',
+          providerFailureCategory: 'provider_failure',
+          providerFailureCode: 'apify_provider_failure',
+          query: 'apify query',
+        },
+        selectedProvider: 'apify',
+        selectedProviderMode: 'apify',
+      },
+    });
+  });
+
+  it('does not fallback after successful provider response when downstream price result is invalid', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'apify' })
+    );
+    const apifyFetch = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: 'query',
+      rawResult: { actorId: 'actor-123' },
+      soldComps: [
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+      ],
+    });
+    const soldCompsFetch = vi.fn();
+    const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+      mode === 'apify'
+        ? ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
+        : ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+    );
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        computeStats: vi.fn(() => ({
+          currency: 'USD',
+          deterministicSuggestedPrice: null,
+          highSoldPrice: null,
+          ignored: [],
+          lowSoldPrice: null,
+          medianSoldPrice: null,
+          soldCount: 1,
+        })),
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+        resolvePricingProvider,
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+    });
+
+    expect(apifyFetch).toHaveBeenCalledTimes(1);
+    expect(soldCompsFetch).not.toHaveBeenCalled();
+  });
+
   it('fails selected soldcomps mode clearly without fixture fallback when config missing', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(listing);
@@ -1950,11 +2145,9 @@ describe('priceListingNow', () => {
   it('classifies soldcomps typed provider failure through provider-neutral path', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(listing);
-
-    await expect(
-      priceListingNow(listing.listing_id, {
-        createPricingProvider: () =>
-          ({
+    const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+      mode === 'soldcomps'
+        ? ({
             fetchSoldComps: vi.fn().mockRejectedValue(
               new SoldCompsPricingProviderError(
                 'soldcomps_rate_limited',
@@ -1964,21 +2157,134 @@ describe('priceListingNow', () => {
               )
             ),
             name: 'soldcomps',
-          }) as never,
+          } as never)
+        : ({
+            fetchSoldComps: vi.fn().mockRejectedValue(
+              new ApifyPricingProviderError(
+                'apify_provider_failure',
+                'provider_failure',
+                'Bearer apify-secret token=apify-secret',
+                'player=victor'
+              )
+            ),
+            name: 'apify',
+          } as never)
+    );
+
+    await expect(
+      priceListingNow(listing.listing_id, {
         dataAccess,
         now: () => new Date('2026-06-12T10:00:00.000Z'),
+        resolvePricingProvider,
       })
     ).rejects.toMatchObject({
-      category: 'recoverable',
+      category: 'terminal',
       code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
       context: expect.objectContaining({
-        provider: 'soldcomps',
-        provider_failure_category: 'rate_limit',
-        provider_failure_code: 'soldcomps_rate_limited',
+        fallback_attempted: true,
+        fallback_provider: 'apify',
+        fallback_succeeded: false,
+        provider: 'apify',
+        provider_failure_category: 'provider_failure',
+        provider_failure_code: 'apify_provider_failure',
+        selected_provider: 'soldcomps',
+        selected_provider_mode: 'soldcomps',
       }),
     });
 
     const markFailedInput = spies.markFailed.mock.calls[0]?.[0];
     expect(JSON.stringify(markFailedInput)).not.toContain('soldcomps-secret');
+    expect(JSON.stringify(markFailedInput)).not.toContain('apify-secret');
+    expect(markFailedInput.raw_result_json).toMatchObject({
+      providerRouting: {
+        fallbackAttempted: true,
+        fallbackProvider: 'apify',
+        fallbackSucceeded: false,
+        firstProviderFailure: {
+          provider: 'soldcomps',
+          providerFailureCategory: 'rate_limit',
+          providerFailureCode: 'soldcomps_rate_limited',
+        },
+        selectedProvider: 'soldcomps',
+        selectedProviderMode: 'soldcomps',
+      },
+    });
+  });
+
+  it('persists fallback diagnostics when alternate provider also fails', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(
+      listing,
+      createAppSettings({ pricing_provider_mode: 'apify' })
+    );
+    const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+      mode === 'apify'
+        ? ({
+            fetchSoldComps: vi.fn().mockRejectedValue(
+              new ApifyPricingProviderError(
+                'apify_auth_failed',
+                'auth_config',
+                'Bearer apify-secret',
+                'token=apify-secret'
+              )
+            ),
+            name: 'apify',
+          } as never)
+        : ({
+            fetchSoldComps: vi.fn().mockRejectedValue(
+              new SoldCompsPricingProviderError(
+                'soldcomps_rate_limited',
+                'rate_limit',
+                'Bearer soldcomps-secret',
+                'token=soldcomps-secret'
+              )
+            ),
+            name: 'soldcomps',
+          } as never)
+    );
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+        resolvePricingProvider,
+      })
+    ).rejects.toMatchObject({
+      category: 'recoverable',
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      context: expect.objectContaining({
+        fallback_attempted: true,
+        fallback_provider: 'soldcomps',
+        fallback_succeeded: false,
+        provider: 'soldcomps',
+        provider_failure_category: 'rate_limit',
+        provider_failure_code: 'soldcomps_rate_limited',
+        selected_provider: 'apify',
+        selected_provider_mode: 'apify',
+      }),
+    });
+
+    const markFailedInput = spies.markFailed.mock.calls[0]?.[0];
+    expect(JSON.stringify(markFailedInput)).not.toContain('apify-secret');
+    expect(JSON.stringify(markFailedInput)).not.toContain('soldcomps-secret');
+    expect(markFailedInput.raw_result_json).toMatchObject({
+      failure: {
+        code: 'soldcomps_rate_limited',
+        provider: 'soldcomps',
+      },
+      providerRouting: {
+        actualProvider: 'apify',
+        fallbackAttempted: true,
+        fallbackProvider: 'soldcomps',
+        fallbackSucceeded: false,
+        firstProviderFailure: {
+          provider: 'apify',
+          providerFailureCategory: 'auth_config',
+          providerFailureCode: 'apify_auth_failed',
+        },
+        selectedProvider: 'apify',
+        selectedProviderMode: 'apify',
+      },
+    });
   });
 });
