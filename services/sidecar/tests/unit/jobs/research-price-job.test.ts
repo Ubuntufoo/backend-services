@@ -1130,6 +1130,7 @@ describe('priceListingNow', () => {
         suggested_price: 5.49,
       })
     );
+    expect(spies.markSucceeded.mock.calls[0]?.[0]?.llm_reasoning_json).not.toHaveProperty('warnings');
   });
 
   it('passes raw-card single shipping-default context into normalization', async () => {
@@ -1305,6 +1306,16 @@ describe('priceListingNow', () => {
           analyst: 'google_pricing_reasoning',
           fallback: 'llm_analysis_failed',
           status: 'failed',
+          warnings: [
+            expect.objectContaining({
+              analyst: 'google_pricing_reasoning',
+              code: 'llm_analysis_failed',
+              reason: 'llm_analysis_failed',
+              retryable: false,
+              severity: 'warning',
+              summary: 'LLM pricing analysis failed. Deterministic price used.',
+            }),
+          ],
         }),
         pricing_model_name: null,
         suggested_price: 5.89,
@@ -1457,6 +1468,18 @@ describe('priceListingNow', () => {
       expect.objectContaining({
         llm_reasoning_json: expect.objectContaining({
           fallback: 'llm_condition_adjusted_price_null',
+          status: 'succeeded',
+          warnings: [
+            expect.objectContaining({
+              analyst: 'test-analyst',
+              code: 'llm_condition_adjusted_price_null',
+              modelName: 'gemini-test',
+              reason: 'llm_condition_adjusted_price_null',
+              retryable: false,
+              severity: 'warning',
+              summary: 'LLM returned no condition-adjusted price. Deterministic price used.',
+            }),
+          ],
         }),
         suggested_price: 5.89,
       })
@@ -1519,6 +1542,16 @@ describe('priceListingNow', () => {
         llm_reasoning_json: expect.objectContaining({
           fallback: 'llm_condition_adjusted_price_out_of_window',
           status: 'failed',
+          warnings: [
+            expect.objectContaining({
+              analyst: 'test-analyst',
+              code: 'llm_condition_adjusted_price_out_of_window',
+              reason: 'llm_condition_adjusted_price_out_of_window',
+              retryable: false,
+              severity: 'warning',
+              summary: 'LLM returned off-target condition-adjusted price. Deterministic price used.',
+            }),
+          ],
         }),
         suggested_price: 5.89,
       })
@@ -1604,6 +1637,21 @@ describe('priceListingNow', () => {
           }),
           modelName: 'gemma-4-31b-it',
           status: 'failed',
+          warnings: [
+            expect.objectContaining({
+              analyst: 'google_pricing_reasoning',
+              code: 'llm_analysis_failed',
+              failure: expect.objectContaining({
+                errorStatus: 'UNAVAILABLE',
+                retryable: true,
+              }),
+              modelName: 'gemma-4-31b-it',
+              reason: 'llm_analysis_failed',
+              retryable: true,
+              severity: 'warning',
+              summary: 'LLM pricing analysis failed. Deterministic price used.',
+            }),
+          ],
         }),
         pricing_model_name: 'gemma-4-31b-it',
         suggested_price: 5.89,

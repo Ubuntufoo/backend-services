@@ -27,6 +27,8 @@ import {
   type LlmPricingPromptFacts,
   type PricingAnalystFailureCause,
   type PricingAnalystFailureDiagnostics,
+  type PricingAnalysisWarning,
+  type PricingAnalysisWarningReason,
   type LivePricingProviderMode,
   type PricingAnalyst,
   type PricingAnalystInput,
@@ -65,6 +67,12 @@ const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
   'Parallel/Variety',
   'Team/Franchise',
 ] as const;
+const PRICING_ANALYSIS_WARNING_REASONS = new Set<PricingAnalysisWarningReason>([
+  'llm_analysis_failed',
+  'llm_condition_adjusted_price_invalid',
+  'llm_condition_adjusted_price_out_of_window',
+  'llm_condition_adjusted_price_null',
+]);
 
 export interface ResearchPriceJobDependencies {
   createPricingProvider?: () => PricingProvider;
@@ -440,6 +448,7 @@ function buildPricingAnalystInput(
 
 function buildSucceededLlmReasoningJson(
   result: PricingAnalystResult,
+  analyst: PricingAnalyst,
   fallbackReason: string | null,
   conditionAdjustment: ConditionAdjustmentSummary
 ): Json {
@@ -452,6 +461,11 @@ function buildSucceededLlmReasoningJson(
           (normalizedConditionAdjustedPrice / conditionAdjustment.deterministicMedianPrice - 1).toFixed(4)
         )
       : null;
+  const warnings = buildPricingAnalysisWarnings({
+    analyst: analyst.name,
+    fallbackReason,
+    modelName: result.modelName,
+  });
 
   return asJson({
     fallback: fallbackReason,
@@ -461,6 +475,7 @@ function buildSucceededLlmReasoningJson(
       conditionAdjustmentPercent: derivedPercent,
     },
     status: 'succeeded',
+    ...(warnings ? { warnings } : {}),
   });
 }
 
@@ -471,6 +486,12 @@ function buildFailedLlmReasoningJson(
   modelName?: string | null
 ): Json {
   const failure = buildLlmFailureDiagnostics(error, modelName);
+  const warnings = buildPricingAnalysisWarnings({
+    analyst: analyst.name,
+    fallbackReason,
+    failure,
+    modelName,
+  });
 
   return asJson({
     analyst: analyst.name,
@@ -479,6 +500,7 @@ function buildFailedLlmReasoningJson(
     failure,
     ...(modelName ? { modelName } : {}),
     status: 'failed',
+    ...(warnings ? { warnings } : {}),
   });
 }
 
@@ -516,6 +538,49 @@ function buildSkippedLlmReasoningJson(fallbackReason: string, conditionAdjustmen
     fallback: fallbackReason,
     status: 'not_attempted',
   });
+}
+
+function isPricingAnalysisWarningReason(
+  value: string | null
+): value is PricingAnalysisWarningReason {
+  return value !== null && PRICING_ANALYSIS_WARNING_REASONS.has(value as PricingAnalysisWarningReason);
+}
+
+function getPricingAnalysisWarningSummary(reason: PricingAnalysisWarningReason): string {
+  switch (reason) {
+    case 'llm_analysis_failed':
+      return 'LLM pricing analysis failed. Deterministic price used.';
+    case 'llm_condition_adjusted_price_invalid':
+      return 'LLM returned invalid condition-adjusted price. Deterministic price used.';
+    case 'llm_condition_adjusted_price_out_of_window':
+      return 'LLM returned off-target condition-adjusted price. Deterministic price used.';
+    case 'llm_condition_adjusted_price_null':
+      return 'LLM returned no condition-adjusted price. Deterministic price used.';
+  }
+}
+
+function buildPricingAnalysisWarnings(input: {
+  analyst: string;
+  fallbackReason: string | null;
+  failure?: PricingAnalystFailureDiagnostics;
+  modelName?: string | null;
+}): PricingAnalysisWarning[] | undefined {
+  if (!isPricingAnalysisWarningReason(input.fallbackReason)) {
+    return undefined;
+  }
+
+  return [
+    {
+      analyst: input.analyst,
+      code: input.fallbackReason,
+      ...(input.failure ? { failure: input.failure } : {}),
+      ...(input.modelName ? { modelName: input.modelName } : {}),
+      reason: input.fallbackReason,
+      retryable: input.failure?.retryable ?? false,
+      severity: 'warning',
+      summary: getPricingAnalysisWarningSummary(input.fallbackReason),
+    },
+  ];
 }
 
 function getConditionAdjustmentFallbackReason(
@@ -925,6 +990,7 @@ export async function priceListingNow(
             : null;
         llmReasoningJson = buildSucceededLlmReasoningJson(
           analystResult,
+          dependencies.pricingAnalyst,
           fallbackReason,
           conditionAdjustment
         );

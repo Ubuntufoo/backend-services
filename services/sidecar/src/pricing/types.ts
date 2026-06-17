@@ -233,6 +233,23 @@ export interface PricingAnalystFailureDiagnostics {
   statusCode?: number;
 }
 
+export type PricingAnalysisWarningReason =
+  | 'llm_analysis_failed'
+  | 'llm_condition_adjusted_price_invalid'
+  | 'llm_condition_adjusted_price_out_of_window'
+  | 'llm_condition_adjusted_price_null';
+
+export interface PricingAnalysisWarning {
+  analyst: string;
+  code: PricingAnalysisWarningReason;
+  failure?: PricingAnalystFailureDiagnostics;
+  modelName?: string;
+  reason: PricingAnalysisWarningReason;
+  retryable: boolean;
+  severity: 'warning';
+  summary: string;
+}
+
 export interface PricingAnalyst {
   readonly name: string;
   analyze(input: PricingAnalystInput): Promise<PricingAnalystResult>;
