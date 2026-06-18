@@ -6,6 +6,10 @@ function buildProviderPattern(term: string): string {
   return `\\b${escapeRegex(term).replace(/\\ /g, '[\\\\s-]+')}\\b`;
 }
 
+function buildNegativeModifier(term: string): string {
+  return term.includes(' ') ? `-"${term}"` : `-${term}`;
+}
+
 export const GRADED_PROVIDER_TERMS = [
   'PSA',
   'BGS',
@@ -39,7 +43,7 @@ export const GRADED_PROVIDER_TERMS = [
 ] as const;
 
 export const GRADED_NEGATIVE_MODIFIERS = [
-  ...GRADED_PROVIDER_TERMS.map((term) => `-${term}`),
+  ...GRADED_PROVIDER_TERMS.map((term) => buildNegativeModifier(term)),
   '-grade',
   '-graded',
   '-slab',

@@ -138,7 +138,7 @@ describe('SoldComps pricing provider', () => {
     }).keyword;
 
     for (const grader of GRADED_PROVIDER_TERMS) {
-      expect(keyword).toContain(`-${grader}`);
+      expect(keyword).toContain(formatExpectedGraderNegative(grader));
     }
   });
 
@@ -751,4 +751,8 @@ function buildExpectedRawCardKeyword(
   const existingNegatives = new Set((baseQuery.match(/-\S+/g) ?? []).map((value) => value.toLowerCase()));
   const appended = DEFAULT_RAW_CARD_EXCLUSIONS.filter((value) => !existingNegatives.has(value.toLowerCase()));
   return `${baseQuery} ${appended.join(' ')}`;
+}
+
+function formatExpectedGraderNegative(grader: string): string {
+  return grader.includes(' ') ? `-"${grader}"` : `-${grader}`;
 }

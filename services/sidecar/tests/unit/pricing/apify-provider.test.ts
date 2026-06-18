@@ -195,7 +195,7 @@ describe('Apify pricing provider', () => {
     }).keywords[0];
 
     for (const grader of GRADED_PROVIDER_TERMS) {
-      expect(keyword).toContain(`-${grader}`);
+      expect(keyword).toContain(formatExpectedGraderNegative(grader));
     }
   });
 
@@ -991,4 +991,8 @@ const DEFAULT_RAW_CARD_EXCLUSIONS = [
 
 function buildExpectedRawCardKeyword(baseQuery: string): string {
   return `${baseQuery} ${DEFAULT_RAW_CARD_EXCLUSIONS.join(' ')}`;
+}
+
+function formatExpectedGraderNegative(grader: string): string {
+  return grader.includes(' ') ? `-"${grader}"` : `-${grader}`;
 }
