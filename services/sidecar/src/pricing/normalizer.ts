@@ -11,6 +11,7 @@ import {
   buildExactCardTitleTarget,
   getExactCardTitleMismatchReason,
 } from './exact-card-title.js';
+import { isGradedListingTitle } from './graded-listing-signals.js';
 import { normalizeSeasonRanges } from './season-range.js';
 
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
@@ -28,18 +29,6 @@ const REJECTION_REASONS = {
 } as const;
 
 const INVALID_TITLE_PATTERNS = [
-  {
-    pattern: /\b(?:PSA|BGS|SGC|CGC|CSG|TAG|HGA|GMA|KSA|ISA|WCG|BCCG)\b/i,
-    reason: REJECTION_REASONS.excludedGradedListing,
-  },
-  {
-    pattern: /\bgraded\b/i,
-    reason: REJECTION_REASONS.excludedGradedListing,
-  },
-  {
-    pattern: /\bslab(?:bed)?\b/i,
-    reason: REJECTION_REASONS.excludedGradedListing,
-  },
   {
     pattern: /\byou[\s-]+pick\b/i,
     reason: REJECTION_REASONS.excludedSelectionListing,
@@ -192,6 +181,10 @@ function getInvalidTitleReason(
   title: string,
   exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>
 ): string | null {
+  if (isGradedListingTitle(title)) {
+    return REJECTION_REASONS.excludedGradedListing;
+  }
+
   for (const { pattern, reason } of INVALID_TITLE_PATTERNS) {
     if (pattern.test(title)) {
       return reason;

@@ -1,6 +1,7 @@
 import {
   computePricingStats,
   createFixturePricingProvider,
+  GRADED_PROVIDER_TERMS,
   normalizeSoldComps,
   type NormalizeSoldCompsContext,
   type RawSoldComp,
@@ -266,10 +267,12 @@ describe('normalizeSoldComps', () => {
   });
 
   it.each([
-    ['1955 Topps #98 Johnny Riddle PSA 5', 'excluded_graded_listing'],
-    ['1955 Topps #98 Johnny Riddle SGC 4', 'excluded_graded_listing'],
-    ['1955 Topps #98 Johnny Riddle BGS 7.5', 'excluded_graded_listing'],
-    ['1955 Topps #98 Johnny Riddle slabbed', 'excluded_graded_listing'],
+    ...GRADED_PROVIDER_TERMS.map((grader) => [
+      `1955 Topps #98 Johnny Riddle ${grader} 9`,
+      'excluded_graded_listing',
+    ] as const),
+    ['1955 Topps #98 Johnny Riddle slabbed', 'excluded_graded_listing'] as const,
+    ['1955 Topps #98 Johnny Riddle graded', 'excluded_graded_listing'] as const,
   ])('rejects graded/filtered title "%s"', (title, reason) => {
     const normalized = normalizeSoldComps([buildRawComp({ title })]);
 

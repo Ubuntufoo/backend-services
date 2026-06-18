@@ -4,6 +4,7 @@ export * from './soldcomps-config.js';
 export * from './provider-input.js';
 export * from './apify-diagnostic.js';
 export * from './sold-comps-query.js';
+export * from './graded-listing-signals.js';
 export * from './pricing-search-query.js';
 export * from './apify-provider.js';
 export * from './soldcomps-provider.js';

@@ -40,6 +40,7 @@
     "sync": "pnpm --filter sidecar sync",
     "update:api-status": "pnpm --filter sidecar update:api-status",
     "diagnose": "pnpm --filter sidecar diagnose",
+    "codex:verify-run": "node ./scripts/run-codex-verification.mjs",
     "test": "pnpm -r --if-present test",
     "test:coverage": "pnpm -r --if-present test:coverage",
     "typecheck": "pnpm -r --if-present typecheck",

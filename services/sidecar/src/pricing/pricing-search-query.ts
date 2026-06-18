@@ -1,52 +1,18 @@
 import { DEFAULT_PRICING_MODIFIER_OPTIONS } from '@ebay-inventory/types';
 import { GRADED_TRADING_CARD_CONDITION_ID, TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 
+import {
+  GRADED_NEGATIVE_MODIFIERS,
+  isGradedListingTitle,
+  GRADED_PROVIDER_TERMS,
+} from './graded-listing-signals.js';
 import { buildSoldCompsQuery } from './sold-comps-query.js';
 import type { PricingProviderInput } from './types.js';
 
-export const GRADED_PROVIDER_TERMS = [
-  'PSA',
-  'BGS',
-  'BVG',
-  'AGC',
-  'SGC',
-  'CGC',
-  'CSG',
-  'TAG',
-  'HGA',
-  'MBA',
-  'GMA',
-  'KSA',
-  'ISA',
-  'WCG',
-  'BCCG',
-  'Beckett',
-  'AGS',
-  'Arena Club',
-  'Rare Edition',
-  'MNT',
-  'ACE',
-  'PCA',
-  'ARS',
-  'BRG',
-  'TCG Grading',
-  'DSG',
-  'FCG',
-  'MGC',
-  'GSG',
-] as const;
+export { GRADED_NEGATIVE_MODIFIERS, GRADED_PROVIDER_TERMS } from './graded-listing-signals.js';
 
 const RAW_CARD_NEGATIVE_MODIFIERS = ['-pick', '-choose', '-complete', '-lot'] as const;
-const GRADED_NEGATIVE_MODIFIERS = [
-  ...GRADED_PROVIDER_TERMS.map((term) => `-${term}`),
-  '-grade',
-  '-graded',
-  '-slab',
-  '-slabbed',
-] as const;
 const AUTOGRAPH_NEGATIVE_MODIFIERS = ['-auto', '-autograph'] as const;
-const TITLE_GRADE_PATTERN =
-  /\b(?:PSA|BGS|SGC|CGC|CSG|TAG|HGA|GMA|KSA|ISA|WCG|BCCG)\b|\bgraded\b|\bslab(?:bed)?\b|\bbeckett\b/i;
 const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader'] as const;
 const GRADE_ITEM_SPECIFIC_KEYS = ['Grade', 'Card Grade'] as const;
 const BOOLEAN_GRADED_ITEM_SPECIFIC_KEYS = ['Graded'] as const;
@@ -83,7 +49,7 @@ function isExplicitlyGraded(input: PricingProviderInput): boolean {
     return true;
   }
 
-  if (TITLE_GRADE_PATTERN.test(input.title)) {
+  if (isGradedListingTitle(input.title)) {
     return true;
   }
 

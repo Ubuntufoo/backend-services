@@ -10,6 +10,8 @@ import {
   buildPricingSearchQuery,
   buildSoldCompsRequestParams,
   createApifyPricingProvider,
+  GRADED_NEGATIVE_MODIFIERS,
+  GRADED_PROVIDER_TERMS,
   normalizeSoldComps,
   parseApifyActorOutput,
   redactSensitiveText,
@@ -130,7 +132,7 @@ describe('Apify pricing provider', () => {
     const actorInput = buildApifyActorInput(input);
 
     expect(actorInput.keywords).toEqual([
-      'John Hadl 1966 Topps 125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      buildExpectedRawCardKeyword('John Hadl 1966 Topps 125'),
     ]);
   });
 
@@ -173,9 +175,28 @@ describe('Apify pricing provider', () => {
     const actorInput = buildApifyActorInput(input);
 
     expect(actorInput.keywords).toEqual([
-      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      buildExpectedRawCardKeyword('Darryl Strawberry 1997 Fleer 179'),
     ]);
     expect(actorInput.keywords[0]).toBe(buildSoldCompsRequestParams(input).keyword);
+  });
+
+  it('applies complete canonical graded negatives to raw-card Apify searches', () => {
+    const keyword = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    }).keywords[0];
+
+    for (const grader of GRADED_PROVIDER_TERMS) {
+      expect(keyword).toContain(`-${grader}`);
+    }
   });
 
   it('removes graded and autograph exclusions when listing opts out', () => {
@@ -509,10 +530,10 @@ describe('Apify pricing provider', () => {
     };
 
     expect(buildApifyActorInput(jordanInput).keywords).toEqual([
-      'Michael Jordan 1991 Hoops 536 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      buildExpectedRawCardKeyword('Michael Jordan 1991 Hoops 536'),
     ]);
     expect(buildApifyActorInput(strawberryInput).keywords).toEqual([
-      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+      buildExpectedRawCardKeyword('Darryl Strawberry 1997 Fleer 179'),
     ]);
   });
 
@@ -957,3 +978,17 @@ describe('Apify pricing provider', () => {
     expect(redacted).toContain('Bearer [redacted-token]');
   });
 });
+
+const DEFAULT_RAW_CARD_EXCLUSIONS = [
+  '-pick',
+  '-choose',
+  '-complete',
+  '-lot',
+  ...GRADED_NEGATIVE_MODIFIERS,
+  '-auto',
+  '-autograph',
+] as const;
+
+function buildExpectedRawCardKeyword(baseQuery: string): string {
+  return `${baseQuery} ${DEFAULT_RAW_CARD_EXCLUSIONS.join(' ')}`;
+}

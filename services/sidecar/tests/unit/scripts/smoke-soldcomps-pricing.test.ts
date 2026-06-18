@@ -155,8 +155,7 @@ describe('smoke soldcomps pricing script', () => {
       expect.objectContaining({
         count: 50,
         page: 1,
-        query:
-          'Johnny Riddle 1955 Topps #98 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
+        query: buildExpectedRawCardKeyword('Johnny Riddle 1955 Topps 98'),
       })
     );
 
@@ -235,3 +234,49 @@ describe('smoke soldcomps pricing script', () => {
     expect(process.exitCode).toBe(1);
   });
 });
+
+const DEFAULT_RAW_CARD_EXCLUSIONS = [
+  '-pick',
+  '-choose',
+  '-complete',
+  '-lot',
+  '-PSA',
+  '-BGS',
+  '-BVG',
+  '-AGC',
+  '-SGC',
+  '-CGC',
+  '-CSG',
+  '-TAG',
+  '-HGA',
+  '-MBA',
+  '-GMA',
+  '-KSA',
+  '-ISA',
+  '-WCG',
+  '-BCCG',
+  '-Beckett',
+  '-AGS',
+  '-Arena Club',
+  '-Rare Edition',
+  '-MNT',
+  '-ACE',
+  '-PCA',
+  '-ARS',
+  '-BRG',
+  '-TCG Grading',
+  '-DSG',
+  '-FCG',
+  '-MGC',
+  '-GSG',
+  '-grade',
+  '-graded',
+  '-slab',
+  '-slabbed',
+  '-auto',
+  '-autograph',
+] as const;
+
+function buildExpectedRawCardKeyword(baseQuery: string): string {
+  return `${baseQuery} ${DEFAULT_RAW_CARD_EXCLUSIONS.join(' ')}`;
+}

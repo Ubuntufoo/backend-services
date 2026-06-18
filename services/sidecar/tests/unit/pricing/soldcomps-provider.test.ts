@@ -11,6 +11,8 @@ import {
   buildSoldCompsQuery,
   buildSoldCompsRequestParams,
   createSoldCompsPricingProvider,
+  GRADED_NEGATIVE_MODIFIERS,
+  GRADED_PROVIDER_TERMS,
   normalizeSoldComps,
   parseSoldCompsUsageHeaders,
   parseSoldCompsResponse,
@@ -95,7 +97,7 @@ describe('SoldComps pricing provider', () => {
     };
 
     expect(buildSoldCompsRequestParams(input).keyword).toBe(
-      'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
+      buildExpectedRawCardKeyword('Darryl Strawberry 1997 Fleer 179')
     );
     expect(buildSoldCompsRequestParams(input).keyword).toBe(buildApifyActorInput(input).keywords[0]);
   });
@@ -117,8 +119,27 @@ describe('SoldComps pricing provider', () => {
         title: '1966 Topps Football #125 John Hadl',
       }).keyword
     ).toBe(
-      'John Hadl 1966 Topps 125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
+      buildExpectedRawCardKeyword('John Hadl 1966 Topps 125')
     );
+  });
+
+  it('applies complete canonical graded negatives to raw-card SoldComps searches', () => {
+    const keyword = buildSoldCompsRequestParams({
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    }).keyword;
+
+    for (const grader of GRADED_PROVIDER_TERMS) {
+      expect(keyword).toContain(`-${grader}`);
+    }
   });
 
   it('does not append raw-card grading exclusions for graded targets', () => {
@@ -161,7 +182,9 @@ describe('SoldComps pricing provider', () => {
     );
 
     expect(keyword).toBe(
-      'Darryl Strawberry 1997 Fleer #179 -pick -PSA -choose -complete -lot -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
+      buildExpectedRawCardKeyword('Darryl Strawberry 1997 Fleer #179 -pick -PSA', {
+        dedupeExisting: true,
+      })
     );
     expect(keyword.match(/-pick/g)).toHaveLength(1);
     expect(keyword.match(/-PSA/g)).toHaveLength(1);
@@ -706,3 +729,26 @@ describe('SoldComps pricing provider', () => {
     });
   });
 });
+
+const DEFAULT_RAW_CARD_EXCLUSIONS = [
+  '-pick',
+  '-choose',
+  '-complete',
+  '-lot',
+  ...GRADED_NEGATIVE_MODIFIERS,
+  '-auto',
+  '-autograph',
+] as const;
+
+function buildExpectedRawCardKeyword(
+  baseQuery: string,
+  options: { dedupeExisting?: boolean } = {}
+): string {
+  if (!options.dedupeExisting) {
+    return `${baseQuery} ${DEFAULT_RAW_CARD_EXCLUSIONS.join(' ')}`;
+  }
+
+  const existingNegatives = new Set((baseQuery.match(/-\S+/g) ?? []).map((value) => value.toLowerCase()));
+  const appended = DEFAULT_RAW_CARD_EXCLUSIONS.filter((value) => !existingNegatives.has(value.toLowerCase()));
+  return `${baseQuery} ${appended.join(' ')}`;
+}
