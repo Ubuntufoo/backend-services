@@ -260,7 +260,21 @@ function sanitizePersistedPricingRawResult(value: unknown, canonicalQuery?: stri
         return [];
       }
 
+      if (key === 'itemSpecifics') {
+        return [];
+      }
+
       if (key === 'keyword' && nextCanonicalQuery && keyword === nextCanonicalQuery) {
+        return [];
+      }
+
+      if (
+        key === 'keywords' &&
+        nextCanonicalQuery &&
+        Array.isArray(entry) &&
+        entry.length === 1 &&
+        asNonEmptyString(entry[0]) === nextCanonicalQuery
+      ) {
         return [];
       }
 

@@ -113,6 +113,21 @@ describe('normalizeSoldComps', () => {
     }
   );
 
+  it('uses 2.00 shipping for 8.50 raw-card single with inflated provider shipping', () => {
+    const normalized = normalizeSoldComps(
+      [
+        buildRawComp({
+          price: { value: 8.5, currency: 'USD' },
+          shippingPrice: { value: 30.05, currency: 'USD' },
+        }),
+      ],
+      buildRawCardSingleContext()
+    );
+
+    expect(normalized.comps[0]?.shippingPrice).toEqual({ currency: 'USD', value: 2 });
+    expect(normalized.comps[0]?.totalPrice).toEqual({ currency: 'USD', value: 10.5 });
+  });
+
   it.each([undefined, null, { value: 0, currency: 'USD' }, { value: 3.25, currency: 'USD' }])(
     'replaces free/null/provider shipping for eligible raw-card singles: %o',
     (shippingPrice) => {

@@ -1,1 +1,2 @@
-export const APIFY_SOLD_COMP_REQUEST_COUNT = 20;
+export const APIFY_SOLD_COMP_REQUEST_COUNT = 50;
+export const APIFY_DAYS_TO_SCRAPE = 90;

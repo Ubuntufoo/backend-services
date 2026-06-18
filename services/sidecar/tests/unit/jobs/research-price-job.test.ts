@@ -1180,10 +1180,139 @@ describe('priceListingNow', () => {
       expect.any(Array),
       expect.objectContaining({
         conditionId: '4000',
+        itemSpecifics: expect.objectContaining({
+          'Card Condition': 'VERY_GOOD',
+          'Card Number': '98',
+          Manufacturer: 'Topps',
+          Player: 'Johnny Riddle',
+          Set: 'Topps',
+          Year: '1955',
+        }),
         listingType: 'single',
         rawCardSingleShippingDefaults: true,
       })
     );
+  });
+
+  it('drops persisted apify diagnostic itemSpecifics and duplicate keywords only at raw_result_json boundary', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps',
+        Year: '1955',
+      },
+      title: '1955 Topps #98 Johnny Riddle',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [createNormalizedComp('comp-1', '1955 Topps #98 Johnny Riddle', 10.5)],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: 'Johnny Riddle 1955 Topps #98',
+            rawResult: {
+              actorId: 'actor-123',
+              input: {
+                actorInput: {
+                  count: 50,
+                  daysToScrape: 90,
+                  ebaySite: 'ebay.com',
+                  keywords: ['Johnny Riddle 1955 Topps #98'],
+                  sortOrder: 'endedRecently',
+                },
+                diagnosticContext: {
+                  facets: {
+                    'Card Number': '98',
+                    Manufacturer: 'Topps',
+                    Player: 'Johnny Riddle',
+                    Set: 'Topps',
+                    Year: '1955',
+                  },
+                  itemSpecifics: {
+                    'Card Condition': 'VERY_GOOD',
+                    'Card Number': '98',
+                    Manufacturer: 'Topps',
+                    Player: 'Johnny Riddle',
+                    Set: 'Topps',
+                    Year: '1955',
+                  },
+                  listingId: listing.listing_id,
+                  title: '1955 Topps #98 Johnny Riddle',
+                },
+                query: 'Johnny Riddle 1955 Topps #98',
+              },
+              output: {
+                itemCount: 1,
+                sampleTitles: ['1955 Topps #98 Johnny Riddle'],
+              },
+            },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 8.5 },
+                shippingPrice: { currency: 'USD', value: 30.05 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '1955 Topps #98 Johnny Riddle',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(normalizeComps).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        itemSpecifics: expect.objectContaining({
+          'Card Condition': 'VERY_GOOD',
+          'Card Number': '98',
+        }),
+        rawCardSingleShippingDefaults: true,
+      })
+    );
+
+    const markSucceededInput = spies.markSucceeded.mock.calls[0]?.[0];
+    expect(markSucceededInput?.raw_result_json).toMatchObject({
+      actorId: 'actor-123',
+      input: {
+        actorInput: {
+          count: 50,
+          daysToScrape: 90,
+          ebaySite: 'ebay.com',
+          sortOrder: 'endedRecently',
+        },
+        diagnosticContext: {
+          facets: {
+            'Card Number': '98',
+            Manufacturer: 'Topps',
+            Player: 'Johnny Riddle',
+            Set: 'Topps',
+            Year: '1955',
+          },
+          listingId: listing.listing_id,
+          title: '1955 Topps #98 Johnny Riddle',
+        },
+        query: 'Johnny Riddle 1955 Topps #98',
+      },
+      output: {
+        itemCount: 1,
+      },
+    });
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.actorInput.keywords');
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.diagnosticContext.itemSpecifics');
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('output.sampleTitles');
   });
 
   it('does not enable raw-card single shipping defaults for explicit graded listings', async () => {

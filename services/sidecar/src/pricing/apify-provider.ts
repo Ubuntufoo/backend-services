@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { createLogger } from '@/utils/logger.js';
 
-import { APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
+import { APIFY_DAYS_TO_SCRAPE, APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
 import { buildPricingSearchQuery } from './pricing-search-query.js';
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
@@ -95,12 +95,11 @@ const apifyActorOutputSchema = z.object({
 
 export interface ApifyActorInput {
   count: number;
+  daysToScrape: number;
   ebaySite: 'ebay.com';
-  itemCondition: 'used';
   keywords: string[];
   sortOrder: 'endedRecently';
   categoryId?: string;
-  daysToScrape?: number;
   itemLocation?: string;
   maxPrice?: number;
   minPrice?: number;
@@ -178,8 +177,8 @@ export class ApifyPricingProviderError extends Error {
 export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInput {
   return {
     count: input.requestedCompCount ?? APIFY_SOLD_COMP_REQUEST_COUNT,
+    daysToScrape: APIFY_DAYS_TO_SCRAPE,
     ebaySite: 'ebay.com',
-    itemCondition: 'used',
     keywords: [buildPricingSearchQuery(input)],
     sortOrder: 'endedRecently',
   };
@@ -420,9 +419,7 @@ function sanitizeActorInput(input: ApifyActorInput): Record<string, unknown> {
     ...(input.categoryId ? { categoryId: redactSensitiveText(input.categoryId) } : {}),
     ...(input.daysToScrape ? { daysToScrape: input.daysToScrape } : {}),
     ebaySite: input.ebaySite,
-    itemCondition: input.itemCondition,
     ...(input.itemLocation ? { itemLocation: redactSensitiveText(input.itemLocation) } : {}),
-    keywords: input.keywords.map((value) => redactSensitiveText(value)),
     ...(input.maxPrice ? { maxPrice: input.maxPrice } : {}),
     ...(input.minPrice ? { minPrice: input.minPrice } : {}),
     sortOrder: input.sortOrder,

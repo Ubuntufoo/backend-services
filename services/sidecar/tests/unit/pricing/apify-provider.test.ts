@@ -8,6 +8,7 @@ import {
   ApifyPricingProviderError,
   buildApifyActorInput,
   buildPricingSearchQuery,
+  buildSoldCompsRequestParams,
   createApifyPricingProvider,
   normalizeSoldComps,
   parseApifyActorOutput,
@@ -50,8 +51,8 @@ describe('Apify pricing provider', () => {
   it('builds expected actor input from pricing context', () => {
     expect(buildApifyActorInput(baseInput)).toEqual({
       count: 9,
+      daysToScrape: 90,
       ebaySite: 'ebay.com',
-      itemCondition: 'used',
       keywords: [buildPricingSearchQuery(baseInput)],
       sortOrder: 'endedRecently',
     });
@@ -77,8 +78,8 @@ describe('Apify pricing provider', () => {
       expect.objectContaining({
         actorInput: {
           count: 9,
+          daysToScrape: 90,
           ebaySite: 'ebay.com',
-          itemCondition: 'used',
           keywords: ['Victor Wembanyama 2023 Panini Prizm 136 PSA 10'],
           sortOrder: 'endedRecently',
         },
@@ -133,6 +134,12 @@ describe('Apify pricing provider', () => {
     ]);
   });
 
+  it('matches SoldComps keyword exactly for graded targets', () => {
+    expect(buildApifyActorInput(baseInput).keywords[0]).toBe(
+      buildSoldCompsRequestParams(baseInput).keyword
+    );
+  });
+
   it('uses shared raw-card exclusions for conservative ungraded-card inputs', () => {
     const input = {
       ...baseInput,
@@ -151,7 +158,7 @@ describe('Apify pricing provider', () => {
   });
 
   it('uses shared raw-card exclusions for Apify by default', () => {
-    const actorInput = buildApifyActorInput({
+    const input = {
       ...baseInput,
       conditionId: '4000',
       title: 'Darryl Strawberry 1997 Fleer #179',
@@ -162,11 +169,13 @@ describe('Apify pricing provider', () => {
         Set: 'Fleer',
         Year: '1997',
       },
-    });
+    };
+    const actorInput = buildApifyActorInput(input);
 
     expect(actorInput.keywords).toEqual([
       'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
     ]);
+    expect(actorInput.keywords[0]).toBe(buildSoldCompsRequestParams(input).keyword);
   });
 
   it('removes graded and autograph exclusions when listing opts out', () => {
@@ -327,18 +336,18 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords).toEqual([buildPricingSearchQuery(input)]);
   });
 
-  it('uses Apify default requested comp count of 20 when input omits requestedCompCount', () => {
+  it('uses Apify default requested comp count of 50 when input omits requestedCompCount', () => {
     expect(
       buildApifyActorInput({
         ...baseInput,
         requestedCompCount: undefined,
       })
     ).toMatchObject({
-      count: 20,
+      count: 50,
     });
   });
 
-  it('uses canonical 20-count actor request when provider fetch has no per-call override', async () => {
+  it('uses canonical 50-count actor request when provider fetch has no per-call override', async () => {
     const runActor = vi.fn(async () => soldCompsFixture);
     const provider = createApifyPricingProvider(
       {
@@ -356,13 +365,17 @@ describe('Apify pricing provider', () => {
     expect(runActor).toHaveBeenCalledWith(
       expect.objectContaining({
         actorInput: expect.objectContaining({
-          count: 20,
+          count: 50,
+          daysToScrape: 90,
+          ebaySite: 'ebay.com',
+          keywords: ['Victor Wembanyama 2023 Panini Prizm 136 PSA 10'],
+          sortOrder: 'endedRecently',
         }),
       })
     );
   });
 
-  it('honors explicit lower Apify requested comp count without clamping to 20', () => {
+  it('honors explicit lower Apify requested comp count without clamping to 50', () => {
     expect(
       buildApifyActorInput({
         ...baseInput,
@@ -428,8 +441,8 @@ describe('Apify pricing provider', () => {
     expect(runActor.mock.calls[0][0]).toMatchObject({
       actorInput: {
         count: 20,
+        daysToScrape: 90,
         ebaySite: 'ebay.com',
-        itemCondition: 'used',
         keywords: [buildPricingSearchQuery(input)],
         sortOrder: 'endedRecently',
       },
@@ -553,6 +566,45 @@ describe('Apify pricing provider', () => {
         currency: 'USD',
         value: 1.99,
       },
+    });
+  });
+
+  it('applies raw-card single shipping defaults after apify parse', () => {
+    const result = parseApifyActorOutput(
+      {
+        items: [
+          {
+            endedAt: '2026-06-14T18:42:00.000Z',
+            shippingPrice: '30.05',
+            soldCurrency: 'USD',
+            soldPrice: '8.50',
+            title: '1955 Topps Johnny Riddle #98',
+            url: 'https://www.ebay.com/itm/256123456789',
+          },
+        ],
+        query: 'Johnny Riddle 1955 Topps #98',
+      },
+      {
+        actorId: 'actor-123',
+        fetchedAt: '2026-06-15T12:00:00.000Z',
+      }
+    );
+    const normalized = normalizeSoldComps(result.soldComps, {
+      itemSpecifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps',
+        Year: '1955',
+      },
+      rawCardSingleShippingDefaults: true,
+      title: '1955 Topps #98 Johnny Riddle',
+    });
+
+    expect(normalized.comps[0]).toMatchObject({
+      shippingPrice: { currency: 'USD', value: 2 },
+      totalPrice: { currency: 'USD', value: 10.5 },
     });
   });
 
@@ -775,9 +827,9 @@ describe('Apify pricing provider', () => {
     const result = parseApifyActorOutput(soldCompsFixture, {
       actorId: 'actor-123',
       actorInput: {
-        count: 20,
+        count: 50,
+        daysToScrape: 90,
         ebaySite: 'ebay.com',
-        itemCondition: 'used',
         keywords: ['Johnny Riddle 1955 Topps #98 token=secret-value'],
         sortOrder: 'endedRecently',
       },
@@ -800,10 +852,9 @@ describe('Apify pricing provider', () => {
     expect(result.rawResult).toMatchObject({
       input: {
         actorInput: {
-          count: 20,
+          count: 50,
+          daysToScrape: 90,
           ebaySite: 'ebay.com',
-          itemCondition: 'used',
-          keywords: ['Johnny Riddle 1955 Topps #98 [redacted-secret:se***ue]'],
           sortOrder: 'endedRecently',
         },
         diagnosticContext: {

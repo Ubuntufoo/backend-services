@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildApifyActorInput,
   SoldCompsPricingProviderError,
   buildPricingSearchQuery,
   buildSoldCompsQuery,
   buildSoldCompsRequestParams,
   createSoldCompsPricingProvider,
+  normalizeSoldComps,
   parseSoldCompsUsageHeaders,
   parseSoldCompsResponse,
   redactSoldCompsSensitiveText,
@@ -61,6 +63,12 @@ describe('SoldComps pricing provider', () => {
     });
   });
 
+  it('matches Apify keyword exactly for graded targets', () => {
+    expect(buildSoldCompsRequestParams(baseInput).keyword).toBe(
+      buildApifyActorInput(baseInput).keywords[0]
+    );
+  });
+
   it('uses SoldComps default requested comp count of 50 when input omits requestedCompCount', () => {
     expect(
       buildSoldCompsRequestParams({
@@ -73,22 +81,23 @@ describe('SoldComps pricing provider', () => {
   });
 
   it('appends stable negative modifiers for raw single-card searches only', () => {
-    expect(
-      buildSoldCompsRequestParams({
-        ...baseInput,
-        conditionId: '4000',
-        title: 'Darryl Strawberry 1997 Fleer #179',
-        itemSpecifics: {
-          'Card Number': '179',
-          Manufacturer: 'Fleer',
-          Player: 'Darryl Strawberry',
-          Set: 'Fleer',
-          Year: '1997',
-        },
-      }).keyword
-    ).toBe(
+    const input = {
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    };
+
+    expect(buildSoldCompsRequestParams(input).keyword).toBe(
       'Darryl Strawberry 1997 Fleer 179 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph'
     );
+    expect(buildSoldCompsRequestParams(input).keyword).toBe(buildApifyActorInput(input).keywords[0]);
   });
 
   it('keeps noisy sport terms out of SoldComps keyword', () => {
@@ -338,6 +347,62 @@ describe('SoldComps pricing provider', () => {
       source: 'headers',
       updatedAt: '2026-06-15T12:00:00.000Z',
       used: 43,
+    });
+  });
+
+  it('applies raw-card single shipping defaults after soldcomps parse', () => {
+    const result = parseSoldCompsResponse(
+      {
+        hasNextPage: false,
+        items: [
+          {
+            categoryId: '261328',
+            condition: 'Pre-Owned',
+            conditionId: 3000,
+            endedAt: '2026-06-14T18:42:00.000Z',
+            epid: null,
+            itemId: '256123456789',
+            scrapedAt: '2026-06-15T12:00:00.000Z',
+            sellerFeedbackScore: null,
+            sellerPositivePercent: null,
+            sellerType: null,
+            sellerUsername: null,
+            shippingCurrency: 'USD',
+            shippingPrice: '30.05',
+            shippingType: 'paid',
+            soldCurrency: 'USD',
+            soldPrice: '8.50',
+            thumbnailUrl: null,
+            title: '1955 Topps Johnny Riddle #98',
+            totalPrice: null,
+            url: 'https://www.ebay.com/itm/256123456789',
+          },
+        ],
+        keyword: 'Johnny Riddle 1955 Topps #98',
+        page: 1,
+        totalItems: 1,
+      },
+      {
+        fetchedAt: '2026-06-15T12:00:00.000Z',
+        query: 'Johnny Riddle 1955 Topps #98',
+      }
+    );
+    const normalized = normalizeSoldComps(result.soldComps, {
+      itemSpecifics: {
+        'Card Condition': 'VERY_GOOD',
+        'Card Number': '98',
+        Manufacturer: 'Topps',
+        Player: 'Johnny Riddle',
+        Set: 'Topps',
+        Year: '1955',
+      },
+      rawCardSingleShippingDefaults: true,
+      title: '1955 Topps #98 Johnny Riddle',
+    });
+
+    expect(normalized.comps[0]).toMatchObject({
+      shippingPrice: { currency: 'USD', value: 2 },
+      totalPrice: { currency: 'USD', value: 10.5 },
     });
   });
 
