@@ -45,6 +45,7 @@ const SPECIAL_CHARACTERISTIC_ITEM_SPECIFIC_KEYS = [
 const NOISY_QUERY_PHRASES = [
   '3rd base',
   'first base',
+  '2nd base',
   'left field',
   'right field',
   'second base',

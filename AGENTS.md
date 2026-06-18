@@ -55,6 +55,21 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 - Pricing remains sidecar-local.
 - Do not document live Apify pricing as active unless code exists beyond fixture/test scaffolding.
 
+## Required Practices
+
+### RTK Enforcement
+
+RTK required for any shell command with non-trivial output when wrapper exists.
+
+Mandatory:
+- `git status` -> `rtk git status`
+- `git diff` -> `rtk git diff`
+- `rg` -> `rtk grep`
+- `sed` / `cat` -> `rtk read`
+- test/lint/typecheck/build -> `rtk test <cmd>` or `rtk <cmd>`
+
+If raw command used where RTK wrapper exists, state reason before execution.
+
 ## Do Not Open Unless Needed Or Directed
 
 - `ROADMAP.md`

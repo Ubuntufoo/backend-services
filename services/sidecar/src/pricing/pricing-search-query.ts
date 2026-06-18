@@ -7,6 +7,8 @@ import type { PricingProviderInput } from './types.js';
 export const GRADED_PROVIDER_TERMS = [
   'PSA',
   'BGS',
+  'BVG',
+  'AGC',
   'SGC',
   'CGC',
   'CSG',
@@ -19,6 +21,19 @@ export const GRADED_PROVIDER_TERMS = [
   'WCG',
   'BCCG',
   'Beckett',
+  'AGS',
+  'Arena Club',
+  'Rare Edition',
+  'MNT',
+  'ACE',
+  'PCA',
+  'ARS',
+  'BRG',
+  'TCG Grading',
+  'DSG',
+  'FCG',
+  'MGC',
+  'GSG',
 ] as const;
 
 const RAW_CARD_NEGATIVE_MODIFIERS = ['-pick', '-choose', '-complete', '-lot'] as const;
