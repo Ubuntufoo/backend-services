@@ -5,17 +5,17 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTOGRAPH_PROVIDER_NEGATIVES,
   buildApifyActorInput,
   SoldCompsPricingProviderError,
   buildPricingSearchQuery,
-  buildSoldCompsQuery,
   buildSoldCompsRequestParams,
+  CORE_GRADED_PROVIDER_NEGATIVES,
   createSoldCompsPricingProvider,
-  GRADED_NEGATIVE_MODIFIERS,
-  GRADED_PROVIDER_TERMS,
   normalizeSoldComps,
   parseSoldCompsUsageHeaders,
   parseSoldCompsResponse,
+  RAW_CARD_NEGATIVE_MODIFIERS,
   redactSoldCompsSensitiveText,
 } from '@/pricing/index.js';
 import { buildSoldCompsKeyword } from '@/pricing/soldcomps-keyword.js';
@@ -123,7 +123,7 @@ describe('SoldComps pricing provider', () => {
     );
   });
 
-  it('applies complete canonical graded negatives to raw-card SoldComps searches', () => {
+  it('applies lean graded negatives to raw-card SoldComps searches', () => {
     const keyword = buildSoldCompsRequestParams({
       ...baseInput,
       conditionId: '4000',
@@ -137,9 +137,15 @@ describe('SoldComps pricing provider', () => {
       },
     }).keyword;
 
-    for (const grader of GRADED_PROVIDER_TERMS) {
-      expect(keyword).toContain(formatExpectedGraderNegative(grader));
+    for (const modifier of CORE_GRADED_PROVIDER_NEGATIVES) {
+      expect(keyword).toContain(modifier);
     }
+    expect(keyword).not.toContain('-TAG');
+    expect(keyword).not.toContain('-HGA');
+    expect(keyword).not.toContain('-MBA');
+    expect(keyword).not.toContain('-GMA');
+    expect(keyword).not.toContain('-"Arena Club"');
+    expect(keyword).not.toContain('-"TCG Grading"');
   });
 
   it('does not append raw-card grading exclusions for graded targets', () => {
@@ -731,13 +737,9 @@ describe('SoldComps pricing provider', () => {
 });
 
 const DEFAULT_RAW_CARD_EXCLUSIONS = [
-  '-pick',
-  '-choose',
-  '-complete',
-  '-lot',
-  ...GRADED_NEGATIVE_MODIFIERS,
-  '-auto',
-  '-autograph',
+  ...RAW_CARD_NEGATIVE_MODIFIERS,
+  ...CORE_GRADED_PROVIDER_NEGATIVES,
+  ...AUTOGRAPH_PROVIDER_NEGATIVES,
 ] as const;
 
 function buildExpectedRawCardKeyword(
@@ -751,8 +753,4 @@ function buildExpectedRawCardKeyword(
   const existingNegatives = new Set((baseQuery.match(/-\S+/g) ?? []).map((value) => value.toLowerCase()));
   const appended = DEFAULT_RAW_CARD_EXCLUSIONS.filter((value) => !existingNegatives.has(value.toLowerCase()));
   return `${baseQuery} ${appended.join(' ')}`;
-}
-
-function formatExpectedGraderNegative(grader: string): string {
-  return grader.includes(' ') ? `-"${grader}"` : `-${grader}`;
 }

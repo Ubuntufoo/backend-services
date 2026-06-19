@@ -10,7 +10,6 @@ import { extractSeasonStartYear, normalizeSeasonRanges } from './season-range.js
 const PLAYER_ITEM_SPECIFIC_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
 const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
 const MANUFACTURER_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Card Manufacturer', 'Brand'] as const;
-const SET_LINE_ITEM_SPECIFIC_KEYS = ['Set', 'Series', 'Product', 'Product Line'] as const;
 const CARD_NUMBER_ITEM_SPECIFIC_KEYS = ['Card Number'] as const;
 const QUERY_TITLE_STOPWORDS = new Set([
   'and',
@@ -114,7 +113,7 @@ export function buildSoldCompsQuery(input: PricingProviderInput): string {
 
   terms.add(player);
   terms.add(primaryYear);
-  terms.add(getProductLine(input.itemSpecifics, title, { cardNumber, manufacturer, player, primaryYear }));
+  terms.add(manufacturer);
 
   if (!isLot) {
     terms.add(formatCardNumber(cardNumber));
@@ -236,61 +235,6 @@ function getManufacturer(
   return undefined;
 }
 
-function getProductLine(
-  itemSpecifics: PricingProviderInput['itemSpecifics'],
-  title: string,
-  context: {
-    cardNumber?: string;
-    manufacturer?: string;
-    player?: string;
-    primaryYear?: string;
-  }
-): string | undefined {
-  const setLine = getSetLine(itemSpecifics, title, context);
-
-  if (!setLine) {
-    return context.manufacturer;
-  }
-
-  if (!context.manufacturer) {
-    return setLine;
-  }
-
-  if (containsWholePhrase(setLine, context.manufacturer)) {
-    return setLine;
-  }
-
-  if (containsWholePhrase(context.manufacturer, setLine)) {
-    return context.manufacturer;
-  }
-
-  return `${context.manufacturer} ${setLine}`;
-}
-
-function getSetLine(
-  itemSpecifics: PricingProviderInput['itemSpecifics'],
-  title: string,
-  context: {
-    cardNumber?: string;
-    manufacturer?: string;
-    player?: string;
-    primaryYear?: string;
-  }
-): string | undefined {
-  for (const value of getSpecificValues(itemSpecifics, SET_LINE_ITEM_SPECIFIC_KEYS)) {
-    const cleaned = cleanSetLineValue(value, context);
-    if (cleaned) {
-      return cleaned;
-    }
-  }
-
-  if (context.manufacturer) {
-    return undefined;
-  }
-
-  return extractSetLineFromTitle(title, context);
-}
-
 function getCardNumber(
   itemSpecifics: PricingProviderInput['itemSpecifics'],
   title: string,
@@ -321,11 +265,6 @@ function sanitizeCardNumber(value: string | undefined): string | undefined {
 
 function formatCardNumber(value: string | undefined): string | undefined {
   return value ? value.replace(/^#+/, '') : undefined;
-}
-
-function includesWholeTerm(source: string, candidate: string): boolean {
-  const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-  return new RegExp(`(?:^|[^A-Za-z0-9])${escaped}(?:$|[^A-Za-z0-9])`, 'i').test(source);
 }
 
 function containsWholePhrase(source: string, candidate: string): boolean {
@@ -379,18 +318,6 @@ function extractTitleGrade(title: string): string | undefined {
   return match ? `${match[1].toUpperCase()} ${match[2]}` : undefined;
 }
 
-function cleanSetLineValue(
-  value: string,
-  context: {
-    cardNumber?: string;
-    manufacturer?: string;
-    player?: string;
-    primaryYear?: string;
-  }
-): string | undefined {
-  return cleanStructuredValue(value, context);
-}
-
 function removeWholePhrase(source: string, candidate: string): string {
   const escaped = escapeRegExp(candidate).replace(/\s+/g, '\\s+');
   return source.replace(new RegExp(`(?:^|\\s)${escaped}(?=$|\\s)`, 'gi'), ' ').replace(/\s+/g, ' ').trim();
@@ -442,25 +369,6 @@ function cleanStructuredValue(
 
   return normalized || undefined;
 }
-
-function extractSetLineFromTitle(
-  title: string,
-  context: {
-    cardNumber?: string;
-    manufacturer?: string;
-    player?: string;
-    primaryYear?: string;
-  }
-): string | undefined {
-  const cleaned = cleanStructuredValue(title, context);
-  if (!cleaned) {
-    return undefined;
-  }
-
-  const tokens = tokenizeTitle(cleaned).filter((token) => !isNoisyQueryToken(token));
-  return tokens.slice(0, 3).join(' ') || undefined;
-}
-
 function stripNoisyQueryTerms(value: string): string {
   let normalized = value;
 

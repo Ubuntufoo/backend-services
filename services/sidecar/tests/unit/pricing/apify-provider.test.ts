@@ -5,15 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTOGRAPH_PROVIDER_NEGATIVES,
   ApifyPricingProviderError,
   buildApifyActorInput,
   buildPricingSearchQuery,
   buildSoldCompsRequestParams,
+  CORE_GRADED_PROVIDER_NEGATIVES,
   createApifyPricingProvider,
-  GRADED_NEGATIVE_MODIFIERS,
-  GRADED_PROVIDER_TERMS,
   normalizeSoldComps,
   parseApifyActorOutput,
+  RAW_CARD_NEGATIVE_MODIFIERS,
   redactSensitiveText,
 } from '@/pricing/index.js';
 
@@ -82,7 +83,7 @@ describe('Apify pricing provider', () => {
           count: 9,
           daysToScrape: 90,
           ebaySite: 'ebay.com',
-          keywords: ['Victor Wembanyama 2023 Panini Prizm 136 PSA 10'],
+          keywords: ['Victor Wembanyama 2023 Panini 136 PSA 10'],
           sortOrder: 'endedRecently',
         },
         diagnosticContext: expect.objectContaining({
@@ -110,7 +111,7 @@ describe('Apify pricing provider', () => {
       conditionId: '4000',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm 136 PSA 10']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini 136 PSA 10']);
     expect(actorInput.keywords[0]).not.toContain('category:183050');
     expect(actorInput.keywords[0]).not.toContain('condition:4000');
   });
@@ -180,7 +181,7 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords[0]).toBe(buildSoldCompsRequestParams(input).keyword);
   });
 
-  it('applies complete canonical graded negatives to raw-card Apify searches', () => {
+  it('applies lean graded negatives to raw-card Apify searches', () => {
     const keyword = buildApifyActorInput({
       ...baseInput,
       conditionId: '4000',
@@ -194,9 +195,15 @@ describe('Apify pricing provider', () => {
       },
     }).keywords[0];
 
-    for (const grader of GRADED_PROVIDER_TERMS) {
-      expect(keyword).toContain(formatExpectedGraderNegative(grader));
+    for (const modifier of CORE_GRADED_PROVIDER_NEGATIVES) {
+      expect(keyword).toContain(modifier);
     }
+    expect(keyword).not.toContain('-TAG');
+    expect(keyword).not.toContain('-HGA');
+    expect(keyword).not.toContain('-MBA');
+    expect(keyword).not.toContain('-GMA');
+    expect(keyword).not.toContain('-"Arena Club"');
+    expect(keyword).not.toContain('-"TCG Grading"');
   });
 
   it('removes graded and autograph exclusions when listing opts out', () => {
@@ -232,7 +239,7 @@ describe('Apify pricing provider', () => {
       },
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm 136 PSA 10']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini 136 PSA 10']);
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
@@ -242,13 +249,13 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm 136 graded']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini 136 graded']);
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
   it.each([
-    ['SGC', '7', 'Victor Wembanyama 2023 Panini Prizm 136 SGC 7'],
-    ['BGS', '9.5', 'Victor Wembanyama 2023 Panini Prizm 136 BGS 9.5'],
+    ['SGC', '7', 'Victor Wembanyama 2023 Panini 136 SGC 7'],
+    ['BGS', '9.5', 'Victor Wembanyama 2023 Panini 136 BGS 9.5'],
   ])('uses structured grader+grade signal for %s %s', (grader, grade, expectedQuery) => {
     const actorInput = buildApifyActorInput({
       ...baseInput,
@@ -338,7 +345,7 @@ describe('Apify pricing provider', () => {
       title: '2023 Panini Prizm Victor Wembanyama Lot of 3 Rookie Cards',
     });
 
-    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini Prizm lot']);
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini lot']);
     expect(actorInput.keywords[0]).not.toContain('#136');
   });
 
@@ -389,7 +396,7 @@ describe('Apify pricing provider', () => {
           count: 50,
           daysToScrape: 90,
           ebaySite: 'ebay.com',
-          keywords: ['Victor Wembanyama 2023 Panini Prizm 136 PSA 10'],
+          keywords: ['Victor Wembanyama 2023 Panini 136 PSA 10'],
           sortOrder: 'endedRecently',
         }),
       })
@@ -980,19 +987,11 @@ describe('Apify pricing provider', () => {
 });
 
 const DEFAULT_RAW_CARD_EXCLUSIONS = [
-  '-pick',
-  '-choose',
-  '-complete',
-  '-lot',
-  ...GRADED_NEGATIVE_MODIFIERS,
-  '-auto',
-  '-autograph',
+  ...RAW_CARD_NEGATIVE_MODIFIERS,
+  ...CORE_GRADED_PROVIDER_NEGATIVES,
+  ...AUTOGRAPH_PROVIDER_NEGATIVES,
 ] as const;
 
 function buildExpectedRawCardKeyword(baseQuery: string): string {
   return `${baseQuery} ${DEFAULT_RAW_CARD_EXCLUSIONS.join(' ')}`;
-}
-
-function formatExpectedGraderNegative(grader: string): string {
-  return grader.includes(' ') ? `-"${grader}"` : `-${grader}`;
 }

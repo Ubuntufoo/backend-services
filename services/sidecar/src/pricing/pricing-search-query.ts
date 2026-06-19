@@ -2,17 +2,20 @@ import { DEFAULT_PRICING_MODIFIER_OPTIONS } from '@ebay-inventory/types';
 import { GRADED_TRADING_CARD_CONDITION_ID, TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 
 import {
-  GRADED_NEGATIVE_MODIFIERS,
+  CORE_GRADED_PROVIDER_NEGATIVES,
   isGradedListingTitle,
-  GRADED_PROVIDER_TERMS,
 } from './graded-listing-signals.js';
 import { buildSoldCompsQuery } from './sold-comps-query.js';
 import type { PricingProviderInput } from './types.js';
 
-export { GRADED_NEGATIVE_MODIFIERS, GRADED_PROVIDER_TERMS } from './graded-listing-signals.js';
+export {
+  CORE_GRADED_PROVIDER_NEGATIVES,
+  GRADED_NEGATIVE_MODIFIERS,
+  GRADED_PROVIDER_TERMS,
+} from './graded-listing-signals.js';
 
-const RAW_CARD_NEGATIVE_MODIFIERS = ['-pick', '-choose', '-complete', '-lot'] as const;
-const AUTOGRAPH_NEGATIVE_MODIFIERS = ['-auto', '-autograph'] as const;
+export const RAW_CARD_NEGATIVE_MODIFIERS = ['-pick', '-choose', '-complete', '-lot'] as const;
+export const AUTOGRAPH_PROVIDER_NEGATIVES = ['-auto', '-autograph'] as const;
 const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader'] as const;
 const GRADE_ITEM_SPECIFIC_KEYS = ['Grade', 'Card Grade'] as const;
 const BOOLEAN_GRADED_ITEM_SPECIFIC_KEYS = ['Graded'] as const;
@@ -29,8 +32,8 @@ export function buildPricingSearchQuery(
   const existingNegativeTerms = collectExistingNegativeTerms(positiveQuery);
   const appendedModifiers = [
     ...RAW_CARD_NEGATIVE_MODIFIERS,
-    ...(modifierOptions.excludeGraded ? GRADED_NEGATIVE_MODIFIERS : []),
-    ...(modifierOptions.excludeAutographs ? AUTOGRAPH_NEGATIVE_MODIFIERS : []),
+    ...(modifierOptions.excludeGraded ? CORE_GRADED_PROVIDER_NEGATIVES : []),
+    ...(modifierOptions.excludeAutographs ? AUTOGRAPH_PROVIDER_NEGATIVES : []),
   ].filter((modifier) => !existingNegativeTerms.has(normalizeNegativeModifier(modifier)));
 
   return appendedModifiers.length > 0 ? `${positiveQuery} ${appendedModifiers.join(' ')}` : positiveQuery;

@@ -20,7 +20,7 @@ describe('buildSoldCompsQuery', () => {
   };
 
   it('builds canonical query for graded single-card listing', () => {
-    expect(buildSoldCompsQuery(baseInput)).toBe('Victor Wembanyama 2023 Panini Prizm 136 PSA 10');
+    expect(buildSoldCompsQuery(baseInput)).toBe('Victor Wembanyama 2023 Panini 136 PSA 10');
   });
 
   it('preserves Johnny Riddle canonical query exactly', () => {
@@ -104,7 +104,7 @@ describe('buildSoldCompsQuery', () => {
     ).toBe('Darryl Strawberry 1997 Fleer 179');
   });
 
-  it('normalizes manufacturer and set league suffixes while preserving real multi-token sets', () => {
+  it('normalizes manufacturer values without using set/product terms in provider query', () => {
     expect(
       buildSoldCompsQuery({
         categoryId: '261328',
@@ -138,7 +138,7 @@ describe('buildSoldCompsQuery', () => {
         requestedCompCount: 20,
         title: 'Ken Griffey Jr. 1994 Fleer Ultra #45',
       })
-    ).toBe('Ken Griffey Jr. 1994 Fleer Ultra 45');
+    ).toBe('Ken Griffey Jr. 1994 Fleer 45');
   });
 
   it('uses explicit title card-number markers when specifics omit card number', () => {
@@ -198,7 +198,7 @@ describe('buildSoldCompsQuery', () => {
         listingType: 'lot',
         title: '2023 Panini Prizm Victor Wembanyama Lot of 3 Rookie Cards',
       })
-    ).toBe('Victor Wembanyama 2023 Panini Prizm lot');
+    ).toBe('Victor Wembanyama 2023 Panini lot');
   });
 
   it('falls back to minimal safe title tokens when identity sparse', () => {
@@ -249,5 +249,53 @@ describe('buildSoldCompsQuery', () => {
         title: 'Pete Maravich 1977 Topps #20',
       })
     ).toBe('Pete Maravich 1977 Topps 20');
+  });
+
+  it('drops bare Set token from provider query regression', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '79',
+          Manufacturer: 'Topps',
+          Player: 'Lindy McDaniel',
+          Set: 'Topps Set',
+          Year: '1957',
+        },
+        listingId: 'Single-000079',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Lindy McDaniel 1957 Topps 79 Baseball Card',
+      })
+    ).toBe('Lindy McDaniel 1957 Topps 79');
+  });
+
+  it.each([
+    ['Topps'],
+    ['1957 Topps'],
+    ['Topps Set'],
+    ['Base Set'],
+  ])('does not add set-derived provider terms for Set=%s', (setValue) => {
+    const query = buildSoldCompsQuery({
+      categoryId: '261328',
+      conditionId: '4000',
+      itemSpecifics: {
+        'Card Number': '79',
+        Manufacturer: 'Topps',
+        Player: 'Lindy McDaniel',
+        Set: setValue,
+        Year: '1957',
+      },
+      listingId: 'Single-000079',
+      listingType: 'single',
+      requestedCompCount: 20,
+      title: 'Lindy McDaniel 1957 Topps 79 Baseball Card',
+    });
+
+    expect(query).toBe('Lindy McDaniel 1957 Topps 79');
+    expect(query).not.toMatch(/\bBase Set\b/i);
+    expect(query).not.toMatch(/\bTopps Set\b/i);
+    expect(query).not.toMatch(/\bSet\b/i);
   });
 });
