@@ -239,6 +239,16 @@ function parseReasoningPayload(raw: string | unknown): unknown {
   try {
     return JSON.parse(payload);
   } catch (error) {
+    const recoveredPayload =
+      error instanceof SyntaxError ? extractFirstJsonDocument(payload) : null;
+    if (recoveredPayload) {
+      try {
+        return JSON.parse(recoveredPayload);
+      } catch {
+        // Fall through to original parse failure below.
+      }
+    }
+
     throw new LlmPricingReasoningValidationError([], 'LLM pricing reasoning response contained invalid JSON.', {
       cause: error,
     });
@@ -253,7 +263,78 @@ function extractJsonPayload(rawText: string): string {
     return fencedMatch[1].trim();
   }
 
+  if (trimmed.startsWith('```')) {
+    const closingFenceIndex = trimmed.indexOf('\n```');
+    if (closingFenceIndex > 0) {
+      const fencedPayload = trimmed.slice(0, closingFenceIndex + 4);
+      const partialFenceMatch = CODE_FENCE_PATTERN.exec(fencedPayload);
+      if (partialFenceMatch?.[1]) {
+        return partialFenceMatch[1].trim();
+      }
+    }
+  }
+
   return trimmed;
+}
+
+function extractFirstJsonDocument(payload: string): string | null {
+  const trimmed = payload.trimStart();
+  const startChar = trimmed[0];
+  if (startChar !== '{' && startChar !== '[') {
+    return null;
+  }
+
+  const stack: string[] = [startChar];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 1; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{' || char === '[') {
+      stack.push(char);
+      continue;
+    }
+
+    if (char === '}' || char === ']') {
+      const expectedOpenChar = char === '}' ? '{' : '[';
+      if (stack.at(-1) !== expectedOpenChar) {
+        return null;
+      }
+
+      stack.pop();
+      if (stack.length === 0) {
+        const candidate = trimmed.slice(0, index + 1);
+        const trailing = trimmed.slice(index + 1).trim();
+        return trailing.length > 0 ? candidate : null;
+      }
+    }
+  }
+
+  return null;
 }
 
 function validateCompIds(

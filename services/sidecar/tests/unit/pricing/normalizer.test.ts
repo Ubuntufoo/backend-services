@@ -266,18 +266,27 @@ describe('normalizeSoldComps', () => {
     ]);
   });
 
-  it.each([
-    ...GRADED_PROVIDER_TERMS.map((grader) => [
-      `1955 Topps #98 Johnny Riddle ${grader} 9`,
-      'excluded_graded_listing',
-    ] as const),
-    ['1955 Topps #98 Johnny Riddle slabbed', 'excluded_graded_listing'] as const,
-    ['1955 Topps #98 Johnny Riddle graded', 'excluded_graded_listing'] as const,
-  ])('rejects graded/filtered title "%s"', (title, reason) => {
+  it.each(buildConfiguredGradedTitleCases())('rejects graded/filtered title "%s"', (title) => {
     const normalized = normalizeSoldComps([buildRawComp({ title })]);
 
     expect(normalized.comps).toEqual([]);
-    expect(normalized.rejected).toEqual([{ index: 0, reason, title }]);
+    expect(normalized.rejected).toEqual([{ index: 0, reason: 'excluded_graded_listing', title }]);
+  });
+
+  it.each([
+    '1957 Topps Lindy McDaniel #79',
+    '1957 Topps Set Break #79 Lindy McDaniel VG',
+    '1957 Topps Baseball Card #79 Lindy McDaniel',
+    'Johnny Riddle 1955 Topps #98 low grade',
+    '2003 Topps Josh Beckett #150',
+    '2003 Topps Josh Beckett #150 graded',
+    '2024 Bowman Ace Bailey #7',
+    '2024 Bowman Ace Bailey #7 graded',
+  ])('keeps raw title "%s"', (title) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })]);
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
   });
 
   it.each([
@@ -670,4 +679,31 @@ function buildExplicitGradedContext(): NormalizeSoldCompsContext {
     rawCardSingleShippingDefaults: false,
     title: '1955 Topps Johnny Riddle PSA 5',
   };
+}
+
+function buildConfiguredGradedTitleCases(): string[] {
+  const ambiguousProviders = new Set(['Beckett', 'ACE']);
+  const titles = GRADED_PROVIDER_TERMS.flatMap((provider) => {
+    const withNumericGrade = `1957 Topps Lindy McDaniel #79 ${provider} 8`;
+    const variants = [withNumericGrade];
+
+    if (provider.includes(' ')) {
+      variants.push(`1957 Topps Lindy McDaniel #79 ${provider.replace(/ /g, '-')} 8`);
+    }
+
+    if (ambiguousProviders.has(provider)) {
+      variants.push(`1957 Topps Lindy McDaniel #79 ${provider} graded`);
+    }
+
+    return variants;
+  });
+
+  return [
+    ...titles,
+    '2003 Topps Josh Beckett #150 Beckett 9',
+    '2024 Bowman Ace Bailey #7 ACE 10',
+    '1955 Topps #98 Johnny Riddle grade 8',
+    '1955 Topps #98 Johnny Riddle slabbed',
+    '1955 Topps #98 Johnny Riddle graded',
+  ];
 }

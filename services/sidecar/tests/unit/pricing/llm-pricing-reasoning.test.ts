@@ -80,6 +80,24 @@ describe('parseLlmPricingReasoningOutput', () => {
     expect(() => parseLlmPricingReasoningOutput('{', context)).toThrow(LlmPricingReasoningValidationError);
   });
 
+  it('recovers first JSON document when trailing text follows valid JSON', () => {
+    const payload = `${JSON.stringify(buildValidPayload(), null, 2)}\nExtra trailing text`;
+
+    expect(parseLlmPricingReasoningOutput(payload, context)).toMatchObject({
+      selectedCompIds: ['comp-1'],
+      rejectedCompIds: ['comp-2'],
+    });
+  });
+
+  it('recovers first JSON document when fenced JSON has trailing text', () => {
+    const payload = `\`\`\`json\n${JSON.stringify(buildValidPayload(), null, 2)}\n\`\`\`\nAdditional note`;
+
+    expect(parseLlmPricingReasoningOutput(payload, context)).toMatchObject({
+      selectedCompIds: ['comp-1'],
+      rejectedCompIds: ['comp-2'],
+    });
+  });
+
   it.each([
     ['non-object output', [], /Expected object, received array/],
     ['missing required fields', { selectedCompIds: ['c1'] }, /rejectedCompIds|confidence|priceExplanation/],
