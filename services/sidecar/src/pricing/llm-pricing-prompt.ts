@@ -20,13 +20,29 @@ const FACT_KEY_ORDER: readonly LlmPricingPromptFactKey[] = [
   'Parallel/Variety',
   'Team/Franchise',
 ];
+const COMPARABLE_SOLD_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T/;
+
+export function createLlmPromptCompIdAliases(
+  compIds: readonly string[],
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(compIds.map((compId, index) => [compId, `c${index + 1}`])),
+  );
+}
 
 export function buildLlmPricingPrompt(input: LlmPricingPromptInput): LlmPricingPrompt {
   const payload = {
     listing: buildListingPayload(input.listing),
     stats: buildStatsPayload(input.stats),
-    comps: buildCompsPayload(input.comps, input.options?.maxComps),
-    conditionAdjustment: buildConditionAdjustmentPayload(input.conditionAdjustment),
+    comps: buildCompsPayload(
+      input.comps,
+      input.options?.maxComps,
+      input.options?.compIdAliasesByCanonicalId,
+    ),
+    conditionAdjustment: buildConditionAdjustmentPayload(
+      input.conditionAdjustment,
+      input.options?.compIdAliasesByCanonicalId,
+    ),
   };
 
   return {
@@ -40,7 +56,7 @@ export function buildLlmPricingPrompt(input: LlmPricingPromptInput): LlmPricingP
     userPrompt: [
       'Return JSON only.',
       'Use exactly these output fields: selectedCompIds, rejectedCompIds, conditionAdjustedPrice, conditionAdjustmentPercent, conditionAdjustmentReason, confidence, priceExplanation, reviewWarnings, ambiguousConditionTerms, compNotes.',
-      'Use only IDs from comps.',
+      'Use only comp IDs from comps exactly as written.',
       'Do not invent comps, prices, dates, grades, serials, players, teams, card attributes, condition terms, or listing facts.',
       'Comps and deterministic stats are already accepted. Do not reject exact-card comps from stats.',
       'Do not make lot or single recommendations.',
@@ -112,7 +128,8 @@ function buildStatsPayload(stats: LlmPricingPromptStats): Record<string, unknown
 
 function buildCompsPayload(
   comps: readonly LlmPricingPromptComp[],
-  maxComps: number | undefined
+  maxComps: number | undefined,
+  compIdAliasesByCanonicalId: Readonly<Record<string, string>> | undefined,
 ): Record<string, unknown>[] {
   const normalizedMaxComps = normalizeMaxComps(maxComps);
   const payloads: Record<string, unknown>[] = [];
@@ -124,10 +141,10 @@ function buildCompsPayload(
     }
 
     const payload: Record<string, unknown> = {
-      id: normalizeRequiredText(comp.id),
+      id: toPromptCompId(comp.id, compIdAliasesByCanonicalId),
       title: truncateText(comp.title, MAX_TITLE_LENGTH),
       price,
-      soldAt: normalizeRequiredText(comp.soldAt),
+      soldAt: normalizeSoldAt(comp.soldAt),
     };
 
     const condition = normalizeOptionalText(comp.condition, MAX_CONDITION_LENGTH);
@@ -146,7 +163,8 @@ function buildCompsPayload(
 }
 
 function buildConditionAdjustmentPayload(
-  summary: LlmPricingPromptInput['conditionAdjustment']
+  summary: LlmPricingPromptInput['conditionAdjustment'],
+  compIdAliasesByCanonicalId: Readonly<Record<string, string>> | undefined,
 ): Record<string, unknown> {
   return {
     listingConditionSignal: summary.listingConditionSignal
@@ -154,18 +172,16 @@ function buildConditionAdjustmentPayload(
           label: summary.listingConditionSignal.label,
           matchedText: summary.listingConditionSignal.matchedText,
           score: summary.listingConditionSignal.score,
-          source: summary.listingConditionSignal.source,
         }
       : null,
     compConditionSignals: summary.compConditionSignals.map((entry) => ({
-      compId: entry.compId,
+      compId: toPromptCompId(entry.compId, compIdAliasesByCanonicalId),
       price: normalizePrice(entry.price),
       signal: entry.signal
         ? {
             label: entry.signal.label,
             matchedText: entry.signal.matchedText,
             score: entry.signal.score,
-            source: entry.signal.source,
           }
         : null,
       title: truncateText(entry.title, MAX_TITLE_LENGTH),
@@ -178,13 +194,24 @@ function buildConditionAdjustmentPayload(
     allowedAdjustment: {
       eligible: summary.allowedAdjustment.eligible,
       targetPrice: normalizeNullablePrice(summary.allowedAdjustment.targetPrice),
-      minPrice: normalizeNullablePrice(summary.allowedAdjustment.minPrice),
-      maxPrice: normalizeNullablePrice(summary.allowedAdjustment.maxPrice),
-      rawPercent: summary.allowedAdjustment.rawPercent,
-      appliedPercent: summary.allowedAdjustment.appliedPercent,
-      reason: summary.allowedAdjustment.reason,
     },
   };
+}
+
+function toPromptCompId(
+  canonicalCompId: string,
+  compIdAliasesByCanonicalId: Readonly<Record<string, string>> | undefined,
+): string {
+  return normalizeRequiredText(compIdAliasesByCanonicalId?.[canonicalCompId] ?? canonicalCompId);
+}
+
+function normalizeSoldAt(value: string): string {
+  const normalized = normalizeRequiredText(value);
+  if (COMPARABLE_SOLD_DATE_PATTERN.test(normalized)) {
+    return normalized.slice(0, 10);
+  }
+
+  return normalized;
 }
 
 function normalizeSoldCount(value: number): number {

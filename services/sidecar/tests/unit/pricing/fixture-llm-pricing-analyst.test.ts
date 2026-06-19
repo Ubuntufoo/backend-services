@@ -30,9 +30,39 @@ describe('createFixtureLlmPricingAnalyst', () => {
 
   it('captures prompt payload including condition summary', async () => {
     const analyst = createFixtureLlmPricingAnalyst();
-    const result = await analyst.analyze(buildInput());
+    const result = await analyst.analyze(
+      buildInput({
+        conditionAdjustment: buildConditionAdjustment({
+          compConditionSignals: [
+            {
+              compId: 'comp-1',
+              price: 10,
+              signal: null,
+              title: 'Comp One VG',
+            },
+            {
+              compId: 'comp-2',
+              price: 15.13,
+              signal: null,
+              title: 'Comp Two EX',
+            },
+            {
+              compId: 'comp-3',
+              price: 20,
+              signal: null,
+              title: 'Comp Three VG-EX',
+            },
+          ],
+        }),
+      }),
+    );
     const payload = extractPayload(result.prompt.userPrompt);
 
+    expect(payload.comps).toEqual([
+      expect.objectContaining({ id: 'c1', soldAt: '2026-05-28' }),
+      expect.objectContaining({ id: 'c2', soldAt: '2026-05-27' }),
+      expect.objectContaining({ id: 'c3', soldAt: '2026-05-26' }),
+    ]);
     expect(payload.conditionAdjustment).toMatchObject({
       listingConditionSignal: {
         label: 'Very Good',
@@ -42,6 +72,11 @@ describe('createFixtureLlmPricingAnalyst', () => {
         eligible: true,
         targetPrice: 14.44,
       },
+      compConditionSignals: [
+        expect.objectContaining({ compId: 'c1' }),
+        expect.objectContaining({ compId: 'c2' }),
+        expect.objectContaining({ compId: 'c3' }),
+      ],
     });
   });
 

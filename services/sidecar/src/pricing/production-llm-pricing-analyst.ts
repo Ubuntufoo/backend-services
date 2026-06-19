@@ -11,7 +11,7 @@ import {
 
 import { redactSensitiveText } from './apify-provider.js';
 import { computePricingConfidence } from './confidence.js';
-import { buildLlmPricingPrompt } from './llm-pricing-prompt.js';
+import { buildLlmPricingPrompt, createLlmPromptCompIdAliases } from './llm-pricing-prompt.js';
 import { parseLlmPricingReasoningOutput } from './llm-pricing-reasoning.js';
 import type {
   LlmPricingPrompt,
@@ -132,7 +132,10 @@ class ProductionPricingAnalyst implements PricingAnalyst {
   constructor(private readonly options: CreateProductionPricingAnalystOptions) {}
 
   async analyze(input: PricingAnalystInput): Promise<PricingAnalystResult> {
-    const prompt = buildPrompt(input);
+    const compIdAliasesByCanonicalId = createLlmPromptCompIdAliases(
+      input.comps.map((comp) => comp.id),
+    );
+    const prompt = buildPrompt(input, compIdAliasesByCanonicalId);
     const routes = await this.options.dataAccess.aiModelRoutes.resolveForTask(
       buildPricingReasoningRouteResolutionInput()
     );
@@ -171,7 +174,8 @@ class ProductionPricingAnalyst implements PricingAnalyst {
     try {
       const reasoning = parseLlmPricingReasoningOutput(reasoningResult.text, {
         allowedAdjustment: input.conditionAdjustment.allowedAdjustment,
-        validCompIds: input.comps.map((comp) => comp.id),
+        canonicalCompIdsByPromptId: invertCompIdAliases(compIdAliasesByCanonicalId),
+        validCompIds: Object.values(compIdAliasesByCanonicalId),
       });
 
       return {
@@ -217,12 +221,18 @@ function buildPricingReasoningRouteResolutionInput(): {
   };
 }
 
-function buildPrompt(input: PricingAnalystInput): LlmPricingPrompt {
+function buildPrompt(
+  input: PricingAnalystInput,
+  compIdAliasesByCanonicalId: Readonly<Record<string, string>>,
+): LlmPricingPrompt {
   return buildLlmPricingPrompt({
     comps: input.comps.map(toPromptComp),
     conditionAdjustment: input.conditionAdjustment,
     listing: input.listing,
-    options: input.promptOptions,
+    options: {
+      ...input.promptOptions,
+      compIdAliasesByCanonicalId,
+    },
     stats: toPromptStats(input),
   });
 }
@@ -249,6 +259,19 @@ function toPromptComp(comp: PricingAnalystInput['comps'][number]): LlmPricingPro
     soldAt: comp.soldDate,
     title: comp.title,
   };
+}
+
+function invertCompIdAliases(
+  compIdAliasesByCanonicalId: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(compIdAliasesByCanonicalId).map(([canonicalCompId, promptCompId]) => [
+        promptCompId,
+        canonicalCompId,
+      ]),
+    ),
+  );
 }
 
 async function executeRoute(

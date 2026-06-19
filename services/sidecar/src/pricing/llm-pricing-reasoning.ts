@@ -134,10 +134,15 @@ export function parseLlmPricingReasoningOutput(
 ): LlmPricingReasoning {
   const parsed = parseReasoningPayload(raw);
   const result = llmPricingReasoningSchema.superRefine((value, refinementContext) => {
+    const normalizedSelectedCompIds = normalizeCompIds(value.selectedCompIds, context);
+    const normalizedRejectedCompIds = normalizeCompIds(value.rejectedCompIds, context);
+
     validateCompIds(value.selectedCompIds, 'selectedCompIds', context, refinementContext);
     validateCompIds(value.rejectedCompIds, 'rejectedCompIds', context, refinementContext);
 
-    const overlappingCompIds = value.selectedCompIds.filter((compId) => value.rejectedCompIds.includes(compId));
+    const overlappingCompIds = normalizedSelectedCompIds.filter((compId) =>
+      normalizedRejectedCompIds.includes(compId),
+    );
     if (overlappingCompIds.length > 0) {
       refinementContext.addIssue({
         code: z.ZodIssueCode.custom,
@@ -147,7 +152,7 @@ export function parseLlmPricingReasoningOutput(
     }
 
     value.compNotes?.forEach((compNote, index) => {
-      if (!context.validCompIds.includes(compNote.compId)) {
+      if (!isKnownCompId(compNote.compId, context)) {
         refinementContext.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['compNotes', index, 'compId'],
@@ -203,6 +208,8 @@ export function parseLlmPricingReasoningOutput(
 
   return {
     ...result.data,
+    selectedCompIds: normalizeCompIds(result.data.selectedCompIds, context),
+    rejectedCompIds: normalizeCompIds(result.data.rejectedCompIds, context),
     conditionAdjustedPrice:
       result.data.conditionAdjustedPrice === null
         ? null
@@ -211,6 +218,10 @@ export function parseLlmPricingReasoningOutput(
       result.data.conditionAdjustmentPercent === null
         ? null
         : Number(result.data.conditionAdjustmentPercent.toFixed(4)),
+    compNotes: result.data.compNotes?.map((compNote) => ({
+      ...compNote,
+      compId: toCanonicalCompId(compNote.compId, context),
+    })),
   };
 }
 
@@ -254,7 +265,9 @@ function validateCompIds(
   const seenCompIds = new Set<string>();
 
   compIds.forEach((compId, index) => {
-    if (seenCompIds.has(compId)) {
+    const canonicalCompId = toCanonicalCompId(compId, context);
+
+    if (seenCompIds.has(canonicalCompId)) {
       refinementContext.addIssue({
         code: z.ZodIssueCode.custom,
         path: [fieldName, index],
@@ -263,9 +276,9 @@ function validateCompIds(
       return;
     }
 
-    seenCompIds.add(compId);
+    seenCompIds.add(canonicalCompId);
 
-    if (!context.validCompIds.includes(compId)) {
+    if (!isKnownCompId(compId, context)) {
       refinementContext.addIssue({
         code: z.ZodIssueCode.custom,
         path: [fieldName, index],
@@ -273,6 +286,33 @@ function validateCompIds(
       });
     }
   });
+}
+
+function normalizeCompIds(
+  compIds: readonly string[],
+  context: LlmPricingReasoningValidationContext,
+): string[] {
+  return compIds.map((compId) => toCanonicalCompId(compId, context));
+}
+
+function isKnownCompId(
+  compId: string,
+  context: LlmPricingReasoningValidationContext,
+): boolean {
+  return context.validCompIds.includes(compId) || canonicalCompIds(context).includes(compId);
+}
+
+function toCanonicalCompId(
+  compId: string,
+  context: LlmPricingReasoningValidationContext,
+): string {
+  return context.canonicalCompIdsByPromptId?.[compId] ?? compId;
+}
+
+function canonicalCompIds(context: LlmPricingReasoningValidationContext): readonly string[] {
+  return context.canonicalCompIdsByPromptId
+    ? Object.values(context.canonicalCompIdsByPromptId)
+    : context.validCompIds;
 }
 
 function normalizeSuggestedPrice(value: number): number | null {

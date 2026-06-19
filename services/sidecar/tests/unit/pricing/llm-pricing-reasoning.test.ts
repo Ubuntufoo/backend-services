@@ -6,7 +6,12 @@ import {
 
 describe('parseLlmPricingReasoningOutput', () => {
   const context: LlmPricingReasoningValidationContext = {
-    validCompIds: ['comp-1', 'comp-2', 'comp-3'],
+    validCompIds: ['c1', 'c2', 'c3'],
+    canonicalCompIdsByPromptId: {
+      c1: 'comp-1',
+      c2: 'comp-2',
+      c3: 'comp-3',
+    },
     allowedAdjustment: {
       eligible: true,
       targetPrice: 15.13,
@@ -19,8 +24,8 @@ describe('parseLlmPricingReasoningOutput', () => {
     expect(
       parseLlmPricingReasoningOutput(
         {
-          selectedCompIds: ['comp-1', 'comp-2'],
-          rejectedCompIds: ['comp-3'],
+          selectedCompIds: ['c1', 'c2'],
+          rejectedCompIds: ['c3'],
           conditionAdjustedPrice: 15.129,
           conditionAdjustmentPercent: -0.0488,
           conditionAdjustmentReason: 'Most explicit-condition comps appear slightly stronger.',
@@ -28,7 +33,7 @@ describe('parseLlmPricingReasoningOutput', () => {
           priceExplanation: 'Median comps support exact deterministic target.',
           reviewWarnings: ['Most explicit-condition comps appear higher grade than listing.'],
           ambiguousConditionTerms: ['low grade'],
-          compNotes: [{ compId: 'comp-1', note: 'Recent sale aligns with target.' }],
+          compNotes: [{ compId: 'c1', note: 'Recent sale aligns with target.' }],
         },
         context,
       ),
@@ -50,8 +55,8 @@ describe('parseLlmPricingReasoningOutput', () => {
     expect(
       parseLlmPricingReasoningOutput(
         {
-          selectedCompIds: ['comp-1'],
-          rejectedCompIds: ['comp-2', 'comp-3'],
+          selectedCompIds: ['c1'],
+          rejectedCompIds: ['c2', 'c3'],
           conditionAdjustedPrice: null,
           conditionAdjustmentPercent: null,
           conditionAdjustmentReason: 'Condition evidence is thin.',
@@ -77,16 +82,16 @@ describe('parseLlmPricingReasoningOutput', () => {
 
   it.each([
     ['non-object output', [], /Expected object, received array/],
-    ['missing required fields', { selectedCompIds: ['comp-1'] }, /rejectedCompIds|confidence|priceExplanation/],
+    ['missing required fields', { selectedCompIds: ['c1'] }, /rejectedCompIds|confidence|priceExplanation/],
     ['extra output field', { ...buildValidPayload(), extra: true }, /Unrecognized key\(s\) in object: 'extra'/],
     ['invalid confidence', { ...buildValidPayload(), confidence: 'certain' }, /confidence/],
-    ['selectedCompIds not array', { ...buildValidPayload(), selectedCompIds: 'comp-1' }, /selectedCompIds/],
-    ['rejectedCompIds not array', { ...buildValidPayload(), rejectedCompIds: 'comp-2' }, /rejectedCompIds/],
-    ['selected unknown comp id', { ...buildValidPayload(), selectedCompIds: ['comp-1', 'unknown'] }, /selectedCompIds.*unknown compId/],
+    ['selectedCompIds not array', { ...buildValidPayload(), selectedCompIds: 'c1' }, /selectedCompIds/],
+    ['rejectedCompIds not array', { ...buildValidPayload(), rejectedCompIds: 'c2' }, /rejectedCompIds/],
+    ['selected unknown comp id', { ...buildValidPayload(), selectedCompIds: ['c1', 'unknown'] }, /selectedCompIds.*unknown compId/],
     ['rejected unknown comp id', { ...buildValidPayload(), rejectedCompIds: ['unknown'] }, /rejectedCompIds.*unknown compId/],
-    ['selected duplicate comp id', { ...buildValidPayload(), selectedCompIds: ['comp-1', 'comp-1'] }, /duplicate compId/],
-    ['rejected duplicate comp id', { ...buildValidPayload(), rejectedCompIds: ['comp-2', 'comp-2'] }, /duplicate compId/],
-    ['selected rejected overlap', { ...buildValidPayload(), selectedCompIds: ['comp-1'], rejectedCompIds: ['comp-1'] }, /overlaps rejectedCompIds/],
+    ['selected duplicate comp id', { ...buildValidPayload(), selectedCompIds: ['c1', 'c1'] }, /duplicate compId/],
+    ['rejected duplicate comp id', { ...buildValidPayload(), rejectedCompIds: ['c2', 'c2'] }, /duplicate compId/],
+    ['selected rejected overlap', { ...buildValidPayload(), selectedCompIds: ['c1'], rejectedCompIds: ['c1'] }, /overlaps rejectedCompIds/],
     ['conditionAdjustedPrice string', { ...buildValidPayload(), conditionAdjustedPrice: '15.13' }, /conditionAdjustedPrice/],
     ['conditionAdjustedPrice NaN', { ...buildValidPayload(), conditionAdjustedPrice: Number.NaN }, /conditionAdjustedPrice/],
     ['conditionAdjustedPrice zero', { ...buildValidPayload(), conditionAdjustedPrice: 0 }, /conditionAdjustedPrice/],
@@ -99,6 +104,22 @@ describe('parseLlmPricingReasoningOutput', () => {
     ['compNotes unknown comp id', { ...buildValidPayload(), compNotes: [{ compId: 'unknown', note: 'Outlier comp.' }] }, /compNotes.*unknown/],
   ])('rejects %s', (_label, payload, message) => {
     expect(() => parseLlmPricingReasoningOutput(payload, context)).toThrow(message);
+  });
+
+  it('remaps alias ids back to canonical comp ids', () => {
+    expect(
+      parseLlmPricingReasoningOutput(
+        {
+          ...buildValidPayload(),
+          selectedCompIds: ['c1'],
+          rejectedCompIds: ['comp-2'],
+        },
+        context,
+      ),
+    ).toMatchObject({
+      selectedCompIds: ['comp-1'],
+      rejectedCompIds: ['comp-2'],
+    });
   });
 
   it('rejects off-target adjustment', () => {
@@ -136,8 +157,8 @@ describe('parseLlmPricingReasoningOutput', () => {
 
 function buildValidPayload() {
   return {
-    selectedCompIds: ['comp-1'],
-    rejectedCompIds: ['comp-2'],
+    selectedCompIds: ['c1'],
+    rejectedCompIds: ['c2'],
     conditionAdjustedPrice: 15.13,
     conditionAdjustmentPercent: 0,
     conditionAdjustmentReason: 'Exact deterministic target accepted.',

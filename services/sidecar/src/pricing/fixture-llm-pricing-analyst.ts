@@ -1,5 +1,5 @@
 import { computePricingConfidence } from './confidence.js';
-import { buildLlmPricingPrompt } from './llm-pricing-prompt.js';
+import { buildLlmPricingPrompt, createLlmPromptCompIdAliases } from './llm-pricing-prompt.js';
 import {
   LlmPricingReasoningValidationError,
   parseLlmPricingReasoningOutput,
@@ -34,12 +34,18 @@ class FixtureLlmPricingAnalyst implements PricingAnalyst {
   constructor(private readonly options: CreateFixtureLlmPricingAnalystOptions = {}) {}
 
   async analyze(input: PricingAnalystInput): Promise<PricingAnalystResult> {
+    const compIdAliasesByCanonicalId = createLlmPromptCompIdAliases(
+      input.comps.map((comp) => comp.id),
+    );
     const prompt = buildLlmPricingPrompt({
       listing: input.listing,
       stats: toPromptStats(input),
       comps: input.comps.map(toPromptComp),
       conditionAdjustment: input.conditionAdjustment,
-      options: input.promptOptions,
+      options: {
+        ...input.promptOptions,
+        compIdAliasesByCanonicalId,
+      },
     });
 
     if (this.options.mode === 'throws') {
@@ -49,7 +55,8 @@ class FixtureLlmPricingAnalyst implements PricingAnalyst {
     try {
       const rawOutput = buildRawOutput(input, this.options.mode, this.options.rawOutput);
       const reasoning = parseLlmPricingReasoningOutput(rawOutput, {
-        validCompIds: input.comps.map((comp) => comp.id),
+        canonicalCompIdsByPromptId: invertCompIdAliases(compIdAliasesByCanonicalId),
+        validCompIds: Object.values(compIdAliasesByCanonicalId),
         allowedAdjustment: input.conditionAdjustment.allowedAdjustment,
       });
 
@@ -97,7 +104,9 @@ function buildRawOutput(
 }
 
 function buildValidRawOutput(input: PricingAnalystInput) {
-  const selectedCompIds = input.comps.map((comp) => comp.id);
+  const selectedCompIds = Object.values(
+    createLlmPromptCompIdAliases(input.comps.map((comp) => comp.id)),
+  );
   const conditionAdjustedPrice = getConditionAdjustedPrice(input);
 
   return {
@@ -171,4 +180,17 @@ function normalizePrice(value: number | null): number | null {
 
   const cents = Math.round(normalized * 100);
   return Number.isSafeInteger(cents) ? normalized : null;
+}
+
+function invertCompIdAliases(
+  compIdAliasesByCanonicalId: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(compIdAliasesByCanonicalId).map(([canonicalCompId, promptCompId]) => [
+        promptCompId,
+        canonicalCompId,
+      ]),
+    ),
+  );
 }

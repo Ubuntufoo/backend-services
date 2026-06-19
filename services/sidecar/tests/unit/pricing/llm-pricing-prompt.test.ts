@@ -32,14 +32,14 @@ describe('buildLlmPricingPrompt', () => {
       },
       comps: [
         {
-          id: 'comp-1',
+          id: 'c1',
           title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
           price: 15.5,
           soldAt: '2026-05-28',
           condition: 'Ungraded',
         },
         {
-          id: 'comp-2',
+          id: 'c2',
           title: '2023 Panini Prizm Victor Wembanyama #136 Spurs RC',
           price: 14.25,
           soldAt: '2026-05-21',
@@ -50,22 +50,20 @@ describe('buildLlmPricingPrompt', () => {
           label: 'Very Good',
           matchedText: 'VERY_GOOD',
           score: 3,
-          source: 'listing_condition',
         },
         compConditionSignals: [
           {
-            compId: 'comp-1',
+            compId: 'c1',
             title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
             price: 15.5,
             signal: {
               label: 'VG-EX',
               matchedText: 'VG-EX',
               score: 3.5,
-              source: 'comp_title',
             },
           },
           {
-            compId: 'comp-2',
+            compId: 'c2',
             title: '2023 Panini Prizm Victor Wembanyama #136 Spurs RC',
             price: 14.25,
             signal: null,
@@ -79,11 +77,6 @@ describe('buildLlmPricingPrompt', () => {
         allowedAdjustment: {
           eligible: true,
           targetPrice: 13.12,
-          minPrice: 13.12,
-          maxPrice: 13.12,
-          rawPercent: -0.0642,
-          appliedPercent: -0.1253,
-          reason: 'eligible',
         },
       },
     });
@@ -222,11 +215,6 @@ describe('buildLlmPricingPrompt', () => {
         allowedAdjustment: {
           eligible: false,
           targetPrice: null,
-          minPrice: null,
-          maxPrice: null,
-          rawPercent: null,
-          appliedPercent: null,
-          reason: 'listing_condition_unknown',
         },
       },
       comps: [
@@ -234,10 +222,15 @@ describe('buildLlmPricingPrompt', () => {
           id: ' comp-1 ',
           title: '  2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX  ',
           price: 15.129,
-          soldAt: ' 2026-05-28 ',
+          soldAt: ' 2026-05-28T11:22:33.000Z ',
           condition: '  ',
         },
       ],
+      options: {
+        compIdAliasesByCanonicalId: {
+          ' comp-1 ': 'c1',
+        },
+      },
     };
 
     const promptA = buildLlmPricingPrompt(input);
@@ -265,7 +258,7 @@ describe('buildLlmPricingPrompt', () => {
       },
       comps: [
         {
-          id: 'comp-1',
+          id: 'c1',
           title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
           price: 15.13,
           soldAt: '2026-05-28',
@@ -282,11 +275,6 @@ describe('buildLlmPricingPrompt', () => {
         allowedAdjustment: {
           eligible: false,
           targetPrice: null,
-          minPrice: null,
-          maxPrice: null,
-          rawPercent: null,
-          appliedPercent: null,
-          reason: 'listing_condition_unknown',
         },
       },
     });
@@ -395,15 +383,21 @@ function buildInput(): LlmPricingPromptInput {
         id: 'comp-1',
         title: '2023 Panini Prizm Victor Wembanyama Rookie #136 VG-EX',
         price: 15.5,
-        soldAt: '2026-05-28',
+        soldAt: '2026-05-28T12:34:56.000Z',
         condition: 'Ungraded',
       },
       {
         id: 'comp-2',
         title: '2023 Panini Prizm Victor Wembanyama #136 Spurs RC',
         price: 14.25,
-        soldAt: '2026-05-21',
+        soldAt: '2026-05-21T00:00:00.000Z',
       },
     ],
+    options: {
+      compIdAliasesByCanonicalId: {
+        'comp-1': 'c1',
+        'comp-2': 'c2',
+      },
+    },
   };
 }

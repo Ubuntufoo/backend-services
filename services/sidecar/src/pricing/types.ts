@@ -160,6 +160,7 @@ export interface LlmPricingPromptComp {
 
 export interface LlmPricingPromptOptions {
   maxComps?: number;
+  compIdAliasesByCanonicalId?: Readonly<Record<string, string>>;
 }
 
 export interface LlmPricingPromptInput {
@@ -195,6 +196,7 @@ export interface LlmPricingReasoning {
 
 export interface LlmPricingReasoningValidationContext {
   validCompIds: readonly string[];
+  canonicalCompIdsByPromptId?: Readonly<Record<string, string>>;
   allowedAdjustment: Pick<AllowedConditionAdjustment, 'eligible' | 'targetPrice' | 'minPrice' | 'maxPrice'>;
 }
 

@@ -11,6 +11,81 @@ import {
 } from '@/pricing/index.js';
 
 describe('createProductionPricingAnalyst', () => {
+  it('uses short prompt-local comp aliases and remaps model output to canonical ids', async () => {
+    const executeModel = vi.fn(async ({ prompt }: { prompt: { userPrompt: string } }) => {
+      const payload = extractPayload(prompt.userPrompt);
+
+      expect(payload.comps).toEqual([
+        expect.objectContaining({ id: 'c1', soldAt: '2026-05-28' }),
+        expect.objectContaining({ id: 'c2', soldAt: '2026-05-27' }),
+      ]);
+      expect(payload.conditionAdjustment).toMatchObject({
+        compConditionSignals: [
+          expect.objectContaining({ compId: 'c1' }),
+          expect.objectContaining({ compId: 'c2' }),
+        ],
+      });
+      expect(JSON.stringify(payload)).not.toContain('canonical-comp-1');
+      expect(JSON.stringify(payload)).not.toContain('canonical-comp-2');
+
+      const response = {
+        selectedCompIds: ['c1'],
+        rejectedCompIds: ['c2'],
+        conditionAdjustedPrice: 14.44,
+        conditionAdjustmentPercent: -0.0456,
+        conditionAdjustmentReason: 'Exact target accepted.',
+        confidence: 'medium',
+        priceExplanation: 'Alias output parsed correctly.',
+      };
+
+      return {
+        rawOutput: response,
+        text: JSON.stringify(response),
+      };
+    });
+    const analyst = createProductionPricingAnalyst({
+      dataAccess: {
+        aiModelRoutes: {
+          resolveForTask: vi.fn().mockResolvedValue([buildRoute()]),
+        },
+        dailyUsage: {
+          incrementGeminiCallsUsed: vi.fn(),
+        },
+      } as never,
+      executeModel,
+      now: () => new Date('2026-06-19T15:00:00.000Z'),
+    });
+
+    const result = await analyst.analyze(
+      buildInput({
+        comps: [
+          buildComp({ id: 'canonical-comp-1', soldDate: '2026-05-28T00:00:00.000Z' }),
+          buildComp({ id: 'canonical-comp-2', soldDate: '2026-05-27T00:00:00.000Z' }),
+        ],
+        conditionAdjustment: buildConditionAdjustment({
+          compConditionSignals: [
+            {
+              compId: 'canonical-comp-1',
+              price: 10,
+              signal: null,
+              title: 'Comp One',
+            },
+            {
+              compId: 'canonical-comp-2',
+              price: 20,
+              signal: null,
+              title: 'Comp Two',
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(result.reasoning.selectedCompIds).toEqual(['canonical-comp-1']);
+    expect(result.reasoning.rejectedCompIds).toEqual(['canonical-comp-2']);
+    expect(executeModel).toHaveBeenCalledTimes(1);
+  });
+
   it('captures safe nested diagnostics for retryable upstream execution failures', async () => {
     const analyst = createProductionPricingAnalyst({
       dataAccess: {
@@ -82,7 +157,10 @@ function buildRoute(overrides: Partial<ResolvedAiModelRoute> = {}): ResolvedAiMo
 
 function buildInput(overrides: Partial<PricingAnalystInput> = {}): PricingAnalystInput {
   return {
-    comps: [],
+    comps: [
+      buildComp({ id: 'comp-1', soldDate: '2026-05-28T00:00:00.000Z' }),
+      buildComp({ id: 'comp-2', soldDate: '2026-05-27T00:00:00.000Z' }),
+    ],
     conditionAdjustment: buildConditionAdjustment(),
     listing: {
       condition: 'Very Good',
@@ -99,6 +177,29 @@ function buildInput(overrides: Partial<PricingAnalystInput> = {}): PricingAnalys
       maxComps: 20,
     },
     stats: buildStats(),
+    ...overrides,
+  };
+}
+
+function buildComp(
+  overrides: Partial<PricingAnalystInput['comps'][number]> = {},
+): PricingAnalystInput['comps'][number] {
+  return {
+    condition: 'Ungraded',
+    id: 'comp-1',
+    listingUrl: null,
+    price: {
+      currency: 'USD',
+      value: 10,
+    },
+    shippingPrice: null,
+    soldDate: '2026-05-28T00:00:00.000Z',
+    source: 'provider',
+    title: 'Victor Wembanyama comp',
+    totalPrice: {
+      currency: 'USD',
+      value: 10,
+    },
     ...overrides,
   };
 }
@@ -143,4 +244,15 @@ function buildConditionAdjustment(
     },
     ...overrides,
   };
+}
+
+function extractPayload(userPrompt: string): Record<string, unknown> {
+  const marker = 'Pricing payload:\n';
+  const index = userPrompt.indexOf(marker);
+
+  if (index < 0) {
+    throw new Error('Prompt payload marker missing.');
+  }
+
+  return JSON.parse(userPrompt.slice(index + marker.length));
 }
