@@ -21,22 +21,32 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
     "Card Manufacturer": "string",
     "Season": "string"
   },
-  "priceSuggestion": 0,
   "confidence": {
     "title": 0.0,
     "category": 0.0,
-    "price": 0.0,
     "aspects": 0.0
   },
   "warnings": ["string"]
 }`;
+
+function omitPriceFromUserHints(
+  hints: GenerateListingDraftInput['userHints']
+): Omit<NonNullable<GenerateListingDraftInput['userHints']>, 'price'> | null {
+  if (!hints) {
+    return null;
+  }
+
+  const { price: _price, ...safeHints } = hints;
+  return safeHints;
+}
 
 export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput): string {
   return [
     'Generate an eBay listing draft for a trading card or card lot.',
     'Use visible image evidence first.',
     'Use user hints only as supplemental context.',
-    'Listing title must be < 80 characters and be in this format: "[Player Name] [Year] [Card Manufacturer] [Card Number] [Important Details: Rookie Card, Parallel, etc.]".',
+    'Listing title must be < 80 characters and use only: player name, year, manufacturer, card number, and explicit market-relevant characteristics visible on the card (e.g., Rookie Card, Refractor, parallel, insert, autograph, memorabilia, numbered).',
+    'Do NOT include inferred filler in titles: sport, league, team, franchise, position, role, "coach", "3rd base", or similar—unless those words are genuinely part of an official set name, insert name, or parallel name printed on the card.',
     'Do not invent grades, certification status, serial numbers, autographs, relics, or rare variants unless they are visible in the images or explicitly provided in the user hints.',
     'Inspect visible card condition and choose the closest supported raw card condition token when the item appears ungraded.',
     'Supported raw card condition tokens: NEAR_MINT_OR_BETTER, EXCELLENT, VERY_GOOD, POOR.',
@@ -72,7 +82,7 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
       {
         listingId: input.listingId,
         imageUrls: input.imageUrls,
-        userHints: input.userHints ?? null,
+        userHints: omitPriceFromUserHints(input.userHints),
       },
       null,
       2

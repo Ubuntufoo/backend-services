@@ -125,12 +125,6 @@ function getListingImageUrls(listing: ListingRow): string[] {
     .filter((value) => value.length > 0);
 }
 
-function getListingPriceHint(listing: ListingRow): number | undefined {
-  return typeof listing.price === 'number' && Number.isFinite(listing.price)
-    ? listing.price
-    : undefined;
-}
-
 function getListingAspectHints(
   listing: ListingRow
 ): NonNullable<GenerateListingDraftInput['userHints']>['aspects'] | undefined {
@@ -161,16 +155,14 @@ function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHin
   const title = asNonEmptyString(listing.title);
   const notes = getListingNotesHint(listing);
   const aspects = getListingAspectHints(listing);
-  const price = getListingPriceHint(listing);
 
-  if (!title && !notes && !aspects && price === undefined) {
+  if (!title && !notes && !aspects) {
     return undefined;
   }
 
   return {
     aspects,
     notes,
-    price,
     title,
   };
 }
@@ -417,10 +409,11 @@ async function markAiModelAttemptRecordFailed(
 function createPreparedListingDraftFromGenerateFn(
   generateDraft: GenerateListingDraftFn
 ): PrepareListingDraftFn {
-  return (input) => Promise.resolve({
-    input,
-    execute: async (options) => await generateDraft(input, options),
-  });
+  return (input) =>
+    Promise.resolve({
+      input,
+      execute: async (options) => await generateDraft(input, options),
+    });
 }
 
 async function ensureJobRunning(
@@ -490,12 +483,15 @@ async function enqueueResearchPriceAfterGenerate(
     const appSettings = await dataAccess.appSettings.get();
     pricingProviderMode = getPricingProviderMode(appSettings);
     if (!isPricingEnabled(appSettings)) {
-      jobLogger.info('Skipped research_price enqueue after generate_ai because pricing provider mode is off.', {
-        event: 'research_price_enqueue_skipped',
-        listingId: listing.listing_id,
-        pricingProviderMode,
-        settingsSource: appSettings ? 'app_settings' : 'default',
-      });
+      jobLogger.info(
+        'Skipped research_price enqueue after generate_ai because pricing provider mode is off.',
+        {
+          event: 'research_price_enqueue_skipped',
+          listingId: listing.listing_id,
+          pricingProviderMode,
+          settingsSource: appSettings ? 'app_settings' : 'default',
+        }
+      );
       return;
     }
 
@@ -513,7 +509,10 @@ async function enqueueResearchPriceAfterGenerate(
 async function runGenerateAiJob(
   job: JobRow,
   options: Required<
-    Pick<RunSidecarJobOptions, 'dataAccess' | 'generateListingDraft' | 'now' | 'prepareListingDraft'>
+    Pick<
+      RunSidecarJobOptions,
+      'dataAccess' | 'generateListingDraft' | 'now' | 'prepareListingDraft'
+    >
   >
 ): Promise<RunSidecarJobResult> {
   const listingId = asNonEmptyString(job.listing_id);
@@ -525,7 +524,10 @@ async function runGenerateAiJob(
       'terminal',
       `Job "${job.id}" is missing listing_id and cannot run generate_ai.`
     );
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -541,7 +543,10 @@ async function runGenerateAiJob(
       'terminal',
       `Listing "${listingId}" was not found for generate_ai.`
     );
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -555,7 +560,10 @@ async function runGenerateAiJob(
       'user_fixable',
       `Listing "${listingId}" is not eligible for generate_ai from status "${listing.status}".`
     );
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -573,7 +581,10 @@ async function runGenerateAiJob(
     );
 
     try {
-      await options.dataAccess.listings.update(listingId, buildGenerateAiFailureUpdate(listingError, errorAt));
+      await options.dataAccess.listings.update(
+        listingId,
+        buildGenerateAiFailureUpdate(listingError, errorAt)
+      );
     } catch (error) {
       listingError = new SidecarJobError(
         listingError.code,
@@ -833,9 +844,7 @@ async function runGenerateAiJob(
   }
 }
 
-function buildAssetPrepSummary(
-  result: PrepareRecordCreatedListingsResult
-): AssetPrepSummary {
+function buildAssetPrepSummary(result: PrepareRecordCreatedListingsResult): AssetPrepSummary {
   return {
     exhaustedCandidates: result.exhaustedCandidates,
     failedCount: result.failed.length,
@@ -846,7 +855,9 @@ function buildAssetPrepSummary(
 
 async function runProcessImagesJob(
   job: JobRow,
-  options: Required<Pick<RunSidecarJobOptions, 'dataAccess' | 'now' | 'prepareRecordCreatedListings'>>
+  options: Required<
+    Pick<RunSidecarJobOptions, 'dataAccess' | 'now' | 'prepareRecordCreatedListings'>
+  >
 ): Promise<RunSidecarJobResult> {
   const errorAt = asIsoTimestamp(options.now);
 
@@ -881,7 +892,10 @@ async function runProcessImagesJob(
 
     const finalError =
       jobError.category === 'recoverable' ? createRetryExhaustedError(job, jobError) : jobError;
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(finalError, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(finalError, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -903,7 +917,10 @@ async function runPublishJob(
       'terminal',
       `Job "${job.id}" is missing listing_id and cannot run publish.`
     );
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -919,7 +936,10 @@ async function runPublishJob(
       'terminal',
       `Listing "${listingId}" was not found for publish.`
     );
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -939,7 +959,10 @@ async function runPublishJob(
       buildPublishFailureUpdate(error, errorAt, 'idle')
     );
 
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -984,7 +1007,10 @@ async function runPublishJob(
       buildPublishFailureUpdate(error, errorAt, 'idle')
     );
 
-    const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+    const failedJob = await options.dataAccess.jobs.fail(
+      job.id,
+      toJobErrorUpdateInput(error, errorAt)
+    );
 
     return {
       job: failedJob,
@@ -1001,7 +1027,10 @@ async function runPublishJob(
         'user_fixable',
         `Listing "${listingId}" could not be claimed for publish.`
       );
-      const failedJob = await options.dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(error, errorAt));
+      const failedJob = await options.dataAccess.jobs.fail(
+        job.id,
+        toJobErrorUpdateInput(error, errorAt)
+      );
 
       return {
         job: failedJob,
@@ -1088,7 +1117,11 @@ export async function runSidecarJob(
   const job = await dataAccess.jobs.getById(jobId);
 
   if (!job) {
-    throw new SidecarJobError(JOB_ERROR_CODES.JOB_NOT_FOUND, 'terminal', `Job "${jobId}" was not found.`);
+    throw new SidecarJobError(
+      JOB_ERROR_CODES.JOB_NOT_FOUND,
+      'terminal',
+      `Job "${jobId}" was not found.`
+    );
   }
 
   const runnableJob = await ensureJobRunning(dataAccess, job, now);
@@ -1113,14 +1146,13 @@ export async function runSidecarJob(
         now,
         prepareRecordCreatedListings: runPrepareRecordCreatedListings,
       });
-    case RESEARCH_PRICE_JOB_TYPE:
-      {
-        const runtimePricingAnalyst =
-          options.researchPrice?.pricingAnalyst ??
-          createProductionPricingAnalyst({
-            dataAccess,
-            now,
-          });
+    case RESEARCH_PRICE_JOB_TYPE: {
+      const runtimePricingAnalyst =
+        options.researchPrice?.pricingAnalyst ??
+        createProductionPricingAnalyst({
+          dataAccess,
+          now,
+        });
 
       return await runResearchPriceJob(runnableJob, {
         ...options.researchPrice,
@@ -1128,7 +1160,7 @@ export async function runSidecarJob(
         now,
         pricingAnalyst: runtimePricingAnalyst,
       });
-      }
+    }
     default: {
       const errorAt = asIsoTimestamp(now);
       const error = new SidecarJobError(
@@ -1136,7 +1168,10 @@ export async function runSidecarJob(
         'terminal',
         `Job "${runnableJob.id}" has unsupported type "${runnableJob.job_type}".`
       );
-      const failedJob = await dataAccess.jobs.fail(runnableJob.id, toJobErrorUpdateInput(error, errorAt));
+      const failedJob = await dataAccess.jobs.fail(
+        runnableJob.id,
+        toJobErrorUpdateInput(error, errorAt)
+      );
 
       return {
         job: failedJob,

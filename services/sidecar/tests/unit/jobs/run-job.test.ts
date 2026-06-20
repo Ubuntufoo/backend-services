@@ -296,9 +296,7 @@ function expectPricingFailureToPreserveListingWorkflow(
   });
 }
 
-function expectNoWorkflowErrorFieldsWritten(
-  updates: Array<[string, Partial<ListingRow>]>
-): void {
+function expectNoWorkflowErrorFieldsWritten(updates: Array<[string, Partial<ListingRow>]>): void {
   for (const [, changes] of updates) {
     expect(changes).not.toHaveProperty('last_error_at');
     expect(changes).not.toHaveProperty('last_error_code');
@@ -309,9 +307,7 @@ function expectNoWorkflowErrorFieldsWritten(
   }
 }
 
-function expectPriceOnlyUpdateWrites(
-  updates: Array<[string, Partial<ListingRow>]>
-): void {
+function expectPriceOnlyUpdateWrites(updates: Array<[string, Partial<ListingRow>]>): void {
   expect(updates).not.toHaveLength(0);
 
   for (const [, changes] of updates) {
@@ -388,7 +384,8 @@ function expectDeterministicLlmFallbackPersistence(params: {
   result: Awaited<ReturnType<typeof runSidecarJob>>;
 }): void {
   const { dataAccess, listing, result } = params;
-  const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock.calls[0]?.[0];
+  const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+    .calls[0]?.[0];
 
   expect(result.job.status).toBe('completed');
   expect(result.listing).toMatchObject({
@@ -531,25 +528,27 @@ function createDataAccess({
     listingStates.push(nextState);
     return nextState;
   });
-  const listingsUpdateWorkflowState = vi.fn(async (input: {
-    listingId: string;
-    status: ListingRow['status'];
-    subStatus: ListingRow['sub_status'];
-  }) => {
-    const current = listingStates.at(-1);
-    if (!current) {
-      throw new Error('listing missing');
-    }
+  const listingsUpdateWorkflowState = vi.fn(
+    async (input: {
+      listingId: string;
+      status: ListingRow['status'];
+      subStatus: ListingRow['sub_status'];
+    }) => {
+      const current = listingStates.at(-1);
+      if (!current) {
+        throw new Error('listing missing');
+      }
 
-    const nextState = {
-      ...current,
-      listing_id: input.listingId,
-      status: input.status,
-      sub_status: input.subStatus,
-    } as ListingRow;
-    listingStates.push(nextState);
-    return nextState;
-  });
+      const nextState = {
+        ...current,
+        listing_id: input.listingId,
+        status: input.status,
+        sub_status: input.subStatus,
+      } as ListingRow;
+      listingStates.push(nextState);
+      return nextState;
+    }
+  );
   const listingPriceResearchCreate = vi.fn(async (input) => {
     listingPriceResearchIdCounter += 1;
     const state = createListingPriceResearchRow({
@@ -839,13 +838,15 @@ function createDataAccess({
           throw enqueueResearchPriceError;
         }
 
-        return enqueueResearchPriceResult ?? {
-          alreadyQueued: false,
-          job: {
-            ...queuedResearchPriceJob,
-            listing_id: listingId,
-          },
-        };
+        return (
+          enqueueResearchPriceResult ?? {
+            alreadyQueued: false,
+            job: {
+              ...queuedResearchPriceJob,
+              listing_id: listingId,
+            },
+          }
+        );
       }),
       fail: vi.fn(async (_jobId: string, error) => {
         if (!jobState) {
@@ -1145,7 +1146,6 @@ describe('runSidecarJob', () => {
             Team: ['Chicago Bulls'],
           },
           notes: 'Card appears ungraded.',
-          price: 199.99,
           title: 'Possible Jordan insert',
         },
       },
@@ -1178,9 +1178,9 @@ describe('runSidecarJob', () => {
       })
     );
     expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
-    expect(
-      vi.mocked(dataAccess.listings.update).mock.invocationCallOrder[0]
-    ).toBeLessThan(vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]);
+    expect(vi.mocked(dataAccess.listings.update).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]
+    );
     expect(
       vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]
     ).toBeLessThan(vi.mocked(dataAccess.jobs.complete).mock.invocationCallOrder[0]);
@@ -2346,28 +2346,30 @@ describe('runSidecarJob', () => {
         sub_status: 'publish_queued',
       }),
     });
-    const publishListingMock = vi.fn(async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
-      await dependencies?.dataAccess?.listings.update(listingId, {
-        ebay_listing_id: 'EBAY-001',
-        exported_at: '2026-05-20T13:00:00.000Z',
-        last_error_at: null,
-        last_error_code: null,
-        last_error_context: {},
-        last_error_message: null,
-        status: 'exported',
-        sub_status: 'idle',
-      });
+    const publishListingMock = vi.fn(
+      async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
+        await dependencies?.dataAccess?.listings.update(listingId, {
+          ebay_listing_id: 'EBAY-001',
+          exported_at: '2026-05-20T13:00:00.000Z',
+          last_error_at: null,
+          last_error_code: null,
+          last_error_context: {},
+          last_error_message: null,
+          status: 'exported',
+          sub_status: 'idle',
+        });
 
-      return {
-        ebayListingId: 'EBAY-001',
-        exportedAt: '2026-05-20T13:00:00.000Z',
-        listingId,
-        offerId: 'OFFER-001',
-        reusedExistingOffer: false,
-        sku: 'LIST-001',
-        status: 'exported' as const,
-      };
-    });
+        return {
+          ebayListingId: 'EBAY-001',
+          exportedAt: '2026-05-20T13:00:00.000Z',
+          listingId,
+          offerId: 'OFFER-001',
+          reusedExistingOffer: false,
+          sku: 'LIST-001',
+          status: 'exported' as const,
+        };
+      }
+    );
 
     const result = await runSidecarJob('job-publish', {
       dataAccess,
@@ -2404,30 +2406,32 @@ describe('runSidecarJob', () => {
         sub_status: 'publish_queued',
       }),
     });
-    const publishListingMock = vi.fn(async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
-      const listing = await dependencies?.dataAccess?.listings.getByListingId(listingId);
+    const publishListingMock = vi.fn(
+      async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
+        const listing = await dependencies?.dataAccess?.listings.getByListingId(listingId);
 
-      expect(listing).toMatchObject({
-        ebay_listing_id: 'EBAY-EXISTING',
-        ebay_offer_id: 'OFFER-EXISTING',
-        sku: 'SKU-KEEP',
-      });
+        expect(listing).toMatchObject({
+          ebay_listing_id: 'EBAY-EXISTING',
+          ebay_offer_id: 'OFFER-EXISTING',
+          sku: 'SKU-KEEP',
+        });
 
-      await dependencies?.dataAccess?.listings.update(listingId, {
-        status: 'exported',
-        sub_status: 'idle',
-      });
+        await dependencies?.dataAccess?.listings.update(listingId, {
+          status: 'exported',
+          sub_status: 'idle',
+        });
 
-      return {
-        ebayListingId: 'EBAY-EXISTING',
-        exportedAt: '2026-05-20T12:59:00.000Z',
-        listingId,
-        offerId: 'OFFER-EXISTING',
-        reusedExistingOffer: true,
-        sku: 'SKU-KEEP',
-        status: 'exported' as const,
-      };
-    });
+        return {
+          ebayListingId: 'EBAY-EXISTING',
+          exportedAt: '2026-05-20T12:59:00.000Z',
+          listingId,
+          offerId: 'OFFER-EXISTING',
+          reusedExistingOffer: true,
+          sku: 'SKU-KEEP',
+          status: 'exported' as const,
+        };
+      }
+    );
 
     const result = await runSidecarJob('job-publish', {
       dataAccess,
@@ -2919,10 +2923,7 @@ describe('runSidecarJob', () => {
       job: queuedPublishJob,
       listing,
     });
-    dataAccess.jobs.listByListingId = vi.fn(async () => [
-      queuedPublishJob,
-      priorFailedPublishJob,
-    ]);
+    dataAccess.jobs.listByListingId = vi.fn(async () => [queuedPublishJob, priorFailedPublishJob]);
     const publishListingMock = vi.fn();
 
     const result = await runSidecarJob('job-publish', {
@@ -3015,17 +3016,19 @@ describe('runSidecarJob', () => {
         sub_status: 'publish_queued',
       }),
     });
-    const publishListingMock = vi.fn(async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
-      await dependencies?.dataAccess?.listings.update(listingId, {
-        ebay_offer_id: 'OFFER-001',
-        sku: 'LIST-001',
-      });
+    const publishListingMock = vi.fn(
+      async (listingId: string, dependencies?: { dataAccess?: SidecarDataAccess }) => {
+        await dependencies?.dataAccess?.listings.update(listingId, {
+          ebay_offer_id: 'OFFER-001',
+          sku: 'LIST-001',
+        });
 
-      throw new PublishListingError('OFFER_PUBLISH_FAILED', 'Sandbox unavailable', {
-        listingId: 'LIST-001',
-        stage: 'publish',
-      });
-    });
+        throw new PublishListingError('OFFER_PUBLISH_FAILED', 'Sandbox unavailable', {
+          listingId: 'LIST-001',
+          stage: 'publish',
+        });
+      }
+    );
 
     const result = await runSidecarJob('job-publish', {
       dataAccess,
@@ -3716,7 +3719,8 @@ describe('runSidecarJob', () => {
         },
       });
 
-      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock.calls[0]?.[0];
+      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
+        .calls[0]?.[0];
       expect(result.job.status).toBe('completed');
       expect(markSucceededInput).toMatchObject({
         confidence: 'high',
@@ -4347,79 +4351,80 @@ describe('runSidecarJob', () => {
     ])(
       'marks listing price research failed on apify %s without corrupting listing workflow',
       async (_label, providerError, expectedCategory) => {
-      const listing = createListingRow({
-        last_error_at: '2026-05-19T12:00:00.000Z',
-        last_error_code: 'existing_error',
-        last_error_context: { source: 'publish' },
-        last_error_message: 'keep me',
-        price: 13.25,
-        status: 'needs_review',
-        sub_status: 'review_pending',
-        title: 'Broken apify provider listing',
-      });
-      const dataAccess = createDataAccess({
-        job: queuedResearchPriceJob,
-        listing,
-      });
+        const listing = createListingRow({
+          last_error_at: '2026-05-19T12:00:00.000Z',
+          last_error_code: 'existing_error',
+          last_error_context: { source: 'publish' },
+          last_error_message: 'keep me',
+          price: 13.25,
+          status: 'needs_review',
+          sub_status: 'review_pending',
+          title: 'Broken apify provider listing',
+        });
+        const dataAccess = createDataAccess({
+          job: queuedResearchPriceJob,
+          listing,
+        });
 
-      const result = await runSidecarJob('job-research-price', {
-        dataAccess,
-        now: () => new Date('2026-05-20T13:00:00.000Z'),
-        researchPrice: {
-          pricingProvider: {
-            fetchSoldComps: vi.fn(async () => {
-              throw providerError;
-            }),
-            name: 'apify',
+        const result = await runSidecarJob('job-research-price', {
+          dataAccess,
+          now: () => new Date('2026-05-20T13:00:00.000Z'),
+          researchPrice: {
+            pricingProvider: {
+              fetchSoldComps: vi.fn(async () => {
+                throw providerError;
+              }),
+              name: 'apify',
+            },
           },
-        },
-      });
+        });
 
-      expect(result.job.status).toBe('failed');
-      expect(result.job.last_error_code).toBe('research_price_failed');
-      expect(result.job.last_error).not.toContain('secret-value');
-      expect(result.job.last_error).not.toContain('super-secret-token');
-      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
-      expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
-        listing_id: 'LIST-001',
-        provider: 'apify',
-        status: 'pending',
-      });
-      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error_code: 'research_price_failed',
-          error_message: expect.not.stringContaining('secret-value'),
-          raw_result_json: expect.objectContaining({
-            failure: expect.objectContaining({
-              category: expectedCategory,
-              code: providerError.code,
-              message: expect.not.stringContaining('secret-value'),
-              provider: 'apify',
-              query: '[redacted-url]',
-              workflowSafe: true,
-            }),
-          }),
-        })
-      );
-      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-      expect(dataAccess.listings.update).not.toHaveBeenCalled();
-      expect(jobLoggerWarn).toHaveBeenCalledWith(
-        'Failed research_price job.',
-        expect.objectContaining({
+        expect(result.job.status).toBe('failed');
+        expect(result.job.last_error_code).toBe('research_price_failed');
+        expect(result.job.last_error).not.toContain('secret-value');
+        expect(result.job.last_error).not.toContain('super-secret-token');
+        expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+        expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledWith({
+          listing_id: 'LIST-001',
           provider: 'apify',
-          providerFailureCategory: expectedCategory,
-          providerFailureCode: providerError.code,
-          providerFailureMessage: expect.not.stringContaining('secret-value'),
-          query: '[redacted-url]',
-          workflowSafe: true,
-        })
-      );
-      expect(
-        [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(([, meta]) =>
-          JSON.stringify(meta).includes('secret-value') ||
-          JSON.stringify(meta).includes('super-secret-token')
-        )
-      ).toBe(false);
+          status: 'pending',
+        });
+        expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
+          expect.objectContaining({
+            error_code: 'research_price_failed',
+            error_message: expect.not.stringContaining('secret-value'),
+            raw_result_json: expect.objectContaining({
+              failure: expect.objectContaining({
+                category: expectedCategory,
+                code: providerError.code,
+                message: expect.not.stringContaining('secret-value'),
+                provider: 'apify',
+                query: '[redacted-url]',
+                workflowSafe: true,
+              }),
+            }),
+          })
+        );
+        expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
+        expect(dataAccess.listings.update).not.toHaveBeenCalled();
+        expect(jobLoggerWarn).toHaveBeenCalledWith(
+          'Failed research_price job.',
+          expect.objectContaining({
+            provider: 'apify',
+            providerFailureCategory: expectedCategory,
+            providerFailureCode: providerError.code,
+            providerFailureMessage: expect.not.stringContaining('secret-value'),
+            query: '[redacted-url]',
+            workflowSafe: true,
+          })
+        );
+        expect(
+          [...jobLoggerWarn.mock.calls, ...jobLoggerInfo.mock.calls].some(
+            ([, meta]) =>
+              JSON.stringify(meta).includes('secret-value') ||
+              JSON.stringify(meta).includes('super-secret-token')
+          )
+        ).toBe(false);
       }
     );
 
@@ -4519,11 +4524,14 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
         title: 'Broken provider listing',
       });
-      const providerError = Object.assign(new Error('fixture exploded https://images.example/card.jpg'), {
-        code: 'fixture_fetch_failed',
-        provider: 'fixture',
-        query: 'victor wembanyama prizm',
-      });
+      const providerError = Object.assign(
+        new Error('fixture exploded https://images.example/card.jpg'),
+        {
+          code: 'fixture_fetch_failed',
+          provider: 'fixture',
+          query: 'victor wembanyama prizm',
+        }
+      );
       const fetchSoldComps = vi.fn(async () => {
         throw providerError;
       });
@@ -4834,5 +4842,66 @@ describe('runSidecarJob', () => {
       message:
         'Job "job-generate-ai" is queued but could not be claimed for execution. It may not be due yet or another worker already claimed it.',
     });
+  });
+
+  it('does not include listing price in Gemini userHints', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        price: 199.99,
+        seller_hints: 'Test hints',
+        title: 'Test listing',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Test Title',
+      description: 'Test description.',
+      aspects: {},
+      warnings: [],
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userHints: expect.not.objectContaining({
+          price: expect.anything(),
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('omits userHints entirely when only price would be present', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        price: 199.99,
+        seller_hints: null,
+        title: null,
+        item_specifics: {},
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Test Title',
+      description: 'Test description.',
+      aspects: {},
+      warnings: [],
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userHints: undefined,
+      }),
+      expect.anything()
+    );
   });
 });
