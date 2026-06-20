@@ -151,4 +151,31 @@ export interface ListingPricingAnalysisWarning {
   summary: string;
 }
 
+export interface ListingLatestPricingResearchCompSummary {
+  rejected_comp_count: number;
+  rejected_comp_ids: string[];
+  selected_comp_count: number;
+  selected_comp_ids: string[];
+  total_comp_count: number;
+}
+
+export interface ListingLatestPricingResearchSummary {
+  comp_summary: ListingLatestPricingResearchCompSummary;
+  confidence: string | null;
+  created_at: string;
+  error_code: string | null;
+  error_message: string | null;
+  listing_id: string;
+  llm_price_explanation: string | null;
+  median_sold_price: number | null;
+  pricing_model_name: string | null;
+  provider: string;
+  query: string | null;
+  research_id: string;
+  sold_count: number | null;
+  status: string;
+  suggested_price: number | null;
+  updated_at: string;
+}
+
 export * from './structured-sku.js';

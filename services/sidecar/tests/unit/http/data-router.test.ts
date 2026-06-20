@@ -77,27 +77,39 @@ const pricingWarning = {
 };
 
 const latestPricingResearchRow = {
-  comps: [],
-  confidence: null,
+  comps: [
+    { id: 'comp-1', title: 'Hidden Comp 1' },
+    { id: 'comp-2', title: 'Hidden Comp 2' },
+    { id: 'comp-3', title: 'Hidden Comp 3' },
+  ],
+  confidence: 'high',
   created_at: '2026-06-17T16:00:00.000Z',
   error_code: null,
   error_message: null,
   id: 'pricing-research-001',
   listing_id: 'LIST-001',
-  llm_price_explanation: null,
+  llm_price_explanation: 'Condition-adjusted midpoint from selected comps.',
   llm_reasoning_json: {
     failure: pricingWarning.failure,
+    selectedCompIds: ['comp-1', 'comp-2'],
     warnings: [pricingWarning],
   },
-  llm_rejected_comp_ids: [],
-  median_sold_price: null,
-  pricing_model_name: null,
+  llm_rejected_comp_ids: ['comp-3'],
+  median_sold_price: 22,
+  pricing_model_name: 'gemma-4-31b-it',
   provider: 'apify',
-  query: null,
-  raw_result_json: {},
-  sold_count: null,
+  query: 'josh beckett rookie card psa 8',
+  raw_result_json: {
+    providerResult: {
+      input: {
+        apiUrl: 'https://user:pass@example.com/private',
+        query: 'secret provider query should stay private',
+      },
+    },
+  },
+  sold_count: 3,
   status: 'succeeded',
-  suggested_price: null,
+  suggested_price: 24,
   updated_at: '2026-06-17T16:00:00.000Z',
 };
 
@@ -282,6 +294,7 @@ describe('data API router', () => {
       listings: [
         {
           ...listingRow,
+          latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
       ],
@@ -301,6 +314,7 @@ describe('data API router', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       ...listingRow,
+      latest_pricing_research: null,
       pricing_analysis_warnings: [],
     });
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
@@ -429,17 +443,23 @@ describe('data API router', () => {
       listings: [
         {
           ...listingRow,
+          latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
         {
           ...secondListingRow,
+          latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
       ],
     });
+    expect(dataAccess.listingPriceResearch.listLatestByListingIds).toHaveBeenCalledWith([
+      'LIST-001',
+      'LIST-002',
+    ]);
   });
 
-  it('exposes sanitized pricing analysis warnings on listing responses', async () => {
+  it('exposes sanitized latest pricing research and warnings on listing responses', async () => {
     const dataAccess = createDataAccess();
     dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
       async () => latestPricingResearchRow
@@ -471,13 +491,136 @@ describe('data API router', () => {
       severity: 'warning',
       summary: 'LLM pricing analysis failed. Deterministic price used.',
     };
+    const expectedLatestResearch = {
+      comp_summary: {
+        rejected_comp_count: 1,
+        rejected_comp_ids: ['comp-3'],
+        selected_comp_count: 2,
+        selected_comp_ids: ['comp-1', 'comp-2'],
+        total_comp_count: 3,
+      },
+      confidence: 'high',
+      created_at: '2026-06-17T16:00:00.000Z',
+      error_code: null,
+      error_message: null,
+      listing_id: 'LIST-001',
+      llm_price_explanation: 'Condition-adjusted midpoint from selected comps.',
+      median_sold_price: 22,
+      pricing_model_name: 'gemma-4-31b-it',
+      provider: 'apify',
+      query: 'josh beckett rookie card psa 8',
+      research_id: 'pricing-research-001',
+      sold_count: 3,
+      status: 'succeeded',
+      suggested_price: 24,
+      updated_at: '2026-06-17T16:00:00.000Z',
+    };
 
     expect(listResponse.status).toBe(200);
     expect(detailResponse.status).toBe(200);
     expect(listResponse.body.listings[0]?.pricing_analysis_warnings).toEqual([expectedWarning]);
     expect(detailResponse.body.pricing_analysis_warnings).toEqual([expectedWarning]);
+    expect(listResponse.body.listings[0]?.latest_pricing_research).toEqual(expectedLatestResearch);
+    expect(detailResponse.body.latest_pricing_research).toEqual(expectedLatestResearch);
     expect(JSON.stringify(detailResponse.body.pricing_analysis_warnings)).not.toContain(
       'should stay private'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'secret provider query should stay private'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'https://user:pass@example.com/private'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'Hidden Comp 1'
+    );
+  });
+
+  it('exposes failed latest pricing research without raw diagnostics', async () => {
+    const failedResearchRow = {
+      ...latestPricingResearchRow,
+      comps: [],
+      confidence: null,
+      error_code: 'RATE_LIMITED',
+      error_message:
+        'Provider overloaded. token=sk_live_1234567890 https://user:pass@example.com/private\nError: stack should stay private',
+      llm_price_explanation: null,
+      llm_reasoning_json: {},
+      llm_rejected_comp_ids: [],
+      median_sold_price: null,
+      pricing_model_name: null,
+      query: 'failed query',
+      raw_result_json: {
+        providerResult: {
+          input: {
+            query: 'failed secret query should stay private',
+          },
+        },
+      },
+      sold_count: null,
+      status: 'failed',
+      suggested_price: null,
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.list.mockResolvedValueOnce([listingRow, secondListingRow]);
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => failedResearchRow);
+    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [failedResearchRow]);
+    const app = createApp(dataAccess);
+
+    const listResponse = await request(app).get('/api/listings');
+    const detailResponse = await request(app).get('/api/listings/LIST-001');
+
+    expect(listResponse.status).toBe(200);
+    expect(detailResponse.status).toBe(200);
+    expect(listResponse.body.listings).toEqual([
+      {
+        ...listingRow,
+        latest_pricing_research: {
+          comp_summary: {
+            rejected_comp_count: 0,
+            rejected_comp_ids: [],
+            selected_comp_count: 0,
+            selected_comp_ids: [],
+            total_comp_count: 0,
+          },
+          confidence: null,
+          created_at: '2026-06-17T16:00:00.000Z',
+          error_code: 'RATE_LIMITED',
+          error_message: 'Provider overloaded. token=[redacted] [redacted-url]',
+          listing_id: 'LIST-001',
+          llm_price_explanation: null,
+          median_sold_price: null,
+          pricing_model_name: null,
+          provider: 'apify',
+          query: 'failed query',
+          research_id: 'pricing-research-001',
+          sold_count: null,
+          status: 'failed',
+          suggested_price: null,
+          updated_at: '2026-06-17T16:00:00.000Z',
+        },
+        pricing_analysis_warnings: [],
+      },
+      {
+        ...secondListingRow,
+        latest_pricing_research: null,
+        pricing_analysis_warnings: [],
+      },
+    ]);
+    expect(detailResponse.body.latest_pricing_research?.error_message).toBe(
+      'Provider overloaded. token=[redacted] [redacted-url]'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'failed secret query should stay private'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'stack should stay private'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'sk_live_1234567890'
+    );
+    expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
+      'https://user:pass@example.com/private'
     );
   });
 
@@ -792,6 +935,7 @@ describe('data API router', () => {
     expect(response.body).toEqual({
       ...listingRow,
       image_urls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+      latest_pricing_research: null,
       pricing_analysis_warnings: [],
       r2_object_keys: ['listings/LIST-001/existing.jpg'],
     });
@@ -966,6 +1110,7 @@ describe('data API router', () => {
       },
       listing: {
         ...preparedListing,
+        latest_pricing_research: null,
         pricing_analysis_warnings: [],
       },
     });
