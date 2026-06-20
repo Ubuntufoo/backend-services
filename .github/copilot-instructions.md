@@ -1,13 +1,51 @@
 ## Agent Context & Token Management Protocol
 
-### 🖥️ Shell & Terminal Optimization (RTK)
+### Headroom MCP Requirement
+
+If `headroom_compress` is available, it is mandatory for bulky intermediate artifacts before analysis.
+
+Hard trigger. Use `headroom_compress` first when any output is:
+
+- truncated
+- multi-screen
+- greater than ~80 lines
+- likely greater than ~1200 tokens
+- large logs, diffs, search output, JSON blobs, or similar bulky artifacts
+
+Required workflow:
+
+1. Call `headroom_compress` before substantive analysis of triggered output.
+2. Compress actual large raw artifact immediately after receipt; do not first rewrite it into a hand-made summary and then compress that summary.
+3. Reason from compressed output by default.
+4. If exact raw detail is required, call `headroom_retrieve` only for exact failing slice or exact detail needed.
+5. Emit commentary proof line before analysis: `HEADROOM_USED: <hash>`.
+
+Failure rule:
+
+- Do not analyze large raw output directly when trigger applies.
+- Do not substitute repeated raw rereads, `tail`, `sed`, bounded shell slices, or similar narrowing tactics in place of required compression once trigger applies, except for exact-detail retrieval after compression.
+- Compressing post-summarized notes instead of triggered raw artifact does not count as effective headroom use and should be treated as non-compliant unless raw artifact was compressed first.
+
+### Shell & Terminal Optimization (RTK)
 
 @/Users/timothymurphy/.codex/RTK.md
 
-- Use `rtk` (Rust Token Killer) globally via `rtk init -g --codex`.
-- Prefix verbose CLI commands with `rtk` to maximize compression.
-- Examples: `rtk pnpm verify-canonical-layout.mjs`, `rtk git status`, `rtk git diff`, `rtk next build`.
-- Native file utilities bypass bash hooks; use `rtk read <file>` or `rtk grep <pattern>` for heavy reads.
+- `rtk` usage mandatory for any shell command with non-trivial output when an RTK wrapper exists.
+- Do not use raw `git status`, `git diff`, `rg`, `sed`, `cat`, `pnpm test`, `pnpm lint`, `pnpm typecheck`, `tsc`, or build commands when RTK can wrap them.
+- Required substitutions:
+  - `git status` -> `rtk git status`
+  - `git diff` -> `rtk git diff`
+  - `rg <pattern> <path>` -> `rtk grep <pattern> <path>`
+  - `sed -n ... <file>` / `cat <file>` -> `rtk read <file>`
+  - noisy validation/build/test commands -> `rtk test <cmd>` or `rtk <cmd>`
+- Examples: `rtk pnpm verify-canonical-layout.mjs`, `rtk git status`, `rtk git diff`, `rtk next build`, `rtk read AGENTS.md`, `rtk grep "pricing_provider_mode" services/sidecar/src`.
+- Native file utilities and non-shell read/search helpers bypass RTK compression. For heavy shell reads/searches, use `rtk read <file>` and `rtk grep <pattern> <path>` by default.
+- Raw command allowed only when:
+  - no RTK analogue exists
+  - exact machine-readable output required
+  - output trivial
+  - RTK filtering would hide needed forensic detail
+- If a raw command is used where an RTK wrapper exists, state reason in commentary before execution.
 
 ### Concise Response Protocol
 
