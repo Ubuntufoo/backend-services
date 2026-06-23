@@ -16,8 +16,12 @@ import { Router, type Request, type Response } from 'express';
 import { ZodError, type ZodType } from 'zod';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import { getBaseUrl, getOauthBaseUrl } from '@/config/environment.js';
-import { serializeListing } from '@/http/listing-pricing-analysis.js';
 import {
+  getDismissedPricingWarningCodes,
+  serializeListing,
+} from '@/http/listing-pricing-analysis.js';
+import {
+  dismissPricingAnalysisWarningsRequestSchema,
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
   listingIdParamsSchema,
@@ -630,6 +634,68 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         });
       } catch (error) {
         sendPricingAnalysisRetryError(res, error);
+      }
+    }
+  );
+
+  router.post(
+    '/listings/:listingId/pricing-analysis-warnings/dismiss',
+    async (req: Request, res: Response) => {
+      const params = parseOrSend(res, listingIdParamsSchema, req.params);
+      if (!params) {
+        return;
+      }
+
+      const body = parseOrSend(res, dismissPricingAnalysisWarningsRequestSchema, req.body);
+      if (!body) {
+        return;
+      }
+
+      try {
+        const dataAccess = getDataAccess();
+        const listing = await dataAccess.listings.getByListingId(params.listingId);
+
+        if (!listing) {
+          res.status(404).json({
+            error: 'not_found',
+            message: `Listing "${params.listingId}" was not found.`,
+          });
+          return;
+        }
+
+        const latestResearch = await dataAccess.listingPriceResearch.getLatestByListingId(
+          params.listingId
+        );
+        const serializedListing = serializeListing(listing, latestResearch);
+
+        if (!latestResearch) {
+          res.status(200).json({ listing: serializedListing });
+          return;
+        }
+
+        const activeCodes = new Set(
+          serializedListing.pricing_analysis_warnings.map((warning) => warning.code)
+        );
+        const requestedCodes = body.codes.filter((code) => activeCodes.has(code));
+
+        if (requestedCodes.length === 0) {
+          res.status(200).json({ listing: serializedListing });
+          return;
+        }
+
+        const mergedCodes = [
+          ...new Set([...getDismissedPricingWarningCodes(latestResearch), ...requestedCodes]),
+        ];
+        const updatedResearch = await dataAccess.listingPriceResearch.dismissPricingWarnings({
+          dismissed_pricing_warning_codes: mergedCodes,
+          id: latestResearch.id,
+        });
+
+        res.status(200).json({
+          listing: serializeListing(listing, updatedResearch),
+        });
+      } catch (error) {
+        sendRouteError(res, error);
       }
     }
   );

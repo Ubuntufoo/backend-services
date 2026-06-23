@@ -39,6 +39,12 @@ function asStringArray(value: unknown): string[] {
   });
 }
 
+export function getDismissedPricingWarningCodes(
+  research: Pick<ListingPriceResearchRow, 'dismissed_pricing_warning_codes'> | null | undefined
+): string[] {
+  return asStringArray(research?.dismissed_pricing_warning_codes);
+}
+
 const URL_REDACTION_PATTERN = /\bhttps?:\/\/\S+/giu;
 const KEYED_SECRET_PATTERN =
   /\b((?:api|access|refresh|bearer|auth|client|secret|session|user)?[_-]?(?:token|key|secret|password))\s*[:=]\s*([^\s,;]+)/giu;
@@ -93,6 +99,7 @@ export function getListingPricingAnalysisWarnings(
 ): ListingPricingAnalysisWarning[] {
   const reasoning = asRecord(research?.llm_reasoning_json);
   const rawWarnings = reasoning?.warnings;
+  const dismissedCodes = new Set(getDismissedPricingWarningCodes(research));
 
   if (!Array.isArray(rawWarnings) || !research) {
     return [];
@@ -112,7 +119,15 @@ export function getListingPricingAnalysisWarnings(
     const summary = asString(record.summary);
     const retryable = asBoolean(record.retryable);
 
-    if (!analyst || !code || !reason || severity !== 'warning' || !summary || retryable === null) {
+    if (
+      !analyst ||
+      !code ||
+      !reason ||
+      severity !== 'warning' ||
+      !summary ||
+      retryable === null ||
+      dismissedCodes.has(code)
+    ) {
       return [];
     }
 

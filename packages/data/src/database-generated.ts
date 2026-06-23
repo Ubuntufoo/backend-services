@@ -417,6 +417,7 @@ export type Database = {
         Row: {
           comps: Json;
           created_at: string;
+          dismissed_pricing_warning_codes: Json;
           error_code: string | null;
           error_message: string | null;
           id: string;
@@ -438,6 +439,7 @@ export type Database = {
         Insert: {
           comps?: Json;
           created_at?: string;
+          dismissed_pricing_warning_codes?: Json;
           error_code?: string | null;
           error_message?: string | null;
           id?: string;
@@ -459,6 +461,7 @@ export type Database = {
         Update: {
           comps?: Json;
           created_at?: string;
+          dismissed_pricing_warning_codes?: Json;
           error_code?: string | null;
           error_message?: string | null;
           id?: string;

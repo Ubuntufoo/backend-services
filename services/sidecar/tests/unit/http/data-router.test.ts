@@ -84,6 +84,7 @@ const latestPricingResearchRow = {
   ],
   confidence: 'high',
   created_at: '2026-06-17T16:00:00.000Z',
+  dismissed_pricing_warning_codes: [],
   error_code: null,
   error_message: null,
   id: 'pricing-research-001',
@@ -236,6 +237,7 @@ function createDataAccess(): SidecarDataAccess {
     },
     listingPriceResearch: {
       create: vi.fn(),
+      dismissPricingWarnings: vi.fn(),
       getLatestByListingId: vi.fn(async () => null),
       listLatestByListingIds: vi.fn(async () => []),
       markFailed: vi.fn(),
@@ -534,6 +536,26 @@ describe('data API router', () => {
     expect(JSON.stringify(detailResponse.body.latest_pricing_research)).not.toContain(
       'Hidden Comp 1'
     );
+  });
+
+  it('filters dismissed pricing analysis warnings during listing serialization', async () => {
+    const dataAccess = createDataAccess();
+    const dismissedResearchRow = {
+      ...latestPricingResearchRow,
+      dismissed_pricing_warning_codes: ['llm_analysis_failed'],
+    };
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => dismissedResearchRow);
+    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [dismissedResearchRow]);
+    const app = createApp(dataAccess);
+
+    const listResponse = await request(app).get('/api/listings');
+    const detailResponse = await request(app).get('/api/listings/LIST-001');
+
+    expect(listResponse.status).toBe(200);
+    expect(detailResponse.status).toBe(200);
+    expect(listResponse.body.listings[0]?.pricing_analysis_warnings).toEqual([]);
+    expect(detailResponse.body.pricing_analysis_warnings).toEqual([]);
+    expect(detailResponse.body.latest_pricing_research?.research_id).toBe('pricing-research-001');
   });
 
   it('exposes failed latest pricing research without raw diagnostics', async () => {
@@ -2089,6 +2111,128 @@ describe('data API router', () => {
       expect(response.status).toBe(422);
       expect(response.body).toMatchObject({
         error: 'no_comps',
+      });
+    });
+  });
+
+  describe('pricing-analysis-warnings dismissal', () => {
+    it('dismisses requested warning codes and returns updated listing', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => latestPricingResearchRow);
+      dataAccess.listingPriceResearch.dismissPricingWarnings = vi.fn(async (input) => ({
+        ...latestPricingResearchRow,
+        dismissed_pricing_warning_codes: input.dismissed_pricing_warning_codes,
+      }));
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/pricing-analysis-warnings/dismiss')
+        .send({ codes: ['llm_analysis_failed', 'llm_analysis_failed'] });
+
+      expect(response.status).toBe(200);
+      expect(dataAccess.listingPriceResearch.dismissPricingWarnings).toHaveBeenCalledWith({
+        dismissed_pricing_warning_codes: ['llm_analysis_failed'],
+        id: 'pricing-research-001',
+      });
+      expect(response.body.listing.pricing_analysis_warnings).toEqual([]);
+      expect(response.body.listing.latest_pricing_research.research_id).toBe('pricing-research-001');
+    });
+
+    it('preserves unrelated warnings when dismissing one code', async () => {
+      const dataAccess = createDataAccess();
+      const mixedResearchRow = {
+        ...latestPricingResearchRow,
+        llm_reasoning_json: {
+          ...latestPricingResearchRow.llm_reasoning_json,
+          warnings: [
+            pricingWarning,
+            {
+              ...pricingWarning,
+              code: 'provider_timeout',
+              reason: 'provider_timeout',
+              summary: 'Provider request timed out. Deterministic price used.',
+            },
+          ],
+        },
+      };
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => mixedResearchRow);
+      dataAccess.listingPriceResearch.dismissPricingWarnings = vi.fn(async (input) => ({
+        ...mixedResearchRow,
+        dismissed_pricing_warning_codes: input.dismissed_pricing_warning_codes,
+      }));
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/pricing-analysis-warnings/dismiss')
+        .send({ codes: ['llm_analysis_failed'] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.listing.pricing_analysis_warnings).toEqual([
+        expect.objectContaining({
+          code: 'provider_timeout',
+        }),
+      ]);
+    });
+
+    it('returns unchanged listing when submitted codes are unknown', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => latestPricingResearchRow);
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/pricing-analysis-warnings/dismiss')
+        .send({ codes: ['unknown_warning'] });
+
+      expect(response.status).toBe(200);
+      expect(dataAccess.listingPriceResearch.dismissPricingWarnings).not.toHaveBeenCalled();
+      expect(response.body.listing.pricing_analysis_warnings).toEqual([
+        expect.objectContaining({
+          code: 'llm_analysis_failed',
+        }),
+      ]);
+    });
+
+    it('returns unchanged listing when no latest pricing research exists', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => null);
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/pricing-analysis-warnings/dismiss')
+        .send({ codes: ['llm_analysis_failed'] });
+
+      expect(response.status).toBe(200);
+      expect(dataAccess.listingPriceResearch.dismissPricingWarnings).not.toHaveBeenCalled();
+      expect(response.body.listing.pricing_analysis_warnings).toEqual([]);
+      expect(response.body.listing.latest_pricing_research).toBeNull();
+    });
+
+    it('returns 404 when listing does not exist', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => null);
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-404/pricing-analysis-warnings/dismiss')
+        .send({ codes: ['llm_analysis_failed'] });
+
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({
+        error: 'not_found',
+      });
+    });
+
+    it('returns 400 for invalid request bodies', async () => {
+      const dataAccess = createDataAccess();
+      const app = createApp(dataAccess);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/pricing-analysis-warnings/dismiss')
+        .send({ codes: [] });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        error: 'invalid_request',
       });
     });
   });

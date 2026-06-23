@@ -54,6 +54,7 @@ import {
   listJobsByListingId,
   listJobsByListingIds,
   listStaleRunningJobs,
+  dismissListingPriceResearchPricingWarnings,
   markListingPriceResearchFailed,
   markListingPriceResearchSucceeded,
   markAiModelAttemptFailed,
@@ -160,6 +161,7 @@ const researchPriceJobRow: JobRow = {
 const listingPriceResearchRow: ListingPriceResearchRow = {
   comps: [],
   created_at: '2026-06-09T12:00:00.000Z',
+  dismissed_pricing_warning_codes: [],
   error_code: null,
   error_message: null,
   id: 'listing-price-research-row-id',
@@ -3986,6 +3988,29 @@ describe('shared repositories', () => {
         raw_result_json: { runId: 'run-123' },
       })
     ).resolves.toEqual(failedRow);
+
+    const dismissedWarningsRow: ListingPriceResearchRow = {
+      ...listingPriceResearchRow,
+      dismissed_pricing_warning_codes: ['llm_analysis_failed', 'provider_timeout'],
+    };
+    const dismissClient = createUpdateClient(
+      'listing_price_research',
+      dismissedWarningsRow,
+      'id',
+      'listing-price-research-row-id',
+      (payload) => {
+        expect(payload).toEqual({
+          dismissed_pricing_warning_codes: ['llm_analysis_failed', 'provider_timeout'],
+        });
+      }
+    );
+
+    await expect(
+      dismissListingPriceResearchPricingWarnings(dismissClient, {
+        dismissed_pricing_warning_codes: ['llm_analysis_failed', 'provider_timeout'],
+        id: 'listing-price-research-row-id',
+      })
+    ).resolves.toEqual(dismissedWarningsRow);
   });
 
   it('creates, fetches, and updates orders', async () => {

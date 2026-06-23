@@ -146,10 +146,12 @@ export {
 } from './repositories/jobs.js';
 export {
   createListingPriceResearch,
+  dismissListingPriceResearchPricingWarnings,
   getLatestListingPriceResearchByListingId,
   listLatestListingPriceResearchByListingIds,
   markListingPriceResearchFailed,
   markListingPriceResearchSucceeded,
+  type DismissListingPriceResearchPricingWarningsInput,
   type MarkListingPriceResearchFailedInput,
   type MarkListingPriceResearchSucceededInput,
 } from './repositories/listing-price-research.js';

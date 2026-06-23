@@ -31,6 +31,11 @@ export interface MarkListingPriceResearchFailedInput {
   raw_result_json?: Json;
 }
 
+export interface DismissListingPriceResearchPricingWarningsInput {
+  dismissed_pricing_warning_codes: Json;
+  id: string;
+}
+
 export async function createListingPriceResearch(
   client: SupabaseDataClient,
   input: ListingPriceResearchInsert
@@ -158,4 +163,23 @@ export async function markListingPriceResearchFailed(
     .single()) as SingleResult<ListingPriceResearchRow>;
 
   return requireSingleResult(result, `Listing price research "${input.id}" was not marked failed.`);
+}
+
+export async function dismissListingPriceResearchPricingWarnings(
+  client: SupabaseDataClient,
+  input: DismissListingPriceResearchPricingWarningsInput
+): Promise<ListingPriceResearchRow> {
+  const result = (await client
+    .from('listing_price_research')
+    .update({
+      dismissed_pricing_warning_codes: input.dismissed_pricing_warning_codes,
+    })
+    .eq('id', input.id)
+    .select()
+    .single()) as SingleResult<ListingPriceResearchRow>;
+
+  return requireSingleResult(
+    result,
+    `Listing price research "${input.id}" pricing warnings were not dismissed.`
+  );
 }

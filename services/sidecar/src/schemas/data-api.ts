@@ -120,6 +120,12 @@ export const updatePricingProviderModeRequestSchema = z
   })
   .strict();
 
+export const dismissPricingAnalysisWarningsRequestSchema = z
+  .object({
+    codes: z.array(trimmedStringSchema('codes')).min(1, 'codes must contain at least one code'),
+  })
+  .strict();
+
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
 export type SellerEditableListingFieldsInput = z.infer<
   typeof sellerEditableListingFieldsSchema
@@ -134,6 +140,9 @@ export type UpdateListingWorkflowStateRequest = z.infer<
   typeof updateListingWorkflowStateRequestSchema
 >;
 export type EnqueueGenerateAiRequest = z.infer<typeof enqueueGenerateAiRequestSchema>;
+export type DismissPricingAnalysisWarningsRequest = z.infer<
+  typeof dismissPricingAnalysisWarningsRequestSchema
+>;
 export type UpdatePricingProviderModeRequest = z.infer<
   typeof updatePricingProviderModeRequestSchema
 >;

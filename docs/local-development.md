@@ -17,6 +17,8 @@ pnpm dev:sidecar:stdio
 pnpm setup
 ```
 
+```
+
 ## Service Commands
 
 | Area | Command |
@@ -27,6 +29,8 @@ pnpm setup
 | Watcher dev | `pnpm --filter @ebay-inventory/watcher-service dev` |
 | Watcher start | `pnpm --filter @ebay-inventory/watcher-service start` |
 | Image service validation | `pnpm --filter @ebay-inventory/image-service check` |
+| GPT-MCP-Local connect | `npm run connect` |
+| Moonbridge | `go run ./cmd/moonbridge --config config.yml` |
 
 ## Validation
 

@@ -15,6 +15,7 @@ import {
   createAppSettings,
   createJob,
   createListingPriceResearch,
+  dismissListingPriceResearchPricingWarnings,
   createListing,
   createOrder,
   enqueueGenerateAiJob,
@@ -169,6 +170,9 @@ export interface SidecarDataAccess {
   };
   listingPriceResearch: {
     create(input: ListingPriceResearchInsert): Promise<ListingPriceResearchRow>;
+    dismissPricingWarnings(
+      input: Parameters<typeof dismissListingPriceResearchPricingWarnings>[1]
+    ): Promise<ListingPriceResearchRow>;
     getLatestByListingId(listingId: string): Promise<ListingPriceResearchRow | null>;
     listLatestByListingIds(listingIds: string[]): Promise<ListingPriceResearchRow[]>;
     markFailed(
@@ -237,6 +241,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
     },
     listingPriceResearch: {
       create: async (input) => await createListingPriceResearch(client, input),
+      dismissPricingWarnings: async (input) =>
+        await dismissListingPriceResearchPricingWarnings(client, input),
       getLatestByListingId: async (listingId) =>
         await getLatestListingPriceResearchByListingId(client, listingId),
       listLatestByListingIds: async (listingIds) =>
