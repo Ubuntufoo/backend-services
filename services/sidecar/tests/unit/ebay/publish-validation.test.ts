@@ -662,6 +662,25 @@ describe('publish validation app settings checks', () => {
     ).not.toThrow();
   });
 
+  it('keeps pricing failure metadata out of publish readiness gating', () => {
+    expect(() =>
+      validatePublishListingReadiness(
+        createListing({
+          last_error_at: '2026-06-22T14:00:00.000Z',
+          last_error_code: 'research_price_failed',
+          last_error_context: {
+            provider: 'soldcomps',
+            provider_failure_category: 'rate_limit',
+            provider_failure_code: 'soldcomps_rate_limited',
+          },
+          last_error_message: 'pricing provider rate limited',
+          price: 18.5,
+        }),
+        createAppSettings()
+      )
+    ).not.toThrow();
+  });
+
   it('rejects title length 81 for publish readiness', () => {
     expect(() =>
       validatePublishListingReadiness(

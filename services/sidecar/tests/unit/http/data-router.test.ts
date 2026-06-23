@@ -114,6 +114,48 @@ const latestPricingResearchRow = {
   updated_at: '2026-06-17T16:00:00.000Z',
 };
 
+const failedLatestPricingResearchRow = {
+  ...latestPricingResearchRow,
+  comps: [],
+  confidence: null,
+  error_code: 'RATE_LIMITED',
+  error_message:
+    'Provider overloaded. token=sk_live_1234567890 https://user:pass@example.com/private\nError: stack should stay private',
+  llm_price_explanation: null,
+  llm_reasoning_json: {},
+  llm_rejected_comp_ids: [],
+  median_sold_price: null,
+  pricing_model_name: null,
+  query: 'failed query',
+  raw_result_json: {
+    providerResult: {
+      input: {
+        query: 'failed secret query should stay private',
+      },
+    },
+  },
+  sold_count: null,
+  status: 'failed',
+  suggested_price: null,
+};
+
+const publishReadyNeedsReviewListingRow = {
+  ...listingRow,
+  category_id: '261328',
+  condition_id: '4000',
+  description: 'Condition-adjusted manually after provider failure.',
+  image_urls: ['https://cdn.example.com/front.jpg'],
+  item_specifics: {
+    'Card Condition': 'EX-MT',
+  },
+  merchant_location_key: 'warehouse-1',
+  price: 24,
+  sku: 'BSKBL-Single-000001',
+  status: 'needs_review',
+  sub_status: 'review_pending',
+  title: '1993 Upper Deck SP Derek Jeter foil rookie',
+};
+
 const geminiUsageSummary = {
   effectiveLimit: 540,
   remaining: 519,
@@ -559,34 +601,14 @@ describe('data API router', () => {
   });
 
   it('exposes failed latest pricing research without raw diagnostics', async () => {
-    const failedResearchRow = {
-      ...latestPricingResearchRow,
-      comps: [],
-      confidence: null,
-      error_code: 'RATE_LIMITED',
-      error_message:
-        'Provider overloaded. token=sk_live_1234567890 https://user:pass@example.com/private\nError: stack should stay private',
-      llm_price_explanation: null,
-      llm_reasoning_json: {},
-      llm_rejected_comp_ids: [],
-      median_sold_price: null,
-      pricing_model_name: null,
-      query: 'failed query',
-      raw_result_json: {
-        providerResult: {
-          input: {
-            query: 'failed secret query should stay private',
-          },
-        },
-      },
-      sold_count: null,
-      status: 'failed',
-      suggested_price: null,
-    };
     const dataAccess = createDataAccess();
     dataAccess.listings.list.mockResolvedValueOnce([listingRow, secondListingRow]);
-    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => failedResearchRow);
-    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [failedResearchRow]);
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+      async () => failedLatestPricingResearchRow
+    );
+    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [
+      failedLatestPricingResearchRow,
+    ]);
     const app = createApp(dataAccess);
 
     const listResponse = await request(app).get('/api/listings');
@@ -1025,6 +1047,49 @@ describe('data API router', () => {
     expect(dataAccess.listings.approveForExport).toHaveBeenCalledWith('LIST-001');
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-001');
+  });
+
+  it('approves and enqueues publish while preserving failed pricing research visibility', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.approveForExport = vi.fn(async (listingId: string) => ({
+      ...publishReadyNeedsReviewListingRow,
+      approved_for_export_at: '2026-06-22T15:00:00.000Z',
+      listing_id: listingId,
+      status: 'approved_for_export',
+      sub_status: 'publish_queued',
+    }));
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+      async () => failedLatestPricingResearchRow
+    );
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001/workflow-state').send({
+      status: 'approved_for_export',
+      subStatus: 'publish_queued',
+    });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.approveForExport).toHaveBeenCalledWith('LIST-001');
+    expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-001');
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        listing_id: 'LIST-001',
+        price: 24,
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+        latest_pricing_research: expect.objectContaining({
+          error_code: 'RATE_LIMITED',
+          error_message: 'Provider overloaded. token=[redacted] [redacted-url]',
+          research_id: 'pricing-research-001',
+          status: 'failed',
+        }),
+        pricing_analysis_warnings: [],
+      })
+    );
+    expect(JSON.stringify(response.body.latest_pricing_research)).not.toContain(
+      'failed secret query should stay private'
+    );
   });
 
   it('rejects workflow-state requests with extra fields such as FE-provided sku text', async () => {

@@ -16,8 +16,8 @@ PREVIOUS ROADMAP TASKS ARCHIVED
 | 9J.21 | BE/Pricing | Add provider fallback routing | Deferred: optionally fall back between SoldComps and Apify after live provider behavior is understood |
 | 9K.1 | $BE/API$ | Expose latest pricing research on listings API | FE can later display pricing context without direct table access |
 | 9K.2 | $FE$ | Display pricing research summary in review UI | Review UI shows suggested price, confidence, explanation, and selected/rejected comps |
-COMPLETED TASKS COMMENTED OUT -->
 | 9J.3 | FE/Dashboard | Dismiss button for individual pricing-analysis errors/warnings from UI | After retry workflow is live and initial issues are resolved, remove pricing-analysis warnings from the UI to reduce noise and focus on actionable issues |
+COMPLETED TASKS COMMENTED OUT -->
 | 9K.4 | BE/FE | Display pricing failures without blocking approval | Rate-limit/provider failures are visible but do not block export |
 | 9L.1 | $BE/Archi$ | Eval extracting pricing into `services/pricing-service` | Decision based on live Apify latency, failure isolation needs, local dev overhead, and pricing module coupling |
 | 9L.2 | BE/Archi | Extract pricing worker to dedicated service if justified | Pricing runs its own workspace service while preserving shared data contracts and non-blocking listing workflow |
