@@ -2,107 +2,53 @@
 
 ### DeepSeek Delegate Workers
 
-Use DeepSeek delegates for non-trivial repo analysis when they reduce main-thread context, compress broad evidence, or improve review quality. Delegates are read-only and advisory. The main thread must verify claims, decide, edit, test, and produce the final answer.
+Source: `/Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/README.md`
 
-**Source of truth:**  
-`/Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/README.md`
-
-**Bootstrap:**
-
-```zsh
+Bootstrap:
 source /Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/env.zsh
-```
 
-**Commands:**
+Use delegates for non-trivial bounded repo analysis, multi-file review, critique, synthesis, summarization, or packed-artifact verification when offloading reduces main-thread context. Delegates are read-only and advisory; the main thread must verify claims, decide, edit, test, and produce the final answer.
 
-| Command                                                      | Purpose                                  |
-| ------------------------------------------------------------ | ---------------------------------------- |
-| `ds-scan-bundle <backend-services\|ebay-ui-app> "<pattern>"` | Focused search with snippets             |
-| `codex-ds-scan <backend-services\|ebay-ui-app> "<pattern>"`  | Bounded repo search                      |
-| `ds-scan-read <relative-path> [start_line] [line_count]`     | Bounded file read                        |
-| `ds-pack-files <relative-path[:start[:count]]> ...`          | Pack known file ranges                   |
-| `codex-ds-analyze --mode review @"$artifact"`                | Preferred review path with fallback      |
-| `codex-ds-review @"$artifact"`                               | Direct bug/regression/test review        |
-| `codex-ds-critic "<task + artifact>"`                        | Risk/plan critique                       |
-| `codex-ds-summarize "<task + artifact>"`                     | Compression/summarization                |
-| `CODEX_DS_DRY_RUN_MODEL=1 <delegate-command>`                | Inspect selected model without API calls |
+Default flow:
+ds-scan-bundle <backend-services|ebay-ui-app|codex-delegates> "<pattern>"
+ds-pack-files --temp <repo-prefixed-path[:start[:count]]> ...
+codex-ds-analyze --mode review @"$artifact"
 
-**Do not delegate:** trivial single-file checks, small obvious edits, direct file mutation, final response generation, destructive actions, secrets, `.env*`, credentials, DB dumps, SQLite state, dependency folders, lockfiles, generated files, oversized logs.
+Use codex-ds-analyze --mode artifact-audit @"$artifact" for evidence audits, operational-claim checks, tool-effectiveness reviews, or cases where fallback must preserve the original audit objective. Use CODEX_DS_DRY_RUN_MODEL=1 <delegate-command> to inspect selected models without API calls.
 
-**Rules:** Retrieve bounded evidence locally first. Prefer file-backed artifacts over inline pasted evidence. Keep delegate artifacts ≤~250 lines. Require compact, structured output. Verify important claims against repo evidence. Never pass arbitrary repo paths to delegates — pass only retrieved artifacts.
+Retrieve bounded evidence locally first. Choose the delegate root from task scope. Prefer file-backed artifacts over inline pasted evidence. Keep artifacts narrow, usually ≤~250 lines for first pass, with file/line references where available.
 
----
+Do not delegate trivial single-file checks, obvious edits, final response generation, direct file mutation, destructive actions, live shell state, DB inspection, environment drift, secrets, .env\*, credentials, DB dumps, SQLite state, dependency folders, lockfiles, generated files, or oversized logs. Never pass arbitrary repo paths; pass only bounded retrieved artifacts.
 
-### Headroom MCP Routing
+### Headroom Routing
 
-- If `headroom_compress` available, use it for bulky, repetitive, or clearly compressible output before analysis.
-- **Strong trigger cases:** truncated output, multi-screen output, logs, long diffs, repetitive search output, JSON blobs, artifacts ~≥80 lines / ~≥1200 tokens.
-- **Skip** for compact path inventories, compact tables, concise artifacts, or <~5k tokens unless repetitive enough for compression to pay off.
-- **Workflow:** compress actual raw artifact first → reason from compressed output by default → use `headroom_retrieve` only for exact slices/raw details → emit `HEADROOM_USED: <hash>` before substantive analysis.
-- **Do not** analyze large raw output directly when trigger applies. Do not substitute tail/sed/shell slices/repeated rereads for compression once trigger applies (except retrieving exact post-compression detail). Do not compress a hand-written summary instead of the original artifact.
+Use headroom_compress for bulky, repetitive raw output before analysis: logs, stack traces, JSON blobs, long diffs, verbose test/build/lint/typecheck output, noisy search results, truncated/multi-screen output, or artifacts ~≥80 lines / ~≥1200 tokens that look compressible.
 
-### Shell & Terminal Optimization (RTK)
+Skip compact path lists, compact tables, already concise output, and artifacts under ~5k tokens unless clearly repetitive. Low-value inputs may return compression_skipped or noop; these do not store retrievable artifacts unless force: true is used.
+
+Workflow: compress the original raw artifact first, reason from compressed output, use headroom_retrieve only for exact raw slices/details, and emit HEADROOM_USED: <hash> only when an artifact is stored.
+
+Do not analyze large triggered output raw. Do not replace compression with tail, sed, repeated rereads, shell slicing, or compressing a hand-written summary.
+
+### RTK Routing
 
 See `@/Users/timothymurphy/.codex/RTK.md`.
 
-- Prefer `rtk` when output is broad, noisy, repetitive, or likely to benefit from filtering/compression.
-- **Strong RTK cases:**
-  - `git diff` → `rtk git diff`
-  - repo-wide/broad search (`rg <pattern> <path>`) → `rtk grep <pattern> <path>`
-  - broad file reads / repeated doc/code inspection → `rtk read <file>`
-  - logs, verbose CLIs, noisy shell output
-  - build/test/lint/typecheck, especially noisy → `rtk test <cmd>` or `rtk <cmd>`
-- **Raw command allowed** when:
-  - no RTK analogue exists
-  - exact machine-readable output needed
-  - output is trivial or very small
-  - formatting-sensitive output matters
-  - exact SQL output needed
-  - RTK filtering would hide forensic detail
-  - `git status --short` or similar compact exact status is needed
-  - tiny file reads are faster/clearer without RTK overhead
-- If bypassing RTK for a non-trivial command where a wrapper exists, state the reason. Do not claim RTK is mandatory merely because a wrapper exists; route by workload shape and expected savings instead.
+Use RTK when output is broad, noisy, repetitive, or likely to benefit from filtering/compression: `git diff`, repo-wide `rg`, broad reads, logs, verbose CLIs, and build/test/lint/typecheck output. Prefer `rtk git diff`, `rtk grep <pattern> <path>`, `rtk read <file>`, `rtk test <cmd>`, or `rtk <cmd>` as appropriate.
 
----
+Use raw commands when output must be exact, small, machine-readable, formatting-sensitive, forensic, SQL-like, or when no RTK analogue exists. Common raw cases: `git status --short`, tiny file reads, exact SQL output, and compact status checks.
+
+Use `rtk read --raw <file>` for exact file output, `rtk read --compact <file>` to force filtering on larger reads, and `rtk gain --family` to check which command families are actually saving context.
+
+Do not treat RTK as mandatory just because a wrapper exists. Route by workload shape and expected savings. If bypassing RTK for a non-trivial command with a wrapper, state why.
 
 ### Concise Response Protocol
 
 Use terse, high-density technical responses. No pleasantries. No full sentences if fragments work. Strip articles and auxiliary verbs. Code blocks + symbols + keywords only. Maximize info density per character.
 
----
-
-## Non-Blocking Loop Detection & Audit
-
-Monitor repeated friction. Finish best safe solution, then append audit block **only** if a high-friction trigger activates.
-
-### Trigger Activation Criteria
-
-Before responding, scan last 3-4 turns. Trigger audit block on:
-
-- **Seesaw:** Same small code/type/test area changing back to a state from 2 turns ago.
-- **Type-chase:** A TypeScript fix broke a dependent module that was working earlier.
-- **Thrash:** Rewriting a large component when the issue is a narrow boundary/contract.
-- **Silent wall:** About to attempt the same failed approach a second time.
-- **Architecture mismatch:** Fix conflicts with project invariants or `AGENTS.md`.
-- **Validation stall:** Tests/typecheck/lint failed 2+ consecutive times — pivot needed.
-
-Do not trigger for normal first-pass failures, simple TS errors, missing imports, formatting, or small corrections.
-
-### When Triggered
-
-1. Finish best safe implementation/review.
-2. Pivot to smallest stable boundary.
-3. State remaining limitation.
-
-Rules: JSON valid. Audit block is final. Do not append without trigger.
-
----
-
 ## Multi-Project & Server Scoping
 
 Target package-level commands with workspace filters (e.g., `pnpm --filter <pkg>`). Avoid unnecessary servers; suppress verbose logs (`--logLevel silent`).
-
----
 
 ## Git Telemetry & Workspace Checks
 
@@ -111,8 +57,6 @@ Target package-level commands with workspace filters (e.g., `pnpm --filter <pkg>
 - If repo state unclear: report branch, modified files, unpushed commits.
 - If push succeeds but `.lock` warning appears: check remote first. Only remove stale `.git/**/*.lock` files if Git ops blocked.
 - `ROADMAP.md` is a living document updated by the user only.
-
----
 
 ## Local-First Version Control
 
@@ -125,8 +69,6 @@ Solo personal project. Git for local checkpoints, recovery, controlled backup.
 - Run relevant validation before important commits and report results.
 - Push only for backup, stable milestones, remote review, or explicit request.
 - Never discard, reset, rebase, force-push, or delete branches/worktrees without approval.
-
----
 
 ## Model Context Protocol (MCP) Tooling
 
@@ -142,8 +84,6 @@ Solo personal project. Git for local checkpoints, recovery, controlled backup.
 
 - Web retrieval not covered by Context7.
 - Includes card pricing, local listings, unstructured web data.
-
----
 
 ## Testing and Validation
 
