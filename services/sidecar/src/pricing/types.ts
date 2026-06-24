@@ -197,7 +197,10 @@ export interface LlmPricingReasoning {
 export interface LlmPricingReasoningValidationContext {
   validCompIds: readonly string[];
   canonicalCompIdsByPromptId?: Readonly<Record<string, string>>;
-  allowedAdjustment: Pick<AllowedConditionAdjustment, 'eligible' | 'targetPrice' | 'minPrice' | 'maxPrice'>;
+  allowedAdjustment: Pick<
+    AllowedConditionAdjustment,
+    'eligible' | 'targetPrice' | 'minPrice' | 'maxPrice'
+  >;
 }
 
 export interface PricingAnalystInput {
@@ -239,7 +242,8 @@ export type PricingAnalysisWarningReason =
   | 'llm_analysis_failed'
   | 'llm_condition_adjusted_price_invalid'
   | 'llm_condition_adjusted_price_out_of_window'
-  | 'llm_condition_adjusted_price_null';
+  | 'llm_condition_adjusted_price_null'
+  | 'provider_failure';
 
 export interface PricingAnalysisWarning {
   analyst: string;

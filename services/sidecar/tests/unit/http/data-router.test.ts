@@ -853,6 +853,53 @@ describe('data API router', () => {
     });
   });
 
+  it('allows seller-editable patch after pricing failure and preserves failed research visibility', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.update = vi.fn(async (_listingId: string, input: ListingUpdate) => ({
+      ...publishReadyNeedsReviewListingRow,
+      ...input,
+      listing_id: 'LIST-001',
+      price: input.price ?? publishReadyNeedsReviewListingRow.price,
+      seller_hints:
+        input.seller_hints === undefined
+          ? publishReadyNeedsReviewListingRow.seller_hints
+          : input.seller_hints,
+      updated_at: '2026-06-22T15:05:00.000Z',
+    }));
+    dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+      async () => failedLatestPricingResearchRow
+    );
+    const app = createApp(dataAccess);
+
+    const response = await request(app).patch('/api/listings/LIST-001').send({
+      price: 27.5,
+      sellerHints: 'Manual override after provider outage',
+    });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      price: 27.5,
+      seller_hints: 'Manual override after provider outage',
+    });
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        listing_id: 'LIST-001',
+        price: 27.5,
+        seller_hints: 'Manual override after provider outage',
+        latest_pricing_research: expect.objectContaining({
+          error_code: 'RATE_LIMITED',
+          error_message: 'Provider overloaded. token=[redacted] [redacted-url]',
+          status: 'failed',
+          suggested_price: null,
+        }),
+        pricing_analysis_warnings: [],
+      })
+    );
+    expect(JSON.stringify(response.body.latest_pricing_research)).not.toContain(
+      'failed secret query should stay private'
+    );
+  });
+
   it('passes manual skuCategoryCode review overrides through itemSpecifics without dropping sibling keys', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);

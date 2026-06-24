@@ -127,6 +127,7 @@ export type PricingAnalysisWarningCode =
   | 'llm_condition_adjusted_price_invalid'
   | 'llm_condition_adjusted_price_out_of_window'
   | 'llm_condition_adjusted_price_null'
+  | 'provider_failure'
   | (string & {});
 
 export interface PricingAnalysisWarningFailureSummary {

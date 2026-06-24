@@ -125,6 +125,29 @@ describe('validatePublishReady', () => {
     ).toEqual({ ok: true });
   });
 
+  it('ignores failed pricing research metadata when required publish fields are valid', () => {
+    expect(
+      validatePublishReady({
+        listing: {
+          ...createListing({
+            sku: STRUCTURED_SKU,
+          }),
+          latest_pricing_research: {
+            error_code: 'RATE_LIMITED',
+            error_message: 'Provider overloaded.',
+            provider: 'apify',
+            query: 'failed query',
+            status: 'failed',
+            suggested_price: null,
+          },
+          pricing_analysis_warnings: [],
+        } as ListingRow,
+        publishConfig: createPublishConfig(),
+        quantity: 1,
+      })
+    ).toEqual({ ok: true });
+  });
+
   it('throws structured required-field error via assert helper', () => {
     expect(() =>
       assertPublishReady({

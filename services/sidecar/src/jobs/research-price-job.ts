@@ -72,6 +72,7 @@ const PRICING_ANALYSIS_WARNING_REASONS = new Set<PricingAnalysisWarningReason>([
   'llm_condition_adjusted_price_invalid',
   'llm_condition_adjusted_price_out_of_window',
   'llm_condition_adjusted_price_null',
+  'provider_failure',
 ]);
 
 export interface ResearchPriceJobDependencies {
@@ -284,7 +285,9 @@ function sanitizePersistedPricingRawResult(value: unknown, canonicalQuery?: stri
 }
 
 function asFiniteNonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
@@ -296,9 +299,10 @@ function buildPricingResearchDiagnostics(
   rawCompCount: number,
   normalized: ReturnType<typeof normalizeSoldComps>
 ): Record<string, boolean | number> {
-  const providerOutput = isRecord(providerRawResult) && isRecord(providerRawResult.output)
-    ? providerRawResult.output
-    : null;
+  const providerOutput =
+    isRecord(providerRawResult) && isRecord(providerRawResult.output)
+      ? providerRawResult.output
+      : null;
   const providerReturnedCount =
     asFiniteNonNegativeInteger(providerOutput?.itemCount) ??
     (isRecord(providerRawResult)
@@ -306,7 +310,9 @@ function buildPricingResearchDiagnostics(
       : undefined) ??
     rawCompCount;
   const requestedCount =
-    isRecord(providerRawResult) && isRecord(providerRawResult.input) && isRecord(providerRawResult.input.request)
+    isRecord(providerRawResult) &&
+    isRecord(providerRawResult.input) &&
+    isRecord(providerRawResult.input.request)
       ? asFiniteNonNegativeInteger(providerRawResult.input.request.count)
       : undefined;
   const providerReportedTotalCount = asFiniteNonNegativeInteger(providerOutput?.totalItems);
@@ -332,7 +338,9 @@ function buildPricingResearchRawResult(
   providerRouting: ProviderRoutingDiagnostics
 ): Json {
   const base =
-    typeof providerRawResult === 'object' && providerRawResult !== null && !Array.isArray(providerRawResult)
+    typeof providerRawResult === 'object' &&
+    providerRawResult !== null &&
+    !Array.isArray(providerRawResult)
       ? { ...providerRawResult }
       : { providerRawResult };
 
@@ -512,7 +520,9 @@ function isProviderFailure(
   );
 }
 
-function buildLlmPricingFacts(itemSpecifics: PricingProviderInput['itemSpecifics']): LlmPricingPromptFacts | undefined {
+function buildLlmPricingFacts(
+  itemSpecifics: PricingProviderInput['itemSpecifics']
+): LlmPricingPromptFacts | undefined {
   if (!itemSpecifics) {
     return undefined;
   }
@@ -521,8 +531,11 @@ function buildLlmPricingFacts(itemSpecifics: PricingProviderInput['itemSpecifics
     LLM_PRICING_FACT_KEYS.flatMap((key) => {
       const value = itemSpecifics[key];
       const normalized = Array.isArray(value)
-        ? value.map((entry) => entry.trim()).filter((entry) => entry.length > 0).join(' / ')
-        : value?.trim() ?? '';
+        ? value
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+            .join(' / ')
+        : (value?.trim() ?? '');
 
       return normalized.length > 0 ? [[key, normalized] as const] : [];
     })
@@ -544,7 +557,9 @@ function buildPricingAnalystInput(
     listing: {
       condition: conditionAdjustment.listingConditionSignal?.label ?? null,
       title:
-        asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId,
+        asNonEmptyString(listing.title) ??
+        buildPricingTitleFromItemSpecifics(itemSpecifics) ??
+        listingId,
       facts: buildLlmPricingFacts(itemSpecifics),
     },
     stats,
@@ -563,9 +578,13 @@ function buildSucceededLlmReasoningJson(
     result.reasoning.conditionAdjustedPrice
   );
   const derivedPercent =
-    normalizedConditionAdjustedPrice !== null && conditionAdjustment.deterministicMedianPrice !== null
+    normalizedConditionAdjustedPrice !== null &&
+    conditionAdjustment.deterministicMedianPrice !== null
       ? Number(
-          (normalizedConditionAdjustedPrice / conditionAdjustment.deterministicMedianPrice - 1).toFixed(4)
+          (
+            normalizedConditionAdjustedPrice / conditionAdjustment.deterministicMedianPrice -
+            1
+          ).toFixed(4)
         )
       : null;
   const warnings = buildPricingAnalysisWarnings({
@@ -639,7 +658,10 @@ function buildFallbackFailureCause(error: unknown): PricingAnalystFailureCause {
   };
 }
 
-function buildSkippedLlmReasoningJson(fallbackReason: string, conditionAdjustment: ConditionAdjustmentSummary): Json {
+function buildSkippedLlmReasoningJson(
+  fallbackReason: string,
+  conditionAdjustment: ConditionAdjustmentSummary
+): Json {
   return asJson({
     conditionAdjustment,
     fallback: fallbackReason,
@@ -650,7 +672,9 @@ function buildSkippedLlmReasoningJson(fallbackReason: string, conditionAdjustmen
 function isPricingAnalysisWarningReason(
   value: string | null
 ): value is PricingAnalysisWarningReason {
-  return value !== null && PRICING_ANALYSIS_WARNING_REASONS.has(value as PricingAnalysisWarningReason);
+  return (
+    value !== null && PRICING_ANALYSIS_WARNING_REASONS.has(value as PricingAnalysisWarningReason)
+  );
 }
 
 function getPricingAnalysisWarningSummary(reason: PricingAnalysisWarningReason): string {
@@ -663,6 +687,8 @@ function getPricingAnalysisWarningSummary(reason: PricingAnalysisWarningReason):
       return 'LLM returned off-target condition-adjusted price. Deterministic price used.';
     case 'llm_condition_adjusted_price_null':
       return 'LLM returned no condition-adjusted price. Deterministic price used.';
+    case 'provider_failure':
+      return 'Pricing provider unavailable. No suggested price available.';
   }
 }
 
@@ -697,7 +723,10 @@ function getConditionAdjustmentFallbackReason(
 }
 
 function getLlmFallbackReason(error: unknown): string {
-  if (error instanceof Error && error.message.includes('conditionAdjustedPrice must equal deterministic')) {
+  if (
+    error instanceof Error &&
+    error.message.includes('conditionAdjustedPrice must equal deterministic')
+  ) {
     return 'llm_condition_adjusted_price_out_of_window';
   }
 
@@ -866,7 +895,9 @@ function resolvePricingProviderForMode(
   }
 
   if (dependencies.resolvePricingProvider) {
-    return assertSupportedPricingProvider(dependencies.resolvePricingProvider(requestedProviderMode));
+    return assertSupportedPricingProvider(
+      dependencies.resolvePricingProvider(requestedProviderMode)
+    );
   }
 
   if (dependencies.pricingProvider?.name === requestedProviderMode) {
@@ -1016,6 +1047,42 @@ async function getListingSafely(
   }
 }
 
+function buildProviderFailureWarning(
+  error: SidecarJobError,
+  providerRouting?: ProviderRoutingDiagnostics
+): PricingAnalysisWarning | undefined {
+  const isWorkflowSafe =
+    typeof error.context.workflow_safe === 'boolean' ? error.context.workflow_safe : true;
+  const isRecoverable = error.category === 'recoverable';
+
+  if (!isWorkflowSafe || !isRecoverable) {
+    return undefined;
+  }
+
+  const provider =
+    asNonEmptyString(error.context.provider) ??
+    providerRouting?.actualProvider ??
+    providerRouting?.selectedProvider;
+  const providerFailureCategory = asNonEmptyString(error.context.provider_failure_category);
+  const providerFailureCode = asNonEmptyString(error.context.provider_failure_code) ?? error.code;
+
+  return {
+    analyst: provider ?? 'pricing_provider',
+    code: 'provider_failure',
+    failure: {
+      causes: [],
+      ...(providerFailureCategory ? { errorCode: providerFailureCategory } : {}),
+      ...(provider ? { provider } : {}),
+      ...(providerFailureCode ? { reason: providerFailureCode } : {}),
+      retryable: true,
+    },
+    reason: 'provider_failure',
+    retryable: true,
+    severity: 'warning',
+    summary: getPricingAnalysisWarningSummary('provider_failure'),
+  };
+}
+
 async function markResearchFailedSafely(
   dataAccess: SidecarDataAccess,
   research: ListingPriceResearchRow | null,
@@ -1043,11 +1110,14 @@ async function markResearchFailedSafely(
     ...(providerRouting ? { providerRouting: buildProviderRoutingRawResult(providerRouting) } : {}),
   };
 
+  const providerWarning = buildProviderFailureWarning(error, providerRouting);
+  const llmReasoningJson = providerWarning ? asJson({ warnings: [providerWarning] }) : {};
+
   await dataAccess.listingPriceResearch.markFailed({
     error_code: error.code,
     error_message: asCompactErrorMessage(error.message),
     id: research.id,
-    llm_reasoning_json: {},
+    llm_reasoning_json: llmReasoningJson,
     pricing_model_name: null,
     raw_result_json: asJson(failureContext),
   });
@@ -1160,7 +1230,10 @@ export async function priceListingNow(
     }
     rawCompCount = providerResult.soldComps.length;
 
-    const normalized = runNormalizeComps(providerResult.soldComps, buildNormalizeSoldCompsContext(listing, listingId));
+    const normalized = runNormalizeComps(
+      providerResult.soldComps,
+      buildNormalizeSoldCompsContext(listing, listingId)
+    );
     normalizedCompCount = normalized.comps.length;
     const stats = runComputeStats(normalized.comps);
     const pricingRawResult = buildPricingResearchRawResult(
@@ -1195,7 +1268,9 @@ export async function priceListingNow(
       comps: normalized.comps,
       stats,
     });
-    const listingCondition = getListingConditionForAdjustment(getListingItemSpecifics(listing.item_specifics));
+    const listingCondition = getListingConditionForAdjustment(
+      getListingItemSpecifics(listing.item_specifics)
+    );
     const conditionAdjustment = computeConditionAdjustmentSummary({
       comps: normalized.comps,
       listingCondition,
@@ -1237,7 +1312,9 @@ export async function priceListingNow(
       } catch (error) {
         fallbackReason = getLlmFallbackReason(error);
         pricingModelName =
-          error instanceof ProductionPricingAnalystError ? error.modelName ?? null : pricingModelName;
+          error instanceof ProductionPricingAnalystError
+            ? (error.modelName ?? null)
+            : pricingModelName;
         llmReasoningJson = buildFailedLlmReasoningJson(
           dependencies.pricingAnalyst,
           fallbackReason,
@@ -1260,14 +1337,17 @@ export async function priceListingNow(
     }
 
     if (fallbackReason === 'llm_condition_adjusted_price_null' && pricingModelName) {
-      jobLogger.info('Fell back to deterministic research_price after null LLM condition adjustment.', {
-        deterministicSuggestedPrice,
-        event: 'research_price_llm_fallback',
-        fallbackReason,
-        jobId: options.jobId,
-        listingId,
-        pricingModelName,
-      });
+      jobLogger.info(
+        'Fell back to deterministic research_price after null LLM condition adjustment.',
+        {
+          deterministicSuggestedPrice,
+          event: 'research_price_llm_fallback',
+          fallbackReason,
+          jobId: options.jobId,
+          listingId,
+          pricingModelName,
+        }
+      );
     }
 
     const finalSuggestedPrice = assertValidSuggestedPrice(
@@ -1277,23 +1357,20 @@ export async function priceListingNow(
     );
     const medianSoldPrice = assertMedianSoldPrice(listingId, stats.medianSoldPrice);
 
-    await persistSucceededResearch(
-      dependencies.dataAccess,
-      {
-        comps: asJson(normalized.comps),
-        confidence: confidence.confidence,
-        llmPriceExplanation,
-        llmReasoningJson,
-        llmRejectedCompIds,
-        medianSoldPrice,
-        pricingModelName,
-        query: providerResult.query,
-        rawResultJson: pricingRawResult,
-        researchId: research.id,
-        soldCount: stats.soldCount,
-        suggestedPrice: finalSuggestedPrice,
-      }
-    );
+    await persistSucceededResearch(dependencies.dataAccess, {
+      comps: asJson(normalized.comps),
+      confidence: confidence.confidence,
+      llmPriceExplanation,
+      llmReasoningJson,
+      llmRejectedCompIds,
+      medianSoldPrice,
+      pricingModelName,
+      query: providerResult.query,
+      rawResultJson: pricingRawResult,
+      researchId: research.id,
+      soldCount: stats.soldCount,
+      suggestedPrice: finalSuggestedPrice,
+    });
     researchSucceeded = true;
     const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
       price: finalSuggestedPrice,
@@ -1331,9 +1408,7 @@ export async function priceListingNow(
     };
   } catch (error) {
     const caughtError =
-      error instanceof ProviderFallbackExecutionError
-        ? (error.cause ?? error)
-        : error;
+      error instanceof ProviderFallbackExecutionError ? (error.cause ?? error) : error;
     if (error instanceof ProviderFallbackExecutionError) {
       pricingProvider = error.pricingProvider;
       providerRouting = error.providerRouting;
@@ -1372,7 +1447,9 @@ export async function priceListingNow(
     const query =
       (providerResult?.query ? redactSensitiveText(providerResult.query) : undefined) ??
       providerFailure.query ??
-      (caughtError instanceof SidecarJobError ? asNonEmptyString(caughtError.context.query) : undefined);
+      (caughtError instanceof SidecarJobError
+        ? asNonEmptyString(caughtError.context.query)
+        : undefined);
 
     try {
       if (!researchSucceeded) {
@@ -1469,9 +1546,7 @@ export async function runResearchPriceJob(
 
     return {
       job: failedJob,
-      listing: listingId
-        ? await getListingSafely(dependencies.dataAccess, listingId)
-        : null,
+      listing: listingId ? await getListingSafely(dependencies.dataAccess, listingId) : null,
     };
   }
 }
