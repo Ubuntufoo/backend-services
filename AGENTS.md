@@ -31,6 +31,8 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 | Shared contracts           | `packages/types/src/`                                                              |
 | Supabase schema/migrations | `supabase/migrations/`                                                             |
 
+Shared delegate root alias for this repo: `backend-services`.
+
 ## Validation Commands
 
 - Repo: `pnpm check`, `pnpm typecheck`, `pnpm lint`
@@ -38,6 +40,15 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 - Watcher: `pnpm --filter @ebay-inventory/watcher-service check`
 - Image service: `pnpm --filter @ebay-inventory/image-service check`
 - Data/env/types: `pnpm --filter @ebay-inventory/data test`, `pnpm --filter @ebay-inventory/env test`, `pnpm --filter @ebay-inventory/types check`
+
+## Common Diagnostics
+
+- Env: `pnpm validate:env`
+- eBay OAuth: `pnpm validate:ebay-oauth`
+- eBay readiness: `pnpm ebay:diagnose-live-readiness`
+- Pricing config: `pnpm pricing:diagnose-soldcomps-config`, `pnpm pricing:diagnose-apify-config`
+- Pricing smoke: `pnpm pricing:smoke-soldcomps`, `pnpm pricing:smoke-apify`
+- Single listing pricing: `pnpm pricing:price-one`
 
 ## Scope Control
 
