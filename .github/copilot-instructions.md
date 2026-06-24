@@ -1,166 +1,151 @@
 ## Agent Context & Token Management Protocol
 
-### Headroom MCP Requirement
+### DeepSeek Delegate Workers
 
-If `headroom_compress` is available, it is mandatory for bulky intermediate artifacts before analysis.
+Use DeepSeek delegates for non-trivial repo analysis when they reduce main-thread context, compress broad evidence, or improve review quality. Delegates are read-only and advisory. The main thread must verify claims, decide, edit, test, and produce the final answer.
 
-Hard trigger. Use `headroom_compress` first when any output is:
+**Source of truth:**  
+`/Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/README.md`
 
-- truncated
-- multi-screen
-- greater than ~80 lines
-- likely greater than ~1200 tokens
-- large logs, diffs, search output, JSON blobs, or similar bulky artifacts
+**Bootstrap:**
 
-Required workflow:
+```zsh
+source /Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/env.zsh
+```
 
-1. Call `headroom_compress` before substantive analysis of triggered output.
-2. Compress actual large raw artifact immediately after receipt; do not first rewrite it into a hand-made summary and then compress that summary.
-3. Reason from compressed output by default.
-4. If exact raw detail is required, call `headroom_retrieve` only for exact failing slice or exact detail needed.
-5. Emit commentary proof line before analysis: `HEADROOM_USED: <hash>`.
+**Commands:**
 
-Failure rule:
+| Command                                                      | Purpose                                  |
+| ------------------------------------------------------------ | ---------------------------------------- |
+| `ds-scan-bundle <backend-services\|ebay-ui-app> "<pattern>"` | Focused search with snippets             |
+| `codex-ds-scan <backend-services\|ebay-ui-app> "<pattern>"`  | Bounded repo search                      |
+| `ds-scan-read <relative-path> [start_line] [line_count]`     | Bounded file read                        |
+| `ds-pack-files <relative-path[:start[:count]]> ...`          | Pack known file ranges                   |
+| `codex-ds-analyze --mode review @"$artifact"`                | Preferred review path with fallback      |
+| `codex-ds-review @"$artifact"`                               | Direct bug/regression/test review        |
+| `codex-ds-critic "<task + artifact>"`                        | Risk/plan critique                       |
+| `codex-ds-summarize "<task + artifact>"`                     | Compression/summarization                |
+| `CODEX_DS_DRY_RUN_MODEL=1 <delegate-command>`                | Inspect selected model without API calls |
 
-- Do not analyze large raw output directly when trigger applies.
-- Do not substitute repeated raw rereads, `tail`, `sed`, bounded shell slices, or similar narrowing tactics in place of required compression once trigger applies, except for exact-detail retrieval after compression.
-- Compressing post-summarized notes instead of triggered raw artifact does not count as effective headroom use and should be treated as non-compliant unless raw artifact was compressed first.
+**Do not delegate:** trivial single-file checks, small obvious edits, direct file mutation, final response generation, destructive actions, secrets, `.env*`, credentials, DB dumps, SQLite state, dependency folders, lockfiles, generated files, oversized logs.
+
+**Rules:** Retrieve bounded evidence locally first. Prefer file-backed artifacts over inline pasted evidence. Keep delegate artifacts ≤~250 lines. Require compact, structured output. Verify important claims against repo evidence. Never pass arbitrary repo paths to delegates — pass only retrieved artifacts.
+
+---
+
+### Headroom MCP Routing
+
+- If `headroom_compress` available, use it for bulky, repetitive, or clearly compressible output before analysis.
+- **Strong trigger cases:** truncated output, multi-screen output, logs, long diffs, repetitive search output, JSON blobs, artifacts ~≥80 lines / ~≥1200 tokens.
+- **Skip** for compact path inventories, compact tables, concise artifacts, or <~5k tokens unless repetitive enough for compression to pay off.
+- **Workflow:** compress actual raw artifact first → reason from compressed output by default → use `headroom_retrieve` only for exact slices/raw details → emit `HEADROOM_USED: <hash>` before substantive analysis.
+- **Do not** analyze large raw output directly when trigger applies. Do not substitute tail/sed/shell slices/repeated rereads for compression once trigger applies (except retrieving exact post-compression detail). Do not compress a hand-written summary instead of the original artifact.
 
 ### Shell & Terminal Optimization (RTK)
 
-@/Users/timothymurphy/.codex/RTK.md
+See `@/Users/timothymurphy/.codex/RTK.md`.
 
-- `rtk` usage mandatory for any shell command with non-trivial output when an RTK wrapper exists.
-- Do not use raw `git status`, `git diff`, `rg`, `sed`, `cat`, `pnpm test`, `pnpm lint`, `pnpm typecheck`, `tsc`, or build commands when RTK can wrap them.
-- Required substitutions:
-  - `git status` -> `rtk git status`
-  - `git diff` -> `rtk git diff`
-  - `rg <pattern> <path>` -> `rtk grep <pattern> <path>`
-  - `sed -n ... <file>` / `cat <file>` -> `rtk read <file>`
-  - noisy validation/build/test commands -> `rtk test <cmd>` or `rtk <cmd>`
-- Examples: `rtk pnpm verify-canonical-layout.mjs`, `rtk git status`, `rtk git diff`, `rtk next build`, `rtk read AGENTS.md`, `rtk grep "pricing_provider_mode" services/sidecar/src`.
-- Native file utilities and non-shell read/search helpers bypass RTK compression. For heavy shell reads/searches, use `rtk read <file>` and `rtk grep <pattern> <path>` by default.
-- Raw command allowed only when:
+- Prefer `rtk` when output is broad, noisy, repetitive, or likely to benefit from filtering/compression.
+- **Strong RTK cases:**
+  - `git diff` → `rtk git diff`
+  - repo-wide/broad search (`rg <pattern> <path>`) → `rtk grep <pattern> <path>`
+  - broad file reads / repeated doc/code inspection → `rtk read <file>`
+  - logs, verbose CLIs, noisy shell output
+  - build/test/lint/typecheck, especially noisy → `rtk test <cmd>` or `rtk <cmd>`
+- **Raw command allowed** when:
   - no RTK analogue exists
-  - exact machine-readable output required
-  - output trivial
-  - RTK filtering would hide needed forensic detail
-- If a raw command is used where an RTK wrapper exists, state reason in commentary before execution.
+  - exact machine-readable output needed
+  - output is trivial or very small
+  - formatting-sensitive output matters
+  - exact SQL output needed
+  - RTK filtering would hide forensic detail
+  - `git status --short` or similar compact exact status is needed
+  - tiny file reads are faster/clearer without RTK overhead
+- If bypassing RTK for a non-trivial command where a wrapper exists, state the reason. Do not claim RTK is mandatory merely because a wrapper exists; route by workload shape and expected savings instead.
+
+---
 
 ### Concise Response Protocol
 
-[ROLE]
-Use terse, high-density technical responses by default. For architecture plans, PR reviews, and handoff prompts, use concise structured markdown.
+Use terse, high-density technical responses. No pleasantries. No full sentences if fragments work. Strip articles and auxiliary verbs. Code blocks + symbols + keywords only. Maximize info density per character.
 
-[STYLE RULES]
-
-1. No pleasantries. No "Sure, I can help." No "Here is the code."
-2. No full sentences if fragments work. Strip all articles (the, a, an) and auxiliary verbs (is, are, will).
-3. Use code blocks, symbols, and keywords only.
-4. Output must be ultra-terse, and highly technical.
-5. Maximize info density per character.
-
-[EXAMPLE]
-User: How do I fix a 403 error on my Nginx server?
-Agent:
-403 Forbidden. Permission issue.
-Check Nginx user: ps aux | grep nginx.
-Fix directory permissions: chmod 755 /var/www/html.
-Restart: systemctl restart nginx. Done.
-
-### File Discovery & Reading Boundaries
-
-- Prefer exact file paths; avoid sweeping directory reads or open-ended searches.
-- Respect `.gitignore` and do not index docs unless asked.
-- Skip `node_modules`, `.git`, build outputs, and other large generated folders.
+---
 
 ## Non-Blocking Loop Detection & Audit
 
-Monitor for repeated friction. Do not stop work. Complete the best safe solution, then include an audit block in your output only if a high-friction trigger occurs.
+Monitor repeated friction. Finish best safe solution, then append audit block **only** if a high-friction trigger activates.
 
-### Trigger Activation Criteria (Audit the Context Window)
+### Trigger Activation Criteria
 
-Before generating your response, look back at the last 3-4 turns in our current conversation history. You MUST trigger the audit block if you detect any of these patterns:
+Before responding, scan last 3-4 turns. Trigger audit block on:
 
-- **Seesaw:** You recognize you are changing the exact same small code/type/test area back to a state it was in 2 turns ago.
-- **Type-chase:** A TypeScript fix you just introduced broke a dependent module type that was working earlier in this thread.
-- **Thrash:** You are rewriting a large component block when the underlying issue is a narrow boundary/contract.
-- **Silent wall:** You are about to attempt the exact same failed debugging or implementation approach for a second time.
-- **Architecture mismatch:** The required fix conflicts with existing project invariants or boundaries specified in `AGENTS.md`.
-- **Validation stall:** Tests/typecheck/lint have failed 2+ consecutive times in this terminal session and require a strategy pivot.
+- **Seesaw:** Same small code/type/test area changing back to a state from 2 turns ago.
+- **Type-chase:** A TypeScript fix broke a dependent module that was working earlier.
+- **Thrash:** Rewriting a large component when the issue is a narrow boundary/contract.
+- **Silent wall:** About to attempt the same failed approach a second time.
+- **Architecture mismatch:** Fix conflicts with project invariants or `AGENTS.md`.
+- **Validation stall:** Tests/typecheck/lint failed 2+ consecutive times — pivot needed.
 
-Do not trigger for normal first-pass test failures, simple TypeScript errors, missing imports, formatting, or small corrections.
+Do not trigger for normal first-pass failures, simple TS errors, missing imports, formatting, or small corrections.
 
-### When triggered
+### When Triggered
 
-1. Finish the best safe implementation/review.
-2. Pivot to the smallest stable boundary.
-3. State any remaining limitation.
+1. Finish best safe implementation/review.
+2. Pivot to smallest stable boundary.
+3. State remaining limitation.
 
-Rules:
-JSON must be valid.
-Audit block must be final.
-Do not append if no high-friction trigger occurred.
+Rules: JSON valid. Audit block is final. Do not append without trigger.
+
+---
 
 ## Multi-Project & Server Scoping
 
-- Target package-level commands with workspace filters (e.g., `pnpm --filter <pkg>`).
-- Avoid launching unnecessary servers; suppress verbose logs (e.g., `--logLevel silent`).
+Target package-level commands with workspace filters (e.g., `pnpm --filter <pkg>`). Avoid unnecessary servers; suppress verbose logs (`--logLevel silent`).
+
+---
 
 ## Git Telemetry & Workspace Checks
 
 - Start with `git diff --stat` and `git status -s`.
-- Use full diffs only when needed for correctness, risk, or unintended file churn.
-- If repository state is unclear, report the current branch, modified files, and unpushed commits before continuing.
-- If a push succeeds but Git reports a remote-tracking `.lock` warning, check the remote first. Only remove stale `.git/**/*.lock` files if Git operations are blocked.
-- ROADMAP.md is a living document to be updated as work is completed, by the user only. Commit changes at all times.
+- Use full diffs only when needed for correctness/risk/churn detection.
+- If repo state unclear: report branch, modified files, unpushed commits.
+- If push succeeds but `.lock` warning appears: check remote first. Only remove stale `.git/**/*.lock` files if Git ops blocked.
+- `ROADMAP.md` is a living document updated by the user only.
+
+---
 
 ## Local-First Version Control
 
-This is a solo personal project. Git is primarily for local checkpoints, recovery, and controlled backup.
+Solo personal project. Git for local checkpoints, recovery, controlled backup.
 
-- Work locally by default.
-- Keep local `main` usable most of the time.
-- Commit meaningful checkpoints.
-- Use branches or worktrees for risky, multi-day, or easily abandoned work.
-- Do not mix unrelated risky tasks in the same branch/worktree.
-- Suggested branch names:
-  - `local/<task-name>` for local-only work
-  - `feature/<task-name>` when remote sharing is expected
-- If the worktree is dirty, report modified files before mixing unrelated work.
-- Use `git add -p` when staging precision matters.
-- Conventional commits are optional.
+- Work locally by default. Keep `main` usable. Commit meaningful checkpoints.
+- Branch naming: `local/<task>` for local-only, `feature/<task>` for remote sharing.
+- Dirty worktree? Report modified files before mixing unrelated work.
+- Use `git add -p` when staging precision matters. Conventional commits optional.
 - Run relevant validation before important commits and report results.
-- Push only for backup, stable milestones, remote review, or explicit user request.
-- Prefer local diff review for routine work.
-- Never discard, reset, rebase, force-push, or delete branches/worktrees without explicit user approval.
+- Push only for backup, stable milestones, remote review, or explicit request.
+- Never discard, reset, rebase, force-push, or delete branches/worktrees without approval.
+
+---
 
 ## Model Context Protocol (MCP) Tooling
 
 - Batch related actions into one tool call per intent.
-- From large tool outputs, extract only the keys/fields needed for the task.
+- From large tool outputs, extract only the keys/fields needed.
 
 ### Context7 MCP Server
 
-- For external libraries, always use the `context7` MCP server.
-- Use `resolve-library-id` if the documentation path is unknown.
+- Use `resolve-library-id` if documentation path unknown.
 - Do not rely on internal knowledge for version-specific details.
 
 ### Jina MCP Server
 
-- For web retrieval not covered by Context7, use the Jina MCP server.
-- Includes card pricing, local listings, and unstructured web data.
+- Web retrieval not covered by Context7.
+- Includes card pricing, local listings, unstructured web data.
+
+---
 
 ## Testing and Validation
 
-- Run linting/tests before every commit.
-- Treat failing checks as blockers.
+- Run linting/tests before every commit. Treat failing checks as blockers.
 - Validate each logical sub-task before continuing.
-
-## Output
-
-- Focus exclusively on the architectural impact and functional shifts. Do not generate granular file-level diffs; instead, detail the specific configuration updates and logical changes introduced.
-
-## Codex Skill File Convention
-
-- Each skill lives in its own folder under `.codex/skills/<skill-name>/SKILL.md`.

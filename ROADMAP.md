@@ -19,7 +19,7 @@ PREVIOUS ROADMAP TASKS ARCHIVED
 | 9J.3 | FE/Dashboard | Dismiss button for individual pricing-analysis errors/warnings from UI | After retry workflow is live and initial issues are resolved, remove pricing-analysis warnings from the UI to reduce noise and focus on actionable issues |
 | 9K.4 | BE/FE | Display pricing failures without blocking approval | Rate-limit/provider failures are visible but do not block export |
 COMPLETED TASKS COMMENTED OUT -->
-| 9L.1 | $BE/Archi$ | Eval extracting pricing into `services/pricing-service` | Decision based on live Apify latency, failure isolation needs, local dev overhead, and pricing module coupling |
+| 9L.1 | $BE/Archi$ | Evaluate benefit of extracting pricing into `services/pricing-service` | Decision based on live Apify latency, failure isolation needs, local dev overhead, and pricing module coupling |
 | 9L.2 | BE/Archi | Extract pricing worker to dedicated service if justified | Pricing runs its own workspace service while preserving shared data contracts and non-blocking listing workflow |
 | 9L.3 | $BE/Pricing$ | Add Apify pricing eligibility gate | Low-value or low-confidence lot candidates skip live Apify; only likely singles or manually selected listings spend Apify credits | GPT-5.5 mini | Medium | Protects monthly Apify budget; use listing metadata, Gemini draft confidence, estimated value threshold, duplicate-cache checks, and manual override |
 | 9L.4 | BE/Pricing | Add Apify usage budget guard | Live Apify calls stop before daily/monthly local caps are exceeded | GPT-5.5 mini | Low-Medium | Track run count/estimated spend; default conservative caps; allow CLI override only for smoke/manual testing |

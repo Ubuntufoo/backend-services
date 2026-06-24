@@ -81,6 +81,11 @@ temp/
 *.orig
 *~
 
+# RTK local runtime database artifacts
+.rtk-history.db
+.rtk-history.db-shm
+.rtk-history.db-wal
+
 # OS files
 .DS_Store
 Thumbs.db
