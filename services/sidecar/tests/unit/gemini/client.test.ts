@@ -116,14 +116,17 @@ describe('getGeminiDraftClient', () => {
     }) as typeof fetch;
 
     const client = getGeminiDraftClient('gemini-api-key');
-    const imageParts = await client.prepareImageParts(['https://cdn.example.com/front.png']);
+    const preparedImageParts = await client.prepareImageParts([
+      'https://cdn.example.com/front.png',
+    ]);
 
     await client.generateDraftRaw({
-      imageParts,
+      imageParts: preparedImageParts.imageParts,
       model: 'gemini-test-model',
       prompt: 'Prompt text',
     });
 
+    expect(preparedImageParts.inlineImageBytesApprox).toBe(4);
     expect(createPartFromUriMock).not.toHaveBeenCalled();
     expect(generateContentMock).toHaveBeenCalledWith({
       model: 'gemini-test-model',
@@ -163,14 +166,15 @@ describe('getGeminiDraftClient', () => {
 
   it('preserves URI-based parts for non-HTTP Gemini file URIs', async () => {
     const client = getGeminiDraftClient('gemini-api-key');
-    const imageParts = await client.prepareImageParts(['gs://bucket/card-front.jpg']);
+    const preparedImageParts = await client.prepareImageParts(['gs://bucket/card-front.jpg']);
 
     await client.generateDraftRaw({
-      imageParts,
+      imageParts: preparedImageParts.imageParts,
       model: 'gemini-test-model',
       prompt: 'Prompt text',
     });
 
+    expect(preparedImageParts.inlineImageBytesApprox).toBe(0);
     expect(createPartFromUriMock).toHaveBeenCalledWith(
       'gs://bucket/card-front.jpg',
       'image/jpeg'

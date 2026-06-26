@@ -4,6 +4,7 @@ import {
   GeminiDraftServiceError,
   GeminiDraftValidationError,
   generateListingDraft as generateListingDraftImpl,
+  prepareGenerateListingDraft,
 } from '@/gemini/index.js';
 
 const generateDraftRawMock = vi.hoisted(() => vi.fn());
@@ -41,7 +42,10 @@ describe('generateListingDraft', () => {
     generateDraftRawMock.mockReset();
     getGeminiDraftClientMock.mockReset();
     prepareImagePartsMock.mockReset();
-    prepareImagePartsMock.mockResolvedValue([{ inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }]);
+    prepareImagePartsMock.mockResolvedValue({
+      imageParts: [{ inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }],
+      inlineImageBytesApprox: 3,
+    });
     getGeminiDraftClientMock.mockReturnValue({
       generateDraftRaw: generateDraftRawMock,
       prepareImageParts: prepareImagePartsMock,
@@ -280,6 +284,43 @@ describe('generateListingDraft', () => {
       warnings: ['Condition cannot be confirmed from photos alone.'],
       rawModelResponse: rawResponse,
     });
+  });
+
+  it('produces compact prompt and image diagnostics without exposing raw prompt or image data', async () => {
+    const preparedDraft = await prepareGenerateListingDraft({
+      listingId: 'LIST-001',
+      imageUrls: [
+        'https://cdn.example.com/front.jpg',
+        'https://cdn.example.com/back.png',
+      ],
+      userHints: {
+        notes: 'Visible edge wear.',
+        title: 'Jordan lot',
+      },
+    });
+
+    expect(preparedDraft.diagnostics.payload).toEqual({
+      imageCount: 2,
+      inlineImageBytesApprox: 3,
+      preparedImagePartCount: 1,
+      promptBytes: expect.any(Number),
+    });
+    expect(preparedDraft.diagnostics.latency.prepareDraftMs).toEqual(expect.any(Number));
+    expect(preparedDraft.diagnostics.latency.prepareDraftMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(preparedDraft.diagnostics.payload.promptBytes)).toBe(true);
+    expect(preparedDraft.diagnostics.payload.promptBytes).toBeGreaterThan(0);
+    expect('prompt' in preparedDraft.diagnostics.payload).toBe(false);
+    expect('imageParts' in preparedDraft.diagnostics.payload).toBe(false);
+
+    const executionResult = await preparedDraft.execute({
+      model: DEFAULT_GEMINI_DRAFT_MODEL,
+    });
+
+    expect(executionResult.diagnostics.payload).toEqual(preparedDraft.diagnostics.payload);
+    expect(executionResult.diagnostics.latency?.modelMs).toEqual(expect.any(Number));
+    expect(executionResult.diagnostics.latency?.parseMs).toEqual(expect.any(Number));
+    expect(executionResult.diagnostics.latency?.modelMs).toBeGreaterThanOrEqual(0);
+    expect(executionResult.diagnostics.latency?.parseMs).toBeGreaterThanOrEqual(0);
   });
 
   it('accepts Franchise as a generated aspect value', async () => {

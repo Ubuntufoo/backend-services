@@ -15,8 +15,13 @@ export interface GeminiDraftRawResult {
   rawResponse: unknown;
 }
 
+export interface PreparedImagePartsResult {
+  imageParts: Part[];
+  inlineImageBytesApprox: number;
+}
+
 export interface GeminiDraftClient {
-  prepareImageParts(imageUrls: string[]): Promise<Part[]>;
+  prepareImageParts(imageUrls: string[]): Promise<PreparedImagePartsResult>;
   generateDraftRaw(request: GeminiDraftProviderRequest): Promise<GeminiDraftRawResult>;
 }
 
@@ -166,8 +171,26 @@ async function buildImagePart(imageUrl: string): Promise<Part> {
   );
 }
 
-async function prepareImageParts(imageUrls: string[]): Promise<Part[]> {
-  return await Promise.all(imageUrls.map(async (imageUrl) => await buildImagePart(imageUrl)));
+function getInlineImageBytesApprox(imagePart: Part): number {
+  const inlineData = 'inlineData' in imagePart ? imagePart.inlineData : undefined;
+
+  if (!inlineData?.data) {
+    return 0;
+  }
+
+  return Buffer.from(inlineData.data, 'base64').length;
+}
+
+async function prepareImageParts(imageUrls: string[]): Promise<PreparedImagePartsResult> {
+  const imageParts = await Promise.all(imageUrls.map(async (imageUrl) => await buildImagePart(imageUrl)));
+
+  return {
+    imageParts,
+    inlineImageBytesApprox: imageParts.reduce(
+      (totalBytes, imagePart) => totalBytes + getInlineImageBytesApprox(imagePart),
+      0
+    ),
+  };
 }
 
 export function getGeminiDraftClient(apiKey: string): GeminiDraftClient {

@@ -2,6 +2,7 @@ import {
   AiModelRouteNotFoundError,
   getPricingProviderMode,
   isPricingEnabled,
+  type AiModelAttemptMetadata,
   type AiModelAttemptRow,
   type GeminiJobAttemptAuditUpdate,
   type GeminiModelAttempt,
@@ -14,12 +15,17 @@ import {
   aspectValueSchema,
   generateListingDraft,
   generateListingDraftWithFallback,
+  GeminiDraftServiceError,
   GeminiFallbackExecutionError,
   normalizeGeneratedDraft,
   prepareGenerateListingDraft,
   resolveTradingCardListingIds,
+  type GenerateAiAttemptDiagnostics,
+  type GenerateAiLatencyDiagnostics,
+  type GenerateAiPayloadDiagnostics,
   type GenerateListingDraftInput,
   type PreparedGenerateListingDraft,
+  type PreparedGenerateListingDraftExecutionResult,
 } from '@/gemini/index.js';
 import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -61,6 +67,8 @@ const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
 const jobLogger = createLogger('Job');
+const nowMs = () => performance.now();
+const elapsedMs = (startedAt: number) => Math.max(0, Math.round(performance.now() - startedAt));
 
 type GenerateListingDraftFn = (
   input: GenerateListingDraftInput,
@@ -411,9 +419,69 @@ function createPreparedListingDraftFromGenerateFn(
 ): PrepareListingDraftFn {
   return (input) =>
     Promise.resolve({
+      diagnostics: {
+        latency: {
+          prepareDraftMs: 0,
+        },
+        payload: {
+          imageCount: input.imageUrls.length,
+        },
+      },
       input,
-      execute: async (options) => await generateDraft(input, options),
+      execute: async (options) => ({
+        diagnostics: {
+          payload: {
+            imageCount: input.imageUrls.length,
+          },
+        },
+        draft: await generateDraft(input, options),
+      }),
     });
+}
+
+function buildAiModelAttemptMetadata(
+  diagnostics: GenerateAiAttemptDiagnostics | undefined
+): AiModelAttemptMetadata | undefined {
+  if (!diagnostics) {
+    return undefined;
+  }
+
+  const payload: AiModelAttemptMetadata = {
+    imageCount: diagnostics.payload.imageCount,
+    ...(diagnostics.payload.inlineImageBytesApprox !== undefined
+      ? { inlineImageBytesApprox: diagnostics.payload.inlineImageBytesApprox }
+      : {}),
+    ...(diagnostics.payload.preparedImagePartCount !== undefined
+      ? { preparedImagePartCount: diagnostics.payload.preparedImagePartCount }
+      : {}),
+    ...(diagnostics.payload.promptBytes !== undefined
+      ? { promptBytes: diagnostics.payload.promptBytes }
+      : {}),
+  };
+
+  return {
+    ...(diagnostics.latency
+      ? {
+          latency: {
+            ...(diagnostics.latency.modelMs !== undefined
+              ? { modelMs: diagnostics.latency.modelMs }
+              : {}),
+            ...(diagnostics.latency.parseMs !== undefined
+              ? { parseMs: diagnostics.latency.parseMs }
+              : {}),
+          },
+        }
+      : {}),
+    payload,
+  };
+}
+
+function getGenerateAiAttemptDiagnostics(error: unknown): GenerateAiAttemptDiagnostics | undefined {
+  if (error instanceof GeminiDraftServiceError) {
+    return error.diagnostics;
+  }
+
+  return undefined;
 }
 
 async function ensureJobRunning(
@@ -608,6 +676,7 @@ async function runGenerateAiJob(
 
   const legacyAttempts: GeminiModelAttempt[] = [];
   const aiModelAttemptRows = new Map<number, AiModelAttemptRow>();
+  const totalStartedAt = nowMs();
 
   try {
     const resolvedRoutes = await options.dataAccess.aiModelRoutes.resolveForTask(
@@ -618,13 +687,27 @@ async function runGenerateAiJob(
       throw createListingDraftRouteNotFoundError();
     }
 
+    const prepareDraftStartedAt = nowMs();
     const preparedDraft = await options.prepareListingDraft({
       imageUrls,
       listingId,
       userHints: buildUserHints(listing),
     });
+    const prepareDraftMs =
+      preparedDraft.diagnostics.latency.prepareDraftMs || elapsedMs(prepareDraftStartedAt);
+    const payloadDiagnostics = preparedDraft.diagnostics.payload;
 
-    const routerResult = await generateListingDraftWithFallback({
+    jobLogger.info('Completed generate_ai draft preparation.', {
+      event: 'generate_ai_prepare_completed',
+      generateAiLatency: {
+        prepareDraftMs,
+      },
+      generateAiPayload: payloadDiagnostics,
+      jobId: job.id,
+      listingId,
+    });
+
+    const routerResult = await generateListingDraftWithFallback<PreparedGenerateListingDraftExecutionResult>({
       executeRoute: async (route) => await preparedDraft.execute({ model: route.modelName }),
       incrementDailyUsage: async () => {
         await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
@@ -649,6 +732,8 @@ async function runGenerateAiJob(
         };
 
         legacyAttempts[attempt.attemptOrder - 1] = failedAttempt;
+        const attemptDiagnostics =
+          getGenerateAiAttemptDiagnostics(attempt.error) ?? { payload: payloadDiagnostics };
 
         const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
         if (aiModelAttempt) {
@@ -660,6 +745,7 @@ async function runGenerateAiJob(
               failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
               finished_at: attempt.completedAt,
               id: aiModelAttempt.id,
+              metadata: buildAiModelAttemptMetadata(attemptDiagnostics),
             },
             aiAttemptContext,
             true
@@ -676,6 +762,18 @@ async function runGenerateAiJob(
           },
           true
         );
+
+        jobLogger.info('Completed generate_ai model attempt.', {
+          event: 'generate_ai_model_attempt_completed',
+          failureCode: attemptError.code,
+          generateAiLatency: attemptDiagnostics.latency,
+          generateAiPayload: attemptDiagnostics.payload,
+          jobId: job.id,
+          listingId,
+          modelName: attempt.route.modelName,
+          status: 'failed',
+          willFallback: attempt.willFallback,
+        });
       },
       onAttemptStarted: async (attempt) => {
         const startedAttempt: GeminiModelAttempt = {
@@ -721,6 +819,9 @@ async function runGenerateAiJob(
             job_id: job.id,
             listing_id: listingId,
             model_name: attempt.route.modelName,
+            metadata: buildAiModelAttemptMetadata({
+              payload: payloadDiagnostics,
+            }),
             provider: AI_PROVIDER_GOOGLE,
             provider_model_id: attempt.route.modelName,
             routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
@@ -753,6 +854,7 @@ async function runGenerateAiJob(
         };
 
         legacyAttempts[attempt.attemptOrder - 1] = succeededAttempt;
+        const attemptDiagnostics = attempt.draft.diagnostics;
 
         const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
         if (aiModelAttempt) {
@@ -762,6 +864,7 @@ async function runGenerateAiJob(
               duration_ms: attempt.durationMs,
               finished_at: attempt.completedAt,
               id: aiModelAttempt.id,
+              metadata: buildAiModelAttemptMetadata(attemptDiagnostics),
             },
             aiAttemptContext,
             true
@@ -778,16 +881,49 @@ async function runGenerateAiJob(
           },
           true
         );
+
+        jobLogger.info('Completed generate_ai model attempt.', {
+          event: 'generate_ai_model_attempt_completed',
+          generateAiLatency: attemptDiagnostics.latency,
+          generateAiPayload: attemptDiagnostics.payload,
+          jobId: job.id,
+          listingId,
+          modelName: attempt.route.modelName,
+          status: 'succeeded',
+          willFallback: false,
+        });
       },
       routes: resolvedRoutes,
     });
 
+    const listingUpdateStartedAt = nowMs();
     const reviewListing = await options.dataAccess.listings.update(
       listingId,
-      buildGeneratedListingReviewUpdate(listing, routerResult.draft)
+      buildGeneratedListingReviewUpdate(listing, routerResult.draft.draft)
     );
+    const listingUpdateMs = elapsedMs(listingUpdateStartedAt);
+    const enqueueResearchPriceStartedAt = nowMs();
     await enqueueResearchPriceAfterGenerate(options.dataAccess, reviewListing);
+    const enqueueResearchPriceMs = elapsedMs(enqueueResearchPriceStartedAt);
     const completedJob = await options.dataAccess.jobs.complete(job.id);
+
+    const generateAiLatency: GenerateAiLatencyDiagnostics = {
+      enqueueResearchPriceMs,
+      listingUpdateMs,
+      modelMs: routerResult.draft.diagnostics.latency?.modelMs,
+      parseMs: routerResult.draft.diagnostics.latency?.parseMs,
+      prepareDraftMs,
+      totalMs: elapsedMs(totalStartedAt),
+    };
+
+    jobLogger.info('Completed generate_ai successfully.', {
+      event: 'generate_ai_succeeded',
+      generateAiLatency,
+      generateAiPayload: routerResult.draft.diagnostics.payload,
+      jobId: job.id,
+      listingId,
+      selectedModel: routerResult.selectedRoute.modelName,
+    });
 
     return {
       job: completedJob,

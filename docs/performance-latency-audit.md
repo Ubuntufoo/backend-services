@@ -32,3 +32,47 @@ Estimates only until measured with live runs.
 - Trim LLM prompt payload second: reduce comp count or prompt bytes only if live timing shows `llmReasoningMs` is material.
 - Revisit persistence round trips third: measure them separately during targeted profiling if provider and LLM latency are already understood.
 - Ignore micro-optimizing normalization/stats unless live rows show unexpected spikes.
+
+## Gemini Draft Generation
+
+### What Is Measured
+
+- `generateAiLatency` in `runGenerateAiJob()` structured logs: `totalMs`, `prepareDraftMs`, `modelMs`, `parseMs`, `listingUpdateMs`, `enqueueResearchPriceMs`
+- `generateAiPayload` in the same logs: `promptBytes`, `imageCount`, `preparedImagePartCount`, `inlineImageBytesApprox`
+- `ai_model_attempts.metadata` for each Gemini provider attempt when audit rows exist:
+  - `metadata.latency.modelMs`
+  - `metadata.latency.parseMs`
+  - `metadata.payload.promptBytes`
+  - `metadata.payload.imageCount`
+  - `metadata.payload.preparedImagePartCount`
+  - `metadata.payload.inlineImageBytesApprox`
+
+### Where To Look
+
+- Structured logs:
+  - `generate_ai_prepare_completed`
+  - `generate_ai_model_attempt_completed`
+  - `generate_ai_succeeded`
+- Model-attempt persistence: `public.ai_model_attempts.metadata`
+- No API surface changes; diagnostics stay in logs and existing attempt metadata only
+
+### Expected Bottlenecks
+
+Estimates only until measured with live runs.
+
+1. Gemini model call
+   Estimated savings: likely highest; external network + provider inference latency.
+2. Image fetch + inline base64 preparation
+   Estimated savings: likely medium/high when multiple large HTTP images are present.
+3. Prompt payload size
+   Estimated savings: likely low/medium unless prompt growth materially increases provider latency.
+4. Parse + listing update + `research_price` enqueue
+   Estimated savings: likely low in normal runs.
+
+### Follow-up Candidates
+
+- Approved 9M.2 route-order optimization: live `generate_ai` audit showed `listing_draft_generation` attempting `gemini-3.5-flash` before `gemini-3-flash-preview`, with repeated Google `503 UNAVAILABLE` / high-demand failures on `3.5` and successful fallback on preview; reorder default route priority to `gemini-3-flash-preview`, then `gemini-3.5-flash`, while preserving fallback behavior.
+- Reduce inline image payload size only if live `inlineImageBytesApprox` and `prepareDraftMs` show material local overhead.
+- Trim prompt bytes only if live runs show prompt size correlates with `modelMs`.
+- Consider deferred or alternative payload strategies only after confirming model latency is not already dominant.
+- Treat all savings estimates as provisional until measured from real `generate_ai` executions.

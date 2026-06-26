@@ -68,10 +68,34 @@ export type GenerateListingDraftInput = z.infer<typeof generateListingDraftInput
 export type GeneratedListingDraft = z.infer<typeof generatedListingDraftSchema>;
 export type GenerateListingDraftUserHints = z.infer<typeof userHintsSchema>;
 
+export interface GenerateAiLatencyDiagnostics {
+  totalMs?: number;
+  prepareDraftMs?: number;
+  modelMs?: number;
+  parseMs?: number;
+  listingUpdateMs?: number;
+  enqueueResearchPriceMs?: number;
+}
+
+export interface GenerateAiPayloadDiagnostics {
+  promptBytes?: number;
+  imageCount: number;
+  preparedImagePartCount?: number;
+  inlineImageBytesApprox?: number;
+}
+
+export interface GenerateAiAttemptDiagnostics {
+  latency?: Pick<GenerateAiLatencyDiagnostics, 'modelMs' | 'parseMs'>;
+  payload: GenerateAiPayloadDiagnostics;
+}
+
 export class GeminiDraftServiceError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly diagnostics?: GenerateAiAttemptDiagnostics;
+
+  constructor(message: string, options?: (ErrorOptions & { diagnostics?: GenerateAiAttemptDiagnostics })) {
     super(message, options);
     this.name = 'GeminiDraftServiceError';
+    this.diagnostics = options?.diagnostics;
   }
 }
 

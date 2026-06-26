@@ -751,6 +751,7 @@ function createDataAccess({
           failure_code: input.failure_code ?? null,
           failure_message: input.failure_message ?? null,
           finished_at: input.finished_at,
+          metadata: input.metadata ?? aiModelAttemptStates[index]?.metadata ?? {},
           status: 'failed',
         };
         aiModelAttemptStates[index] = aiModelAttemptState;
@@ -771,6 +772,7 @@ function createDataAccess({
           ...aiModelAttemptStates[index],
           duration_ms: input.duration_ms ?? null,
           finished_at: input.finished_at,
+          metadata: input.metadata ?? aiModelAttemptStates[index]?.metadata ?? {},
           status: 'succeeded',
         };
         aiModelAttemptStates[index] = aiModelAttemptState;
@@ -1084,7 +1086,63 @@ describe('runSidecarJob', () => {
         title: 'Possible Jordan insert',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
+    const payloadDiagnostics = {
+      imageCount: 2,
+      inlineImageBytesApprox: 2048,
+      preparedImagePartCount: 2,
+      promptBytes: 512,
+    };
+    const preparedDraftExecuteMock = vi.fn(async () => ({
+      diagnostics: {
+        latency: {
+          modelMs: 87,
+          parseMs: 5,
+        },
+        payload: payloadDiagnostics,
+      },
+      draft: {
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Ungraded single card with visible edge wear.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: 'Visible edge wear and light corner wear.',
+        cardConditionToken: 'VERY_GOOD',
+        conditionSuggestion: 'Ungraded',
+        skuCategoryCode: 'BSKBL',
+        aspects: {
+          Franchise: 'Utah Jazz',
+          Player: 'Michael Jordan',
+          Manufacturer: 'Upper Deck',
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: ['Condition inferred from visible wear only.'],
+        rawModelResponse: { id: 'raw-response-1' },
+      },
+    }));
+    const prepareListingDraftMock = vi.fn(async () => ({
+      diagnostics: {
+        latency: {
+          prepareDraftMs: 14,
+        },
+        payload: payloadDiagnostics,
+      },
+      execute: preparedDraftExecuteMock,
+      input: {
+        imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
+        listingId: 'Single-000001',
+        userHints: {
+          aspects: {
+            Player: 'Michael Jordan',
+            Team: ['Chicago Bulls'],
+          },
+          notes: 'Card appears ungraded.',
+          title: 'Possible Jordan insert',
+        },
+      },
+    }));
+    const generatedDraft = {
       title: '1991 Upper Deck Michael Jordan',
       description: 'Ungraded single card with visible edge wear.',
       categorySuggestion: 'Sports Trading Cards',
@@ -1103,7 +1161,7 @@ describe('runSidecarJob', () => {
       },
       warnings: ['Condition inferred from visible wear only.'],
       rawModelResponse: { id: 'raw-response-1' },
-    }));
+    };
     const pricingProvider = {
       fetch: vi.fn(),
       name: 'fixture' as const,
@@ -1114,8 +1172,8 @@ describe('runSidecarJob', () => {
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
-      generateListingDraft: generateListingDraftMock,
       now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
       researchPrice: {
         pricingAnalyst,
         pricingProvider,
@@ -1136,7 +1194,7 @@ describe('runSidecarJob', () => {
       requireStructuredOutput: true,
       taskType: 'listing_draft_generation',
     });
-    expect(generateListingDraftMock).toHaveBeenCalledWith(
+    expect(prepareListingDraftMock).toHaveBeenCalledWith(
       {
         imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
         listingId: 'Single-000001',
@@ -1149,12 +1207,14 @@ describe('runSidecarJob', () => {
           title: 'Possible Jordan insert',
         },
       },
-      { model: 'gemini-3.1-flash-lite' }
     );
+    expect(preparedDraftExecuteMock).toHaveBeenCalledWith({
+      model: 'gemini-3.1-flash-lite',
+    });
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'Single-000001',
       expect.objectContaining({
-        category_id: '183050',
+        category_id: '261328',
         condition_id: '4000',
         condition_notes: 'Visible edge wear and light corner wear.',
         description: 'Ungraded single card with visible edge wear.',
@@ -1220,6 +1280,9 @@ describe('runSidecarJob', () => {
       attempt_order: 1,
       job_id: 'job-generate-ai',
       listing_id: 'Single-000001',
+      metadata: {
+        payload: payloadDiagnostics,
+      },
       model_name: 'gemini-3.1-flash-lite',
       provider: 'google',
       provider_model_id: 'gemini-3.1-flash-lite',
@@ -1231,7 +1294,64 @@ describe('runSidecarJob', () => {
       duration_ms: 0,
       finished_at: '2026-05-20T13:00:00.000Z',
       id: 'ai-model-attempt-row-id',
+      metadata: {
+        latency: {
+          modelMs: 87,
+          parseMs: 5,
+        },
+        payload: payloadDiagnostics,
+      },
     });
+    expect(jobLoggerInfo).toHaveBeenCalledWith(
+      'Completed generate_ai draft preparation.',
+      expect.objectContaining({
+        event: 'generate_ai_prepare_completed',
+        generateAiLatency: {
+          prepareDraftMs: 14,
+        },
+        generateAiPayload: payloadDiagnostics,
+      })
+    );
+    expect(jobLoggerInfo).toHaveBeenCalledWith(
+      'Completed generate_ai model attempt.',
+      expect.objectContaining({
+        event: 'generate_ai_model_attempt_completed',
+        generateAiLatency: {
+          modelMs: 87,
+          parseMs: 5,
+        },
+        generateAiPayload: payloadDiagnostics,
+        modelName: 'gemini-3.1-flash-lite',
+        status: 'succeeded',
+      })
+    );
+    expect(jobLoggerInfo).toHaveBeenCalledWith(
+      'Completed generate_ai successfully.',
+      expect.objectContaining({
+        event: 'generate_ai_succeeded',
+        generateAiPayload: payloadDiagnostics,
+        selectedModel: 'gemini-3.1-flash-lite',
+      })
+    );
+    const successLog = jobLoggerInfo.mock.calls.find(
+      ([message]) => message === 'Completed generate_ai successfully.'
+    );
+    expect(successLog?.[1]).toEqual(
+      expect.objectContaining({
+        generateAiLatency: expect.objectContaining({
+          enqueueResearchPriceMs: expect.any(Number),
+          listingUpdateMs: expect.any(Number),
+          modelMs: 87,
+          parseMs: 5,
+          prepareDraftMs: 14,
+          totalMs: expect.any(Number),
+        }),
+      })
+    );
+    expect(Number.isFinite((successLog?.[1] as { generateAiLatency: { totalMs: number } }).generateAiLatency.totalMs)).toBe(true);
+    expect(
+      (successLog?.[1] as { generateAiLatency: { totalMs: number } }).generateAiLatency.totalMs
+    ).toBeGreaterThanOrEqual(0);
     expect(dataAccess.listings.updateWorkflowState).toHaveBeenCalledTimes(1);
     expect(result.listing?.status).toBe('needs_review');
     expect(result.listing?.sub_status).toBe('review_pending');
@@ -1240,6 +1360,7 @@ describe('runSidecarJob', () => {
     });
     expect(result.listing?.sku).toBe('Single-000001');
     expect(result.listing?.listing_id).toBe('Single-000001');
+    expect(result.listing?.title).toBe(generatedDraft.title);
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(pricingProvider.fetch).not.toHaveBeenCalled();
     expect(pricingAnalyst.analyze).not.toHaveBeenCalled();
@@ -1795,6 +1916,11 @@ describe('runSidecarJob', () => {
       attempt_order: 1,
       job_id: 'job-generate-ai',
       listing_id: 'LIST-001',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
       model_name: 'gemini-3.1-flash-lite',
       provider: 'google',
       provider_model_id: 'gemini-3.1-flash-lite',
@@ -1806,6 +1932,11 @@ describe('runSidecarJob', () => {
       attempt_order: 2,
       job_id: 'job-generate-ai',
       listing_id: 'LIST-001',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
       model_name: 'gemini-3.1-pro',
       provider: 'google',
       provider_model_id: 'gemini-3.1-pro',
@@ -1819,11 +1950,21 @@ describe('runSidecarJob', () => {
       failure_message: '429 too many requests',
       finished_at: '2026-05-20T13:00:00.000Z',
       id: 'ai-model-attempt-row-id',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
     });
     expect(dataAccess.aiModelAttempts.markSucceeded).toHaveBeenCalledWith({
       duration_ms: 0,
       finished_at: '2026-05-20T13:00:00.000Z',
       id: 'ai-model-attempt-row-id-2',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
     });
     expect(result.job.status).toBe('completed');
     expect(result.job.gemini_attempt_count).toBe(2);
@@ -1842,6 +1983,80 @@ describe('runSidecarJob', () => {
       }),
     ]);
     expect(result.listing?.status).toBe('needs_review');
+  });
+
+  it('tries flash preview before gemini 3.5 flash when resolver orders it first', async () => {
+    const previewRoute = createResolvedAiModelRoute({
+      displayName: 'Gemini 3 Flash Preview',
+      modelName: 'gemini-3-flash-preview',
+      routeOrder: 1,
+    });
+    const secondRoute = createResolvedAiModelRoute({
+      displayName: 'Gemini 3.5 Flash',
+      modelName: 'gemini-3.5-flash',
+      routeOrder: 2,
+    });
+    const dataAccess = createDataAccess({
+      aiModelRoutes: [previewRoute, secondRoute],
+    });
+    const generateListingDraftMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('503 unavailable'))
+      .mockResolvedValueOnce({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Recovered after preview-first attempt.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Player: 'Michael Jordan',
+          Manufacturer: 'Upper Deck',
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: ['Second route used after preview unavailable.'],
+        rawModelResponse: { id: 'raw-response-preview-first-fallback' },
+      });
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        listingId: 'LIST-001',
+      }),
+      { model: 'gemini-3-flash-preview' }
+    );
+    expect(generateListingDraftMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        listingId: 'LIST-001',
+      }),
+      { model: 'gemini-3.5-flash' }
+    );
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        attempt_order: 1,
+        model_name: 'gemini-3-flash-preview',
+        provider_model_id: 'gemini-3-flash-preview',
+      })
+    );
+    expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        attempt_order: 2,
+        model_name: 'gemini-3.5-flash',
+        provider_model_id: 'gemini-3.5-flash',
+      })
+    );
+    expect(result.job.gemini_selected_model).toBe('gemini-3.5-flash');
+    expect(result.listing?.description).toBe('Recovered after preview-first attempt.');
   });
 
   it('resolves category and condition ids from Gemini suggestions only for trading card singles', async () => {
@@ -1874,7 +2089,7 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listings.update).toHaveBeenCalledWith(
       'LIST-001',
       expect.objectContaining({
-        category_id: '183050',
+        category_id: '261328',
         condition_id: '4000',
         status: 'needs_review',
         sub_status: 'review_pending',
@@ -1991,6 +2206,11 @@ describe('runSidecarJob', () => {
       attempt_order: 1,
       job_id: 'job-generate-ai',
       listing_id: 'LIST-001',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
       model_name: 'gemini-3.1-flash-lite',
       provider: 'google',
       provider_model_id: 'gemini-3.1-flash-lite',
@@ -2004,6 +2224,11 @@ describe('runSidecarJob', () => {
       failure_message: 'Gemini timed out',
       finished_at: '2026-05-20T13:00:00.000Z',
       id: 'ai-model-attempt-row-id',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
     });
     expect(result.job.gemini_attempt_count).toBe(1);
     expect(result.job.gemini_selected_model).toBeNull();
@@ -2067,6 +2292,11 @@ describe('runSidecarJob', () => {
       attempt_order: 1,
       job_id: 'job-generate-ai',
       listing_id: 'LIST-001',
+      metadata: {
+        payload: {
+          imageCount: 2,
+        },
+      },
       model_name: 'gemini-3.1-flash-lite',
       provider: 'google',
       provider_model_id: 'gemini-3.1-flash-lite',
@@ -4242,7 +4472,7 @@ describe('runSidecarJob', () => {
       expect(result.listing?.price).not.toBe(listing.price);
     });
 
-    it('marks listing price research failed on provider errors without writing listing last_error fields', async () => {
+    it('falls back after provider errors without writing listing last_error fields', async () => {
       const listing = createListingRow({
         last_error_at: '2026-05-19T12:00:00.000Z',
         last_error_code: 'existing_error',
@@ -4271,19 +4501,25 @@ describe('runSidecarJob', () => {
         },
       });
 
-      expect(result.job.status).toBe('failed');
-      expect(result.job.last_error_code).toBe('research_price_failed');
-      expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
+      expect(result.job.status).toBe('completed');
+      expect(result.job.last_error_code).toBeNull();
+      expect(result.listing).toMatchObject({
+        last_error_at: listing.last_error_at,
+        last_error_code: listing.last_error_code,
+        last_error_context: listing.last_error_context,
+        last_error_message: listing.last_error_message,
+        status: 'needs_review',
+        sub_status: 'review_pending',
+      });
+      expect(result.listing?.price).toEqual(expect.any(Number));
+      expect(result.listing?.price).not.toBe(listing.price);
       expect(fetchSoldComps).toHaveBeenCalledTimes(1);
       expect(dataAccess.listingPriceResearch.create).toHaveBeenCalledTimes(1);
-      expect(dataAccess.listingPriceResearch.markFailed).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error_code: 'research_price_failed',
-          error_message: 'fixture exploded',
-        })
-      );
-      expect(dataAccess.listingPriceResearch.markSucceeded).not.toHaveBeenCalled();
-      expect(dataAccess.listings.update).not.toHaveBeenCalled();
+      expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
+      expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledTimes(1);
+      expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+        price: expect.any(Number),
+      });
       expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
     });
 
@@ -4551,19 +4787,17 @@ describe('runSidecarJob', () => {
         },
       });
 
-      expect(result.job.status).toBe('failed');
+      expect(result.job.status).toBe('completed');
       expect(jobLoggerWarn).toHaveBeenCalledWith(
-        'Failed research_price job.',
+        'Primary research_price provider failed. Attempting fallback provider.',
         expect.objectContaining({
-          event: 'research_price_failed',
-          failureCode: 'research_price_failed',
-          jobId: 'job-research-price',
+          event: 'research_price_provider_fallback_started',
+          fallbackProvider: 'apify',
+          firstProvider: 'fixture',
           listingId: 'LIST-001',
-          provider: 'fixture',
           providerFailureCode: 'fixture_fetch_failed',
           providerFailureMessage: 'fixture exploded [redacted-url]',
           query: 'victor wembanyama prizm',
-          workflowSafe: true,
         })
       );
       expect(jobLoggerWarn).not.toHaveBeenCalledWith(

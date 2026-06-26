@@ -136,17 +136,17 @@ describe('ai model routes repository', () => {
       createJoinedRouteRow({
         catalog: {
           ...baseCatalogRow,
-          display_name: 'Gemini 3.5 Flash',
+          display_name: 'Gemini 3 Flash Preview',
         },
-        model_name: 'gemini-3.5-flash',
+        model_name: 'gemini-3-flash-preview',
         route_order: 1,
       }),
       createJoinedRouteRow({
         catalog: {
           ...baseCatalogRow,
-          display_name: 'Gemini 3 Flash Preview',
+          display_name: 'Gemini 3.5 Flash',
         },
-        model_name: 'gemini-3-flash-preview',
+        model_name: 'gemini-3.5-flash',
         route_order: 2,
       }),
       createJoinedRouteRow({
@@ -178,16 +178,16 @@ describe('ai model routes repository', () => {
 
     expect(routes).toEqual([
       expect.objectContaining({
-        displayName: 'Gemini 3.5 Flash',
-        modelName: 'gemini-3.5-flash',
+        displayName: 'Gemini 3 Flash Preview',
+        modelName: 'gemini-3-flash-preview',
         provider: 'google',
         requestsPerDay: null,
         requestsPerMinute: null,
         routeOrder: 1,
       }),
       expect.objectContaining({
-        displayName: 'Gemini 3 Flash Preview',
-        modelName: 'gemini-3-flash-preview',
+        displayName: 'Gemini 3.5 Flash',
+        modelName: 'gemini-3.5-flash',
         provider: 'google',
         requestsPerDay: null,
         requestsPerMinute: null,
@@ -483,17 +483,17 @@ describe('ai model routes repository', () => {
       createJoinedRouteRow({
         catalog: {
           ...baseCatalogRow,
-          display_name: 'Gemini 3.5 Flash',
+          display_name: 'Gemini 3 Flash Preview',
         },
-        model_name: 'gemini-3.5-flash',
+        model_name: 'gemini-3-flash-preview',
         route_order: 1,
       }),
       createJoinedRouteRow({
         catalog: {
           ...baseCatalogRow,
-          display_name: 'Gemini 3 Flash Preview',
+          display_name: 'Gemini 3.5 Flash',
         },
-        model_name: 'gemini-3-flash-preview',
+        model_name: 'gemini-3.5-flash',
         route_order: 2,
       }),
       createJoinedRouteRow({
@@ -512,7 +512,7 @@ describe('ai model routes repository', () => {
 
     expect(route).toEqual(
       expect.objectContaining({
-        modelName: 'gemini-3.5-flash',
+        modelName: 'gemini-3-flash-preview',
         routeOrder: 1,
       })
     );
