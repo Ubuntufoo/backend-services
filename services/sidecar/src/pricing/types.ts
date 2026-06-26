@@ -212,10 +212,20 @@ export interface PricingAnalystInput {
 }
 
 export interface PricingAnalystResult {
+  diagnostics?: PricingAnalystResultDiagnostics;
   modelName: string;
   reasoning: LlmPricingReasoning;
   prompt: LlmPricingPrompt;
   rawOutput: unknown;
+}
+
+export interface PricingAnalystResultDiagnostics {
+  compCountSent: number;
+  modelCallMs: number;
+  outputTextByteLength: number;
+  parseMs: number;
+  promptByteLength: number;
+  selectedModel: string;
 }
 
 export interface PricingAnalystFailureCause {

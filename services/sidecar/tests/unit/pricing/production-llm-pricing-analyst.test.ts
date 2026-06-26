@@ -83,6 +83,16 @@ describe('createProductionPricingAnalyst', () => {
 
     expect(result.reasoning.selectedCompIds).toEqual(['canonical-comp-1']);
     expect(result.reasoning.rejectedCompIds).toEqual(['canonical-comp-2']);
+    expect(result.diagnostics).toMatchObject({
+      compCountSent: 2,
+      outputTextByteLength: expect.any(Number),
+      promptByteLength: expect.any(Number),
+      selectedModel: 'gemma-4-31b-it',
+    });
+    expect(Number.isFinite(result.diagnostics?.modelCallMs)).toBe(true);
+    expect(Number.isFinite(result.diagnostics?.parseMs)).toBe(true);
+    expect(result.diagnostics?.modelCallMs).toBeGreaterThanOrEqual(0);
+    expect(result.diagnostics?.parseMs).toBeGreaterThanOrEqual(0);
     expect(executeModel).toHaveBeenCalledTimes(1);
   });
 

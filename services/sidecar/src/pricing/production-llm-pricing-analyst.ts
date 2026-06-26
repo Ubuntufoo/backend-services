@@ -28,6 +28,9 @@ const AI_PROVIDER_GOOGLE = 'google';
 const PRICING_REASONING_ROUTE_TASK_TYPE = 'pricing_reasoning';
 const JSON_RESPONSE_MIME_TYPE = 'application/json';
 
+const nowMs = () => performance.now();
+const elapsedMs = (startedAt: number) => Math.max(0, Math.round(performance.now() - startedAt));
+
 const LLM_PRICING_RESPONSE_JSON_SCHEMA = {
   additionalProperties: false,
   properties: {
@@ -136,6 +139,7 @@ class ProductionPricingAnalyst implements PricingAnalyst {
       input.comps.map((comp) => comp.id),
     );
     const prompt = buildPrompt(input, compIdAliasesByCanonicalId);
+    const promptByteLength = getPromptByteLength(prompt);
     const routes = await this.options.dataAccess.aiModelRoutes.resolveForTask(
       buildPricingReasoningRouteResolutionInput()
     );
@@ -148,6 +152,7 @@ class ProductionPricingAnalyst implements PricingAnalyst {
       this.options.executeModel ?? createGeminiPricingReasoningExecutor(this.options.env);
 
     let routerResult: GenerateListingDraftWithFallbackResult<PricingReasoningDraft>;
+    const modelCallStartedAt = nowMs();
     try {
       routerResult = await generateListingDraftWithFallback({
         executeRoute: async (route) => ({
@@ -170,6 +175,8 @@ class ProductionPricingAnalyst implements PricingAnalyst {
     }
 
     const reasoningResult = routerResult.draft;
+    const modelCallMs = elapsedMs(modelCallStartedAt);
+    const parseStartedAt = nowMs();
 
     try {
       const reasoning = parseLlmPricingReasoningOutput(reasoningResult.text, {
@@ -177,8 +184,17 @@ class ProductionPricingAnalyst implements PricingAnalyst {
         canonicalCompIdsByPromptId: invertCompIdAliases(compIdAliasesByCanonicalId),
         validCompIds: Object.values(compIdAliasesByCanonicalId),
       });
+      const parseMs = elapsedMs(parseStartedAt);
 
       return {
+        diagnostics: {
+          compCountSent: input.comps.length,
+          modelCallMs,
+          outputTextByteLength: Buffer.byteLength(reasoningResult.text, 'utf8'),
+          parseMs,
+          promptByteLength,
+          selectedModel: reasoningResult.modelName,
+        },
         modelName: reasoningResult.modelName,
         prompt,
         rawOutput: reasoningResult.rawOutput,
@@ -235,6 +251,13 @@ function buildPrompt(
     },
     stats: toPromptStats(input),
   });
+}
+
+function getPromptByteLength(prompt: LlmPricingPrompt): number {
+  return (
+    Buffer.byteLength(prompt.systemInstruction, 'utf8') +
+    Buffer.byteLength(prompt.userPrompt, 'utf8')
+  );
 }
 
 function toPromptStats(input: PricingAnalystInput): LlmPricingPromptStats {

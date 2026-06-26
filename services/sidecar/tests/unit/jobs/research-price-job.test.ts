@@ -110,6 +110,12 @@ function createAppSettings(
   } as AppSettingsRow;
 }
 
+function expectFiniteNonNegativeMetric(value: unknown): void {
+  expect(typeof value).toBe('number');
+  expect(Number.isFinite(value)).toBe(true);
+  expect(value).toBeGreaterThanOrEqual(0);
+}
+
 function createVictorComp(
   price: number,
   soldDate: string,
@@ -839,6 +845,17 @@ describe('priceListingNow', () => {
       },
     });
     expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.request.keyword');
+    const latency = markSucceededInput?.raw_result_json?.diagnostics?.latency as
+      | Record<string, unknown>
+      | undefined;
+    expect(latency).toBeDefined();
+    expectFiniteNonNegativeMetric(latency?.totalMs);
+    expectFiniteNonNegativeMetric(latency?.createResearchMs);
+    expectFiniteNonNegativeMetric(latency?.providerFetchMs);
+    expectFiniteNonNegativeMetric(latency?.normalizationMs);
+    expectFiniteNonNegativeMetric(latency?.statsMs);
+    expect(latency).not.toHaveProperty('persistResearchMs');
+    expect(latency).not.toHaveProperty('updateListingMs');
   });
 
   it('persists exact-card mismatch reasons and excludes rejected comps from stats', async () => {
@@ -1787,7 +1804,7 @@ describe('priceListingNow', () => {
       })
     );
 
-    const markSucceededInput = spies.markSucceeded.mock.calls.at(-1)?.[0];
+    const markSucceededInput = spies.markSucceeded.mock.calls[0]?.[0];
     const persistedReasoning = JSON.stringify(markSucceededInput?.llm_reasoning_json);
 
     expect(persistedReasoning).not.toContain('secret-value');
@@ -2061,7 +2078,8 @@ describe('priceListingNow', () => {
       provider: 'apify',
       selectedProviderMode: 'soldcomps',
     });
-    expect(spies.markSucceeded.mock.calls[0]?.[0]?.raw_result_json).toMatchObject({
+    const markSucceededInput = spies.markSucceeded.mock.calls.at(-1)?.[0];
+    expect(markSucceededInput?.raw_result_json).toMatchObject({
       providerRouting: {
         actualProvider: 'apify',
         fallbackAttempted: true,
@@ -2078,6 +2096,15 @@ describe('priceListingNow', () => {
         selectedProviderMode: 'soldcomps',
       },
     });
+    const latency = markSucceededInput?.raw_result_json?.diagnostics?.latency as
+      | Record<string, unknown>
+      | undefined;
+    expect(latency).toBeDefined();
+    expectFiniteNonNegativeMetric(latency?.totalMs);
+    expectFiniteNonNegativeMetric(latency?.providerFetchMs);
+    expectFiniteNonNegativeMetric(latency?.fallbackFetchMs);
+    expect(latency).not.toHaveProperty('persistResearchMs');
+    expect(latency).not.toHaveProperty('updateListingMs');
   });
 
   it('falls back from apify to soldcomps and persists soldcomps usage snapshot', async () => {

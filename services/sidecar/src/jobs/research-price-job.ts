@@ -74,6 +74,8 @@ const PRICING_ANALYSIS_WARNING_REASONS = new Set<PricingAnalysisWarningReason>([
   'llm_condition_adjusted_price_null',
   'provider_failure',
 ]);
+const nowMs = () => performance.now();
+const elapsedMs = (startedAt: number) => Math.max(0, Math.round(performance.now() - startedAt));
 
 export interface ResearchPriceJobDependencies {
   createPricingProvider?: () => PricingProvider;
@@ -128,6 +130,17 @@ interface ProviderRoutingDiagnostics {
   firstProviderFailure?: ProviderRoutingFailureDetails;
   selectedProvider: string;
   selectedProviderMode: LivePricingProviderMode;
+}
+
+interface PricingResearchLatencyDiagnostics {
+  totalMs: number;
+  createResearchMs?: number;
+  fallbackFetchMs?: number;
+  llmReasoningMs?: number;
+  normalizationMs?: number;
+  providerFetchMs?: number;
+  soldCompsUsagePersistMs?: number;
+  statsMs?: number;
 }
 
 class ProviderFallbackExecutionError extends Error {
@@ -295,47 +308,63 @@ function asBoolean(value: unknown): boolean | undefined {
 }
 
 function buildPricingResearchDiagnostics(
-  providerRawResult: unknown,
-  rawCompCount: number,
-  normalized: ReturnType<typeof normalizeSoldComps>
-): Record<string, boolean | number> {
+  input: {
+    latency: PricingResearchLatencyDiagnostics;
+    llmAttempted: boolean;
+    normalized: ReturnType<typeof normalizeSoldComps>;
+    providerRawResult: unknown;
+    providerRouting: ProviderRoutingDiagnostics;
+    rawCompCount: number;
+  }
+): Record<string, unknown> {
   const providerOutput =
-    isRecord(providerRawResult) && isRecord(providerRawResult.output)
-      ? providerRawResult.output
+    isRecord(input.providerRawResult) && isRecord(input.providerRawResult.output)
+      ? input.providerRawResult.output
       : null;
   const providerReturnedCount =
     asFiniteNonNegativeInteger(providerOutput?.itemCount) ??
-    (isRecord(providerRawResult)
-      ? asFiniteNonNegativeInteger(providerRawResult.returnedSoldComps)
+    (isRecord(input.providerRawResult)
+      ? asFiniteNonNegativeInteger(input.providerRawResult.returnedSoldComps)
       : undefined) ??
-    rawCompCount;
+    input.rawCompCount;
   const requestedCount =
-    isRecord(providerRawResult) &&
-    isRecord(providerRawResult.input) &&
-    isRecord(providerRawResult.input.request)
-      ? asFiniteNonNegativeInteger(providerRawResult.input.request.count)
+    isRecord(input.providerRawResult) &&
+    isRecord(input.providerRawResult.input) &&
+    isRecord(input.providerRawResult.input.request)
+      ? asFiniteNonNegativeInteger(input.providerRawResult.input.request.count)
       : undefined;
   const providerReportedTotalCount = asFiniteNonNegativeInteger(providerOutput?.totalItems);
   const providerHasNextPage = asBoolean(providerOutput?.hasNextPage);
 
   return Object.fromEntries(
     Object.entries({
-      normalizationAcceptedCount: normalized.comps.length,
-      normalizationInputCount: rawCompCount,
-      normalizationRejectedCount: normalized.rejected.length,
+      acceptedCompCount: input.normalized.comps.length,
+      actualProvider: input.providerRouting.actualProvider,
+      fallbackAttempted: input.providerRouting.fallbackAttempted,
+      fallbackSucceeded: input.providerRouting.fallbackSucceeded,
+      latency: input.latency,
+      llmAttempted: input.llmAttempted,
+      normalizationAcceptedCount: input.normalized.comps.length,
+      normalizationInputCount: input.rawCompCount,
+      normalizationRejectedCount: input.normalized.rejected.length,
       providerHasNextPage,
       providerReportedTotalCount,
       providerReturnedCount,
+      rawCompCount: input.rawCompCount,
+      rejectedCompCount: input.normalized.rejected.length,
       requestedCount,
+      selectedProvider: input.providerRouting.selectedProvider,
     }).filter(([, value]) => value !== undefined)
-  ) as Record<string, boolean | number>;
+  );
 }
 
 function buildPricingResearchRawResult(
   providerRawResult: unknown,
   rawCompCount: number,
   normalized: ReturnType<typeof normalizeSoldComps>,
-  providerRouting: ProviderRoutingDiagnostics
+  providerRouting: ProviderRoutingDiagnostics,
+  latency: PricingResearchLatencyDiagnostics,
+  llmAttempted: boolean
 ): Json {
   const base =
     typeof providerRawResult === 'object' &&
@@ -346,7 +375,14 @@ function buildPricingResearchRawResult(
 
   return asJson({
     ...(sanitizePersistedPricingRawResult(base) as Record<string, unknown>),
-    diagnostics: buildPricingResearchDiagnostics(base, rawCompCount, normalized),
+    diagnostics: buildPricingResearchDiagnostics({
+      latency,
+      llmAttempted,
+      normalized,
+      providerRawResult: base,
+      providerRouting,
+      rawCompCount,
+    }),
     normalization: {
       acceptedCount: normalized.comps.length,
       inputCount: rawCompCount,
@@ -925,6 +961,7 @@ async function fetchProviderResultWithFallback(
   dependencies: ResearchPriceJobDependencies,
   selectedProviderMode: LivePricingProviderMode
 ): Promise<{
+  latency: Pick<PricingResearchLatencyDiagnostics, 'fallbackFetchMs' | 'providerFetchMs'>;
   pricingProvider: PricingProvider;
   providerResult: PricingProviderResult;
   providerRouting: ProviderRoutingDiagnostics;
@@ -942,13 +979,20 @@ async function fetchProviderResultWithFallback(
     selectedProviderMode,
   };
   const providerInput = buildPricingProviderInput(listing, listingId);
+  const primaryFetchStartedAt = nowMs();
 
   try {
     const providerResult = await pricingProvider.fetchSoldComps(providerInput);
     providerRouting.actualProvider = providerResult.provider;
-    return { pricingProvider, providerResult, providerRouting };
+    return {
+      latency: { providerFetchMs: elapsedMs(primaryFetchStartedAt) },
+      pricingProvider,
+      providerResult,
+      providerRouting,
+    };
   } catch (error) {
     const fallbackProviderMode = getFallbackProviderMode(selectedProviderMode);
+    const providerFetchMs = elapsedMs(primaryFetchStartedAt);
     providerRouting.fallbackProvider = fallbackProviderMode;
     providerRouting.firstProviderFailure = buildProviderRoutingFailureDetails(
       error,
@@ -973,12 +1017,21 @@ async function fetchProviderResultWithFallback(
     );
     providerRouting.fallbackProvider = fallbackProvider.name;
     providerRouting.fallbackAttempted = true;
+    const fallbackFetchStartedAt = nowMs();
 
     try {
       const providerResult = await fallbackProvider.fetchSoldComps(providerInput);
       providerRouting.actualProvider = providerResult.provider;
       providerRouting.fallbackSucceeded = true;
-      return { pricingProvider, providerResult, providerRouting };
+      return {
+        latency: {
+          fallbackFetchMs: elapsedMs(fallbackFetchStartedAt),
+          providerFetchMs,
+        },
+        pricingProvider,
+        providerResult,
+        providerRouting,
+      };
     } catch (fallbackError) {
       throw new ProviderFallbackExecutionError(
         asCompactErrorMessage(fallbackError),
@@ -1170,6 +1223,7 @@ export async function priceListingNow(
     );
   }
 
+  const pipelineStartedAt = nowMs();
   const selectedProviderMode = await getEnabledPricingProviderMode(dependencies, options);
   assertResearchPriceListingEligible(listing);
   const runNormalizeComps = dependencies.normalizeComps ?? normalizeSoldComps;
@@ -1198,6 +1252,14 @@ export async function priceListingNow(
   let providerResult: PricingProviderResult | undefined;
   let rawCompCount = 0;
   let normalizedCompCount = 0;
+  let createResearchMs: number | undefined;
+  let fallbackFetchMs: number | undefined;
+  let llmReasoningMs: number | undefined;
+  let normalizationMs: number | undefined;
+  let providerFetchMs: number | undefined;
+  let soldCompsUsagePersistMs: number | undefined;
+  let statsMs: number | undefined;
+  const llmAttempted = dependencies.pricingAnalyst !== undefined;
 
   try {
     jobLogger.info(getResearchPriceLogMessage('started', options.executionSource), {
@@ -1210,38 +1272,39 @@ export async function priceListingNow(
       selectedProviderMode,
     });
 
+    const createResearchStartedAt = nowMs();
     research = await dependencies.dataAccess.listingPriceResearch.create({
       listing_id: listingId,
       provider: resolvedProvider.name,
       status: 'pending',
     });
+    createResearchMs = elapsedMs(createResearchStartedAt);
 
-    ({ pricingProvider, providerResult, providerRouting } = await fetchProviderResultWithFallback(
-      listing,
-      listingId,
-      dependencies,
-      selectedProviderMode
-    ));
+    ({
+      latency: { fallbackFetchMs, providerFetchMs },
+      pricingProvider,
+      providerResult,
+      providerRouting,
+    } = await fetchProviderResultWithFallback(listing, listingId, dependencies, selectedProviderMode));
     if (providerResult.provider === SOLDCOMPS_PROVIDER_NAME) {
+      const soldCompsUsagePersistStartedAt = nowMs();
       await persistSoldCompsUsageSnapshot(
         dependencies.dataAccess,
         providerResult.soldCompsUsage ?? null
       );
+      soldCompsUsagePersistMs = elapsedMs(soldCompsUsagePersistStartedAt);
     }
     rawCompCount = providerResult.soldComps.length;
 
+    const normalizationStartedAt = nowMs();
     const normalized = runNormalizeComps(
       providerResult.soldComps,
       buildNormalizeSoldCompsContext(listing, listingId)
     );
+    normalizationMs = elapsedMs(normalizationStartedAt);
     normalizedCompCount = normalized.comps.length;
+    const statsStartedAt = nowMs();
     const stats = runComputeStats(normalized.comps);
-    const pricingRawResult = buildPricingResearchRawResult(
-      providerResult.rawResult,
-      rawCompCount,
-      normalized,
-      providerRouting
-    );
     jobLogger.info('Completed research_price provider fetch.', {
       acceptedCompCount: normalizedCompCount,
       actualProvider: providerRouting.actualProvider,
@@ -1277,6 +1340,7 @@ export async function priceListingNow(
       stats,
     });
     const deterministicFallbackReason = getConditionAdjustmentFallbackReason(conditionAdjustment);
+    statsMs = elapsedMs(statsStartedAt);
 
     let llmReasoningJson: Json = {};
     let llmRejectedCompIds: Json = [];
@@ -1286,6 +1350,7 @@ export async function priceListingNow(
     let fallbackReason: string | null = deterministicFallbackReason;
 
     if (dependencies.pricingAnalyst) {
+      const llmReasoningStartedAt = nowMs();
       try {
         const analystResult = await dependencies.pricingAnalyst.analyze(
           buildPricingAnalystInput(listing, listingId, normalized.comps, stats, conditionAdjustment)
@@ -1332,6 +1397,7 @@ export async function priceListingNow(
           pricingModelName: pricingModelName ?? undefined,
         });
       }
+      llmReasoningMs = elapsedMs(llmReasoningStartedAt);
     } else if (fallbackReason !== null) {
       llmReasoningJson = buildSkippedLlmReasoningJson(fallbackReason, conditionAdjustment);
     }
@@ -1356,6 +1422,23 @@ export async function priceListingNow(
       'final'
     );
     const medianSoldPrice = assertMedianSoldPrice(listingId, stats.medianSoldPrice);
+    let pricingRawResult = buildPricingResearchRawResult(
+      providerResult.rawResult,
+      rawCompCount,
+      normalized,
+      providerRouting,
+      {
+        createResearchMs,
+        fallbackFetchMs,
+        llmReasoningMs,
+        normalizationMs,
+        providerFetchMs,
+        soldCompsUsagePersistMs,
+        statsMs,
+        totalMs: elapsedMs(pipelineStartedAt),
+      },
+      llmAttempted
+    );
 
     await persistSucceededResearch(dependencies.dataAccess, {
       comps: asJson(normalized.comps),
