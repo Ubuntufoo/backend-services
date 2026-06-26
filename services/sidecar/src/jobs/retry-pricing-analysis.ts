@@ -25,7 +25,14 @@ import { createLogger } from '@/utils/logger.js';
 
 const retryLogger = createLogger('RetryPricingAnalysis');
 
-const PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE = new Set<PricingAnalysisWarningReason>([
+type RetryableLlmPricingAnalysisWarningReason = Exclude<
+  PricingAnalysisWarningReason,
+  'provider_failure'
+>;
+
+const PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE = new Set<
+  RetryableLlmPricingAnalysisWarningReason
+>([
   'llm_analysis_failed',
   'llm_condition_adjusted_price_invalid',
   'llm_condition_adjusted_price_out_of_window',
@@ -142,7 +149,8 @@ function parsePricingAnalysisWarnings(llmReasoningJson: unknown): PricingAnalysi
 
 function hasRetryablePricingAnalysisWarning(llmReasoningJson: unknown): boolean {
   return parsePricingAnalysisWarnings(llmReasoningJson).some(
-    (warning) => warning.retryable && PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE.has(warning.reason)
+    (warning) =>
+      warning.retryable && isRetryableLlmPricingAnalysisWarningReason(warning.reason)
   );
 }
 
@@ -216,7 +224,16 @@ function rebuildPricingAnalystInput(
 
 // -- Warning / reasoning helpers (mirrors research-price-job internals) -----
 
-function getPricingAnalysisWarningSummary(reason: PricingAnalysisWarningReason): string {
+function isRetryableLlmPricingAnalysisWarningReason(
+  value: string | null
+): value is RetryableLlmPricingAnalysisWarningReason {
+  return (
+    value !== null &&
+    PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE.has(value as RetryableLlmPricingAnalysisWarningReason)
+  );
+}
+
+function getPricingAnalysisWarningSummary(reason: RetryableLlmPricingAnalysisWarningReason): string {
   switch (reason) {
     case 'llm_analysis_failed':
       return 'LLM pricing analysis failed. Deterministic price used.';
@@ -235,27 +252,22 @@ function buildPricingAnalysisWarnings(input: {
   failure?: PricingAnalystFailureDiagnostics;
   modelName?: string | null;
 }): PricingAnalysisWarning[] | undefined {
-  if (
-    !input.fallbackReason ||
-    !PRICING_ANALYSIS_WARNING_REASONS_RETRYABLE.has(
-      input.fallbackReason as PricingAnalysisWarningReason
-    )
-  ) {
+  if (!isRetryableLlmPricingAnalysisWarningReason(input.fallbackReason)) {
     return undefined;
   }
+
+  const fallbackReason = input.fallbackReason;
 
   return [
     {
       analyst: input.analyst,
-      code: input.fallbackReason as PricingAnalysisWarningReason,
+      code: fallbackReason,
       ...(input.failure ? { failure: input.failure } : {}),
       ...(input.modelName ? { modelName: input.modelName } : {}),
-      reason: input.fallbackReason as PricingAnalysisWarningReason,
+      reason: fallbackReason,
       retryable: input.failure?.retryable ?? false,
       severity: 'warning',
-      summary: getPricingAnalysisWarningSummary(
-        input.fallbackReason as PricingAnalysisWarningReason
-      ),
+      summary: getPricingAnalysisWarningSummary(fallbackReason),
     },
   ];
 }

@@ -120,8 +120,71 @@ describe('computePricingStats', () => {
     expect(result).toMatchObject({
       medianSoldPrice: 15.33,
       lowSoldPrice: 10.11,
-      highSoldPrice: 20.55,
+      highSoldPrice: 20.56,
       deterministicSuggestedPrice: 15.33,
+    });
+  });
+
+  it('uses stable cent rounding for decimal edge cases and median output', () => {
+    expect(
+      computePricingStats([buildComp({ totalPrice: { value: 1.005, currency: 'USD' } })])
+    ).toMatchObject({
+      soldCount: 1,
+      medianSoldPrice: 1.01,
+      lowSoldPrice: 1.01,
+      highSoldPrice: 1.01,
+      deterministicSuggestedPrice: 1.01,
+    });
+
+    expect(
+      computePricingStats([buildComp({ totalPrice: { value: 1.015, currency: 'USD' }, id: 'edge-2' })])
+    ).toMatchObject({
+      medianSoldPrice: 1.02,
+      lowSoldPrice: 1.02,
+      highSoldPrice: 1.02,
+      deterministicSuggestedPrice: 1.02,
+    });
+
+    expect(
+      computePricingStats([buildComp({ totalPrice: { value: 0.995, currency: 'USD' }, id: 'edge-3' })])
+    ).toMatchObject({
+      medianSoldPrice: 1,
+      lowSoldPrice: 1,
+      highSoldPrice: 1,
+      deterministicSuggestedPrice: 1,
+    });
+
+    expect(
+      computePricingStats([
+        buildComp({ id: 'median-a', totalPrice: { value: 1.005, currency: 'USD' } }),
+        buildComp({ id: 'median-b', totalPrice: { value: 1.015, currency: 'USD' } }),
+      ])
+    ).toMatchObject({
+      soldCount: 2,
+      medianSoldPrice: 1.01,
+      lowSoldPrice: 1.01,
+      highSoldPrice: 1.02,
+      deterministicSuggestedPrice: 1.01,
+    });
+  });
+
+  it('returns null stats and soldCount 0 when no usable comps remain', () => {
+    expect(
+      computePricingStats([
+        buildComp({ id: 'zero', totalPrice: { value: 0, currency: 'USD' } }),
+        buildComp({ id: 'negative', totalPrice: { value: -1, currency: 'USD' } }),
+      ])
+    ).toEqual({
+      soldCount: 0,
+      medianSoldPrice: null,
+      lowSoldPrice: null,
+      highSoldPrice: null,
+      deterministicSuggestedPrice: null,
+      currency: null,
+      ignored: [
+        { id: 'zero', reason: 'invalid_total_price' },
+        { id: 'negative', reason: 'invalid_total_price' },
+      ],
     });
   });
 

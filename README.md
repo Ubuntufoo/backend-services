@@ -30,12 +30,13 @@ Primary root commands:
 
 ## Docs
 
-- [AGENTS.md](AGENTS.md)
-- [docs/architecture.md](docs/architecture.md)
+- [AGENTS.md](AGENTS.md) : Information about the agents used in the backend services.
+- [docs/architecture.md](docs/architecture.md) : High-level architecture overview.
 - [docs/local-development.md](docs/local-development.md)
-- [docs/ebay-integration.md](docs/ebay-integration.md)
-- [docs/pricing.md](docs/pricing.md)
-- [docs/operations.md](docs/operations.md)
+- [docs/ebay-integration.md](docs/ebay-integration.md) 
+- [docs/pricing.md](docs/pricing.md) : Information about the pricing model.
+- [docs/operations.md](docs/operations.md) : Operational procedures and best practices.
 - [docs/troubleshooting.md](docs/troubleshooting.md)
 - [live-pilot-notes.md](live-pilot-notes.md)
-- [SCHEMA_SPEC.md](SCHEMA_SPEC.md)
+- [ROADMAP.md](ROADMAP.md)
+- [SCHEMA_SPEC.md](SCHEMA_SPEC.md) : The schema specification.

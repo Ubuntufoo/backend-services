@@ -597,6 +597,53 @@ describe('Apify pricing provider', () => {
     });
   });
 
+  it('normalizes actor numeric fields identically for numbers and numeric strings', () => {
+    const fromNumbers = parseApifyActorOutput(
+      {
+        items: [
+          {
+            endedAt: '2026-06-14T18:42:00.000Z',
+            shippingPrice: 1.99,
+            soldCurrency: 'USD',
+            soldPrice: 14.99,
+            title: '1955 Topps Johnny Riddle #98',
+            url: 'https://www.ebay.com/itm/256123456789',
+          },
+        ],
+        query: 'Johnny Riddle 1955 Topps #98',
+      },
+      {
+        actorId: 'actor-123',
+        fetchedAt: '2026-06-15T12:00:00.000Z',
+      }
+    );
+    const fromStrings = parseApifyActorOutput(
+      {
+        items: [
+          {
+            endedAt: '2026-06-14T18:42:00.000Z',
+            shippingPrice: '1.99',
+            soldCurrency: 'USD',
+            soldPrice: '14.99',
+            title: '1955 Topps Johnny Riddle #98',
+            url: 'https://www.ebay.com/itm/256123456789',
+          },
+        ],
+        query: 'Johnny Riddle 1955 Topps #98',
+      },
+      {
+        actorId: 'actor-123',
+        fetchedAt: '2026-06-15T12:00:00.000Z',
+      }
+    );
+
+    expect(fromNumbers.soldComps).toEqual(fromStrings.soldComps);
+    expect(fromNumbers.soldComps[0]).toMatchObject({
+      price: { currency: 'USD', value: 14.99 },
+      shippingPrice: { currency: 'USD', value: 1.99 },
+    });
+  });
+
   it('applies raw-card single shipping defaults after apify parse', () => {
     const result = parseApifyActorOutput(
       {

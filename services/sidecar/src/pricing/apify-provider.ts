@@ -38,7 +38,7 @@ const numericValueSchema = z.union([
     .trim()
     .min(1)
     .refine((value) => !Number.isNaN(Number(value)), 'must be numeric'),
-]);
+]).transform((value) => Number(value));
 
 const internalApifySoldCompSchema = z.object({
   condition: z.string().trim().min(1).nullable().optional(),

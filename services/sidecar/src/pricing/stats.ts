@@ -64,5 +64,5 @@ function calculateMedian(sortedValues: readonly number[]): number {
 }
 
 function roundCurrency(value: number): number {
-  return Number(value.toFixed(2));
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
