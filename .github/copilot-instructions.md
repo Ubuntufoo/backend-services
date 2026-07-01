@@ -2,10 +2,10 @@
 
 ### DeepSeek Delegate Workers
 
-Source: `/Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/README.md`
+Source: `/Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/README.md`
 
 Bootstrap:
-source /Users/timothymurphy/Developer/Personal/ebay-inventory-manager/codex-delegates/env.zsh
+source /Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/env.zsh
 
 Use delegates for non-trivial bounded repo analysis, multi-file review, critique, synthesis, summarization, or packed-artifact verification when offloading reduces main-thread context. Delegates are read-only and advisory; the main thread must verify claims, decide, edit, test, and produce the final answer.
 
