@@ -24,6 +24,11 @@ export interface ManualRetryListingWorkflowOptions {
 
 type ListingRetryState = 'missing' | 'orphan' | 'safe';
 
+type ListingErrorFields = Pick<
+  ListingUpdate,
+  'last_error_at' | 'last_error_code' | 'last_error_context' | 'last_error_message'
+>;
+
 function asIsoTimestamp(now: () => Date): string {
   return now().toISOString();
 }
@@ -35,16 +40,11 @@ function sortJobsNewestFirst(jobs: JobRow[]): JobRow[] {
   });
 }
 
-function getWorkflowJobType(workflow: ManualRetryWorkflow): JobRow['job_type'] {
-  return workflow;
-}
-
 function getWorkflowJobs(
   jobs: JobRow[],
   workflow: ManualRetryWorkflow
 ): JobRow[] {
-  const jobType = getWorkflowJobType(workflow);
-  return sortJobsNewestFirst(jobs).filter((job) => job.job_type === jobType);
+  return sortJobsNewestFirst(jobs.filter((job) => job.job_type === workflow));
 }
 
 function getActiveWorkflowJob(
@@ -128,23 +128,26 @@ function getRetryState(
     : getPublishRetryState(listing);
 }
 
+function buildClearedListingErrorFields(): ListingErrorFields {
+  return {
+    last_error_at: null,
+    last_error_code: null,
+    last_error_context: {},
+    last_error_message: null,
+  };
+}
+
 function buildListingRetryUpdate(workflow: ManualRetryWorkflow): ListingUpdate {
   if (workflow === 'generate_ai') {
     return {
-      last_error_at: null,
-      last_error_code: null,
-      last_error_context: {},
-      last_error_message: null,
+      ...buildClearedListingErrorFields(),
       status: 'assets_ready',
       sub_status: 'ready_to_generate',
     };
   }
 
   return {
-    last_error_at: null,
-    last_error_code: null,
-    last_error_context: {},
-    last_error_message: null,
+    ...buildClearedListingErrorFields(),
     status: 'approved_for_export',
     sub_status: 'publish_queued',
   };
@@ -255,10 +258,10 @@ async function enqueueWorkflowJob(
   workflow: ManualRetryWorkflow
 ): Promise<{ alreadyQueued: boolean; job: JobRow }> {
   if (workflow === 'generate_ai') {
-    return await dataAccess.jobs.enqueueGenerateAi(listingId);
+    return dataAccess.jobs.enqueueGenerateAi(listingId);
   }
 
-  return await dataAccess.jobs.enqueuePublish(listingId);
+  return dataAccess.jobs.enqueuePublish(listingId);
 }
 
 export async function retryListingWorkflow(

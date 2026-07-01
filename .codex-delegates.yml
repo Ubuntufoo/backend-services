@@ -1,0 +1,61 @@
+project_name: backend-services
+project_id: backend-services
+repo_root: .
+
+safe_pack_roots:
+  - services/sidecar
+  - packages/data
+  - packages/env
+  - packages/types
+  - services/watcher-service
+  - services/image-service
+  - docs
+
+forbidden_paths:
+  - .git/**
+  - .env
+  - .env.*
+  - '**/.env'
+  - '**/.env.*'
+  - node_modules/**
+  - '**/node_modules/**'
+  - .pnpm-store/**
+  - .chatgpt/**
+  - .codex/**
+  - dist/**
+  - build/**
+  - coverage/**
+  - .cache/**
+  - .vitest/**
+  - .nyc_output/**
+  - test-results/**
+  - logs/**
+  - tmp/**
+  - temp/**
+  - '*.log'
+  - '*.sqlite'
+  - '*.sqlite3'
+  - '*.db'
+  - '*.db-shm'
+  - '*.db-wal'
+  - '*.dump'
+  - supabase/.branches/**
+  - supabase/.temp/**
+
+verification_hints:
+  - pnpm --filter sidecar typecheck
+  - pnpm --filter sidecar test
+  - pnpm --filter @ebay-inventory/data test
+  - pnpm validate:env
+
+artifact_defaults:
+  preferred_max_files: 7
+  preferred_max_lines_per_file: 220
+  soft_max_total_lines: 1000
+
+workflow_hints:
+  - Prefer bounded file packing over repo-wide dumps.
+  - Focus backend workflow changes in services/sidecar and packages/data unless the task targets another package.
+  - Exclude .env files, secrets, local databases, run artifacts, and Supabase runtime dumps from packed evidence.
+  - Report precise file and line evidence, then verify delegate findings in the main thread.
+  - Use artifact-audit for evidence or operational-claim checks; use review for multi-file code changes.

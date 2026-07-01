@@ -64,6 +64,12 @@ interface ActiveLoopState {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface StaleJobRecoveryOutcome {
+  finalError: SidecarJobError;
+  nextRetryAt: string | null;
+  staleError: SidecarJobError;
+}
+
 const defaultLogger: SidecarJobRunnerLogger = {
   info(message, context) {
     console.log(formatLogMessage(message, context));
@@ -146,6 +152,45 @@ function getLogger(logger?: SidecarJobRunnerLogger): SidecarJobRunnerLogger {
   return logger ?? defaultLogger;
 }
 
+function getStaleJobRecoveryOutcome(
+  job: RunSidecarJobResult['job'],
+  occurredAt: Date
+): StaleJobRecoveryOutcome {
+  const staleError = createStaleWorkerError(job);
+
+  if (hasAttemptsRemaining(job)) {
+    return {
+      finalError: staleError,
+      nextRetryAt: getNextRetryAt(job.attempts, occurredAt),
+      staleError,
+    };
+  }
+
+  return {
+    finalError: createRetryExhaustedError(job, staleError),
+    nextRetryAt: null,
+    staleError,
+  };
+}
+
+async function persistStaleJobRecovery(
+  dataAccess: SidecarDataAccess,
+  job: RunSidecarJobResult['job'],
+  outcome: StaleJobRecoveryOutcome,
+  errorAt: string
+): Promise<void> {
+  if (outcome.nextRetryAt) {
+    await dataAccess.jobs.requeue(
+      job.id,
+      toJobErrorUpdateInput(outcome.staleError, errorAt),
+      outcome.nextRetryAt
+    );
+    return;
+  }
+
+  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(outcome.finalError, errorAt));
+}
+
 function stopLoopState(state: ActiveLoopState): void {
   state.stopped = true;
 
@@ -181,13 +226,14 @@ async function recoverStaleGenerateAiJob(
   now: () => Date,
   logger: SidecarJobRunnerLogger
 ): Promise<void> {
-  const errorAt = asIsoTimestamp(now);
+  const occurredAt = now();
+  const errorAt = occurredAt.toISOString();
   const listingId = job.listing_id;
-  const staleError = createStaleWorkerError(job);
+  const outcome = getStaleJobRecoveryOutcome(job, occurredAt);
 
   if (listingId) {
     try {
-      await repairGenerateAiListing(dataAccess, listingId, staleError, errorAt);
+      await repairGenerateAiListing(dataAccess, listingId, outcome.staleError, errorAt);
     } catch (error) {
       logger.error('Failed to repair stale generate_ai listing.', {
         error: asErrorMessage(error),
@@ -197,17 +243,7 @@ async function recoverStaleGenerateAiJob(
     }
   }
 
-  if (hasAttemptsRemaining(job)) {
-    await dataAccess.jobs.requeue(
-      job.id,
-      toJobErrorUpdateInput(staleError, errorAt),
-      getNextRetryAt(job.attempts, now())
-    );
-    return;
-  }
-
-  const exhaustedError = createRetryExhaustedError(job, staleError);
-  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
+  await persistStaleJobRecovery(dataAccess, job, outcome, errorAt);
 }
 
 async function recoverStaleProcessImagesJob(
@@ -215,20 +251,13 @@ async function recoverStaleProcessImagesJob(
   job: RunSidecarJobResult['job'],
   now: () => Date
 ): Promise<void> {
-  const errorAt = asIsoTimestamp(now);
-  const staleError = createStaleWorkerError(job);
-
-  if (hasAttemptsRemaining(job)) {
-    await dataAccess.jobs.requeue(
-      job.id,
-      toJobErrorUpdateInput(staleError, errorAt),
-      getNextRetryAt(job.attempts, now())
-    );
-    return;
-  }
-
-  const exhaustedError = createRetryExhaustedError(job, staleError);
-  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
+  const occurredAt = now();
+  await persistStaleJobRecovery(
+    dataAccess,
+    job,
+    getStaleJobRecoveryOutcome(job, occurredAt),
+    occurredAt.toISOString()
+  );
 }
 
 async function repairPublishListing(
@@ -260,18 +289,19 @@ async function recoverStalePublishJob(
   now: () => Date,
   logger: SidecarJobRunnerLogger
 ): Promise<void> {
-  const errorAt = asIsoTimestamp(now);
+  const occurredAt = now();
+  const errorAt = occurredAt.toISOString();
   const listingId = job.listing_id;
-  const staleError = createStaleWorkerError(job);
+  const outcome = getStaleJobRecoveryOutcome(job, occurredAt);
 
   if (listingId) {
     try {
       await repairPublishListing(
         dataAccess,
         listingId,
-        hasAttemptsRemaining(job) ? staleError : createRetryExhaustedError(job, staleError),
+        outcome.finalError,
         errorAt,
-        hasAttemptsRemaining(job) ? 'publish_queued' : 'idle'
+        outcome.nextRetryAt ? 'publish_queued' : 'idle'
       );
     } catch (error) {
       logger.error('Failed to repair stale publish listing.', {
@@ -282,17 +312,7 @@ async function recoverStalePublishJob(
     }
   }
 
-  if (hasAttemptsRemaining(job)) {
-    await dataAccess.jobs.requeue(
-      job.id,
-      toJobErrorUpdateInput(staleError, errorAt),
-      getNextRetryAt(job.attempts, now())
-    );
-    return;
-  }
-
-  const exhaustedError = createRetryExhaustedError(job, staleError);
-  await dataAccess.jobs.fail(job.id, toJobErrorUpdateInput(exhaustedError, errorAt));
+  await persistStaleJobRecovery(dataAccess, job, outcome, errorAt);
 }
 
 async function recoverStaleRunningJobs(

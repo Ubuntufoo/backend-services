@@ -47,6 +47,9 @@ export interface DataApiRouterOptions {
   pricingAnalyst?: PricingAnalyst;
 }
 
+type RouteErrorCode = 'invalid_request' | 'not_found' | 'server_error';
+type RouteErrorSender = (res: Response, error: unknown) => void;
+
 function parseOrSend<T>(res: Response, schema: ZodType<T>, input: unknown): T | undefined {
   const parsed = schema.safeParse(input);
 
@@ -78,12 +81,29 @@ function toStatusCode(error: unknown): number {
   return 500;
 }
 
+function sendJsonError(
+  res: Response,
+  statusCode: number,
+  error: RouteErrorCode | string,
+  message: string
+): void {
+  res.status(statusCode).json({
+    error,
+    message,
+  });
+}
+
+function sendNotFound(res: Response, message: string): void {
+  sendJsonError(res, 404, 'not_found', message);
+}
+
+function sendListingNotFound(res: Response, listingId: string): void {
+  sendNotFound(res, `Listing "${listingId}" was not found.`);
+}
+
 function sendRouteError(res: Response, error: unknown): void {
   if (error instanceof ListingWorkflowTransitionConflictError) {
-    res.status(409).json({
-      error: 'listing_state_stale',
-      message: error.message,
-    });
+    sendJsonError(res, 409, 'listing_state_stale', error.message);
     return;
   }
 
@@ -96,36 +116,25 @@ function sendRouteError(res: Response, error: unknown): void {
     console.error('Data API route error:', error);
   }
 
-  res.status(statusCode).json({
-    error:
-      statusCode === 400 ? 'invalid_request' : statusCode === 404 ? 'not_found' : 'server_error',
-    message: responseMessage,
-  });
+  const responseCode: RouteErrorCode =
+    statusCode === 400 ? 'invalid_request' : statusCode === 404 ? 'not_found' : 'server_error';
+  sendJsonError(res, statusCode, responseCode, responseMessage);
 }
 
 function sendManualRetryError(res: Response, error: unknown): void {
   if (error instanceof SidecarJobError) {
     if (error.code === JOB_ERROR_CODES.JOB_NOT_FOUND) {
-      res.status(404).json({
-        error: 'not_found',
-        message: error.message,
-      });
+      sendNotFound(res, error.message);
       return;
     }
 
     if (error.code === JOB_ERROR_CODES.LISTING_NOT_FOUND) {
-      res.status(404).json({
-        error: 'not_found',
-        message: error.message,
-      });
+      sendNotFound(res, error.message);
       return;
     }
 
     if (error.code === JOB_ERROR_CODES.MANUAL_RETRY_NOT_ALLOWED) {
-      res.status(409).json({
-        error: error.code,
-        message: error.message,
-      });
+      sendJsonError(res, 409, error.code, error.message);
       return;
     }
   }
@@ -148,14 +157,23 @@ function sendPricingAnalysisRetryError(res: Response, error: unknown): void {
               ? 503
               : 500;
 
-    res.status(statusCode).json({
-      error: error.code,
-      message: error.message,
-    });
+    sendJsonError(res, statusCode, error.code, error.message);
     return;
   }
 
   sendRouteError(res, error);
+}
+
+async function runRoute(
+  res: Response,
+  handler: () => Promise<void>,
+  sendError: RouteErrorSender = sendRouteError
+): Promise<void> {
+  try {
+    await handler();
+  } catch (error) {
+    sendError(res, error);
+  }
 }
 
 function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpdate {
@@ -337,17 +355,15 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
   const router = Router();
   const getDataAccess = (): SidecarDataAccess => options.dataAccess ?? getSidecarDataAccess();
 
-  router.get('/listings', async (_req: Request, res: Response) => {
-    try {
+  router.get('/listings', async (_req: Request, res: Response) =>
+    runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const listings = await dataAccess.listings.list();
       res.json({
         listings: await serializeListingsWithLatestPricingAnalysis(dataAccess, listings),
       });
-    } catch (error) {
-      sendRouteError(res, error);
-    }
-  });
+    })
+  );
 
   router.get('/listings/:listingId', async (req: Request, res: Response) => {
     const params = parseOrSend(res, listingIdParamsSchema, req.params);
@@ -355,31 +371,27 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const listing = await dataAccess.listings.getByListingId(params.listingId);
 
       if (!listing) {
-        res.status(404).json({
-          error: 'not_found',
-          message: `Listing "${params.listingId}" was not found.`,
-        });
+        sendListingNotFound(res, params.listingId);
         return;
       }
 
       res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
-  router.get('/gemini-usage', async (_req: Request, res: Response) => {
-    try {
-      const summary = await getDataAccess().dailyUsage.getGeminiSummary();
+  router.get('/gemini-usage', async (_req: Request, res: Response) =>
+    runRoute(res, async () => {
+      const dataAccess = getDataAccess();
+      const summary = await dataAccess.dailyUsage.getGeminiSummary();
       let lastAttempt: GeminiUsageLastAttempt | null = null;
 
       try {
-        lastAttempt = await getDataAccess().aiModelAttempts.getLatestGeminiUsageAttempt();
+        lastAttempt = await dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt();
       } catch (error) {
         warnGeminiUsageAttemptLookup(error);
       }
@@ -393,10 +405,8 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         usage_date: summary.usageDate,
         used: summary.used,
       });
-    } catch (error) {
-      sendRouteError(res, error);
-    }
-  });
+    })
+  );
 
   router.get('/ebay-environment', (_req: Request, res: Response) => {
     res.json(getEbayEnvironmentResponse());
@@ -408,13 +418,11 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const listing = await dataAccess.listings.create(buildListingInsert(body));
       res.status(201).json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
   router.patch('/listings/:listingId', async (req: Request, res: Response) => {
@@ -428,32 +436,27 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
+      const dataAccess = getDataAccess();
       let existingItemSpecifics: ListingUpdate['item_specifics'] | undefined;
 
       if (body.pricingModifierOptions !== undefined) {
-        const existingListing = await getDataAccess().listings.getByListingId(params.listingId);
+        const existingListing = await dataAccess.listings.getByListingId(params.listingId);
 
         if (!existingListing) {
-          res.status(404).json({
-            error: 'not_found',
-            message: `Listing "${params.listingId}" was not found.`,
-          });
+          sendListingNotFound(res, params.listingId);
           return;
         }
 
         existingItemSpecifics = existingListing.item_specifics as ListingUpdate['item_specifics'];
       }
 
-      const dataAccess = getDataAccess();
       const listing = await dataAccess.listings.update(
         params.listingId,
         mapSellerEditableListingFields(body, existingItemSpecifics)
       );
       res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
   router.patch('/listings/:listingId/image-urls', async (req: Request, res: Response) => {
@@ -467,15 +470,12 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const listing = await dataAccess.listings.getByListingId(params.listingId);
 
       if (!listing) {
-        res.status(404).json({
-          error: 'not_found',
-          message: `Listing "${params.listingId}" was not found.`,
-        });
+        sendListingNotFound(res, params.listingId);
         return;
       }
 
@@ -490,9 +490,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       }
 
       res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, updatedListing));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
   router.patch('/listings/:listingId/workflow-state', async (req: Request, res: Response) => {
@@ -506,7 +504,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const listing =
         body.status === 'approved_for_export' && body.subStatus === 'publish_queued'
@@ -522,9 +520,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       }
 
       res.json(await serializeListingWithLatestPricingAnalysis(dataAccess, listing));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
   router.post('/listings/:listingId/generate-ai', async (req: Request, res: Response) => {
@@ -538,23 +534,22 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const listing = await dataAccess.listings.getByListingId(params.listingId);
 
       if (!listing) {
-        res.status(404).json({
-          error: 'not_found',
-          message: `Listing "${params.listingId}" was not found.`,
-        });
+        sendListingNotFound(res, params.listingId);
         return;
       }
 
       if (listing.status !== 'assets_ready') {
-        res.status(409).json({
-          error: 'listing_not_assets_ready',
-          message: `Listing "${params.listingId}" must be assets_ready before generate_ai can be enqueued.`,
-        });
+        sendJsonError(
+          res,
+          409,
+          'listing_not_assets_ready',
+          `Listing "${params.listingId}" must be assets_ready before generate_ai can be enqueued.`
+        );
         return;
       }
 
@@ -565,10 +560,12 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       });
 
       if (!preparedListing) {
-        res.status(409).json({
-          error: 'listing_state_stale',
-          message: `Listing "${params.listingId}" changed before generate_ai could be enqueued. Refresh and retry.`,
-        });
+        sendJsonError(
+          res,
+          409,
+          'listing_state_stale',
+          `Listing "${params.listingId}" changed before generate_ai could be enqueued. Refresh and retry.`
+        );
         return;
       }
 
@@ -579,9 +576,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         job: enqueueResult.job,
         listing: await serializeListingWithLatestPricingAnalysis(dataAccess, preparedListing),
       });
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
   router.post('/listings/:listingId/retry', async (req: Request, res: Response) => {
@@ -590,7 +585,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const result = await retryListingWorkflow({
         dataAccess,
@@ -601,9 +596,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         ...result,
         listing: await serializeListingWithLatestPricingAnalysis(dataAccess, result.listing),
       });
-    } catch (error) {
-      sendManualRetryError(res, error);
-    }
+    }, sendManualRetryError);
   });
 
   router.post(
@@ -614,27 +607,29 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      try {
-        const dataAccess = getDataAccess();
-        const pricingAnalyst =
-          options.pricingAnalyst ??
-          createProductionPricingAnalyst({
+      return runRoute(
+        res,
+        async () => {
+          const dataAccess = getDataAccess();
+          const pricingAnalyst =
+            options.pricingAnalyst ??
+            createProductionPricingAnalyst({
+              dataAccess,
+              now: () => new Date(),
+            });
+
+          const result = await retryPricingAnalysis(params.listingId, {
             dataAccess,
-            now: () => new Date(),
+            pricingAnalyst,
           });
 
-        const result = await retryPricingAnalysis(params.listingId, {
-          dataAccess,
-          pricingAnalyst,
-        });
-
-        res.status(200).json({
-          listing: await serializeListingWithLatestPricingAnalysis(dataAccess, result.listing),
-          warning_resolved: result.warningResolved,
-        });
-      } catch (error) {
-        sendPricingAnalysisRetryError(res, error);
-      }
+          res.status(200).json({
+            listing: await serializeListingWithLatestPricingAnalysis(dataAccess, result.listing),
+            warning_resolved: result.warningResolved,
+          });
+        },
+        sendPricingAnalysisRetryError
+      );
     }
   );
 
@@ -651,15 +646,12 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         return;
       }
 
-      try {
+      return runRoute(res, async () => {
         const dataAccess = getDataAccess();
         const listing = await dataAccess.listings.getByListingId(params.listingId);
 
         if (!listing) {
-          res.status(404).json({
-            error: 'not_found',
-            message: `Listing "${params.listingId}" was not found.`,
-          });
+          sendListingNotFound(res, params.listingId);
           return;
         }
 
@@ -694,29 +686,22 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         res.status(200).json({
           listing: serializeListing(listing, updatedResearch),
         });
-      } catch (error) {
-        sendRouteError(res, error);
-      }
+      });
     }
   );
 
-  router.get('/app-settings', async (_req: Request, res: Response) => {
-    try {
+  router.get('/app-settings', async (_req: Request, res: Response) =>
+    runRoute(res, async () => {
       const appSettings = await getDataAccess().appSettings.get(DEFAULT_APP_SETTINGS_ID);
 
       if (!appSettings) {
-        res.status(404).json({
-          error: 'not_found',
-          message: 'App settings "default" were not found.',
-        });
+        sendNotFound(res, 'App settings "default" were not found.');
         return;
       }
 
       res.json(serializeAppSettings(appSettings));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
-  });
+    })
+  );
 
   router.patch('/app-settings', async (req: Request, res: Response) => {
     const body = parseOrSend(res, updatePricingProviderModeRequestSchema, req.body);
@@ -724,7 +709,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       return;
     }
 
-    try {
+    return runRoute(res, async () => {
       const appSettings = await getDataAccess().appSettings.update(
         {
           pricing_provider_mode: body.pricingProviderMode,
@@ -733,9 +718,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       );
 
       res.json(serializeAppSettings(appSettings));
-    } catch (error) {
-      sendRouteError(res, error);
-    }
+    });
   });
 
   return router;

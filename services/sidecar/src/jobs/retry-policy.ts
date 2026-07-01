@@ -8,6 +8,20 @@ const DEFAULT_STALE_LEASE_MS = 15 * 60 * 1000;
 const DEFAULT_RETRY_DELAY_FIRST_MS = 60 * 1000;
 const DEFAULT_RETRY_DELAY_NEXT_MS = 5 * 60 * 1000;
 
+const DEFAULT_MAX_ATTEMPTS_BY_JOB_TYPE: Record<JobRow['job_type'], number> = {
+  generate_ai: DEFAULT_GENERATE_AI_MAX_ATTEMPTS,
+  process_images: DEFAULT_PROCESS_IMAGES_MAX_ATTEMPTS,
+  publish: DEFAULT_PUBLISH_MAX_ATTEMPTS,
+  research_price: DEFAULT_RESEARCH_PRICE_MAX_ATTEMPTS,
+};
+
+const MAX_ATTEMPTS_ENV_KEY_BY_JOB_TYPE: Record<JobRow['job_type'], string> = {
+  generate_ai: 'SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI',
+  process_images: 'SIDECAR_JOB_MAX_ATTEMPTS_PROCESS_IMAGES',
+  publish: 'SIDECAR_JOB_MAX_ATTEMPTS_PUBLISH',
+  research_price: 'SIDECAR_JOB_MAX_ATTEMPTS_RESEARCH_PRICE',
+};
+
 function readPositiveIntegerEnv(
   env: NodeJS.ProcessEnv,
   key: string,
@@ -27,39 +41,11 @@ export function getDefaultMaxAttempts(
   jobType: JobRow['job_type'],
   env: NodeJS.ProcessEnv = process.env
 ): number {
-  if (jobType === 'process_images') {
-    return readPositiveIntegerEnv(
-      env,
-      'SIDECAR_JOB_MAX_ATTEMPTS_PROCESS_IMAGES',
-      DEFAULT_PROCESS_IMAGES_MAX_ATTEMPTS
-    );
-  }
-
-  if (jobType === 'generate_ai') {
-    return readPositiveIntegerEnv(
-      env,
-      'SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI',
-      DEFAULT_GENERATE_AI_MAX_ATTEMPTS
-    );
-  }
-
-  if (jobType === 'publish') {
-    return readPositiveIntegerEnv(
-      env,
-      'SIDECAR_JOB_MAX_ATTEMPTS_PUBLISH',
-      DEFAULT_PUBLISH_MAX_ATTEMPTS
-    );
-  }
-
-  if (jobType === 'research_price') {
-    return readPositiveIntegerEnv(
-      env,
-      'SIDECAR_JOB_MAX_ATTEMPTS_RESEARCH_PRICE',
-      DEFAULT_RESEARCH_PRICE_MAX_ATTEMPTS
-    );
-  }
-
-  return DEFAULT_GENERATE_AI_MAX_ATTEMPTS;
+  return readPositiveIntegerEnv(
+    env,
+    MAX_ATTEMPTS_ENV_KEY_BY_JOB_TYPE[jobType],
+    DEFAULT_MAX_ATTEMPTS_BY_JOB_TYPE[jobType]
+  );
 }
 
 export function getJobMaxAttempts(

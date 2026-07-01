@@ -81,13 +81,20 @@ function mapFailureSummary(value: unknown): PricingAnalysisWarningFailureSummary
     return null;
   }
 
+  const errorCode = asString(record.errorCode);
+  const errorStatus = asString(record.errorStatus);
+  const provider = asString(record.provider);
+  const reason = asString(record.reason);
+  const retryable = asBoolean(record.retryable);
+  const statusCode = asNumber(record.statusCode);
+
   const summary: PricingAnalysisWarningFailureSummary = {
-    ...(asString(record.errorCode) ? { error_code: asString(record.errorCode)! } : {}),
-    ...(asString(record.errorStatus) ? { error_status: asString(record.errorStatus)! } : {}),
-    ...(asString(record.provider) ? { provider: asString(record.provider)! } : {}),
-    ...(asString(record.reason) ? { reason: asString(record.reason)! } : {}),
-    ...(asBoolean(record.retryable) !== null ? { retryable: asBoolean(record.retryable)! } : {}),
-    ...(asNumber(record.statusCode) !== null ? { status_code: asNumber(record.statusCode)! } : {}),
+    ...(errorCode ? { error_code: errorCode } : {}),
+    ...(errorStatus ? { error_status: errorStatus } : {}),
+    ...(provider ? { provider } : {}),
+    ...(reason ? { reason } : {}),
+    ...(retryable !== null ? { retryable } : {}),
+    ...(statusCode !== null ? { status_code: statusCode } : {}),
   };
 
   return Object.keys(summary).length > 0 ? summary : null;
@@ -153,10 +160,9 @@ function getLatestPricingResearchCompSummary(
 ): ListingLatestPricingResearchCompSummary {
   const reasoning = asRecord(research.llm_reasoning_json);
   const selectedCompIds = asStringArray(reasoning?.selectedCompIds);
+  const rejectedCompIdsFromRow = asStringArray(research.llm_rejected_comp_ids);
   const rejectedCompIds =
-    asStringArray(research.llm_rejected_comp_ids).length > 0
-      ? asStringArray(research.llm_rejected_comp_ids)
-      : asStringArray(reasoning?.rejectedCompIds);
+    rejectedCompIdsFromRow.length > 0 ? rejectedCompIdsFromRow : asStringArray(reasoning?.rejectedCompIds);
 
   return {
     rejected_comp_count: rejectedCompIds.length,
