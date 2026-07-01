@@ -623,22 +623,22 @@ function buildSucceededLlmReasoningJson(
           ).toFixed(4)
         )
       : null;
-  const warnings = buildPricingAnalysisWarnings({
-    analyst: analyst.name,
-    fallbackReason,
-    modelName: result.modelName,
-  });
-
-  return asJson({
-    fallback: fallbackReason,
-    modelName: result.modelName,
-    reasoning: {
-      ...result.reasoning,
-      conditionAdjustmentPercent: derivedPercent,
+  return buildLlmReasoningJsonWithWarnings(
+    {
+      fallback: fallbackReason,
+      modelName: result.modelName,
+      reasoning: {
+        ...result.reasoning,
+        conditionAdjustmentPercent: derivedPercent,
+      },
+      status: 'succeeded',
     },
-    status: 'succeeded',
-    ...(warnings ? { warnings } : {}),
-  });
+    {
+      analyst: analyst.name,
+      fallbackReason,
+      modelName: result.modelName,
+    }
+  );
 }
 
 function buildFailedLlmReasoningJson(
@@ -648,20 +648,37 @@ function buildFailedLlmReasoningJson(
   modelName?: string | null
 ): Json {
   const failure = buildLlmFailureDiagnostics(error, modelName);
-  const warnings = buildPricingAnalysisWarnings({
-    analyst: analyst.name,
-    fallbackReason,
-    failure,
-    modelName,
-  });
+  return buildLlmReasoningJsonWithWarnings(
+    {
+      analyst: analyst.name,
+      error: asCompactErrorMessage(error),
+      fallback: fallbackReason,
+      failure,
+      ...(modelName ? { modelName } : {}),
+      status: 'failed',
+    },
+    {
+      analyst: analyst.name,
+      fallbackReason,
+      failure,
+      modelName,
+    }
+  );
+}
+
+function buildLlmReasoningJsonWithWarnings(
+  payload: Record<string, unknown>,
+  warningInput: {
+    analyst: string;
+    fallbackReason: string | null;
+    failure?: PricingAnalystFailureDiagnostics;
+    modelName?: string | null;
+  }
+): Json {
+  const warnings = buildPricingAnalysisWarnings(warningInput);
 
   return asJson({
-    analyst: analyst.name,
-    error: asCompactErrorMessage(error),
-    fallback: fallbackReason,
-    failure,
-    ...(modelName ? { modelName } : {}),
-    status: 'failed',
+    ...payload,
     ...(warnings ? { warnings } : {}),
   });
 }
@@ -1136,6 +1153,10 @@ function buildProviderFailureWarning(
   };
 }
 
+function buildWarningOnlyReasoningJson(warning: PricingAnalysisWarning | undefined): Json {
+  return warning ? asJson({ warnings: [warning] }) : {};
+}
+
 async function markResearchFailedSafely(
   dataAccess: SidecarDataAccess,
   research: ListingPriceResearchRow | null,
@@ -1164,7 +1185,7 @@ async function markResearchFailedSafely(
   };
 
   const providerWarning = buildProviderFailureWarning(error, providerRouting);
-  const llmReasoningJson = providerWarning ? asJson({ warnings: [providerWarning] }) : {};
+  const llmReasoningJson = buildWarningOnlyReasoningJson(providerWarning);
 
   await dataAccess.listingPriceResearch.markFailed({
     error_code: error.code,

@@ -124,10 +124,12 @@ function shouldUseRawCardSingleShippingDefaults(
     return false;
   }
 
-  return !hasExplicitGrade(providerInput.itemSpecifics);
+  return !hasGradedSignalItemSpecifics(providerInput.itemSpecifics);
 }
 
-function hasExplicitGrade(itemSpecifics: PricingProviderInput['itemSpecifics']): boolean {
+export function hasExplicitGradeFieldItemSpecifics(
+  itemSpecifics: PricingProviderInput['itemSpecifics']
+): boolean {
   if (!itemSpecifics) {
     return false;
   }
@@ -139,6 +141,20 @@ function hasExplicitGrade(itemSpecifics: PricingProviderInput['itemSpecifics']):
         return true;
       }
     }
+  }
+
+  return false;
+}
+
+export function hasGradedSignalItemSpecifics(
+  itemSpecifics: PricingProviderInput['itemSpecifics']
+): boolean {
+  if (hasExplicitGradeFieldItemSpecifics(itemSpecifics)) {
+    return true;
+  }
+
+  if (!itemSpecifics) {
+    return false;
   }
 
   const gradedValue = itemSpecifics.Graded;

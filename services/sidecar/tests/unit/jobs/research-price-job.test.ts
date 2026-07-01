@@ -1386,6 +1386,112 @@ describe('priceListingNow', () => {
     );
   });
 
+  it('does not enable raw-card single shipping defaults when Graded item specific is set', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Number': '136',
+        Graded: 'Yes',
+        Manufacturer: 'Panini',
+        Player: 'Victor Wembanyama',
+        Set: 'Prizm',
+        Year: '2023',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+    const { dataAccess } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama Rookie Card', 35)],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 20 },
+                shippingPrice: { currency: 'USD', value: 15 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(normalizeComps).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        conditionId: '4000',
+        listingType: 'single',
+        rawCardSingleShippingDefaults: false,
+      })
+    );
+  });
+
+  it('does not enable raw-card single shipping defaults when Card Condition is graded', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Condition': 'graded',
+        'Card Number': '136',
+        Manufacturer: 'Panini',
+        Player: 'Victor Wembanyama',
+        Set: 'Prizm',
+        Year: '2023',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+    const { dataAccess } = createDataAccess(listing);
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: [createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama Rookie Card', 35)],
+      rejected: [],
+    });
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: [
+              {
+                price: { currency: 'USD', value: 20 },
+                shippingPrice: { currency: 'USD', value: 15 },
+                soldDate: '2026-06-01T10:00:00.000Z',
+                title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+              },
+            ],
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(normalizeComps).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        conditionId: '4000',
+        listingType: 'single',
+        rawCardSingleShippingDefaults: false,
+      })
+    );
+  });
+
   it('falls back deterministically when pricing_reasoning route missing', async () => {
     const listing = createListing({
       item_specifics: {

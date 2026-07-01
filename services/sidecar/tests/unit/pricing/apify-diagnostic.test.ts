@@ -20,7 +20,7 @@ describe('Apify pricing diagnostic', () => {
         actor: null,
         attempted: false,
       },
-      requestedCompCount: 20,
+      requestedCompCount: 50,
       overallStatus: 'pass',
       timeoutSeconds: 120,
       token: {

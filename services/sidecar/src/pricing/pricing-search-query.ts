@@ -1,6 +1,7 @@
 import { DEFAULT_PRICING_MODIFIER_OPTIONS } from '@ebay-inventory/types';
-import { GRADED_TRADING_CARD_CONDITION_ID, TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
+import { GRADED_TRADING_CARD_CONDITION_ID } from '@/listings/trading-card-conditions.js';
 
+import { hasGradedSignalItemSpecifics } from './provider-input.js';
 import {
   CORE_GRADED_PROVIDER_NEGATIVES,
   isGradedListingTitle,
@@ -14,9 +15,6 @@ export {
 
 export const RAW_CARD_NEGATIVE_MODIFIERS = ['-pick', '-choose', '-complete', '-lot'] as const;
 export const AUTOGRAPH_PROVIDER_NEGATIVES = ['-auto', '-autograph'] as const;
-const GRADER_ITEM_SPECIFIC_KEYS = ['Professional Grader', 'Grader'] as const;
-const GRADE_ITEM_SPECIFIC_KEYS = ['Grade', 'Card Grade'] as const;
-const BOOLEAN_GRADED_ITEM_SPECIFIC_KEYS = ['Graded'] as const;
 
 export function buildPricingSearchQuery(
   input: PricingProviderInput,
@@ -54,50 +52,7 @@ function isExplicitlyGraded(input: PricingProviderInput): boolean {
     return true;
   }
 
-  for (const key of GRADER_ITEM_SPECIFIC_KEYS) {
-    const value = input.itemSpecifics?.[key];
-    const normalizedValues = Array.isArray(value) ? value : [value];
-
-    for (const entry of normalizedValues) {
-      if (typeof entry === 'string' && entry.trim().length > 0) {
-        return true;
-      }
-    }
-  }
-
-  for (const key of GRADE_ITEM_SPECIFIC_KEYS) {
-    const value = input.itemSpecifics?.[key];
-    const normalizedValues = Array.isArray(value) ? value : [value];
-
-    for (const entry of normalizedValues) {
-      if (typeof entry === 'string' && entry.trim().length > 0) {
-        return true;
-      }
-    }
-  }
-
-  for (const key of BOOLEAN_GRADED_ITEM_SPECIFIC_KEYS) {
-    const value = input.itemSpecifics?.[key];
-    const normalizedValues = Array.isArray(value) ? value : [value];
-
-    for (const entry of normalizedValues) {
-      if (typeof entry !== 'string') {
-        continue;
-      }
-
-      const normalized = entry.trim().toLowerCase();
-      if (normalized === 'yes' || normalized === 'true' || normalized === 'graded') {
-        return true;
-      }
-    }
-  }
-
-  const cardCondition = input.itemSpecifics?.[TRADING_CARD_CONDITION_ASPECT_KEY];
-  if (typeof cardCondition === 'string' && cardCondition.trim().toLowerCase() === 'graded') {
-    return true;
-  }
-
-  return false;
+  return hasGradedSignalItemSpecifics(input.itemSpecifics);
 }
 
 function collectExistingNegativeTerms(query: string): Set<string> {

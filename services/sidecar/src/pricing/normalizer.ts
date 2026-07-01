@@ -78,13 +78,6 @@ export function normalizeSoldComps(
 
   return { comps, rejected };
 }
-
-function normalizeSoldComp(rawComp: RawSoldComp):
-  | Omit<NormalizedSoldComp, 'id' | 'source'>
-  | { reason: string; title: string | null } {
-  return normalizeSingleSoldComp(rawComp, buildExactCardTitleTarget({}), {});
-}
-
 function normalizeSingleSoldComp(
   rawComp: RawSoldComp,
   exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>,

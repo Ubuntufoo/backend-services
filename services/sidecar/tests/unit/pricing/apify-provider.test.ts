@@ -160,6 +160,38 @@ describe('Apify pricing provider', () => {
     expect(actorInput.keywords[0]).not.toContain('raw');
   });
 
+  it('treats Graded item specific as a graded-signal search guard', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        ...baseInput.itemSpecifics,
+        Graded: 'Yes',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini 136']);
+    expect(actorInput.keywords[0]).not.toContain('-PSA');
+    expect(actorInput.keywords[0]).not.toContain('-pick');
+  });
+
+  it('treats graded Card Condition as a graded-signal search guard', () => {
+    const actorInput = buildApifyActorInput({
+      ...baseInput,
+      conditionId: '4000',
+      itemSpecifics: {
+        ...baseInput.itemSpecifics,
+        'Card Condition': 'graded',
+      },
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+    });
+
+    expect(actorInput.keywords).toEqual(['Victor Wembanyama 2023 Panini 136']);
+    expect(actorInput.keywords[0]).not.toContain('-PSA');
+    expect(actorInput.keywords[0]).not.toContain('-pick');
+  });
+
   it('uses shared raw-card exclusions for Apify by default', () => {
     const input = {
       ...baseInput,
