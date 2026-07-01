@@ -1,46 +1,120 @@
-## Agent Context & Token Management Protocol
+## DevelopmentRole & Philosophy
+
+Follow the "Ponytail" development principle: write only what is needed, maximize native platform features, cut abstractions, and embrace "the best code is code never written." Keep solutions minimal and YAGNI-compliant.
+
+- Never jump to code. User will supply an initial plan/goal prompt.
+- Strip out ambiguity to align on a clear, singular goal.
+- Native First: Prefer standard utilities over packages; native browser features over custom JS or complex UI primitives.
+- Strict Structure: Use strict TypeScript interfaces and JSON schemas.
+- No Speculative Abstractions: No single-use interfaces, factories, or static configs.
+- Verbosity Control: Provide code first, then max 3 lines on what was skipped. Mark simplifications with: `// ponytail: [constraint], upgrade path: [path]`.
+
+## Agent Context & Token Management
+
+Use tools as a pipeline:
+- RTK/Headroom narrow or compress broad evidence -> DeepSeek delegates analyze bounded exact evidence -> main thread verifies, edits, tests, and finalizes
+
+- Do not treat RTK, Headroom, and delegates as interchangeable. RTK/Headroom help locate or shrink evidence; delegates reason over bounded evidence; the main thread remains responsible for decisions and verification.
 
 ### DeepSeek Delegate Workers
 
-Source: `/Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/README.md`
+Source of truth:
+
+* Routine instructions: `/Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/AGENTS.md`
+* Full reference, consult selectively only when needed: `/Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/README.md`
+
+Do not ingest the full README by default. Use `AGENTS.md` for normal delegate workflow instructions, and targeted README searches or bounded line reads only when a specific command, contract, or historical detail is missing.
 
 Bootstrap:
+
+```sh
 source /Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/env.zsh
+```
 
-Use delegates for non-trivial bounded repo analysis, multi-file review, critique, synthesis, summarization, or packed-artifact verification when offloading reduces main-thread context. Delegates are read-only and advisory; the main thread must verify claims, decide, edit, test, and produce the final answer.
+Use delegates for non-trivial bounded repo analysis, multi-file review, critique, synthesis, summarization, or packed-artifact verification when offloading reduces main-thread context.
 
-Default flow:
-ds-scan-bundle <backend-services|ebay-ui-app|codex-delegates> "<pattern>"
-ds-pack-files --temp <repo-prefixed-path[:start[:count]]> ...
-codex-ds-analyze --mode review @"$artifact"
+Delegates are read-only and advisory. The main thread must verify claims, decide what to do, edit files, run tests, and produce final conclusions.
 
-Use codex-ds-analyze --mode artifact-audit @"$artifact" for evidence audits, operational-claim checks, tool-effectiveness reviews, or cases where fallback must preserve the original audit objective. Use CODEX_DS_DRY_RUN_MODEL=1 <delegate-command> to inspect selected models without API calls.
+Preferred delegate paths:
 
-Retrieve bounded evidence locally first. Choose the delegate root from task scope. Prefer file-backed artifacts over inline pasted evidence. Keep artifacts narrow, usually ≤~250 lines for first pass, with file/line references where available.
+* normal review: `ds-delegate-review --mode review <file[:start[:count]]> ...`
+* manual artifact path: `ds pack --temp <repo-path[:start[:count]]> ...` -> `ds run analyze --mode <mode> @"$artifact"`
+* evidence audit: `ds run analyze --mode artifact-audit @"$artifact"`
+* run bundles: `ds run init`, inspect with `ds show`
 
-Do not delegate trivial single-file checks, obvious edits, final response generation, direct file mutation, destructive actions, live shell state, DB inspection, environment drift, secrets, .env\*, credentials, DB dumps, SQLite state, dependency folders, lockfiles, generated files, or oversized logs. Never pass arbitrary repo paths; pass only bounded retrieved artifacts.
+Prefer exact file-backed evidence for delegates. Use RTK or Headroom to narrow bulky/noisy output before choosing exact ranges. Do not pass summaries to delegates when source ranges can be packed.
 
-### Headroom Routing
+Keep artifacts narrow and split broad tasks into focused delegate calls.
 
-Use headroom_compress for bulky, repetitive raw output before analysis: logs, stack traces, JSON blobs, long diffs, verbose test/build/lint/typecheck output, noisy search results, truncated/multi-screen output, or artifacts ~≥80 lines / ~≥1200 tokens that look compressible.
+Compatibility shims remain supported and must stay quiet at runtime so stdout/JSON contracts do not change. Prefer v2 `ds` commands for migrated behavior; use existing entrypoints for scan/config/workspace/patch/model-worker commands until migrated.
 
-Skip compact path lists, compact tables, already concise output, and artifacts under ~5k tokens unless clearly repetitive. Low-value inputs may return compression_skipped or noop; these do not store retrievable artifacts unless force: true is used.
-
-Workflow: compress the original raw artifact first, reason from compressed output, use headroom_retrieve only for exact raw slices/details, and emit HEADROOM_USED: <hash> only when an artifact is stored.
-
-Do not analyze large triggered output raw. Do not replace compression with tail, sed, repeated rereads, shell slicing, or compressing a hand-written summary.
+Do not delegate trivial checks, obvious edits, final response generation, direct file mutation, destructive actions, live/runtime state, DB inspection, environment drift, secrets, `.env*`, credentials, DB dumps, SQLite state, dependency folders, lockfiles, generated files, oversized raw logs, or arbitrary repo paths.
 
 ### RTK Routing
 
-See `@/Users/timothymurphy/.codex/RTK.md`.
+See @/Users/timothymurphy/.codex/RTK.md.
 
-Use RTK when output is broad, noisy, repetitive, or likely to benefit from filtering/compression: `git diff`, repo-wide `rg`, broad reads, logs, verbose CLIs, and build/test/lint/typecheck output. Prefer `rtk git diff`, `rtk grep <pattern> <path>`, `rtk read <file>`, `rtk test <cmd>`, or `rtk <cmd>` as appropriate.
+Use RTK when anticipated output is broad, noisy, repetitive, or likely to benefit from filtering/compression: diffs, repo-wide search, broad reads, logs, verbose CLIs, and build/test/lint/typecheck output.
 
-Use raw commands when output must be exact, small, machine-readable, formatting-sensitive, forensic, SQL-like, or when no RTK analogue exists. Common raw cases: `git status --short`, tiny file reads, exact SQL output, and compact status checks.
+Before reading bulky artifacts, prefer rtk view first. Use the compact view to identify the exact file, line range, row, diff hunk, or error group needed, then fetch raw source only when exact evidence is required.
 
-Use `rtk read --raw <file>` for exact file output, `rtk read --compact <file>` to force filtering on larger reads, and `rtk gain --family` to check which command families are actually saving context.
+Primary context-view commands:
 
-Do not treat RTK as mandatory just because a wrapper exists. Route by workload shape and expected savings. If bypassing RTK for a non-trivial command with a wrapper, state why.
+rtk view tree <path>
+rtk view source <file[:start[:count]]>
+rtk view json <file>
+rtk view csv <file>
+rtk view diff <diff-or-args>
+rtk view log <file>
+
+RTK view outputs include footer metadata and raw recovery hints. Treat the compact view as orientation/context, not as a substitute for exact file-backed evidence when precision matters.
+
+Examples:
+rtk view tree services/sidecar/src/pricing
+rtk view source services/sidecar/src/jobs/run-job.ts:1:120
+rtk view json /tmp/provider-result.json
+rtk view csv /tmp/comps.csv
+rtk view diff
+rtk grep "pricing" services/sidecar
+rtk read services/sidecar/src/jobs/run-job.ts
+rtk test "pnpm --filter sidecar test -- run-job.test.ts"
+rtk "pnpm typecheck"
+
+Use raw commands when output must be exact, small, machine-readable, formatting-sensitive, forensic, SQL-like, or when no RTK analogue exists. Common raw cases: git status --short, tiny file reads, exact SQL output, compact status checks, and final source-of-truth snippets used for implementation or review claims.
+
+Inside delegate workflows, use RTK or rtk view to narrow candidate seams before ds pack or ds-delegate-review. Do not pass RTK summaries to delegates when exact file-backed evidence is needed; pack the raw source ranges instead.
+
+### Headroom Routing
+
+Use Headroom for bulky already-captured artifacts: long test logs, large diffs, delegate scans, repetitive JSON blobs, or other large/noisy outputs.
+
+Skip Headroom for compact lists, concise tables, and small exact outputs unless they are repetitive.
+
+Workflow:
+compress raw artifact -> reason from compressed output -> retrieve exact slices only when needed
+
+Inside delegate workflows, use Headroom to shrink bulky local evidence before deciding what exact ranges to pack. Do not hand delegates compressed summaries when underlying file slices or artifact ranges can be packed instead.
+
+Examples:
+large failing test log -> headroom_compress -> reason from compressed output -> retrieve exact failure slice if needed
+large JSON API response -> headroom_compress -> identify relevant keys/errors -> retrieve exact slice if needed
+large diff already captured in chat/output -> headroom_compress -> identify changed areas -> inspect exact files/ranges
+verbose delegate scan output -> headroom_compress -> identify candidate seams -> pack exact source ranges for delegate review
+
+Skip Headroom for compact lists, concise tables, and small exact outputs unless they are repetitive.
+
+### Combined Routing Rule
+
+For broad or noisy tasks:
+RTK/Headroom or `rtk view` narrow evidence -> exact files/ranges -> ds-delegate-review or ds pack -> ds run analyze -> main-thread verification
+
+For bulky artifacts:
+rtk view first -> identify exact file/line/range/row/hunk/error group -> raw read or ds pack exact evidence -> main-thread verification
+
+For small exact checks:
+raw command or raw read -> main-thread reasoning
+
+No delegate, RTK, Headroom, or rtk view is required when the evidence is already small and exact. Use compact RTK views for orientation only; use raw source ranges for final evidence, implementation decisions, and delegate packs.
 
 ### Concise Response Protocol
 
@@ -56,7 +130,11 @@ Target package-level commands with workspace filters (e.g., `pnpm --filter <pkg>
 - Use full diffs only when needed for correctness/risk/churn detection.
 - If repo state unclear: report branch, modified files, unpushed commits.
 - If push succeeds but `.lock` warning appears: check remote first. Only remove stale `.git/**/*.lock` files if Git ops blocked.
-- `ROADMAP.md` is a living document updated by the user only.
+
+## Testing and Validation
+
+- Run necessary linting/tests before every commit. Treat failing checks as blockers. Only run tests in scope, avoid broad regression testing unless explicitly required.
+- Validate logical sub-tasks before continuing.
 
 ## Local-First Version Control
 
@@ -84,8 +162,3 @@ Solo personal project. Git for local checkpoints, recovery, controlled backup.
 
 - Web retrieval not covered by Context7.
 - Includes card pricing, local listings, unstructured web data.
-
-## Testing and Validation
-
-- Run linting/tests before every commit. Treat failing checks as blockers.
-- Validate each logical sub-task before continuing.

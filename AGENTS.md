@@ -57,15 +57,6 @@ Shared delegate root alias for this repo: `backend-services`.
 - Treat `ROADMAP.md` and `docs/archive/` as context only, not source of truth.
 - Keep sidecar as canonical backend entrypoint; do not invent extracted services unless code exists.
 
-## Current Pricing Status
-
-- Implemented: fixture-backed `research_price` job, comp normalization, deterministic median-based stats, confidence scoring, validated LLM pricing wiring/config behind deterministic fallback, `listing_price_research` persistence.
-- Workflow-safe: successful research may update `listings.price` while listing remains `needs_review` / `review_pending`.
-- Pricing failures should stay job-scoped and `listing_price_research`-scoped; they should not block review/export and should not write listing `last_error_*`.
-- Live Apify provider/pilot still pending.
-- Pricing remains sidecar-local.
-- Do not document live Apify pricing as active unless code exists beyond fixture/test scaffolding.
-
 ## Do Not Open Unless Needed Or Directed
 
 - `ROADMAP.md`
