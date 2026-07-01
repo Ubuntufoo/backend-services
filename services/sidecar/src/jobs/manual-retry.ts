@@ -4,6 +4,7 @@ import {
   createManualRetryNotAllowedError,
   isManualRetryAllowedStoredError,
   JOB_ERROR_CODES,
+  type JobErrorContext,
   SidecarJobError,
 } from './job-errors.js';
 
@@ -97,11 +98,7 @@ function getPublishRetryState(listing: ListingRow): ListingRetryState {
 }
 
 function resolveWorkflow(listing: ListingRow): ManualRetryWorkflow {
-  if (
-    listing.status === 'assets_ready' ||
-    listing.status === 'generating' ||
-    listing.status === 'needs_review'
-  ) {
+  if (listing.status === 'assets_ready' || listing.status === 'generating') {
     return 'generate_ai';
   }
 
@@ -117,6 +114,29 @@ function resolveWorkflow(listing: ListingRow): ManualRetryWorkflow {
       listing_sub_status: listing.sub_status,
     }
   );
+}
+
+function assertNeedsReviewGenerateAiRetryable(
+  listing: ListingRow,
+  latestGenerateAiJob: JobRow | null
+): void {
+  if (!latestGenerateAiJob || latestGenerateAiJob.status !== 'failed') {
+    const context = Object.fromEntries(
+      Object.entries({
+        job_id: latestGenerateAiJob?.id,
+        job_status: latestGenerateAiJob?.status,
+        listing_id: listing.listing_id,
+        listing_status: listing.status,
+        listing_sub_status: listing.sub_status,
+        workflow: 'generate_ai',
+      }).filter(([, value]) => value !== undefined)
+    ) as JobErrorContext;
+
+    throw createManualRetryNotAllowedError(
+      `Listing "${listing.listing_id}" needs explicit failed generate_ai job evidence before manual retry is allowed from needs_review.`,
+      context
+    );
+  }
 }
 
 function getRetryState(
@@ -279,7 +299,14 @@ export async function retryListingWorkflow(
   }
 
   const jobs = await options.dataAccess.jobs.listByListingId(options.listingId);
-  const workflow = resolveWorkflow(listing);
+  const needsReviewGenerateAiJob =
+    listing.status === 'needs_review' ? getLatestWorkflowJob(jobs, 'generate_ai') : null;
+
+  if (listing.status === 'needs_review') {
+    assertNeedsReviewGenerateAiRetryable(listing, needsReviewGenerateAiJob);
+  }
+
+  const workflow = listing.status === 'needs_review' ? 'generate_ai' : resolveWorkflow(listing);
   const activeJob = getActiveWorkflowJob(jobs, workflow);
 
   if (activeJob) {
@@ -291,7 +318,10 @@ export async function retryListingWorkflow(
     };
   }
 
-  const latestWorkflowJob = getLatestWorkflowJob(jobs, workflow);
+  const latestWorkflowJob =
+    workflow === 'generate_ai' && needsReviewGenerateAiJob
+      ? needsReviewGenerateAiJob
+      : getLatestWorkflowJob(jobs, workflow);
   assertListingRetryable(listing, workflow, latestWorkflowJob);
 
   const repairedListing = await options.dataAccess.listings.update(
