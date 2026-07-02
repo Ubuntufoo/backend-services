@@ -1,9 +1,14 @@
-import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
+import type {
+  JobRow,
+  ListingPriceResearchRow,
+  ListingRow,
+  ListingUpdate,
+} from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
-import { retryListingWorkflow } from '@/jobs/manual-retry.js';
+import { retryListingWorkflow, retryPricingReview } from '@/jobs/manual-retry.js';
 
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -71,7 +76,8 @@ function createJobRow(overrides: Partial<JobRow> = {}): JobRow {
 
 function createDataAccess(
   listing: ListingRow,
-  jobs: JobRow[]
+  jobs: JobRow[],
+  latestResearch: ListingPriceResearchRow | null = null
 ): SidecarDataAccess {
   const listingsUpdate = vi.fn(async (_listingId: string, changes: ListingUpdate) => ({
     ...listing,
@@ -99,10 +105,50 @@ function createDataAccess(
     jobs: {
       enqueueGenerateAi: vi.fn(),
       enqueuePublish: vi.fn(),
+      enqueueResearchPrice: vi.fn(async () => ({
+        alreadyQueued: false,
+        job: createJobRow({
+          id: 'job-research-price-enqueued',
+          job_type: 'research_price',
+          listing_id: listing.listing_id,
+          status: 'queued',
+        }),
+      })),
       listByListingId: vi.fn(async () => jobs),
       resetForManualRetry,
     },
+    listingPriceResearch: {
+      getLatestByListingId: vi.fn(async () => latestResearch),
+    },
   } as unknown as SidecarDataAccess;
+}
+
+function createResearchRow(
+  overrides: Partial<ListingPriceResearchRow> = {}
+): ListingPriceResearchRow {
+  return {
+    comps: [],
+    confidence: null,
+    created_at: '2026-05-22T12:00:00.000Z',
+    dismissed_pricing_warning_codes: [],
+    error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+    error_message: 'No deterministic price.',
+    id: 'research-row-id',
+    listing_id: 'LIST-001',
+    llm_price_explanation: null,
+    llm_reasoning_json: {},
+    llm_rejected_comp_ids: [],
+    median_sold_price: null,
+    pricing_model_name: null,
+    provider: 'soldcomps',
+    query: 'victor wembanyama 2023 prizm 136',
+    raw_result_json: {},
+    sold_count: null,
+    status: 'failed',
+    suggested_price: null,
+    updated_at: '2026-05-22T12:01:00.000Z',
+    ...overrides,
+  };
 }
 
 describe('retryListingWorkflow needs_review semantics', () => {
@@ -208,5 +254,170 @@ describe('retryListingWorkflow needs_review semantics', () => {
 
     expect(dataAccess.listings.update).not.toHaveBeenCalled();
     expect(dataAccess.jobs.resetForManualRetry).not.toHaveBeenCalled();
+  });
+});
+
+describe('retryPricingReview', () => {
+  it('resets latest failed research_price job for retryable deterministic pricing failure', async () => {
+    const listing = createListingRow({
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    const failedJob = createJobRow({
+      id: 'job-research-price-failed',
+      job_type: 'research_price',
+      last_error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+      status: 'failed',
+      updated_at: '2026-05-22T12:01:00.000Z',
+    });
+    const dataAccess = createDataAccess(listing, [failedJob], createResearchRow());
+
+    const result = await retryPricingReview({
+      dataAccess,
+      listingId: listing.listing_id,
+      now: () => new Date('2026-05-22T12:05:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      alreadyQueued: false,
+      listing,
+      workflow: 'research_price',
+    });
+    expect(result.job).toMatchObject({
+      id: 'job-research-price-failed',
+      status: 'queued',
+    });
+    expect(dataAccess.jobs.resetForManualRetry).toHaveBeenCalledWith(
+      'job-research-price-failed',
+      '2026-05-22T12:05:00.000Z'
+    );
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+  });
+
+  it('enqueues a new research_price job when failed pricing evidence exists but reset cannot be used', async () => {
+    const listing = createListingRow({
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    const failedJob = createJobRow({
+      id: 'job-research-price-failed',
+      job_type: 'research_price',
+      last_error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+      status: 'failed',
+    });
+    const dataAccess = createDataAccess(listing, [failedJob], createResearchRow());
+    dataAccess.jobs.resetForManualRetry = vi.fn(async () => null);
+
+    const result = await retryPricingReview({
+      dataAccess,
+      listingId: listing.listing_id,
+    });
+
+    expect(result.job).toMatchObject({
+      id: 'job-research-price-enqueued',
+      status: 'queued',
+    });
+    expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith(listing.listing_id);
+  });
+
+  it('rejects missing listings', async () => {
+    const dataAccess = createDataAccess(createListingRow(), []);
+    dataAccess.listings.getByListingId = vi.fn(async () => null);
+
+    await expect(
+      retryPricingReview({
+        dataAccess,
+        listingId: 'LIST-404',
+      })
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'Listing "LIST-404" was not found.',
+    });
+  });
+
+  it('rejects ineligible listing status for pricing retry', async () => {
+    const listing = createListingRow({
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+    const dataAccess = createDataAccess(listing, [], createResearchRow());
+
+    await expect(
+      retryPricingReview({
+        dataAccess,
+        listingId: listing.listing_id,
+      })
+    ).rejects.toMatchObject({
+      code: 'ineligible_listing',
+    });
+  });
+
+  it('rejects missing failed pricing evidence', async () => {
+    const listing = createListingRow({
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    const dataAccess = createDataAccess(listing, [], null);
+
+    await expect(
+      retryPricingReview({
+        dataAccess,
+        listingId: listing.listing_id,
+      })
+    ).rejects.toMatchObject({
+      code: 'no_failed_pricing_evidence',
+    });
+  });
+
+  it('rejects non-retryable pricing failures', async () => {
+    const listing = createListingRow({
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    const failedJob = createJobRow({
+      id: 'job-research-price-failed',
+      job_type: 'research_price',
+      last_error_code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      status: 'failed',
+    });
+    const dataAccess = createDataAccess(
+      listing,
+      [failedJob],
+      createResearchRow({
+        error_code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
+      })
+    );
+
+    await expect(
+      retryPricingReview({
+        dataAccess,
+        listingId: listing.listing_id,
+      })
+    ).rejects.toMatchObject({
+      code: 'non_retryable_pricing_failure',
+    });
+  });
+
+  it('rejects duplicate active research_price jobs', async () => {
+    const listing = createListingRow({
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    });
+    const activeJob = createJobRow({
+      id: 'job-research-price-active',
+      job_type: 'research_price',
+      status: 'running',
+    });
+    const dataAccess = createDataAccess(listing, [activeJob], createResearchRow());
+
+    await expect(
+      retryPricingReview({
+        dataAccess,
+        listingId: listing.listing_id,
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB,
+      message: 'Listing "LIST-001" already has an active research_price job.',
+    });
   });
 });

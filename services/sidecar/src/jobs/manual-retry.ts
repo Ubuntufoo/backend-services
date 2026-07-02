@@ -1,14 +1,17 @@
-import type { JobRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
+import type { JobRow, ListingPriceResearchRow, ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  createDuplicateActiveJobError,
   createManualRetryNotAllowedError,
   isManualRetryAllowedStoredError,
   JOB_ERROR_CODES,
   type JobErrorContext,
   SidecarJobError,
 } from './job-errors.js';
+import { isResearchPriceListingEligible } from './research-price-job.js';
 
 export type ManualRetryWorkflow = 'generate_ai' | 'publish';
+export type PricingRetryWorkflow = 'research_price';
 
 export interface ManualRetryListingWorkflowResult {
   alreadyQueued: boolean;
@@ -21,6 +24,30 @@ export interface ManualRetryListingWorkflowOptions {
   dataAccess: SidecarDataAccess;
   listingId: string;
   now?: () => Date;
+}
+
+export interface RetryPricingReviewResult {
+  alreadyQueued: false;
+  job: JobRow;
+  listing: ListingRow;
+  workflow: PricingRetryWorkflow;
+}
+
+export type RetryPricingReviewErrorCode =
+  | 'duplicate_active_job'
+  | 'ineligible_listing'
+  | 'no_failed_pricing_evidence'
+  | 'non_retryable_pricing_failure'
+  | 'not_found';
+
+export class RetryPricingReviewError extends Error {
+  readonly code: RetryPricingReviewErrorCode;
+
+  constructor(code: RetryPricingReviewErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RetryPricingReviewError';
+    this.code = code;
+  }
 }
 
 type ListingRetryState = 'missing' | 'orphan' | 'safe';
@@ -43,14 +70,14 @@ function sortJobsNewestFirst(jobs: JobRow[]): JobRow[] {
 
 function getWorkflowJobs(
   jobs: JobRow[],
-  workflow: ManualRetryWorkflow
+  workflow: ManualRetryWorkflow | PricingRetryWorkflow
 ): JobRow[] {
   return sortJobsNewestFirst(jobs.filter((job) => job.job_type === workflow));
 }
 
 function getActiveWorkflowJob(
   jobs: JobRow[],
-  workflow: ManualRetryWorkflow
+  workflow: ManualRetryWorkflow | PricingRetryWorkflow
 ): JobRow | null {
   return (
     getWorkflowJobs(jobs, workflow).find(
@@ -61,9 +88,72 @@ function getActiveWorkflowJob(
 
 function getLatestWorkflowJob(
   jobs: JobRow[],
-  workflow: ManualRetryWorkflow
+  workflow: ManualRetryWorkflow | PricingRetryWorkflow
 ): JobRow | null {
   return getWorkflowJobs(jobs, workflow)[0] ?? null;
+}
+
+function getLatestFailedPricingResearch(
+  research: ListingPriceResearchRow | null
+): ListingPriceResearchRow | null {
+  return research?.status === 'failed' ? research : null;
+}
+
+function isRetryablePricingFailureCode(
+  code: string | null | undefined
+): code is typeof JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID {
+  return code === JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID;
+}
+
+function assertPricingReviewRetryable(input: {
+  latestPricingJob: JobRow | null;
+  latestResearch: ListingPriceResearchRow | null;
+  listing: ListingRow;
+}): void {
+  if (!isResearchPriceListingEligible(input.listing)) {
+    throw new RetryPricingReviewError(
+      'ineligible_listing',
+      `Listing "${input.listing.listing_id}" is not eligible for full pricing retry from "${input.listing.status}/${input.listing.sub_status}".`
+    );
+  }
+
+  const failedResearch = getLatestFailedPricingResearch(input.latestResearch);
+  if (!failedResearch) {
+    throw new RetryPricingReviewError(
+      'no_failed_pricing_evidence',
+      `Listing "${input.listing.listing_id}" has no failed pricing research to retry.`
+    );
+  }
+
+  if (!isRetryablePricingFailureCode(failedResearch.error_code)) {
+    throw new RetryPricingReviewError(
+      'non_retryable_pricing_failure',
+      `Latest pricing failure for listing "${input.listing.listing_id}" is not eligible for full pricing retry.`
+    );
+  }
+
+  if (
+    input.latestPricingJob?.status === 'failed' &&
+    isRetryablePricingFailureCode(input.latestPricingJob.last_error_code)
+  ) {
+    return;
+  }
+
+  if (!input.latestPricingJob || input.latestPricingJob.status === 'completed') {
+    return;
+  }
+
+  if (input.latestPricingJob.status === 'queued' || input.latestPricingJob.status === 'running') {
+    throw new RetryPricingReviewError(
+      'duplicate_active_job',
+      `Listing "${input.listing.listing_id}" already has an active research_price job.`
+    );
+  }
+
+  throw new RetryPricingReviewError(
+    'no_failed_pricing_evidence',
+    `Listing "${input.listing.listing_id}" has no failed research_price job to retry.`
+  );
 }
 
 function getGenerateAiRetryState(listing: ListingRow): ListingRetryState {
@@ -366,5 +456,69 @@ export async function retryListingWorkflow(
     workflow,
     job: enqueueResult.job,
     listing: repairedListing,
+  };
+}
+
+export async function retryPricingReview(options: {
+  dataAccess: SidecarDataAccess;
+  listingId: string;
+  now?: () => Date;
+}): Promise<RetryPricingReviewResult> {
+  const now = options.now ?? (() => new Date());
+  const listing = await options.dataAccess.listings.getByListingId(options.listingId);
+
+  if (!listing) {
+    throw new RetryPricingReviewError(
+      'not_found',
+      `Listing "${options.listingId}" was not found.`
+    );
+  }
+
+  const [jobs, latestResearch] = await Promise.all([
+    options.dataAccess.jobs.listByListingId(options.listingId),
+    options.dataAccess.listingPriceResearch.getLatestByListingId(options.listingId),
+  ]);
+  const activeJob = getActiveWorkflowJob(jobs, 'research_price');
+  if (activeJob) {
+    throw createDuplicateActiveJobError('research_price', options.listingId, activeJob.id);
+  }
+
+  const latestPricingJob = getLatestWorkflowJob(jobs, 'research_price');
+  assertPricingReviewRetryable({
+    latestPricingJob,
+    latestResearch,
+    listing,
+  });
+
+  if (latestPricingJob?.status === 'failed') {
+    const resetJob = await options.dataAccess.jobs.resetForManualRetry(
+      latestPricingJob.id,
+      asIsoTimestamp(now)
+    );
+
+    if (resetJob) {
+      return {
+        alreadyQueued: false,
+        job: resetJob,
+        listing,
+        workflow: 'research_price',
+      };
+    }
+  }
+
+  const enqueueResult = await options.dataAccess.jobs.enqueueResearchPrice(options.listingId);
+  if (enqueueResult.alreadyQueued) {
+    throw createDuplicateActiveJobError(
+      'research_price',
+      options.listingId,
+      enqueueResult.job.id
+    );
+  }
+
+  return {
+    alreadyQueued: false,
+    job: enqueueResult.job,
+    listing,
+    workflow: 'research_price',
   };
 }

@@ -151,6 +151,7 @@ const publishReadyNeedsReviewListingRow = {
   merchant_location_key: 'warehouse-1',
   price: 24,
   sku: 'BSKBL-Single-000001',
+  listing_type: 'single',
   status: 'needs_review',
   sub_status: 'review_pending',
   title: '1993 Upper Deck SP Derek Jeter foil rookie',
@@ -2223,6 +2224,184 @@ describe('data API router', () => {
       expect(response.status).toBe(422);
       expect(response.body).toMatchObject({
         error: 'no_comps',
+      });
+    });
+  });
+
+  describe('retry-pricing', () => {
+    it('queues full pricing retry and returns serialized listing with latest failed pricing research', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => ({
+        ...publishReadyNeedsReviewListingRow,
+        last_error_code: 'research_price_suggested_price_invalid',
+      }));
+      dataAccess.jobs.listByListingId = vi.fn(async () => [
+        {
+          attempts: 1,
+          created_at: '2026-05-17T01:00:00.000Z',
+          id: 'job-research-price-failed',
+          job_type: 'research_price',
+          last_error: 'No deterministic price',
+          last_error_at: '2026-05-17T01:05:00.000Z',
+          last_error_code: 'research_price_suggested_price_invalid',
+          listing_id: 'LIST-001',
+          max_attempts: 3,
+          next_run_at: null,
+          status: 'failed',
+          updated_at: '2026-05-17T01:05:00.000Z',
+        },
+      ]);
+      dataAccess.jobs.resetForManualRetry = vi.fn(async () => ({
+        attempts: 0,
+        created_at: '2026-05-17T01:00:00.000Z',
+        id: 'job-research-price-failed',
+        job_type: 'research_price',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        max_attempts: 3,
+        next_run_at: null,
+        status: 'queued',
+        updated_at: '2026-05-17T02:00:00.000Z',
+      }));
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...failedLatestPricingResearchRow,
+        error_code: 'research_price_suggested_price_invalid',
+        listing_id: 'LIST-001',
+      }));
+      const app = createApp(dataAccess);
+
+      const response = await request(app).post('/api/listings/LIST-001/retry-pricing').send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        alreadyQueued: false,
+        workflow: 'research_price',
+        job: expect.objectContaining({
+          id: 'job-research-price-failed',
+          status: 'queued',
+        }),
+        listing: expect.objectContaining({
+          listing_id: 'LIST-001',
+          latest_pricing_research: expect.objectContaining({
+            error_code: 'research_price_suggested_price_invalid',
+            status: 'failed',
+          }),
+        }),
+      });
+    });
+
+    it('returns 404 when retry-pricing listing does not exist', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => null);
+      const app = createApp(dataAccess);
+
+      const response = await request(app).post('/api/listings/LIST-404/retry-pricing').send({});
+
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({
+        error: 'not_found',
+      });
+    });
+
+    it('returns 422 when listing is not in pricing-retry review state', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => ({
+        ...listingRow,
+        status: 'approved_for_export',
+        sub_status: 'idle',
+      }));
+      dataAccess.jobs.listByListingId = vi.fn(async () => []);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => failedLatestPricingResearchRow);
+      const app = createApp(dataAccess);
+
+      const response = await request(app).post('/api/listings/LIST-001/retry-pricing').send({});
+
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'ineligible_listing',
+      });
+    });
+
+    it('returns 422 when there is no failed pricing evidence to retry', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => publishReadyNeedsReviewListingRow);
+      dataAccess.jobs.listByListingId = vi.fn(async () => []);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => null);
+      const app = createApp(dataAccess);
+
+      const response = await request(app).post('/api/listings/LIST-001/retry-pricing').send({});
+
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'no_failed_pricing_evidence',
+      });
+    });
+
+    it('returns 422 when latest pricing failure is not retryable for full repricing', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => publishReadyNeedsReviewListingRow);
+      dataAccess.jobs.listByListingId = vi.fn(async () => [
+        {
+          attempts: 1,
+          created_at: '2026-05-17T01:00:00.000Z',
+          id: 'job-research-price-failed',
+          job_type: 'research_price',
+          last_error: 'Provider failed',
+          last_error_at: '2026-05-17T01:05:00.000Z',
+          last_error_code: 'research_price_failed',
+          listing_id: 'LIST-001',
+          max_attempts: 3,
+          next_run_at: null,
+          status: 'failed',
+          updated_at: '2026-05-17T01:05:00.000Z',
+        },
+      ]);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...failedLatestPricingResearchRow,
+        error_code: 'research_price_failed',
+      }));
+      const app = createApp(dataAccess);
+
+      const response = await request(app).post('/api/listings/LIST-001/retry-pricing').send({});
+
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'non_retryable_pricing_failure',
+      });
+    });
+
+    it('returns 409 when an active research_price job already exists', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => publishReadyNeedsReviewListingRow);
+      dataAccess.jobs.listByListingId = vi.fn(async () => [
+        {
+          attempts: 1,
+          created_at: '2026-05-17T01:00:00.000Z',
+          id: 'job-research-price-active',
+          job_type: 'research_price',
+          last_error: null,
+          last_error_at: null,
+          last_error_code: null,
+          listing_id: 'LIST-001',
+          max_attempts: 3,
+          next_run_at: null,
+          status: 'running',
+          updated_at: '2026-05-17T01:05:00.000Z',
+        },
+      ]);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => ({
+        ...failedLatestPricingResearchRow,
+        error_code: 'research_price_suggested_price_invalid',
+      }));
+      const app = createApp(dataAccess);
+
+      const response = await request(app).post('/api/listings/LIST-001/retry-pricing').send({});
+
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({
+        error: 'duplicate_active_job',
       });
     });
   });

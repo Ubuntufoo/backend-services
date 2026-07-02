@@ -36,7 +36,7 @@ import {
 import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options.js';
 import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
-import { retryListingWorkflow } from '@/jobs/manual-retry.js';
+import { retryListingWorkflow, retryPricingReview, RetryPricingReviewError } from '@/jobs/manual-retry.js';
 import { retryPricingAnalysis, RetryPricingAnalysisError } from '@/jobs/retry-pricing-analysis.js';
 import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
 import { createProductionPricingAnalyst } from '@/pricing/index.js';
@@ -158,6 +158,27 @@ function sendPricingAnalysisRetryError(res: Response, error: unknown): void {
               : 500;
 
     sendJsonError(res, statusCode, error.code, error.message);
+    return;
+  }
+
+  sendRouteError(res, error);
+}
+
+function sendPricingReviewRetryError(res: Response, error: unknown): void {
+  if (error instanceof RetryPricingReviewError) {
+    const statusCode =
+      error.code === 'not_found'
+        ? 404
+        : error.code === 'duplicate_active_job'
+          ? 409
+          : 422;
+
+    sendJsonError(res, statusCode, error.code, error.message);
+    return;
+  }
+
+  if (error instanceof SidecarJobError && error.code === JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB) {
+    sendJsonError(res, 409, error.code, error.message);
     return;
   }
 
@@ -632,6 +653,30 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       );
     }
   );
+
+  router.post('/listings/:listingId/retry-pricing', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    return runRoute(
+      res,
+      async () => {
+        const dataAccess = getDataAccess();
+        const result = await retryPricingReview({
+          dataAccess,
+          listingId: params.listingId,
+        });
+
+        res.status(200).json({
+          ...result,
+          listing: await serializeListingWithLatestPricingAnalysis(dataAccess, result.listing),
+        });
+      },
+      sendPricingReviewRetryError
+    );
+  });
 
   router.post(
     '/listings/:listingId/pricing-analysis-warnings/dismiss',

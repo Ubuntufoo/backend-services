@@ -490,7 +490,7 @@ export function createManualRetryNotAllowedError(
 }
 
 export function createDuplicateActiveJobError(
-  workflow: 'generate_ai' | 'publish',
+  workflow: 'generate_ai' | 'publish' | 'research_price',
   listingId: string,
   jobId?: string
 ): SidecarJobError {
