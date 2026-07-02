@@ -9,6 +9,7 @@ import {
   buildApifyActorInput,
   SoldCompsPricingProviderError,
   buildPricingSearchQuery,
+  buildSoldCompsQuery,
   buildSoldCompsRequestParams,
   CORE_GRADED_PROVIDER_NEGATIVES,
   createSoldCompsPricingProvider,
@@ -485,32 +486,362 @@ describe('SoldComps pricing provider', () => {
     expect(result.soldComps).toHaveLength(3);
   });
 
-  it('accepts zero-result responses as success', async () => {
+  it('retries strict zero-result raw-card searches once with relaxed canonical query', async () => {
+    const input = {
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    };
+    const strictKeyword = buildPricingSearchQuery(input);
+    const relaxedKeyword = buildSoldCompsQuery(input);
+    const runRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          hasNextPage: false,
+          items: [],
+          keyword: strictKeyword,
+          page: 1,
+          totalItems: 0,
+        },
+        responseHeaders: {
+          'x-usage-limit': '2000',
+          'x-usage-used': '11',
+        },
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        body: {
+          ...soldCompsFixture,
+          keyword: relaxedKeyword,
+        },
+        responseHeaders: {
+          'x-usage-limit': '2000',
+          'x-usage-used': '12',
+        },
+        status: 200,
+      });
     const provider = createSoldCompsPricingProvider(
       {
         apiKey: 'sc_secret-token',
       },
       {
-        runRequest: async () => ({
-          body: {
-            hasNextPage: false,
-            items: [],
-            keyword: soldCompsFixture.keyword,
-            page: 1,
-            totalItems: 0,
+        now: () => new Date('2026-06-15T12:00:00.000Z'),
+        runRequest,
+      }
+    );
+
+    const result = await provider.fetchSoldComps(input);
+
+    expect(runRequest).toHaveBeenCalledTimes(2);
+    expect(runRequest.mock.calls[0]?.[0]).toMatchObject({ query: strictKeyword });
+    expect(runRequest.mock.calls[1]?.[0]).toMatchObject({ query: relaxedKeyword });
+    expect(result.query).toBe(relaxedKeyword);
+    expect(result.soldComps).toHaveLength(3);
+    expect(result.rawResult).toMatchObject({
+      input: {
+        query: relaxedKeyword,
+      },
+      queryFallback: {
+        effectiveQuery: relaxedKeyword,
+        fallbackAttempt: {
+          input: {
+            query: relaxedKeyword,
           },
-          status: 200,
-        }),
+          output: {
+            itemCount: 3,
+          },
+          query: relaxedKeyword,
+        },
+        fallbackAttempted: true,
+        fallbackSucceeded: true,
+        strictAttempt: {
+          input: {
+            query: strictKeyword,
+          },
+          output: {
+            itemCount: 0,
+          },
+          query: strictKeyword,
+        },
+      },
+      usage: {
+        used: 12,
+      },
+    });
+    expect(result.soldCompsUsage).toEqual({
+      limit: 2000,
+      source: 'headers',
+      updatedAt: '2026-06-15T12:00:00.000Z',
+      used: 12,
+    });
+  });
+
+  it('records both zero-result attempts when relaxed fallback also returns zero results', async () => {
+    const input = {
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    };
+    const strictKeyword = buildPricingSearchQuery(input);
+    const relaxedKeyword = buildSoldCompsQuery(input);
+    const runRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          hasNextPage: false,
+          items: [],
+          keyword: strictKeyword,
+          page: 1,
+          totalItems: 0,
+        },
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        body: {
+          hasNextPage: false,
+          items: [],
+          keyword: relaxedKeyword,
+          page: 1,
+          totalItems: 0,
+        },
+        status: 200,
+      });
+    const provider = createSoldCompsPricingProvider(
+      {
+        apiKey: 'sc_secret-token',
+      },
+      {
+        runRequest,
+      }
+    );
+
+    const result = await provider.fetchSoldComps(input);
+
+    expect(runRequest).toHaveBeenCalledTimes(2);
+    expect(result.query).toBe(relaxedKeyword);
+    expect(result.soldComps).toEqual([]);
+    expect(result.rawResult).toMatchObject({
+      input: {
+        query: relaxedKeyword,
+      },
+      queryFallback: {
+        effectiveQuery: relaxedKeyword,
+        fallbackAttempt: {
+          input: {
+            query: relaxedKeyword,
+          },
+          output: {
+            itemCount: 0,
+          },
+        },
+        fallbackAttempted: true,
+        fallbackSucceeded: false,
+        strictAttempt: {
+          input: {
+            query: strictKeyword,
+          },
+          output: {
+            itemCount: 0,
+          },
+        },
+      },
+    });
+  });
+
+  it('throws fallback provider errors after strict zero results and attaches query-fallback diagnostics', async () => {
+    const input = {
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    };
+    const strictKeyword = buildPricingSearchQuery(input);
+    const relaxedKeyword = buildSoldCompsQuery(input);
+    const runRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        body: {
+          hasNextPage: false,
+          items: [],
+          keyword: strictKeyword,
+          page: 1,
+          totalItems: 0,
+        },
+        status: 200,
+      })
+      .mockRejectedValueOnce(
+        new SoldCompsPricingProviderError(
+          'soldcomps_rate_limited',
+          'rate_limit',
+          'SoldComps request failed with status 429: quota exceeded',
+          relaxedKeyword,
+          {
+            rawResult: {
+              status: 429,
+            },
+            statusCode: 429,
+          }
+        )
+      );
+    const provider = createSoldCompsPricingProvider(
+      {
+        apiKey: 'sc_secret-token',
+      },
+      {
+        runRequest,
+      }
+    );
+
+    await expect(provider.fetchSoldComps(input)).rejects.toSatisfy((error) => {
+      expect(error).toBeInstanceOf(SoldCompsPricingProviderError);
+      expect(error).toMatchObject({
+        category: 'rate_limit',
+        code: 'soldcomps_rate_limited',
+        query: relaxedKeyword,
+        rawResult: {
+          queryFallback: {
+            fallbackAttempted: true,
+            fallbackFailure: {
+              category: 'rate_limit',
+              code: 'soldcomps_rate_limited',
+              query: relaxedKeyword,
+              status: 429,
+              statusCode: 429,
+            },
+            fallbackSucceeded: false,
+            strictAttempt: {
+              input: {
+                query: strictKeyword,
+              },
+              output: {
+                itemCount: 0,
+              },
+            },
+          },
+        },
+        statusCode: 429,
+      });
+      return true;
+    });
+    expect(runRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts zero-result responses as success', async () => {
+    const runRequest = vi.fn().mockResolvedValue({
+      body: {
+        hasNextPage: false,
+        items: [],
+        keyword: soldCompsFixture.keyword,
+        page: 1,
+        totalItems: 0,
+      },
+      status: 200,
+    });
+    const provider = createSoldCompsPricingProvider(
+      {
+        apiKey: 'sc_secret-token',
+      },
+      {
+        runRequest,
       }
     );
 
     const result = await provider.fetchSoldComps(baseInput);
 
+    expect(runRequest).toHaveBeenCalledTimes(1);
     expect(result.soldComps).toEqual([]);
     expect(result.rawResult).toMatchObject({
       output: {
         hasNextPage: false,
         itemCount: 0,
+      },
+      queryFallback: {
+        effectiveQuery: buildPricingSearchQuery(baseInput),
+        fallbackAttempted: false,
+        fallbackSucceeded: false,
+        strictAttempt: {
+          input: {
+            query: buildPricingSearchQuery(baseInput),
+          },
+          output: {
+            itemCount: 0,
+          },
+        },
+      },
+    });
+  });
+
+  it('does not retry strict searches that already returned provider results', async () => {
+    const input = {
+      ...baseInput,
+      conditionId: '4000',
+      title: 'Darryl Strawberry 1997 Fleer #179',
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+    };
+    const strictKeyword = buildPricingSearchQuery(input);
+    const runRequest = vi.fn().mockResolvedValue({
+      body: {
+        ...soldCompsFixture,
+        keyword: strictKeyword,
+      },
+      status: 200,
+    });
+    const provider = createSoldCompsPricingProvider(
+      {
+        apiKey: 'sc_secret-token',
+      },
+      {
+        runRequest,
+      }
+    );
+
+    const result = await provider.fetchSoldComps(input);
+
+    expect(runRequest).toHaveBeenCalledTimes(1);
+    expect(result.query).toBe(strictKeyword);
+    expect(result.rawResult).toMatchObject({
+      input: {
+        query: strictKeyword,
+      },
+      queryFallback: {
+        effectiveQuery: strictKeyword,
+        fallbackAttempted: false,
+        fallbackSucceeded: false,
+        strictAttempt: {
+          input: {
+            query: strictKeyword,
+          },
+          output: {
+            itemCount: 3,
+          },
+        },
       },
     });
   });

@@ -11,6 +11,8 @@ import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import { priceListingNow } from '@/jobs/research-price-job.js';
 import {
   ApifyPricingProviderError,
+  buildPricingSearchQuery,
+  buildSoldCompsQuery,
   createProductionPricingAnalyst,
   SoldCompsPricingProviderError,
 } from '@/pricing/index.js';
@@ -486,6 +488,126 @@ describe('priceListingNow', () => {
     );
   });
 
+  it('persists effective relaxed soldcomps query plus strict and fallback diagnostics on success', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+        pricingModifierOptions: {
+          excludeAutographs: true,
+          excludeGraded: true,
+          excludeVariants: false,
+        },
+      },
+      title: 'Darryl Strawberry 1997 Fleer #179',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const providerInput = {
+      categoryId: listing.category_id,
+      conditionId: listing.condition_id,
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      listingId: listing.listing_id,
+      listingType: 'single' as const,
+      pricingModifierOptions: {
+        excludeAutographs: true,
+        excludeGraded: true,
+        excludeVariants: false,
+      },
+      title: listing.title,
+    };
+    const strictQuery = buildPricingSearchQuery(providerInput);
+    const relaxedQuery = buildSoldCompsQuery(providerInput);
+
+    await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'soldcomps',
+            query: relaxedQuery,
+            rawResult: {
+              fetchedAt: '2026-06-12T10:05:00.000Z',
+              input: {
+                query: relaxedQuery,
+              },
+              output: {
+                itemCount: 3,
+              },
+              queryFallback: {
+                effectiveQuery: relaxedQuery,
+                fallbackAttempt: {
+                  input: {
+                    query: relaxedQuery,
+                  },
+                  output: {
+                    itemCount: 3,
+                  },
+                },
+                fallbackAttempted: true,
+                fallbackSucceeded: true,
+                strictAttempt: {
+                  input: {
+                    query: strictQuery,
+                  },
+                  output: {
+                    itemCount: 0,
+                  },
+                },
+              },
+            },
+            soldComps: [
+              createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179'),
+              createVictorComp(22, '2026-05-31T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179 EX'),
+              createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179 NM'),
+            ],
+            soldCompsUsage: {
+              limit: 50,
+              source: 'headers',
+              updatedAt: '2026-06-12T10:05:00.000Z',
+              used: 10,
+            },
+          }),
+          name: 'soldcomps',
+        }) as never,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: relaxedQuery,
+        raw_result_json: expect.objectContaining({
+          input: expect.objectContaining({
+            query: relaxedQuery,
+          }),
+          queryFallback: expect.objectContaining({
+            effectiveQuery: relaxedQuery,
+            fallbackAttempted: true,
+            fallbackSucceeded: true,
+            strictAttempt: expect.objectContaining({
+              input: expect.objectContaining({
+                query: strictQuery,
+              }),
+              output: expect.objectContaining({
+                itemCount: 0,
+              }),
+            }),
+          }),
+        }),
+      })
+    );
+  });
+
   it.each([
     ['zero', 0],
     ['negative', -1],
@@ -535,6 +657,239 @@ describe('priceListingNow', () => {
       })
     );
   });
+
+  it('preserves soldcomps query-fallback diagnostics in failed research persistence', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      title: 'Darryl Strawberry 1997 Fleer #179',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const providerInput = {
+      categoryId: listing.category_id,
+      conditionId: listing.condition_id,
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      listingId: listing.listing_id,
+      listingType: 'single' as const,
+      pricingModifierOptions: {
+        excludeAutographs: true,
+        excludeGraded: true,
+        excludeVariants: false,
+      },
+      title: listing.title,
+    };
+    const strictQuery = buildPricingSearchQuery(providerInput);
+    const relaxedQuery = buildSoldCompsQuery(providerInput);
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        computeStats: vi.fn(() => ({
+          currency: 'USD',
+          deterministicSuggestedPrice: null,
+          highSoldPrice: null,
+          ignored: [],
+          lowSoldPrice: null,
+          medianSoldPrice: null,
+          soldCount: 0,
+        })),
+        createPricingProvider: () =>
+          ({
+            fetchSoldComps: vi.fn().mockResolvedValue({
+              fetchedAt: '2026-06-12T10:05:00.000Z',
+              provider: 'soldcomps',
+              query: relaxedQuery,
+              rawResult: {
+                input: {
+                  query: relaxedQuery,
+                },
+                output: {
+                  itemCount: 0,
+                },
+                queryFallback: {
+                  effectiveQuery: relaxedQuery,
+                  fallbackAttempt: {
+                    input: {
+                      query: relaxedQuery,
+                    },
+                    output: {
+                      itemCount: 0,
+                    },
+                  },
+                  fallbackAttempted: true,
+                  fallbackSucceeded: false,
+                  strictAttempt: {
+                    input: {
+                      query: strictQuery,
+                    },
+                    output: {
+                      itemCount: 0,
+                    },
+                  },
+                },
+              },
+              soldComps: [],
+            }),
+            name: 'soldcomps',
+          }) as never,
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+    });
+
+    expect(spies.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+        raw_result_json: expect.objectContaining({
+          providerResult: expect.objectContaining({
+            queryFallback: expect.objectContaining({
+              effectiveQuery: relaxedQuery,
+              fallbackAttempted: true,
+              fallbackSucceeded: false,
+              strictAttempt: expect.objectContaining({
+                input: expect.objectContaining({
+                  query: strictQuery,
+                }),
+              }),
+            }),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('persists strict-zero soldcomps fallback diagnostics on provider routing when apify rescue succeeds', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      title: 'Darryl Strawberry 1997 Fleer #179',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const providerInput = {
+      categoryId: listing.category_id,
+      conditionId: listing.condition_id,
+      itemSpecifics: {
+        'Card Number': '179',
+        Manufacturer: 'Fleer',
+        Player: 'Darryl Strawberry',
+        Set: 'Fleer',
+        Year: '1997',
+      },
+      listingId: listing.listing_id,
+      listingType: 'single' as const,
+      pricingModifierOptions: {
+        excludeAutographs: true,
+        excludeGraded: true,
+        excludeVariants: false,
+      },
+      title: listing.title,
+    };
+    const strictQuery = buildPricingSearchQuery(providerInput);
+    const relaxedQuery = buildSoldCompsQuery(providerInput);
+
+    const soldCompsFetch = vi.fn().mockRejectedValue(
+      new SoldCompsPricingProviderError(
+        'soldcomps_rate_limited',
+        'rate_limit',
+        'SoldComps request failed with status 429: quota exceeded',
+        relaxedQuery,
+        {
+          rawResult: {
+            queryFallback: {
+              fallbackAttempted: true,
+              fallbackFailure: {
+                category: 'rate_limit',
+                code: 'soldcomps_rate_limited',
+                query: relaxedQuery,
+                statusCode: 429,
+              },
+              fallbackSucceeded: false,
+              strictAttempt: {
+                input: {
+                  query: strictQuery,
+                },
+                output: {
+                  itemCount: 0,
+                },
+              },
+            },
+          },
+          statusCode: 429,
+        }
+      )
+    );
+    const apifyFetch = vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: strictQuery,
+      rawResult: { actorId: 'actor-123' },
+      soldComps: [createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179')],
+    });
+    const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+      mode === 'soldcomps'
+        ? ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+        : ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
+    );
+
+    const result = await priceListingNow(listing.listing_id, {
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      resolvePricingProvider,
+    });
+
+    expect(result).toMatchObject({
+      provider: 'apify',
+      selectedProviderMode: 'soldcomps',
+    });
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        raw_result_json: expect.objectContaining({
+          providerRouting: expect.objectContaining({
+            actualProvider: 'apify',
+            fallbackAttempted: true,
+            fallbackProvider: 'apify',
+            fallbackSucceeded: true,
+            firstProviderFailure: expect.objectContaining({
+              provider: 'soldcomps',
+              providerFailureCategory: 'rate_limit',
+              providerFailureCode: 'soldcomps_rate_limited',
+              query: relaxedQuery,
+              rawResult: expect.objectContaining({
+                queryFallback: expect.objectContaining({
+	                  fallbackAttempted: true,
+	                  fallbackSucceeded: false,
+	                  strictAttempt: expect.objectContaining({
+	                    input: expect.objectContaining({
+	                      query: strictQuery,
+	                    }),
+	                  }),
+	                }),
+	              }),
+	            }),
+	          }),
+	        }),
+	      })
+	    );
+	  });
 
   it('allows apify pricing mode without preflight rejection', async () => {
     const listing = createListing();

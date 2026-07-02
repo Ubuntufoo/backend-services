@@ -119,6 +119,7 @@ interface ProviderRoutingFailureDetails {
   providerFailureCategory?: string;
   providerFailureCode?: string;
   query?: string;
+  rawResult?: Json;
   workflowSafe?: boolean;
 }
 
@@ -426,6 +427,7 @@ function getProviderFailureDetails(error: unknown): {
   providerFailureMessage: string;
   provider?: string;
   query?: string;
+  rawResult?: Json;
   workflowSafe?: boolean;
 } {
   const providerFailureMessage = asCompactErrorMessage(error);
@@ -445,6 +447,7 @@ function getProviderFailureDetails(error: unknown): {
         asNonEmptyString(error.message) ??
         providerFailureMessage
     ),
+    rawResult: isRecord(error.rawResult) ? asJson(error.rawResult) : undefined,
     query: asNonEmptyString(error.query)
       ? redactSensitiveText(asNonEmptyString(error.query)!)
       : undefined,
@@ -477,6 +480,7 @@ function buildResearchProviderFailureJobError(
         pricing_provider_mode: selectedProviderMode,
         provider_failure_category: failure.providerFailureCategory,
         provider_failure_code: failure.providerFailureCode,
+        provider_raw_result: failure.rawResult,
         query: failure.query,
         workflow_safe: failure.workflowSafe ?? true,
       }).filter(([, value]) => value !== undefined)
@@ -498,6 +502,7 @@ function buildProviderRoutingFailureDetails(
       : {}),
     ...(failure.providerFailureCode ? { providerFailureCode: failure.providerFailureCode } : {}),
     ...(failure.query ? { query: failure.query } : {}),
+    ...(failure.rawResult ? { rawResult: failure.rawResult } : {}),
     ...(failure.workflowSafe !== undefined ? { workflowSafe: failure.workflowSafe } : {}),
   };
 }
@@ -1176,6 +1181,9 @@ async function markResearchFailedSafely(
         message: asCompactErrorMessage(error.message),
         provider: asNonEmptyString(error.context.provider),
         query: asNonEmptyString(error.context.query),
+        rawResult: isRecord(error.context.provider_raw_result)
+          ? asJson(error.context.provider_raw_result)
+          : getProviderFailureDetails(error).rawResult,
         workflowSafe:
           typeof error.context.workflow_safe === 'boolean' ? error.context.workflow_safe : true,
       }).filter(([, value]) => value !== undefined)

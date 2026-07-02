@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { SOLDCOMPS_API_BASE_URL, SOLDCOMPS_SOLD_COMP_REQUEST_COUNT } from './soldcomps-config.js';
+import { buildSoldCompsQuery } from './sold-comps-query.js';
 import { buildSoldCompsKeyword } from './soldcomps-keyword.js';
 import type {
   PricingProvider,
@@ -118,6 +119,7 @@ export class SoldCompsPricingProviderError extends Error {
   readonly code: string;
   readonly provider = SOLDCOMPS_PROVIDER_NAME;
   readonly query: string;
+  readonly rawResult?: Record<string, unknown>;
   readonly statusCode?: number;
   readonly workflowSafe = true;
 
@@ -126,13 +128,14 @@ export class SoldCompsPricingProviderError extends Error {
     category: SoldCompsProviderFailureCategory,
     message: string,
     query: string,
-    options?: ErrorOptions & { statusCode?: number }
+    options?: ErrorOptions & { rawResult?: Record<string, unknown>; statusCode?: number }
   ) {
     super(compactSoldCompsErrorMessage(message));
     this.name = 'SoldCompsPricingProviderError';
     this.category = category;
     this.code = code;
     this.query = redactSoldCompsSensitiveText(query);
+    this.rawResult = options?.rawResult;
     this.statusCode = options?.statusCode;
     if (options?.cause) {
       this.cause = options.cause;
@@ -148,11 +151,14 @@ export interface SoldCompsRequestParams {
   sortOrder: 'endedRecently';
 }
 
-export function buildSoldCompsRequestParams(input: PricingProviderInput): SoldCompsRequestParams {
+export function buildSoldCompsRequestParams(
+  input: PricingProviderInput,
+  keyword = buildSoldCompsKeyword(input)
+): SoldCompsRequestParams {
   return {
     count: input.requestedCompCount ?? SOLDCOMPS_SOLD_COMP_REQUEST_COUNT,
     ebaySite: 'ebay.com',
-    keyword: buildSoldCompsKeyword(input),
+    keyword,
     page: 1,
     sortOrder: 'endedRecently',
   };
@@ -238,41 +244,172 @@ export function createSoldCompsPricingProvider(
         );
       }
 
-      const request = buildSoldCompsRequestParams(input);
-      const fetchedAt = now().toISOString();
+      const strictRequest = buildSoldCompsRequestParams(input);
+      const relaxedQuery = buildSoldCompsQuery(input);
+      const strictResult = await executeSoldCompsRequest({
+        apiBaseUrl: config.apiBaseUrl ?? SOLDCOMPS_API_BASE_URL,
+        apiKey: config.apiKey,
+        now,
+        request: strictRequest,
+        runRequest,
+        timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
+      });
+
+      if (strictResult.soldComps.length > 0 || strictRequest.keyword === relaxedQuery) {
+        return withQueryFallbackDiagnostics({
+          effectiveResult: strictResult,
+          strictResult,
+        });
+      }
+
+      const fallbackRequest = buildSoldCompsRequestParams(input, relaxedQuery);
 
       try {
-        const raw = await runRequest({
+        const fallbackResult = await executeSoldCompsRequest({
           apiBaseUrl: config.apiBaseUrl ?? SOLDCOMPS_API_BASE_URL,
           apiKey: config.apiKey,
-          count: request.count,
-          page: request.page,
-          query: request.keyword,
+          now,
+          request: fallbackRequest,
+          runRequest,
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
         });
 
-        return parseSoldCompsResponse(raw.body, {
-          fetchedAt,
-          query: request.keyword,
-          request,
-          responseHeaders: raw.responseHeaders,
-          status: raw.status,
+        return withQueryFallbackDiagnostics({
+          effectiveResult: fallbackResult,
+          fallbackResult,
+          strictResult,
         });
       } catch (error) {
-        if (error instanceof SoldCompsPricingProviderError) {
+        if (!(error instanceof SoldCompsPricingProviderError)) {
           throw error;
         }
 
-        throw new SoldCompsPricingProviderError(
-          'soldcomps_provider_failure',
-          'provider_failure',
-          error instanceof Error ? error.message : String(error),
-          request.keyword,
-          { cause: error instanceof Error ? error : undefined }
-        );
+        throw withFallbackFailureDiagnostics(error, {
+          strictResult,
+        });
       }
     },
   };
+}
+
+async function executeSoldCompsRequest(input: {
+  apiBaseUrl: string;
+  apiKey: string;
+  now: () => Date;
+  request: SoldCompsRequestParams;
+  runRequest: (input: SoldCompsFetchInput) => Promise<SoldCompsFetchResult>;
+  timeoutSeconds: number;
+}): Promise<PricingProviderResult> {
+  const fetchedAt = input.now().toISOString();
+
+  try {
+    const raw = await input.runRequest({
+      apiBaseUrl: input.apiBaseUrl,
+      apiKey: input.apiKey,
+      count: input.request.count,
+      page: input.request.page,
+      query: input.request.keyword,
+      timeoutSeconds: input.timeoutSeconds,
+    });
+
+    return parseSoldCompsResponse(raw.body, {
+      fetchedAt,
+      query: input.request.keyword,
+      request: input.request,
+      responseHeaders: raw.responseHeaders,
+      status: raw.status,
+    });
+  } catch (error) {
+    if (error instanceof SoldCompsPricingProviderError) {
+      throw error;
+    }
+
+    throw new SoldCompsPricingProviderError(
+      'soldcomps_provider_failure',
+      'provider_failure',
+      error instanceof Error ? error.message : String(error),
+      input.request.keyword,
+      { cause: error instanceof Error ? error : undefined }
+    );
+  }
+}
+
+function withQueryFallbackDiagnostics(input: {
+  effectiveResult: PricingProviderResult;
+  fallbackError?: SoldCompsPricingProviderError;
+  fallbackResult?: PricingProviderResult;
+  strictResult: PricingProviderResult;
+}): PricingProviderResult {
+  return {
+    ...input.effectiveResult,
+    rawResult: {
+      ...toObjectRecord(input.effectiveResult.rawResult),
+      queryFallback: buildQueryFallbackDiagnostics({
+        effectiveQuery: input.effectiveResult.query,
+        fallbackError: input.fallbackError,
+        fallbackResult: input.fallbackResult,
+        strictResult: input.strictResult,
+      }),
+    },
+  };
+}
+
+function withFallbackFailureDiagnostics(
+  error: SoldCompsPricingProviderError,
+  input: {
+    strictResult: PricingProviderResult;
+  }
+): SoldCompsPricingProviderError {
+  return new SoldCompsPricingProviderError(error.code, error.category, error.message, error.query, {
+    cause: error,
+    rawResult: {
+      queryFallback: buildQueryFallbackDiagnostics({
+        fallbackError: error,
+        strictResult: input.strictResult,
+      }),
+    },
+    statusCode: error.statusCode,
+  });
+}
+
+function buildQueryFallbackDiagnostics(input: {
+  effectiveQuery?: string;
+  fallbackError?: SoldCompsPricingProviderError;
+  fallbackResult?: PricingProviderResult;
+  strictResult: PricingProviderResult;
+}): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries({
+      effectiveQuery: input.effectiveQuery,
+      fallbackAttempt: input.fallbackResult ? toAttemptDiagnostics(input.fallbackResult) : undefined,
+      fallbackAttempted: input.fallbackResult !== undefined || input.fallbackError !== undefined,
+      fallbackFailure: input.fallbackError
+        ? {
+            ...(input.fallbackError.rawResult ? input.fallbackError.rawResult : {}),
+            category: input.fallbackError.category,
+            code: input.fallbackError.code,
+            message: input.fallbackError.message,
+            query: input.fallbackError.query,
+            statusCode: input.fallbackError.statusCode,
+          }
+        : undefined,
+      fallbackSucceeded: input.fallbackResult !== undefined && input.fallbackResult.soldComps.length > 0,
+      strictAttempt: toAttemptDiagnostics(input.strictResult),
+    }).filter(([, value]) => value !== undefined)
+  );
+}
+
+function toAttemptDiagnostics(result: PricingProviderResult): Record<string, unknown> {
+  return {
+    ...toObjectRecord(result.rawResult),
+    query: result.query,
+  };
+}
+
+function toObjectRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? { ...value }
+    : { value };
 }
 
 async function defaultRunRequest(
