@@ -3,6 +3,15 @@ import { createLogger } from '@/utils/logger.js';
 
 import { APIFY_DAYS_TO_SCRAPE, APIFY_SOLD_COMP_REQUEST_COUNT } from './apify-config.js';
 import { buildPricingSearchQuery } from './pricing-search-query.js';
+import {
+  compactRedactedMessage,
+  extractZodErrorMessage,
+  isNetworkLikeError,
+  readResponseText,
+  redactPricingSensitiveText,
+  sanitizeRedactedUnknown,
+  truncateRedactedText,
+} from './provider-shared.js';
 import type { PricingProvider, PricingProviderInput, PricingProviderResult, RawSoldComp } from './types.js';
 
 const APIFY_PROVIDER_NAME = 'apify';
@@ -165,7 +174,7 @@ export class ApifyPricingProviderError extends Error {
     query: string,
     options?: ErrorOptions & { statusCode?: number }
   ) {
-    super(compactApifyErrorMessage(message), options);
+    super(compactRedactedMessage(message), options);
     this.name = 'ApifyPricingProviderError';
     this.category = category;
     this.code = code;
@@ -173,6 +182,8 @@ export class ApifyPricingProviderError extends Error {
     this.statusCode = options?.statusCode;
   }
 }
+
+export const redactSensitiveText = redactPricingSensitiveText;
 
 export function buildApifyActorInput(input: PricingProviderInput): ApifyActorInput {
   return {
@@ -207,7 +218,7 @@ export function parseApifyActorOutput(
     throw new ApifyPricingProviderError(
       'apify_output_invalid',
       'malformed_output',
-      `Apify actor output malformed: ${extractZodErrorMessage(error)}`,
+      `Apify actor output malformed: ${extractZodErrorMessage(error, 'invalid actor output')}`,
       getQueryFromActorOutput(raw),
       { cause: error instanceof Error ? error : undefined }
     );
@@ -333,13 +344,13 @@ async function defaultRunActor(
     });
 
     if (!response.ok) {
-      const responseText = await readResponseText(response);
+      const responseText = await readResponseText(response, 'Unable to read Apify response body.');
       const { category, code } = classifyApifyHttpFailure(response.status);
 
       throw new ApifyPricingProviderError(
         code,
         category,
-        `Apify Actor request failed with status ${response.status}: ${truncateText(responseText)}`,
+        `Apify Actor request failed with status ${response.status}: ${truncateRedactedText(responseText)}`,
         input.query,
         {
           statusCode: response.status,
@@ -429,39 +440,11 @@ function sanitizeActorInput(input: ApifyActorInput): Record<string, unknown> {
 
 function sanitizeDiagnosticContext(input: ApifyActorDiagnosticContext): Record<string, unknown> {
   return {
-    ...(input.facets ? { facets: sanitizeUnknown(input.facets) } : {}),
-    ...(input.itemSpecifics ? { itemSpecifics: sanitizeUnknown(input.itemSpecifics) } : {}),
+    ...(input.facets ? { facets: sanitizeRedactedUnknown(input.facets) } : {}),
+    ...(input.itemSpecifics ? { itemSpecifics: sanitizeRedactedUnknown(input.itemSpecifics) } : {}),
     listingId: redactSensitiveText(input.listingId),
     title: redactSensitiveText(input.title),
   };
-}
-
-function sanitizeUnknown(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return redactSensitiveText(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeUnknown(entry));
-  }
-
-  if (typeof value === 'object' && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entryValue]) => [key, sanitizeUnknown(entryValue)])
-    );
-  }
-
-  return value;
-}
-
-export function redactSensitiveText(value: string): string {
-  return value
-    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
-    .replace(/\b(?:Bearer|bearer)\s+[A-Za-z0-9._~+/=-]+\b/g, 'Bearer [redacted-token]')
-    .replace(
-      /\b(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token|key|apikey|apiKey)\s*[:=]\s*([^\s,&]+)/gi,
-      (_match, secret: string) => `[redacted-secret:${maskSecret(secret)}]`
-    );
 }
 
 function toRawSoldComp(
@@ -595,48 +578,6 @@ function getSetFacet(itemSpecifics: PricingProviderInput['itemSpecifics']): stri
   return getFirstSpecificValue(itemSpecifics, SET_ITEM_SPECIFIC_KEYS);
 }
 
-async function readResponseText(response: { text(): Promise<string> }): Promise<string> {
-  try {
-    return await response.text();
-  } catch {
-    return 'Unable to read Apify response body.';
-  }
-}
-
-function truncateText(value: string, maxLength = 240): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-
-  if (normalized.length <= maxLength) {
-    return redactSensitiveText(normalized);
-  }
-
-  return `${redactSensitiveText(normalized.slice(0, maxLength - 3))}...`;
-}
-
-function compactApifyErrorMessage(value: string): string {
-  const normalized = redactSensitiveText(value).replace(/\s+/g, ' ').trim();
-
-  if (normalized.length <= 240) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, 237)}...`;
-}
-
-function extractZodErrorMessage(error: unknown): string {
-  if (!(error instanceof z.ZodError)) {
-    return error instanceof Error ? error.message : 'invalid actor output';
-  }
-
-  const issue = error.issues[0];
-  if (!issue) {
-    return 'invalid actor output';
-  }
-
-  const path = issue.path.length > 0 ? issue.path.join('.') : 'payload';
-  return `${path}: ${issue.message}`;
-}
-
 function getQueryFromActorOutput(raw: unknown): string {
   if (!raw || Array.isArray(raw) || typeof raw !== 'object') {
     return '';
@@ -666,25 +607,4 @@ function classifyApifyHttpFailure(
   }
 
   return { category: 'provider_failure', code: `apify_http_${status}` };
-}
-
-function isNetworkLikeError(error: Error): boolean {
-  const message = error.message.toLowerCase();
-  return (
-    message.includes('network') ||
-    message.includes('socket') ||
-    message.includes('fetch failed') ||
-    message.includes('econnreset') ||
-    message.includes('enotfound') ||
-    message.includes('timed out') ||
-    message.includes('timeout')
-  );
-}
-
-function maskSecret(value: string): string {
-  if (value.length <= 8) {
-    return '***';
-  }
-
-  return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }

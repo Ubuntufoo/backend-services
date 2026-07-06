@@ -2,6 +2,14 @@ import { z } from 'zod';
 
 import { SOLDCOMPS_API_BASE_URL, SOLDCOMPS_SOLD_COMP_REQUEST_COUNT } from './soldcomps-config.js';
 import { buildSoldCompsQuery } from './sold-comps-query.js';
+import {
+  compactRedactedMessage,
+  extractZodErrorMessage,
+  isNetworkLikeError,
+  readResponseText,
+  redactPricingSensitiveText,
+  truncateRedactedText,
+} from './provider-shared.js';
 import { buildSoldCompsKeyword } from './soldcomps-keyword.js';
 import type {
   PricingProvider,
@@ -130,7 +138,7 @@ export class SoldCompsPricingProviderError extends Error {
     query: string,
     options?: ErrorOptions & { rawResult?: Record<string, unknown>; statusCode?: number }
   ) {
-    super(compactSoldCompsErrorMessage(message));
+    super(compactRedactedMessage(message));
     this.name = 'SoldCompsPricingProviderError';
     this.category = category;
     this.code = code;
@@ -142,6 +150,8 @@ export class SoldCompsPricingProviderError extends Error {
     }
   }
 }
+
+export const redactSoldCompsSensitiveText = redactPricingSensitiveText;
 
 export interface SoldCompsRequestParams {
   count: number;
@@ -182,7 +192,7 @@ export function parseSoldCompsResponse(
     throw new SoldCompsPricingProviderError(
       'soldcomps_output_invalid',
       'malformed_output',
-      `SoldComps output malformed: ${extractZodErrorMessage(error)}`,
+      `SoldComps output malformed: ${extractZodErrorMessage(error, 'invalid provider output')}`,
       meta.query ?? getQueryFromResponse(raw),
       { cause: error instanceof Error ? error : undefined, statusCode: meta.status }
     );
@@ -437,7 +447,7 @@ async function defaultRunRequest(
     });
 
     if (!response.ok) {
-      const responseText = await readResponseText(response);
+      const responseText = await readResponseText(response, 'Unable to read SoldComps response body.');
       const parsedError = parseSoldCompsError(responseText);
       const { category, code } = classifySoldCompsHttpFailure(response.status);
       const detail = parsedError?.detail ? ` ${parsedError.detail}` : '';
@@ -445,7 +455,7 @@ async function defaultRunRequest(
       throw new SoldCompsPricingProviderError(
         code,
         category,
-        `SoldComps request failed with status ${response.status}: ${parsedError?.error ?? truncateText(responseText)}${detail}`,
+        `SoldComps request failed with status ${response.status}: ${parsedError?.error ?? truncateRedactedText(responseText)}${detail}`,
         input.query,
         {
           statusCode: response.status,
@@ -642,50 +652,6 @@ export function parseSoldCompsUsageHeaders(
   };
 }
 
-export function redactSoldCompsSensitiveText(value: string): string {
-  return value
-    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
-    .replace(/\b(?:Bearer|bearer)\s+[A-Za-z0-9._~+/=-]+\b/g, 'Bearer [redacted-token]')
-    .replace(
-      /\b(?:token|api[_-]?key|access[_-]?token|refresh[_-]?token|key|apikey|apiKey)\s*[:=]\s*([^\s,&]+)/gi,
-      (_match, secret: string) => `[redacted-secret:${maskSecret(secret)}]`
-    );
-}
-
-function truncateText(value: string, maxLength = 240): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-
-  if (normalized.length <= maxLength) {
-    return redactSoldCompsSensitiveText(normalized);
-  }
-
-  return `${redactSoldCompsSensitiveText(normalized.slice(0, maxLength - 3))}...`;
-}
-
-function compactSoldCompsErrorMessage(value: string): string {
-  const normalized = redactSoldCompsSensitiveText(value).replace(/\s+/g, ' ').trim();
-
-  if (normalized.length <= 240) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, 237)}...`;
-}
-
-function extractZodErrorMessage(error: unknown): string {
-  if (!(error instanceof z.ZodError)) {
-    return error instanceof Error ? error.message : 'invalid provider output';
-  }
-
-  const issue = error.issues[0];
-  if (!issue) {
-    return 'invalid provider output';
-  }
-
-  const path = issue.path.length > 0 ? issue.path.join('.') : 'payload';
-  return `${path}: ${issue.message}`;
-}
-
 function getQueryFromResponse(raw: unknown): string {
   if (!raw || Array.isArray(raw) || typeof raw !== 'object') {
     return '';
@@ -715,33 +681,4 @@ function classifySoldCompsHttpFailure(
   }
 
   return { category: 'provider_failure', code: `soldcomps_http_${status}` };
-}
-
-function isNetworkLikeError(error: Error): boolean {
-  const message = error.message.toLowerCase();
-  return (
-    message.includes('network') ||
-    message.includes('socket') ||
-    message.includes('fetch failed') ||
-    message.includes('econnreset') ||
-    message.includes('enotfound') ||
-    message.includes('timed out') ||
-    message.includes('timeout')
-  );
-}
-
-async function readResponseText(response: { text(): Promise<string> }): Promise<string> {
-  try {
-    return await response.text();
-  } catch {
-    return 'Unable to read SoldComps response body.';
-  }
-}
-
-function maskSecret(value: string): string {
-  if (value.length <= 8) {
-    return '***';
-  }
-
-  return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }

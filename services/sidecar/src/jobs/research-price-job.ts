@@ -20,7 +20,6 @@ import {
   getListingItemSpecifics,
   getListingConditionForAdjustment,
   normalizeSoldComps,
-  redactSensitiveText as redactPricingSensitiveText,
   resolveProductionPricingProvider,
   type ConditionAdjustmentSummary,
   type LlmPricingPromptFactKey,
@@ -41,6 +40,10 @@ import {
   type SoldCompsUsageSnapshot,
   ProductionPricingAnalystError,
 } from '@/pricing/index.js';
+import {
+  compactRedactedMessage,
+  redactPricingSensitiveText,
+} from '../pricing/provider-shared.js';
 import { createLogger } from '@/utils/logger.js';
 import {
   classifyJobError,
@@ -400,14 +403,7 @@ function redactSensitiveText(value: string): string {
 }
 
 function asCompactErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = redactSensitiveText(message).replace(/\s+/g, ' ').trim();
-
-  if (normalized.length <= 240) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, 237)}...`;
+  return compactRedactedMessage(error instanceof Error ? error.message : String(error));
 }
 
 function getPricingMode(
