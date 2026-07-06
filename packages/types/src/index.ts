@@ -160,12 +160,33 @@ export interface ListingLatestPricingResearchCompSummary {
   total_comp_count: number;
 }
 
+export type ListingLatestPricingResearchFailureReason =
+  | 'provider_zero_results'
+  | 'all_comps_rejected'
+  | 'provider_failure'
+  | 'unknown';
+
+export interface ListingLatestPricingResearchFailureSummary {
+  accepted_comp_count?: number;
+  provider?: string;
+  provider_failure_category?: string;
+  provider_failure_code?: string;
+  provider_failure_status?: string;
+  provider_returned_count?: number;
+  query?: string;
+  reason: ListingLatestPricingResearchFailureReason;
+  rejected_comp_count?: number;
+  rejected_reason_counts?: Record<string, number>;
+  requested_count?: number;
+}
+
 export interface ListingLatestPricingResearchSummary {
   comp_summary: ListingLatestPricingResearchCompSummary;
   confidence: string | null;
   created_at: string;
   error_code: string | null;
   error_message: string | null;
+  failure_summary: ListingLatestPricingResearchFailureSummary | null;
   listing_id: string;
   llm_price_explanation: string | null;
   median_sold_price: number | null;

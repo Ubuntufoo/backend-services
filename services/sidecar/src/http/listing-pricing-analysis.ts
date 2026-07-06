@@ -1,5 +1,6 @@
 import type { ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
 import type {
+  ListingLatestPricingResearchFailureSummary,
   ListingLatestPricingResearchCompSummary,
   ListingLatestPricingResearchSummary,
   ListingPricingAnalysisWarning,
@@ -26,6 +27,11 @@ function asBoolean(value: unknown): boolean | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asCount(value: unknown): number | null {
+  const normalized = asNumber(value);
+  return normalized !== null && normalized >= 0 ? Math.trunc(normalized) : null;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -72,6 +78,118 @@ function sanitizeErrorMessage(value: unknown): string | null {
     .find((part) => part.length > 0);
 
   return firstLine ? redactInlineSecrets(firstLine).slice(0, 500) : null;
+}
+
+function sanitizeSummaryString(value: unknown, maxLength = 160): string | null {
+  const sanitized = sanitizeErrorMessage(value);
+  return sanitized ? sanitized.slice(0, maxLength) : null;
+}
+
+function sanitizeReasonCountKey(value: unknown): string | null {
+  const sanitized = sanitizeSummaryString(value, 80);
+
+  if (!sanitized) {
+    return null;
+  }
+
+  const normalized = sanitized
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '_')
+    .replace(/^_+|_+$/gu, '')
+    .slice(0, 48);
+
+  return normalized.length > 0 ? normalized : null;
+}
+
+function firstCount(...values: unknown[]): number | null {
+  for (const value of values) {
+    const count = asCount(value);
+    if (count !== null) {
+      return count;
+    }
+  }
+
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = sanitizeSummaryString(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function firstRawString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = asString(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function hasExplicitProviderFailureDetails(value: unknown): boolean {
+  const record = asRecord(value);
+
+  return Boolean(
+    firstRawString(
+      record?.providerFailureCode,
+      record?.providerFailureCategory,
+      record?.providerFailureStatus
+    )
+  );
+}
+
+function hasProviderRoutingFailureEvidence(value: unknown): boolean {
+  const record = asRecord(value);
+
+  return Boolean(
+    record &&
+      (hasExplicitProviderFailureDetails(record) ||
+        firstRawString(record.provider, record.query, record.message) ||
+        asRecord(record.rawResult))
+  );
+}
+
+function hasZeroResultsText(value: unknown): boolean {
+  const sanitized = sanitizeSummaryString(value, 240);
+
+  if (!sanitized) {
+    return false;
+  }
+
+  return (
+    /\b(?:zero|0|no)\s+(?:provider\s+)?(?:results?|returned\s+results?|comps?)\b/iu.test(
+      sanitized
+    ) || /\breturned\s+0\b/iu.test(sanitized)
+  );
+}
+
+function getRejectedReasonCounts(value: unknown): Record<string, number> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const counts = new Map<string, number>();
+
+  for (const entry of value) {
+    const record = asRecord(entry);
+    const key = sanitizeReasonCountKey(record?.reason) ?? sanitizeReasonCountKey(record?.code);
+
+    if (!key) {
+      continue;
+    }
+
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  return counts.size > 0 ? Object.fromEntries(counts) : undefined;
 }
 
 function mapFailureSummary(value: unknown): PricingAnalysisWarningFailureSummary | null {
@@ -173,6 +291,129 @@ function getLatestPricingResearchCompSummary(
   };
 }
 
+function buildFailureSummary(
+  research: ListingPriceResearchRow
+): ListingLatestPricingResearchFailureSummary | null {
+  if (research.status !== 'failed') {
+    return null;
+  }
+
+  const rawResult = asRecord(research.raw_result_json);
+  const diagnostics = asRecord(rawResult?.diagnostics);
+  const normalization = asRecord(rawResult?.normalization);
+  const providerRouting = asRecord(rawResult?.providerRouting);
+  const firstProviderFailure = asRecord(providerRouting?.firstProviderFailure);
+  const failure = asRecord(rawResult?.failure);
+  const providerResult = asRecord(rawResult?.providerResult);
+  const providerResultOutput = asRecord(providerResult?.output);
+  const providerResultRequest = asRecord(asRecord(providerResult?.input)?.request);
+  const compSummary = getLatestPricingResearchCompSummary(research);
+
+  const provider = firstString(
+    firstProviderFailure?.provider,
+    failure?.provider,
+    diagnostics?.actualProvider,
+    diagnostics?.selectedProvider,
+    research.provider
+  );
+  const query = firstString(firstProviderFailure?.query, failure?.query, research.query);
+  const requestedCount = firstCount(diagnostics?.requestedCount, providerResultRequest?.count);
+  const providerReturnedCount = firstCount(
+    diagnostics?.providerReturnedCount,
+    diagnostics?.rawCompCount,
+    diagnostics?.normalizationInputCount,
+    normalization?.inputCount,
+    normalization?.rawCount,
+    providerResultOutput?.itemCount,
+    providerResult?.returnedSoldComps
+  );
+  const acceptedCompCount = firstCount(
+    diagnostics?.normalizationAcceptedCount,
+    diagnostics?.acceptedCompCount,
+    normalization?.acceptedCount,
+    compSummary.selected_comp_count
+  );
+  const rejectedCompCount = firstCount(
+    diagnostics?.normalizationRejectedCount,
+    diagnostics?.rejectedCompCount,
+    normalization?.rejectedCount,
+    compSummary.rejected_comp_count
+  );
+  const rejectedReasonCounts = getRejectedReasonCounts(normalization?.rejected);
+
+  const baseSummary = {
+    ...(provider ? { provider } : {}),
+    ...(query ? { query } : {}),
+  };
+  const countSummary = {
+    ...(requestedCount !== null ? { requested_count: requestedCount } : {}),
+    ...(providerReturnedCount !== null ? { provider_returned_count: providerReturnedCount } : {}),
+    ...(acceptedCompCount !== null ? { accepted_comp_count: acceptedCompCount } : {}),
+    ...(rejectedCompCount !== null ? { rejected_comp_count: rejectedCompCount } : {}),
+  };
+  const hasProviderFailureContext =
+    hasExplicitProviderFailureDetails(failure) ||
+    hasProviderRoutingFailureEvidence(firstProviderFailure);
+  const allCounts = [
+    providerReturnedCount,
+    firstCount(diagnostics?.rawCompCount, diagnostics?.normalizationInputCount, normalization?.rawCount),
+  ].filter((value): value is number => value !== null);
+  const zeroCountsOnly = allCounts.length > 0 && allCounts.every((value) => value === 0);
+  const zeroContext = hasZeroResultsText(research.error_message) || hasZeroResultsText(failure?.message);
+
+  if (
+    (providerReturnedCount ?? 0) > 0 &&
+    (acceptedCompCount ?? 0) === 0 &&
+    (rejectedCompCount ?? 0) > 0
+  ) {
+    return {
+      ...baseSummary,
+      ...countSummary,
+      ...(rejectedReasonCounts ? { rejected_reason_counts: rejectedReasonCounts } : {}),
+      reason: 'all_comps_rejected',
+    };
+  }
+
+  if (zeroCountsOnly || (providerReturnedCount === 0 && !hasProviderFailureContext) || zeroContext) {
+    return {
+      ...baseSummary,
+      ...countSummary,
+      reason: 'provider_zero_results',
+    };
+  }
+
+  if (hasProviderFailureContext) {
+    const providerFailureCode = firstString(
+      firstProviderFailure?.providerFailureCode,
+      failure?.providerFailureCode
+    );
+    const providerFailureCategory = firstString(
+      firstProviderFailure?.providerFailureCategory,
+      failure?.providerFailureCategory
+    );
+    const providerFailureStatus = firstString(
+      firstProviderFailure?.providerFailureStatus,
+      failure?.providerFailureStatus,
+      asRecord(firstProviderFailure?.rawResult)?.status,
+      asRecord(failure?.rawResult)?.status
+    );
+
+    return {
+      ...baseSummary,
+      ...(providerFailureCategory ? { provider_failure_category: providerFailureCategory } : {}),
+      ...(providerFailureCode ? { provider_failure_code: providerFailureCode } : {}),
+      ...(providerFailureStatus ? { provider_failure_status: providerFailureStatus } : {}),
+      reason: 'provider_failure',
+    };
+  }
+
+  return {
+    ...(provider ? { provider } : {}),
+    ...(query ? { query } : {}),
+    reason: 'unknown',
+  };
+}
+
 export function serializeLatestPricingResearch(
   research: ListingPriceResearchRow | null
 ): ListingLatestPricingResearchSummary | null {
@@ -186,6 +427,7 @@ export function serializeLatestPricingResearch(
     created_at: research.created_at,
     error_code: asString(research.error_code),
     error_message: sanitizeErrorMessage(research.error_message),
+    failure_summary: buildFailureSummary(research),
     listing_id: research.listing_id,
     llm_price_explanation: asString(research.llm_price_explanation),
     median_sold_price: asNumber(research.median_sold_price),
