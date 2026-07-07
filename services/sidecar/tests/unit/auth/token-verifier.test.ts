@@ -16,6 +16,40 @@ describe('TokenVerifier', () => {
     introspection_endpoint:
       'http://localhost:8080/realms/master/protocol/openid-connect/token/introspect',
   };
+  type TokenVerifierOptions = ConstructorParameters<typeof TokenVerifier>[0];
+  type JwtVerifyResult = Awaited<ReturnType<typeof jose.jwtVerify>>;
+
+  function createJwtTokenVerifier(overrides: Partial<TokenVerifierOptions> = {}) {
+    return new TokenVerifier({
+      authServerMetadata: mockMetadata,
+      expectedAudience: 'http://localhost:3000',
+      useIntrospection: false,
+      ...overrides,
+    });
+  }
+
+  function mockJwtVerification(payload: Record<string, unknown>) {
+    const mockJWKS = vi.fn();
+
+    vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
+    vi.mocked(jose.createRemoteJWKSet).mockReturnValue(
+      mockJWKS as unknown as ReturnType<typeof jose.createRemoteJWKSet>
+    );
+    vi.mocked(jose.jwtVerify).mockResolvedValue({
+      payload,
+      protectedHeader: {},
+    } as JwtVerifyResult);
+
+    return mockJWKS;
+  }
+
+  function mockJwtVerificationFailure(errorMessage: string) {
+    vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
+    vi.mocked(jose.createRemoteJWKSet).mockReturnValue(
+      vi.fn() as unknown as ReturnType<typeof jose.createRemoteJWKSet>
+    );
+    vi.mocked(jose.jwtVerify).mockRejectedValue(new Error(errorMessage));
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -219,7 +253,6 @@ describe('TokenVerifier', () => {
 
   describe('verifyToken - JWT', () => {
     it('should verify token via JWT validation', async () => {
-      const mockJWKS = vi.fn();
       const mockPayload = {
         iss: mockMetadata.issuer,
         aud: 'http://localhost:3000',
@@ -229,18 +262,9 @@ describe('TokenVerifier', () => {
         exp: Math.floor(Date.now() / 1000) + 3600,
       };
 
-      vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
-      vi.mocked(jose.createRemoteJWKSet).mockReturnValue(mockJWKS as any);
-      vi.mocked(jose.jwtVerify).mockResolvedValue({
-        payload: mockPayload,
-        protectedHeader: {} as any,
-      });
-
-      const verifier = new TokenVerifier({
-        authServerMetadata: mockMetadata,
-        expectedAudience: 'http://localhost:3000',
+      const mockJWKS = mockJwtVerification(mockPayload);
+      const verifier = createJwtTokenVerifier({
         requiredScopes: ['mcp:tools'],
-        useIntrospection: false,
       });
 
       await verifier.initialize();
@@ -260,7 +284,6 @@ describe('TokenVerifier', () => {
     });
 
     it('should handle scope as array in JWT', async () => {
-      const mockJWKS = vi.fn();
       const mockPayload = {
         iss: mockMetadata.issuer,
         aud: 'http://localhost:3000',
@@ -269,18 +292,8 @@ describe('TokenVerifier', () => {
         exp: Math.floor(Date.now() / 1000) + 3600,
       };
 
-      vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
-      vi.mocked(jose.createRemoteJWKSet).mockReturnValue(mockJWKS as any);
-      vi.mocked(jose.jwtVerify).mockResolvedValue({
-        payload: mockPayload,
-        protectedHeader: {} as any,
-      });
-
-      const verifier = new TokenVerifier({
-        authServerMetadata: mockMetadata,
-        expectedAudience: 'http://localhost:3000',
-        useIntrospection: false,
-      });
+      mockJwtVerification(mockPayload);
+      const verifier = createJwtTokenVerifier();
 
       await verifier.initialize();
       const result = await verifier.verifyToken('test-jwt-token');
@@ -289,7 +302,6 @@ describe('TokenVerifier', () => {
     });
 
     it('should reject JWT with missing scopes', async () => {
-      const mockJWKS = vi.fn();
       const mockPayload = {
         iss: mockMetadata.issuer,
         aud: 'http://localhost:3000',
@@ -298,18 +310,9 @@ describe('TokenVerifier', () => {
         exp: Math.floor(Date.now() / 1000) + 3600,
       };
 
-      vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
-      vi.mocked(jose.createRemoteJWKSet).mockReturnValue(mockJWKS as any);
-      vi.mocked(jose.jwtVerify).mockResolvedValue({
-        payload: mockPayload,
-        protectedHeader: {} as any,
-      });
-
-      const verifier = new TokenVerifier({
-        authServerMetadata: mockMetadata,
-        expectedAudience: 'http://localhost:3000',
+      mockJwtVerification(mockPayload);
+      const verifier = createJwtTokenVerifier({
         requiredScopes: ['mcp:admin'],
-        useIntrospection: false,
       });
 
       await verifier.initialize();
@@ -338,15 +341,8 @@ describe('TokenVerifier', () => {
     });
 
     it('should handle JWT verification failures', async () => {
-      vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
-      vi.mocked(jose.createRemoteJWKSet).mockReturnValue(vi.fn() as any);
-      vi.mocked(jose.jwtVerify).mockRejectedValue(new Error('Invalid signature'));
-
-      const verifier = new TokenVerifier({
-        authServerMetadata: mockMetadata,
-        expectedAudience: 'http://localhost:3000',
-        useIntrospection: false,
-      });
+      mockJwtVerificationFailure('Invalid signature');
+      const verifier = createJwtTokenVerifier();
 
       await verifier.initialize();
 
@@ -356,7 +352,6 @@ describe('TokenVerifier', () => {
     });
 
     it('should use azp claim if client_id not present', async () => {
-      const mockJWKS = vi.fn();
       const mockPayload = {
         iss: mockMetadata.issuer,
         aud: 'http://localhost:3000',
@@ -365,18 +360,8 @@ describe('TokenVerifier', () => {
         exp: Math.floor(Date.now() / 1000) + 3600,
       };
 
-      vi.mocked(axios.get).mockResolvedValue({ data: mockMetadata });
-      vi.mocked(jose.createRemoteJWKSet).mockReturnValue(mockJWKS as any);
-      vi.mocked(jose.jwtVerify).mockResolvedValue({
-        payload: mockPayload,
-        protectedHeader: {} as any,
-      });
-
-      const verifier = new TokenVerifier({
-        authServerMetadata: mockMetadata,
-        expectedAudience: 'http://localhost:3000',
-        useIntrospection: false,
-      });
+      mockJwtVerification(mockPayload);
+      const verifier = createJwtTokenVerifier();
 
       await verifier.initialize();
       const result = await verifier.verifyToken('test-jwt-token');

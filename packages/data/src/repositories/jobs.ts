@@ -59,7 +59,7 @@ export interface JobErrorUpdateInput {
 
 export type GeminiAttemptStatus = 'started' | 'succeeded' | 'failed' | 'skipped';
 
-export interface GeminiModelAttempt {
+export interface GeminiModelAttempt extends Record<string, Json | undefined> {
   attempt_order: number;
   completed_at: string | null;
   duration_ms: number | null;
@@ -569,7 +569,7 @@ export async function setGeminiJobAttemptAudit(
 ): Promise<JobRow> {
   return await updateJob(client, jobId, {
     gemini_attempt_count: input.gemini_attempt_count,
-    gemini_attempts: input.gemini_attempts as unknown as Json,
+    gemini_attempts: input.gemini_attempts,
     gemini_selected_model: input.gemini_selected_model,
   });
 }

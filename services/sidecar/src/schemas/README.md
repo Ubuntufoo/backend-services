@@ -1,6 +1,6 @@
 # eBay MCP API Schemas
 
-This directory contains comprehensive Zod schemas for all eBay API endpoints, organized by functional area. These schemas provide both **input validation** and **output type safety** for MCP (Model Context Protocol) tools.
+This directory contains the sidecar's eBay-facing Zod schemas, organized by functional area. These schemas provide **input validation** and **output type safety** for the tool and API surfaces that import them.
 
 ## 📁 Directory Structure
 
@@ -37,6 +37,8 @@ The schemas in this directory serve multiple purposes:
 3. **Type Safety**: Provide TypeScript types for compile-time checking
 4. **JSON Schema Generation**: Convert Zod schemas to JSON Schema format for MCP tools
 5. **Documentation**: Self-documenting code with schema descriptions
+
+`src/schemas/index.ts` is the source of truth for the currently exported schema groups. Keep this README aligned with that file and avoid hard-coded endpoint totals here.
 
 ## 🚀 Usage
 
@@ -367,30 +369,6 @@ describe('Inventory Schemas', () => {
 5. **Passthrough**: Use `.passthrough()` to allow additional properties from eBay
 6. **Enum Support**: Use native enums from `@/types/ebay-enums.js`
 
-## ✅ Completion Status
-
-All eBay API endpoints now have comprehensive Zod schemas!
-
-- [x] **Account Management** - 21 endpoints ✅
-- [x] **Inventory Management** - 30 endpoints ✅
-- [x] **Communication** - 11 endpoints ✅
-- [x] **Fulfillment** - 16 endpoints ✅
-- [x] **Marketing & Promotions** - 71 endpoints ✅
-- [x] **Metadata** - 23 endpoints ✅
-- [x] **Analytics** - 4 endpoints ✅
-- [x] **Taxonomy** - 4 endpoints ✅
-- [x] **Other APIs** - 40 endpoints ✅
-
-**Total: 220 eBay API endpoints with full input/output schemas**
-
-## 🚧 Future Enhancements
-
-- [ ] Integration tests for all schemas
-- [ ] Schema validation benchmarks
-- [ ] Performance optimization for large-scale validation
-- [ ] Additional enum validation for marketplace-specific values
-- [ ] Schema versioning strategy for API updates
-
 ## 📝 Notes
 
 - All schemas use `.optional()` for fields that may not be present in responses
@@ -398,21 +376,5 @@ All eBay API endpoints now have comprehensive Zod schemas!
 - Amount schemas support currency conversion fields
 - Date fields use ISO 8601 string format
 - All schemas support eBay's standard pagination (href, limit, offset, etc.)
-- All schemas validated against openapi-typescript generated types
-- Required vs optional fields precisely match eBay API specifications
-
-## 📊 Statistics
-
-- **Total Zod Schemas**: 450+
-- **Total JSON Schemas**: 220+
-- **Lines of Code**: 5,000+
-- **API Categories**: 9
-- **Coverage**: 100% of eBay Seller APIs
-
----
-
-**Last Updated**: 2025-11-16
-**Status**: ✅ Complete
-**Zod Version**: 3.x
-**zod-to-json-schema Version**: 3.24.6
-**Validation Status**: All schemas verified against TypeScript types
+- Use category files plus `index.ts` exports as the source of truth for actual coverage
+- Update examples and category notes when schema groups move or tool surfaces change

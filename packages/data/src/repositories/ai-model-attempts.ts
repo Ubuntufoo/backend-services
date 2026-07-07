@@ -99,7 +99,7 @@ function withOptionalMetadata<TUpdate extends { metadata?: Json }>(
 
   return {
     ...changes,
-    metadata: metadata as Json,
+    metadata,
   };
 }
 
@@ -173,7 +173,7 @@ export async function createAiModelAttempt(
   input: CreateAiModelAttemptInput
 ): Promise<AiModelAttemptRow> {
   const jobId = input.job_id ?? null;
-  const metadata = (input.metadata ?? {}) as Json;
+  const metadata: Json = input.metadata ?? {};
 
   for (let retryCount = 0; retryCount < MAX_CREATE_AI_MODEL_ATTEMPT_RETRIES; retryCount += 1) {
     const attemptOrder =
