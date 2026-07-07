@@ -39,13 +39,12 @@ RTK.1A | Tooling/RTK | Prototype wrapper-level `rtk view` dispatcher | Add `rtk 
 | 9N.10A | BE | Final backend consistency audit | Review backend-services naming consistency, coding conventions, diagnostics, logging, typing, comments, and style after 9N.4-9N.6; resolve only small behavior-preserving backend inconsistencies and produce a backend cleanup report |
 | 9N.10B | FE | Final frontend consistency audit | Review ebay-ui-app naming consistency, coding conventions, diagnostics, typing, comments, tests, and style after 9N.7-9N.9; resolve only small behavior-preserving frontend inconsistencies and produce a frontend cleanup report |
 | 9N.11 | BE/Architecture | Audit sidecar data facade usage | Identify unused SidecarDataAccess methods and possible subdomain splits without changing behavior.
-COMPLETED TASKS COMMENTED OUT -->
 | 9N.12 | BE/Pricing | Audit pricing barrel imports | Classify pricing/index imports and replace only low-risk runtime imports with direct module imports.
 | 9N.13 | Docs/Architecture | Consolidate backend architecture docs | Keep docs/architecture.md as source of truth while preserving concise routing summaries in README/AGENTS.
+COMPLETED TASKS COMMENTED OUT -->
+| 10 | $DOCS$ | Repo docs need a macro review to reflect the new pricing service and its integration with the existing architecture | General doc cleanup should also be done in this pass |
 --------------- READY FOR LIVE PILOT --------------
 | 10 | BE/Archi | Re-evaluate dedicated pricing worker after live pilot | Decide whether to extract pricing into services/pricing-service based on live provider latency, queue impact, failure isolation needs, and local-dev overhead| 9L.2 | $BE/Pricing$ | Add Apify pricing eligibility gate | Low-value or low-confidence lot candidates skip live Apify; only likely singles or manually selected listings spend Apify credits | GPT-5.5 mini | Medium | Protects monthly Apify budget; use listing metadata, Gemini draft confidence, estimated value threshold, duplicate-cache checks, and manual override |
-| 10 | $DOCS$ | Repo docs need a macro review to reflect the new pricing service and its integration with the existing architecture | General doc cleanup should also be done in this pass |
-| 10 | $BE/FE$ | Remove 'assets_ready' (seller hints) step for singles | Single listings skip AI generation and go straight from watcher intake to review | GPT-5.5 mini | Medium | Simplifies single listing flow for pilot; lot listings keep full flow with seller hints and Gemini draft |
 | 10 | $BE/DB$ | Add manual listing status reconciliation tool | Exported listings can later be batch-marked listed/sold after Seller Hub-managed pilot | GPT-5.5 mini | Low-Medium | Defer until after initial live testing; useful before order sync exists |
 | 10 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, and `sale_price` are persisted | GPT-5.5 mini | Medium | Storage foundation before scheduled order sync |
 | 10 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work against eBay API | GPT-5.5 | Medium | Begin post-listing order workflow |

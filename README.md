@@ -2,6 +2,8 @@
 
 Backend monorepo for eBay Inventory Manager. Current runtime center: `services/sidecar`. Watcher and image-service packages support intake and file processing; shared packages hold env, data, and domain contracts.
 
+Canonical architecture reference: [docs/architecture.md](docs/architecture.md).
+
 ## Quick Start
 
 ```bash
@@ -21,17 +23,10 @@ Primary root commands:
 - `pnpm lint`
 - `pnpm test`
 
-## Current Packages
-
-- `services/sidecar`: canonical backend runtime for HTTP, MCP, eBay integration, job execution, pricing.
-- `services/watcher-service`: filesystem intake for incoming listing images.
-- `services/image-service`: local image processing package.
-- `packages/data`, `packages/env`, `packages/types`: shared persistence, config, and domain contracts.
-
 ## Docs
 
-- [AGENTS.md](AGENTS.md) : Information about the agents used in the backend services.
-- [docs/architecture.md](docs/architecture.md) : High-level architecture overview.
+- [AGENTS.md](AGENTS.md) : Repo-specific agent routing guidance.
+- [docs/architecture.md](docs/architecture.md) : Source of truth for current backend architecture and ownership boundaries.
 - [docs/local-development.md](docs/local-development.md)
 - [docs/ebay-integration.md](docs/ebay-integration.md) 
 - [docs/pricing.md](docs/pricing.md) : Information about the pricing model.

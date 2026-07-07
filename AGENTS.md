@@ -4,17 +4,7 @@
 
 Backend monorepo for eBay Inventory Manager. Current runtime center: `services/sidecar`. Use this file to decide where to inspect. Do not treat roadmap or historical plans as implementation truth.
 
-## Current Architecture
-
-- `services/sidecar`: canonical backend runtime; HTTP sidecar, MCP stdio, eBay auth/publish, workflow APIs, job execution, pricing job.
-- `services/watcher-service`: local filesystem intake for incoming listing images.
-- `services/image-service`: local image processing library/runtime package.
-- `packages/data`: Supabase repositories, workflow persistence, shared DB types.
-- `packages/env`: shared env loading/validation.
-- `packages/types`: shared workflow/domain contracts.
-- Pricing currently lives inside sidecar; no dedicated pricing service.
-- eBay publish path and readiness checks already live inside sidecar.
-- Placeholder dirs like `services/r2-service`, `services/gemini-service`, `services/job-runner`, and `services/ebay-service` are not current runtime boundaries unless code proves otherwise.
+Canonical architecture details live in [docs/architecture.md](docs/architecture.md). Keep this file focused on repo-aware routing and scope control.
 
 ## Agent File Routing
 
