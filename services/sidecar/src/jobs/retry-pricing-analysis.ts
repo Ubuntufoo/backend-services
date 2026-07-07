@@ -491,7 +491,7 @@ export async function retryPricingAnalysis(
   // 8. Build analyst input and re-run
   const analystInput = rebuildPricingAnalystInput(listing, comps, stats, conditionAdjustment);
 
-  let analystResult: PricingAnalystResult;
+  let analystResult: PricingAnalystResult | null = null;
   let llmReasoningJson: Json;
   let llmConditionAdjustedPrice: number | null = null;
   let fallbackReason: string | null = null;
@@ -555,12 +555,17 @@ export async function retryPricingAnalysis(
   const warningResolved = fallbackReason === null && llmConditionAdjustedPrice !== null;
 
   // 10. Persist updated llm_reasoning_json on the research row
-  const rejectedCompIds = warningResolved
-    ? (analystResult!.reasoning.rejectedCompIds as unknown as Json)
+  const resolvedReasoning = warningResolved ? analystResult?.reasoning : undefined;
+  const rejectedCompIds = resolvedReasoning
+    ? (resolvedReasoning.rejectedCompIds as unknown as Json)
     : (latestResearch.llm_rejected_comp_ids ?? []);
-  const priceExplanation = warningResolved
-    ? analystResult!.reasoning.priceExplanation
+  const priceExplanation = resolvedReasoning
+    ? resolvedReasoning.priceExplanation
     : latestResearch.llm_price_explanation;
+  const suggestedPrice =
+    warningResolved && llmConditionAdjustedPrice !== null
+      ? llmConditionAdjustedPrice
+      : (latestResearch.suggested_price ?? stats.deterministicSuggestedPrice);
 
   await dataAccess.listingPriceResearch.markSucceeded({
     comps: (latestResearch.comps ?? asJson(comps)) as Json,
@@ -574,9 +579,7 @@ export async function retryPricingAnalysis(
     query: latestResearch.query ?? undefined,
     raw_result_json: (latestResearch.raw_result_json ?? {}) as Json,
     sold_count: stats.soldCount,
-    suggested_price: warningResolved
-      ? llmConditionAdjustedPrice!
-      : (latestResearch.suggested_price ?? stats.deterministicSuggestedPrice),
+    suggested_price: suggestedPrice,
   });
 
   // 11. Update listing price only if retry produced a valid condition-adjusted

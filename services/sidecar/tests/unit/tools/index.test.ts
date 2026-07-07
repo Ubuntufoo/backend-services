@@ -3,6 +3,40 @@ import { executeTool, getToolDefinitions } from '../../../src/tools/index.js';
 
 import type { EbaySellerApi } from '../../../src/api/index.js';
 
+type ToolContentResult = {
+  content: Array<{ text: string }>;
+};
+
+type OAuthUrlResult = {
+  redirectUri: string;
+};
+
+type DisplayCredentialsResult = {
+  credentials: {
+    clientId: string;
+    clientSecret: string;
+    environment: string;
+    redirectUri: string;
+  };
+  scopes: string[];
+  status: {
+    currentTokenType: string;
+    hasAppAccessToken: boolean;
+    hasUserToken: boolean;
+  };
+  tokens: {
+    accessToken: string;
+    accessTokenExpiry: Record<string, unknown>;
+    appToken: string;
+    refreshToken: string;
+  };
+};
+
+type RefreshAccessTokenResult = {
+  accessToken: string;
+  accessTokenExpiry: Record<string, unknown>;
+};
+
 describe('Tools Layer', () => {
   let mockApi: EbaySellerApi;
 
@@ -274,10 +308,11 @@ describe('Tools Layer', () => {
       vi.mocked(mockApi.inventory.getInventoryItems).mockResolvedValue(mockResponse);
 
       const result = await executeTool(mockApi, 'search', { limit: 10 });
+      const contentResult = result as ToolContentResult;
 
       expect(mockApi.inventory.getInventoryItems).toHaveBeenCalledWith(10, 0);
       expect(result).toHaveProperty('content');
-      expect(Array.isArray((result as any).content)).toBe(true);
+      expect(Array.isArray(contentResult.content)).toBe(true);
     });
 
     it('should execute fetch tool', async () => {
@@ -318,11 +353,12 @@ describe('Tools Layer', () => {
       const result = await executeTool(mockApi, 'ebay_get_oauth_url', {
         redirectUri: 'https://test.com/callback',
       });
+      const oauthUrlResult = result as OAuthUrlResult;
 
       expect(result).toHaveProperty('authorizationUrl');
       expect(result).toHaveProperty('redirectUri');
       expect(result).toHaveProperty('instructions');
-      expect((result as any).redirectUri).toBe('https://test.com/callback');
+      expect(oauthUrlResult.redirectUri).toBe('https://test.com/callback');
     });
 
     it('should throw error when client ID missing', async () => {
@@ -422,7 +458,7 @@ describe('Tools Layer', () => {
       expect(result).toHaveProperty('status');
       expect(result).toHaveProperty('scopes');
 
-      const resultObj = result as any;
+      const resultObj = result as DisplayCredentialsResult;
 
       // Check credentials are masked
       expect(resultObj.credentials.clientId).toContain('...');
@@ -466,7 +502,7 @@ describe('Tools Layer', () => {
 
       const result = await executeTool(mockApi, 'ebay_display_credentials', {});
 
-      const resultObj = result as any;
+      const resultObj = result as DisplayCredentialsResult;
 
       // Check that missing tokens are indicated
       expect(resultObj.tokens.refreshToken).toBe('Not set (in .env.local)');
@@ -510,7 +546,7 @@ describe('Tools Layer', () => {
       expect(result).toHaveProperty('accessTokenExpiry');
       expect(result).toHaveProperty('tokenInfo');
 
-      const resultObj = result as any;
+      const resultObj = result as RefreshAccessTokenResult;
 
       // Check token is masked
       expect(resultObj.accessToken).toContain('...');
@@ -954,10 +990,11 @@ describe('Tools Layer', () => {
       const result = await executeTool(mockApi, 'SearchClaudeCodeDocs', {
         query: 'test query',
       });
+      const contentResult = result as ToolContentResult;
 
       expect(result).toHaveProperty('content');
-      expect((result as any).content[0].text).toContain('SearchClaudeCodeDocs');
-      expect((result as any).content[0].text).toContain('test query');
+      expect(contentResult.content[0]?.text).toContain('SearchClaudeCodeDocs');
+      expect(contentResult.content[0]?.text).toContain('test query');
     });
   });
 });

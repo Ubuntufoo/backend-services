@@ -282,6 +282,7 @@ describe('HTTP MCP transport', () => {
       listings: [
         {
           ...listingRow,
+          latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
       ],
