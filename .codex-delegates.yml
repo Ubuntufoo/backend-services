@@ -44,6 +44,8 @@ forbidden_paths:
 
 verification_hints:
   - pnpm --filter sidecar typecheck
+  # Fallback when workspace build-approval policy blocks the filtered pnpm entrypoint.
+  - services/sidecar/node_modules/.bin/tsc --noEmit --pretty false -p services/sidecar/tsconfig.json
   - pnpm --filter sidecar test
   - pnpm --filter @ebay-inventory/data test
   - pnpm validate:env
