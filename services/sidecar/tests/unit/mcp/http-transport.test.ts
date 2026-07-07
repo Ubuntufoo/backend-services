@@ -53,16 +53,11 @@ function createDataAccess(): SidecarDataAccess {
   return {
     aiModelRoutes: {
       resolveForTask: async () => [],
-      resolvePrimaryForTask: async () => {
-        throw new Error('not implemented');
-      },
     },
     aiModelAttempts: {
       create: async () => {
         throw new Error('not implemented');
       },
-      listByListingId: async () => [],
-      listByListingIds: async () => [],
       markFailed: async () => {
         throw new Error('not implemented');
       },
@@ -71,12 +66,6 @@ function createDataAccess(): SidecarDataAccess {
       },
     },
     dailyUsage: {
-      getEffectiveGeminiLimit: async () => {
-        throw new Error('not implemented');
-      },
-      getEffectiveOrderSyncLimit: async () => {
-        throw new Error('not implemented');
-      },
       getGeminiSummary: async () => ({
         effectiveLimit: 500,
         remaining: 479,
@@ -85,13 +74,7 @@ function createDataAccess(): SidecarDataAccess {
         usageDate: '2026-06-01',
         used: 21,
       }),
-      getOrCreate: async () => {
-        throw new Error('not implemented');
-      },
       incrementGeminiCallsUsed: async () => {
-        throw new Error('not implemented');
-      },
-      incrementOrderSyncCount: async () => {
         throw new Error('not implemented');
       },
     },
@@ -102,7 +85,6 @@ function createDataAccess(): SidecarDataAccess {
       listApprovedForExport: async () => [],
       list: async () => [listingRow],
       listByStatus: async () => [listingRow],
-      markPublishFailed: async () => listingRow,
       saveImageMetadata: async () => listingRow,
       update: async () => listingRow,
       updateWorkflowState: async () => listingRow,
@@ -110,9 +92,6 @@ function createDataAccess(): SidecarDataAccess {
     jobs: {
       claimDueQueued: async () => null,
       complete: async () => {
-        throw new Error('not implemented');
-      },
-      create: async () => {
         throw new Error('not implemented');
       },
       enqueueGenerateAi: async () => ({
@@ -126,23 +105,6 @@ function createDataAccess(): SidecarDataAccess {
           last_error_code: null,
           listing_id: 'LIST-001',
           max_attempts: 3,
-          next_run_at: null,
-          attempts: 0,
-          status: 'queued',
-          updated_at: '2026-05-17T00:00:00.000Z',
-        },
-      }),
-      enqueueProcessImages: async () => ({
-        alreadyQueued: false,
-        job: {
-          created_at: '2026-05-17T00:00:00.000Z',
-          id: 'job-process-images-row-id',
-          job_type: 'process_images',
-          last_error: null,
-          last_error_at: null,
-          last_error_code: null,
-          listing_id: null,
-          max_attempts: 2,
           next_run_at: null,
           attempts: 0,
           status: 'queued',
@@ -169,7 +131,6 @@ function createDataAccess(): SidecarDataAccess {
       fail: async () => {
         throw new Error('not implemented');
       },
-      getActiveGenerateAiByListingId: async () => null,
       getById: async () => null,
       listDueQueued: async () => [],
       listByListingId: async () => [],
@@ -178,15 +139,6 @@ function createDataAccess(): SidecarDataAccess {
       requeue: async () => {
         throw new Error('not implemented');
       },
-      update: async () => {
-        throw new Error('not implemented');
-      },
-    },
-    orders: {
-      create: async () => {
-        throw new Error('not implemented');
-      },
-      getByOrderId: async () => null,
       update: async () => {
         throw new Error('not implemented');
       },

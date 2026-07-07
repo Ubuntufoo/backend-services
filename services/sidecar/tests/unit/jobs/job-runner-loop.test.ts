@@ -86,7 +86,6 @@ function createDataAccess(
   options: {
     claimApprovedForPublish?: (listingId: string, current: ListingRow | null) => ListingRow | null;
     claimDueQueued?: (jobId: string, current: JobRow | null) => JobRow | null;
-    markPublishFailed?: (listingId: string, errorAt: string, error: unknown, current: ListingRow) => ListingRow;
   } = {}
 ): {
   dataAccess: SidecarDataAccess;
@@ -99,22 +98,15 @@ function createDataAccess(
   const dataAccess: SidecarDataAccess = {
     aiModelRoutes: {
       resolveForTask: vi.fn(async () => []),
-      resolvePrimaryForTask: vi.fn(),
     },
     aiModelAttempts: {
       create: vi.fn(),
-      listByListingId: vi.fn(),
-      listByListingIds: vi.fn(),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
     dailyUsage: {
-      getEffectiveGeminiLimit: vi.fn(),
-      getEffectiveOrderSyncLimit: vi.fn(),
       getGeminiSummary: vi.fn(),
-      getOrCreate: vi.fn(),
       incrementGeminiCallsUsed: vi.fn(),
-      incrementOrderSyncCount: vi.fn(),
     },
     appSettings: {
       create: vi.fn(),
@@ -164,9 +156,7 @@ function createDataAccess(
         jobStates.set(jobId, next);
         return { ...next };
       }),
-      create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
-      enqueueProcessImages: vi.fn(),
       enqueuePublish: vi.fn(async (listingId: string) => {
         const existingJob = [...jobStates.values()].find(
           (job) =>
@@ -212,7 +202,6 @@ function createDataAccess(
         jobStates.set(jobId, next);
         return { ...next };
       }),
-      getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(async (jobId: string) => {
         const current = jobStates.get(jobId);
         return current ? { ...current } : null;
@@ -342,60 +331,6 @@ function createDataAccess(
           .slice(offset, offset + limit)
           .map((listing) => ({ ...listing }))
       ),
-      markPublishFailed: vi.fn(async (listingId: string, errorAt: string, error: unknown) => {
-        const current = listingStates.get(listingId);
-        if (!current) {
-          throw new Error(`Missing listing ${listingId}`);
-        }
-
-        const next =
-          options.markPublishFailed?.(listingId, errorAt, error, current) ??
-          ({
-            ...current,
-            last_error_at: errorAt,
-            last_error_code:
-              typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
-                ? error.code
-                : 'publish_failed',
-            last_error_context: {
-              code:
-                typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
-                  ? error.code
-                  : undefined,
-              issues:
-                typeof error === 'object' &&
-                error !== null &&
-                'context' in error &&
-                typeof error.context === 'object' &&
-                error.context !== null &&
-                'issues' in error.context &&
-                Array.isArray(error.context.issues)
-                  ? error.context.issues
-                  : undefined,
-              message: error instanceof Error ? error.message : String(error),
-              name:
-                error instanceof Error && typeof error.name === 'string' && error.name.length > 0
-                  ? error.name
-                  : undefined,
-              stage:
-                typeof error === 'object' &&
-                error !== null &&
-                'context' in error &&
-                typeof error.context === 'object' &&
-                error.context !== null &&
-                'stage' in error.context &&
-                typeof error.context.stage === 'string'
-                  ? error.context.stage
-                  : undefined,
-            },
-            last_error_message: error instanceof Error ? error.message : String(error),
-            status: 'approved_for_export',
-            sub_status: 'publish_queued',
-          } as ListingRow);
-
-        listingStates.set(listingId, next);
-        return { ...next };
-      }),
       saveImageMetadata: vi.fn(),
       update: vi.fn(async (listingId: string, changes: Partial<ListingRow>) => {
         const current = listingStates.get(listingId);
@@ -413,11 +348,6 @@ function createDataAccess(
       updateWorkflowState: vi.fn(async () => {
         throw new Error('unexpected workflow update');
       }),
-    },
-    orders: {
-      create: vi.fn(),
-      getByOrderId: vi.fn(),
-      update: vi.fn(),
     },
   };
 

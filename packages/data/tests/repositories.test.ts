@@ -17,7 +17,6 @@ import {
   claimDueQueuedJob,
   completeJob,
   createAppSettings,
-  createJob,
   createListing,
   createOrder,
   DEFAULT_ORDER_SYNC_DAILY_LIMIT,
@@ -38,16 +37,14 @@ import {
   getJobById,
   getLatestListingPriceResearchByListingId,
   listLatestListingPriceResearchByListingIds,
-  getOrCreateDailyUsage,
   getListingByListingId,
   getOrderByOrderId,
+  getOrCreateDailyUsage,
   incrementGeminiCallsUsed,
   incrementOrderSyncCount,
   isPricingEnabled,
   isPricingProviderModeEnabled,
   listApprovedForExportListings,
-  listAiModelAttemptsForListing,
-  listAiModelAttemptsForListings,
   listDueQueuedJobs,
   listListings,
   listListingsByStatus,
@@ -60,7 +57,6 @@ import {
   markAiModelAttemptFailed,
   markAiModelAttemptSucceeded,
   prepareListingForGenerateAi,
-  markListingPublishFailed,
   resetJobForManualRetry,
   requeueJob,
   resolveGeminiDailyUsageWindow,
@@ -75,6 +71,9 @@ import {
   updateJob,
   updateOrder,
 } from '../src/index.js';
+import { listAiModelAttemptsForListing, listAiModelAttemptsForListings } from '../src/repositories/ai-model-attempts.js';
+import { createJob } from '../src/repositories/jobs.js';
+import { markListingPublishFailed } from '../src/repositories/listings.js';
 import { requireSingleResult } from '../src/repositories/shared.js';
 
 const listingRow: ListingRow = {

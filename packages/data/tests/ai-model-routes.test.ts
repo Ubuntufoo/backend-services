@@ -3,8 +3,8 @@ import type { SupabaseDataClient } from '../src/index.js';
 import {
   AiModelRouteNotFoundError,
   resolveAiModelRoutesForTask,
-  resolvePrimaryAiModelRouteForTask,
 } from '../src/index.js';
+import { resolvePrimaryAiModelRouteForTask } from '../src/repositories/ai-model-routes.js';
 
 interface JoinedCatalogRow {
   display_name: string | null;

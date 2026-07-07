@@ -333,18 +333,12 @@ function createDependencies({
   const dataAccess: SidecarDataAccess = {
     aiModelAttempts: {
       create: vi.fn(),
-      listByListingId: vi.fn(),
-      listByListingIds: vi.fn(),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
     dailyUsage: {
-      getEffectiveGeminiLimit: vi.fn(),
-      getEffectiveOrderSyncLimit: vi.fn(),
       getGeminiSummary: vi.fn(),
-      getOrCreate: vi.fn(),
       incrementGeminiCallsUsed: vi.fn(),
-      incrementOrderSyncCount: vi.fn(),
     },
     appSettings: {
       create: vi.fn(),
@@ -354,12 +348,9 @@ function createDependencies({
     jobs: {
       claimDueQueued: vi.fn(),
       complete: vi.fn(),
-      create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
-      enqueueProcessImages: vi.fn(),
       enqueuePublish: vi.fn(),
       fail: vi.fn(),
-      getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
       listByListingId: vi.fn(),
       listDueQueued: vi.fn(),
@@ -375,15 +366,9 @@ function createDependencies({
       listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(),
       listByStatus: vi.fn(),
-      markPublishFailed: vi.fn(),
       saveImageMetadata: vi.fn(),
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
-    },
-    orders: {
-      create: vi.fn(),
-      getByOrderId: vi.fn(),
-      update: vi.fn(),
     },
   };
 

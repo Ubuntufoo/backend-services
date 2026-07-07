@@ -9,12 +9,9 @@ import type {
 const createSupabaseServiceClientMock = vi.fn(() => ({ from: vi.fn() }));
 const createAiModelAttemptMock = vi.fn();
 const resolveAiModelRoutesForTaskMock = vi.fn();
-const resolvePrimaryAiModelRouteForTaskMock = vi.fn();
 const listListingsMock = vi.fn();
 const listListingsByStatusMock = vi.fn();
 const listApprovedForExportListingsMock = vi.fn();
-const listAiModelAttemptsForListingMock = vi.fn();
-const listAiModelAttemptsForListingsMock = vi.fn();
 const getLatestGeminiUsageAttemptMock = vi.fn();
 const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
@@ -24,37 +21,26 @@ const createListingMock = vi.fn();
 const approveListingForExportMock = vi.fn();
 const updateListingMock = vi.fn();
 const claimApprovedListingForPublishMock = vi.fn();
-const markListingPublishFailedMock = vi.fn();
 const updateListingWorkflowStateMock = vi.fn();
 const saveListingImageMetadataMock = vi.fn();
 const getAppSettingsMock = vi.fn();
-const createJobMock = vi.fn();
 const enqueueGenerateAiJobMock = vi.fn();
-const enqueueProcessImagesJobMock = vi.fn();
 const enqueuePublishJobMock = vi.fn();
 const failJobMock = vi.fn();
-const getEffectiveGeminiDailyLimitMock = vi.fn();
-const getEffectiveOrderSyncDailyLimitMock = vi.fn();
 const getGeminiDailyUsageSummaryMock = vi.fn();
 const completeJobMock = vi.fn();
-const getActiveGenerateAiJobByListingIdMock = vi.fn();
 const getJobByIdMock = vi.fn();
-const getOrCreateDailyUsageMock = vi.fn();
 const getLatestListingPriceResearchByListingIdMock = vi.fn();
 const listLatestListingPriceResearchByListingIdsMock = vi.fn();
 const listDueQueuedJobsMock = vi.fn();
 const listJobsByListingIdMock = vi.fn();
 const listStaleRunningJobsMock = vi.fn();
 const incrementGeminiCallsUsedMock = vi.fn();
-const incrementOrderSyncCountMock = vi.fn();
 const claimDueQueuedJobMock = vi.fn();
 const resetJobForManualRetryMock = vi.fn();
 const requeueJobMock = vi.fn();
 const setGeminiJobAttemptAuditMock = vi.fn();
 const updateJobMock = vi.fn();
-const createOrderMock = vi.fn();
-const getOrderByOrderIdMock = vi.fn();
-const updateOrderMock = vi.fn();
 const createAppSettingsMock = vi.fn();
 const updateAppSettingsMock = vi.fn();
 const createListingPriceResearchMock = vi.fn();
@@ -64,46 +50,33 @@ const markListingPriceResearchSucceededMock = vi.fn();
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
   createAiModelAttempt: createAiModelAttemptMock,
-    resolveAiModelRoutesForTask: resolveAiModelRoutesForTaskMock,
-    resolvePrimaryAiModelRouteForTask: resolvePrimaryAiModelRouteForTaskMock,
+  resolveAiModelRoutesForTask: resolveAiModelRoutesForTaskMock,
   getLatestGeminiUsageAttempt: getLatestGeminiUsageAttemptMock,
-    claimApprovedListingForPublish: claimApprovedListingForPublishMock,
+  claimApprovedListingForPublish: claimApprovedListingForPublishMock,
   claimDueQueuedJob: claimDueQueuedJobMock,
   completeJob: completeJobMock,
   createAppSettings: createAppSettingsMock,
-  createJob: createJobMock,
   createListing: createListingMock,
   createListingPriceResearch: createListingPriceResearchMock,
   approveListingForExport: approveListingForExportMock,
-  createOrder: createOrderMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
   enqueueGenerateAiJob: enqueueGenerateAiJobMock,
-  enqueueProcessImagesJob: enqueueProcessImagesJobMock,
   enqueuePublishJob: enqueuePublishJobMock,
   failJob: failJobMock,
-  getEffectiveGeminiDailyLimit: getEffectiveGeminiDailyLimitMock,
-  getEffectiveOrderSyncDailyLimit: getEffectiveOrderSyncDailyLimitMock,
   getGeminiDailyUsageSummary: getGeminiDailyUsageSummaryMock,
   getAppSettings: getAppSettingsMock,
-  getActiveGenerateAiJobByListingId: getActiveGenerateAiJobByListingIdMock,
   getJobById: getJobByIdMock,
   getLatestListingPriceResearchByListingId: getLatestListingPriceResearchByListingIdMock,
-  getOrCreateDailyUsage: getOrCreateDailyUsageMock,
   getListingByOfferId: getListingByOfferIdMock,
   getListingByListingId: getListingByListingIdMock,
-  getOrderByOrderId: getOrderByOrderIdMock,
   incrementGeminiCallsUsed: incrementGeminiCallsUsedMock,
-  incrementOrderSyncCount: incrementOrderSyncCountMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
-  listAiModelAttemptsForListing: listAiModelAttemptsForListingMock,
-  listAiModelAttemptsForListings: listAiModelAttemptsForListingsMock,
   listDueQueuedJobs: listDueQueuedJobsMock,
   listJobsByListingId: listJobsByListingIdMock,
   listLatestListingPriceResearchByListingIds: listLatestListingPriceResearchByListingIdsMock,
   listStaleRunningJobs: listStaleRunningJobsMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
-  markListingPublishFailed: markListingPublishFailedMock,
   markListingPriceResearchFailed: markListingPriceResearchFailedMock,
   markListingPriceResearchSucceeded: markListingPriceResearchSucceededMock,
   markAiModelAttemptFailed: markAiModelAttemptFailedMock,
@@ -116,7 +89,6 @@ vi.mock('@ebay-inventory/data', () => ({
   updateJob: updateJobMock,
   updateListing: updateListingMock,
   updateListingWorkflowState: updateListingWorkflowStateMock,
-  updateOrder: updateOrderMock,
 }));
 
 describe('sidecar data access', () => {
@@ -147,18 +119,10 @@ describe('sidecar data access', () => {
     });
     await dataAccess.listings.getByListingId('LIST-001');
     await dataAccess.listings.getByOfferId('OFFER-001');
-    await dataAccess.aiModelAttempts.listByListingIds?.(['LIST-001', 'LIST-002']);
     await dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt();
     await dataAccess.listingPriceResearch.getLatestByListingId('LIST-001');
     await dataAccess.listingPriceResearch.listLatestByListingIds(['LIST-001', 'LIST-002']);
     await dataAccess.aiModelRoutes.resolveForTask({
-      provider: 'google',
-      requireImages: true,
-      requireJsonOutput: true,
-      requireStructuredOutput: true,
-      taskType: 'listing_draft_generation',
-    });
-    await dataAccess.aiModelRoutes.resolvePrimaryForTask({
       provider: 'google',
       requireImages: true,
       requireJsonOutput: true,
@@ -180,10 +144,6 @@ describe('sidecar data access', () => {
     });
     expect(getListingByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getListingByOfferIdMock).toHaveBeenCalledWith(client, 'OFFER-001');
-    expect(listAiModelAttemptsForListingsMock).toHaveBeenCalledWith(client, [
-      'LIST-001',
-      'LIST-002',
-    ]);
     expect(getLatestGeminiUsageAttemptMock).toHaveBeenCalledWith(client);
     expect(getLatestListingPriceResearchByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(listLatestListingPriceResearchByListingIdsMock).toHaveBeenCalledWith(client, [
@@ -191,13 +151,6 @@ describe('sidecar data access', () => {
       'LIST-002',
     ]);
     expect(resolveAiModelRoutesForTaskMock).toHaveBeenCalledWith(client, {
-      provider: 'google',
-      requireImages: true,
-      requireJsonOutput: true,
-      requireStructuredOutput: true,
-      taskType: 'listing_draft_generation',
-    });
-    expect(resolvePrimaryAiModelRouteForTaskMock).toHaveBeenCalledWith(client, {
       provider: 'google',
       requireImages: true,
       requireJsonOutput: true,
@@ -233,7 +186,6 @@ describe('sidecar data access', () => {
     await dataAccess.listings.approveForExport('LIST-001');
     await dataAccess.listings.claimApprovedForPublish('LIST-001');
     await dataAccess.listings.update('LIST-001', listingUpdate);
-    await dataAccess.listings.markPublishFailed('LIST-001', '2026-05-25T12:00:00.000Z', new Error('boom'));
     await dataAccess.listings.saveImageMetadata(imageMetadataUpdate);
     await dataAccess.listings.updateWorkflowState(workflowUpdate);
     await dataAccess.appSettings.get();
@@ -242,18 +194,12 @@ describe('sidecar data access', () => {
     expect(approveListingForExportMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(claimApprovedListingForPublishMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(updateListingMock).toHaveBeenCalledWith(client, 'LIST-001', listingUpdate);
-    expect(markListingPublishFailedMock).toHaveBeenCalledWith(
-      client,
-      'LIST-001',
-      '2026-05-25T12:00:00.000Z',
-      expect.any(Error)
-    );
     expect(saveListingImageMetadataMock).toHaveBeenCalledWith(client, imageMetadataUpdate);
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);
     expect(getAppSettingsMock).toHaveBeenCalledWith(client, 'default');
   });
 
-  it('delegates jobs and orders calls to the matching shared repository helpers', async () => {
+  it('delegates remaining job, usage, and pricing calls to shared repository helpers', async () => {
     const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
     const dataAccess = createSidecarDataAccess();
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -267,7 +213,6 @@ describe('sidecar data access', () => {
       routing_source: 'direct_gemini',
       started_at: '2026-05-25T13:00:00.000Z',
     });
-    await dataAccess.aiModelAttempts.listByListingId('LIST-001');
     await dataAccess.aiModelAttempts.markSucceeded({
       duration_ms: 2000,
       finished_at: '2026-05-25T13:00:02.000Z',
@@ -280,22 +225,15 @@ describe('sidecar data access', () => {
       finished_at: '2026-05-25T13:00:02.000Z',
       id: 'ai-model-attempt-row-id',
     });
-    await dataAccess.jobs.create({
-      job_type: 'process_images',
-      listing_id: 'LIST-001',
-      status: 'queued',
-    });
     await dataAccess.jobs.claimDueQueued('job-row-id', '2026-05-25T13:00:00.000Z');
     await dataAccess.jobs.complete('job-row-id');
     await dataAccess.jobs.enqueueGenerateAi('LIST-001');
-    await dataAccess.jobs.enqueueProcessImages();
     await dataAccess.jobs.enqueuePublish('LIST-001');
     await dataAccess.jobs.fail('job-row-id', {
       errorAt: '2026-05-25T13:00:00.000Z',
       errorCode: 'stale_worker',
       errorMessage: 'boom',
     });
-    await dataAccess.jobs.getActiveGenerateAiByListingId('LIST-001');
     await dataAccess.jobs.getById('job-row-id');
     await dataAccess.jobs.listDueQueued('2026-05-25T13:00:00.000Z', { limit: 1 });
     await dataAccess.jobs.listByListingId('LIST-001');
@@ -323,19 +261,8 @@ describe('sidecar data access', () => {
       gemini_selected_model: 'gemini-3.1-flash-lite',
     });
     await dataAccess.jobs.update('job-row-id', { status: 'running' });
-    await dataAccess.dailyUsage.getOrCreate('2026-05-25');
-    await dataAccess.dailyUsage.getEffectiveGeminiLimit('2026-05-25');
-    await dataAccess.dailyUsage.getEffectiveOrderSyncLimit('2026-05-25');
     await dataAccess.dailyUsage.getGeminiSummary(new Date('2026-05-25T13:00:00.000Z'));
     await dataAccess.dailyUsage.incrementGeminiCallsUsed('2026-05-25');
-    await dataAccess.dailyUsage.incrementOrderSyncCount('2026-05-25');
-
-    await dataAccess.orders.create({
-      listing_id: 'LIST-001',
-      order_id: 'ORDER-001',
-    });
-    await dataAccess.orders.getByOrderId('ORDER-001');
-    await dataAccess.orders.update('ORDER-001', { fulfillment_status: 'shipped' });
 
     expect(createAiModelAttemptMock).toHaveBeenCalledWith(client, {
       job_id: 'job-row-id',
@@ -346,7 +273,6 @@ describe('sidecar data access', () => {
       routing_source: 'direct_gemini',
       started_at: '2026-05-25T13:00:00.000Z',
     });
-    expect(listAiModelAttemptsForListingMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(markAiModelAttemptSucceededMock).toHaveBeenCalledWith(client, {
       duration_ms: 2000,
       finished_at: '2026-05-25T13:00:02.000Z',
@@ -359,14 +285,6 @@ describe('sidecar data access', () => {
       finished_at: '2026-05-25T13:00:02.000Z',
       id: 'ai-model-attempt-row-id',
     });
-    expect(createJobMock).toHaveBeenCalledWith(
-      client,
-      expect.objectContaining({
-        job_type: 'process_images',
-        listing_id: 'LIST-001',
-        status: 'queued',
-      })
-    );
     expect(claimDueQueuedJobMock).toHaveBeenCalledWith(
       client,
       'job-row-id',
@@ -374,14 +292,12 @@ describe('sidecar data access', () => {
     );
     expect(completeJobMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(enqueueGenerateAiJobMock).toHaveBeenCalledWith(client, 'LIST-001');
-    expect(enqueueProcessImagesJobMock).toHaveBeenCalledWith(client);
     expect(enqueuePublishJobMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(failJobMock).toHaveBeenCalledWith(client, 'job-row-id', {
       errorAt: '2026-05-25T13:00:00.000Z',
       errorCode: 'stale_worker',
       errorMessage: 'boom',
     });
-    expect(getActiveGenerateAiJobByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(getJobByIdMock).toHaveBeenCalledWith(client, 'job-row-id');
     expect(listDueQueuedJobsMock).toHaveBeenCalledWith(
       client,
@@ -422,26 +338,10 @@ describe('sidecar data access', () => {
       gemini_selected_model: 'gemini-3.1-flash-lite',
     });
     expect(updateJobMock).toHaveBeenCalledWith(client, 'job-row-id', { status: 'running' });
-    expect(getOrCreateDailyUsageMock).toHaveBeenCalledWith(client, '2026-05-25');
-    expect(getEffectiveGeminiDailyLimitMock).toHaveBeenCalledWith(client, '2026-05-25');
-    expect(getEffectiveOrderSyncDailyLimitMock).toHaveBeenCalledWith(client, '2026-05-25');
     expect(getGeminiDailyUsageSummaryMock).toHaveBeenCalledWith(
       client,
       new Date('2026-05-25T13:00:00.000Z')
     );
     expect(incrementGeminiCallsUsedMock).toHaveBeenCalledWith(client, '2026-05-25');
-    expect(incrementOrderSyncCountMock).toHaveBeenCalledWith(client, '2026-05-25');
-
-    expect(createOrderMock).toHaveBeenCalledWith(
-      client,
-      expect.objectContaining({
-        listing_id: 'LIST-001',
-        order_id: 'ORDER-001',
-      })
-    );
-    expect(getOrderByOrderIdMock).toHaveBeenCalledWith(client, 'ORDER-001');
-    expect(updateOrderMock).toHaveBeenCalledWith(client, 'ORDER-001', {
-      fulfillment_status: 'shipped',
-    });
   });
 });

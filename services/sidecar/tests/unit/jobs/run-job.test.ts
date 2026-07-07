@@ -491,7 +491,6 @@ function createDataAccess({
   const dailyUsageErrors = [...(dailyUsageIncrementErrors ?? [])];
 
   const jobsGetById = vi.fn(async () => (jobState ? { ...jobState } : null));
-  const jobsCreate = vi.fn();
   const jobsListByListingId = vi.fn(async (listingId: string) =>
     jobState && jobState.listing_id === listingId ? [{ ...jobState }] : []
   );
@@ -588,9 +587,6 @@ function createDataAccess({
     listingPriceResearchStates[listingPriceResearchStates.indexOf(current)] = nextState;
     return { ...nextState };
   });
-  const ordersCreate = vi.fn();
-  const ordersGetByOrderId = vi.fn();
-  const ordersUpdate = vi.fn();
   const appSettingsCreate = vi.fn();
   const appSettingsGet = vi.fn(async () =>
     appSettings
@@ -628,35 +624,8 @@ function createDataAccess({
 
         return aiModelRoutes;
       }),
-      resolvePrimaryForTask: vi.fn(async () => {
-        if (aiModelRouteError) {
-          throw aiModelRouteError;
-        }
-
-        return aiModelRoute;
-      }),
     },
     dailyUsage: {
-      getEffectiveGeminiLimit: vi.fn(async () => ({
-        effectiveLimit: 500,
-        source: 'app_settings' as const,
-        usage: {
-          gemini_calls_used: 0,
-          gemini_daily_limit: 500,
-          order_sync_count: 0,
-          usage_date: '2026-05-20',
-        },
-      })),
-      getEffectiveOrderSyncLimit: vi.fn(async () => ({
-        effectiveLimit: 25,
-        source: 'app_settings' as const,
-        usage: {
-          gemini_calls_used: 0,
-          gemini_daily_limit: 500,
-          order_sync_count: 0,
-          usage_date: '2026-05-20',
-        },
-      })),
       getGeminiSummary: vi.fn(async () => ({
         effectiveLimit: 500,
         remaining: 500,
@@ -664,12 +633,6 @@ function createDataAccess({
         resetTimeZone: 'America/Los_Angeles' as const,
         usageDate: '2026-05-20',
         used: 0,
-      })),
-      getOrCreate: vi.fn(async () => ({
-        gemini_calls_used: 0,
-        gemini_daily_limit: 500,
-        order_sync_count: 0,
-        usage_date: '2026-05-20',
       })),
       incrementGeminiCallsUsed: vi.fn(async () => {
         const nextError = dailyUsageErrors.shift();
@@ -699,7 +662,6 @@ function createDataAccess({
           },
         };
       }),
-      incrementOrderSyncCount: vi.fn(),
     },
     aiModelAttempts: {
       create: vi.fn(async (input) => {
@@ -730,11 +692,6 @@ function createDataAccess({
 
         return { ...aiModelAttemptState };
       }),
-      listByListingId: vi.fn(async (listingId: string) =>
-        aiModelAttemptStates
-          .filter((attempt) => attempt.listing_id === listingId)
-          .map((attempt) => ({ ...attempt }))
-      ),
       markFailed: vi.fn(async (input) => {
         if (aiModelAttemptError) {
           throw aiModelAttemptError;
@@ -816,14 +773,9 @@ function createDataAccess({
 
         return { ...jobState };
       }),
-      create: jobsCreate,
       enqueueGenerateAi: vi.fn(async () => ({
         alreadyQueued: false,
         job: queuedGenerateAiJob,
-      })),
-      enqueueProcessImages: vi.fn(async () => ({
-        alreadyQueued: false,
-        job: queuedProcessImagesJob,
       })),
       enqueuePublish: vi.fn(async () => ({
         alreadyQueued: false,
@@ -866,7 +818,6 @@ function createDataAccess({
 
         return { ...jobState };
       }),
-      getActiveGenerateAiByListingId: vi.fn(async () => queuedGenerateAiJob),
       getById: jobsGetById,
       listDueQueued: vi.fn(async () => []),
       listByListingId: jobsListByListingId,
@@ -935,7 +886,6 @@ function createDataAccess({
       listApprovedForExport: vi.fn(async () => []),
       list: listingsList,
       listByStatus: listingsListByStatus,
-      markPublishFailed: vi.fn(),
       saveImageMetadata: listingsSaveImageMetadata,
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
@@ -944,11 +894,6 @@ function createDataAccess({
       create: listingPriceResearchCreate,
       markFailed: listingPriceResearchMarkFailed,
       markSucceeded: listingPriceResearchMarkSucceeded,
-    },
-    orders: {
-      create: ordersCreate,
-      getByOrderId: ordersGetByOrderId,
-      update: ordersUpdate,
     },
   };
 }

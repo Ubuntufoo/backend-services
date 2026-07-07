@@ -207,23 +207,16 @@ function createDataAccess(): SidecarDataAccess {
   return {
     aiModelRoutes: {
       resolveForTask: vi.fn(async () => []),
-      resolvePrimaryForTask: vi.fn(),
     },
     aiModelAttempts: {
       create: vi.fn(),
       getLatestGeminiUsageAttempt: vi.fn(async () => null),
-      listByListingId: vi.fn(),
-      listByListingIds: vi.fn(async () => []),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
     dailyUsage: {
-      getEffectiveGeminiLimit: vi.fn(),
-      getEffectiveOrderSyncLimit: vi.fn(),
       getGeminiSummary: vi.fn(async () => geminiUsageSummary),
-      getOrCreate: vi.fn(),
       incrementGeminiCallsUsed: vi.fn(),
-      incrementOrderSyncCount: vi.fn(),
     },
     listings: {
       approveForExport: vi.fn(async (listingId: string) => ({
@@ -242,7 +235,6 @@ function createDataAccess(): SidecarDataAccess {
       listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(async () => [listingRow]),
       listByStatus: vi.fn(async () => [listingRow]),
-      markPublishFailed: vi.fn(async () => listingRow),
       prepareForGenerateAi: vi.fn(async () => listingRow),
       saveImageMetadata: vi.fn(async (_input) => ({
         ...listingRow,
@@ -261,13 +253,10 @@ function createDataAccess(): SidecarDataAccess {
     jobs: {
       claimDueQueued: vi.fn(),
       complete: vi.fn(),
-      create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
-      enqueueProcessImages: vi.fn(),
       enqueuePublish: vi.fn(),
       enqueueResearchPrice: vi.fn(),
       fail: vi.fn(),
-      getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
       listDueQueued: vi.fn(),
       listByListingId: vi.fn(),
@@ -285,11 +274,6 @@ function createDataAccess(): SidecarDataAccess {
       listLatestByListingIds: vi.fn(async () => []),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
-    },
-    orders: {
-      create: vi.fn(),
-      getByOrderId: vi.fn(),
-      update: vi.fn(),
     },
     appSettings: {
       create: vi.fn(),

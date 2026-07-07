@@ -112,22 +112,15 @@ function createDataAccess(
   const dataAccess: SidecarDataAccess = {
     aiModelRoutes: {
       resolveForTask: vi.fn(async () => []),
-      resolvePrimaryForTask: vi.fn(),
     },
     aiModelAttempts: {
       create: vi.fn(),
-      listByListingId: vi.fn(),
-      listByListingIds: vi.fn(),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
     dailyUsage: {
-      getEffectiveGeminiLimit: vi.fn(),
-      getEffectiveOrderSyncLimit: vi.fn(),
       getGeminiSummary: vi.fn(),
-      getOrCreate: vi.fn(),
       incrementGeminiCallsUsed: vi.fn(),
-      incrementOrderSyncCount: vi.fn(),
     },
     appSettings: {
       create: vi.fn(),
@@ -137,12 +130,9 @@ function createDataAccess(
     jobs: {
       claimDueQueued: vi.fn(),
       complete: vi.fn(),
-      create: vi.fn(),
       enqueueGenerateAi: vi.fn(),
-      enqueueProcessImages: vi.fn(),
       enqueuePublish: vi.fn(),
       fail: vi.fn(),
-      getActiveGenerateAiByListingId: vi.fn(),
       getById: vi.fn(),
       listDueQueued: vi.fn(),
       listByListingId: vi.fn(),
@@ -158,15 +148,9 @@ function createDataAccess(
       listApprovedForExport: vi.fn(async () => []),
       list: listingsList,
       listByStatus: listingsListByStatus,
-      markPublishFailed: vi.fn(),
       saveImageMetadata: vi.fn(),
       update: listingsUpdate,
       updateWorkflowState: vi.fn(),
-    },
-    orders: {
-      create: vi.fn(),
-      getByOrderId: vi.fn(),
-      update: vi.fn(),
     },
   };
 

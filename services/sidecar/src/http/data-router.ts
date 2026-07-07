@@ -39,8 +39,8 @@ import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow, retryPricingReview, RetryPricingReviewError } from '@/jobs/manual-retry.js';
 import { retryPricingAnalysis, RetryPricingAnalysisError } from '@/jobs/retry-pricing-analysis.js';
 import { JOB_ERROR_CODES, SidecarJobError } from '@/jobs/job-errors.js';
-import { createProductionPricingAnalyst } from '@/pricing/index.js';
-import type { PricingAnalyst } from '@/pricing/index.js';
+import { createProductionPricingAnalyst } from '@/pricing/production-llm-pricing-analyst.js';
+import type { PricingAnalyst } from '@/pricing/types.js';
 
 export interface DataApiRouterOptions {
   dataAccess?: SidecarDataAccess;

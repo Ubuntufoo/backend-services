@@ -34,7 +34,7 @@ import {
   type PublishListingDependencies,
   type PublishListingResult,
 } from '@/ebay/publish-listing.js';
-import { createProductionPricingAnalyst } from '@/pricing/index.js';
+import { createProductionPricingAnalyst } from '@/pricing/production-llm-pricing-analyst.js';
 import {
   classifyJobError,
   createRetryExhaustedError,

@@ -39,15 +39,12 @@ export type {
 export {
   AiModelRouteNotFoundError,
   resolveAiModelRoutesForTask,
-  resolvePrimaryAiModelRouteForTask,
   type ResolveAiModelRoutesInput,
   type ResolvedAiModelRoute,
 } from './repositories/ai-model-routes.js';
 export {
   createAiModelAttempt,
   getLatestGeminiUsageAttempt,
-  listAiModelAttemptsForListing,
-  listAiModelAttemptsForListings,
   markAiModelAttemptFailed,
   markAiModelAttemptSucceeded,
   type GeminiUsageLastAttempt,
@@ -116,7 +113,6 @@ export {
 export {
   claimDueQueuedJob,
   completeJob,
-  createJob,
   enqueueGenerateAiJob,
   enqueueProcessImagesJob,
   enqueuePublishJob,
@@ -165,7 +161,6 @@ export {
   listListings,
   listListingsByStatus,
   prepareListingForGenerateAi,
-  markListingPublishFailed,
   saveGeneratedListingFields,
   saveListingArtifacts,
   saveListingImageMetadata,
