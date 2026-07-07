@@ -33,6 +33,11 @@ Backend monorepo for eBay Inventory Manager. Current runtime center: `services/s
 
 Shared delegate root alias for this repo: `backend-services`.
 
+## Repo-Aware Paths
+
+- Existing top-level code/test roots here: `services/`, `packages/`, `supabase/`, and repo docs such as `README.md` or `docs/` when explicitly in scope.
+- Omit absent generic roots like top-level `src/`, `app/`, and `__tests__/` from lint/test/rg/delegate commands; use repo-aware presets such as `rg --files services packages supabase` and package-filtered `pnpm --filter ...` commands.
+
 ## Validation Commands
 
 - Repo: `pnpm check`, `pnpm typecheck`, `pnpm lint`
