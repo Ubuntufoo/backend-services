@@ -317,6 +317,77 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function getProviderResultRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function getProviderResultNumber(
+  record: Record<string, unknown> | null,
+  topLevelKey: string,
+  nestedRecordKey?: string,
+  nestedValueKey?: string
+): number | undefined {
+  const topLevelValue = asFiniteNonNegativeInteger(record?.[topLevelKey]);
+
+  if (topLevelValue !== undefined) {
+    return topLevelValue;
+  }
+
+  if (!nestedRecordKey || !nestedValueKey) {
+    return undefined;
+  }
+
+  const nestedRecord = isRecord(record?.[nestedRecordKey]) ? record[nestedRecordKey] : null;
+  return asFiniteNonNegativeInteger(nestedRecord?.[nestedValueKey]);
+}
+
+function getProviderResultBoolean(
+  record: Record<string, unknown> | null,
+  topLevelKey: string,
+  nestedRecordKey?: string,
+  nestedValueKey?: string
+): boolean | undefined {
+  const topLevelValue = asBoolean(record?.[topLevelKey]);
+
+  if (topLevelValue !== undefined) {
+    return topLevelValue;
+  }
+
+  if (!nestedRecordKey || !nestedValueKey) {
+    return undefined;
+  }
+
+  const nestedRecord = isRecord(record?.[nestedRecordKey]) ? record[nestedRecordKey] : null;
+  return asBoolean(nestedRecord?.[nestedValueKey]);
+}
+
+function getProviderRequestedCount(record: Record<string, unknown> | null): number | undefined {
+  const request = isRecord(record?.request)
+    ? record.request
+    : isRecord(record?.input) && isRecord(record.input.request)
+      ? record.input.request
+      : null;
+
+  return asFiniteNonNegativeInteger(request?.count);
+}
+
+function getProviderQueryPlan(record: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!record) {
+    return null;
+  }
+
+  if (isRecord(record.queryPlan)) {
+    return record.queryPlan;
+  }
+
+  return isRecord(record.queryFallback) ? record.queryFallback : null;
+}
+
+function getProviderFinalAttemptType(record: Record<string, unknown> | null): string | undefined {
+  const queryPlan = getProviderQueryPlan(record);
+  return asNonEmptyString(queryPlan?.finalAttemptType);
+}
+
 function buildPricingResearchDiagnostics(
   input: {
     latency: PricingResearchLatencyDiagnostics;
@@ -327,24 +398,24 @@ function buildPricingResearchDiagnostics(
     rawCompCount: number;
   }
 ): Record<string, unknown> {
-  const providerOutput =
-    isRecord(input.providerRawResult) && isRecord(input.providerRawResult.output)
-      ? input.providerRawResult.output
-      : null;
+  const providerRecord = getProviderResultRecord(input.providerRawResult);
   const providerReturnedCount =
-    asFiniteNonNegativeInteger(providerOutput?.itemCount) ??
-    (isRecord(input.providerRawResult)
-      ? asFiniteNonNegativeInteger(input.providerRawResult.returnedSoldComps)
-      : undefined) ??
+    getProviderResultNumber(providerRecord, 'itemCount', 'output', 'itemCount') ??
+    (providerRecord ? asFiniteNonNegativeInteger(providerRecord.returnedSoldComps) : undefined) ??
     input.rawCompCount;
-  const requestedCount =
-    isRecord(input.providerRawResult) &&
-    isRecord(input.providerRawResult.input) &&
-    isRecord(input.providerRawResult.input.request)
-      ? asFiniteNonNegativeInteger(input.providerRawResult.input.request.count)
-      : undefined;
-  const providerReportedTotalCount = asFiniteNonNegativeInteger(providerOutput?.totalItems);
-  const providerHasNextPage = asBoolean(providerOutput?.hasNextPage);
+  const requestedCount = getProviderRequestedCount(providerRecord);
+  const providerReportedTotalCount = getProviderResultNumber(
+    providerRecord,
+    'totalItems',
+    'output',
+    'totalItems'
+  );
+  const providerHasNextPage = getProviderResultBoolean(
+    providerRecord,
+    'hasNextPage',
+    'output',
+    'hasNextPage'
+  );
 
   return Object.fromEntries(
     Object.entries({
@@ -364,6 +435,70 @@ function buildPricingResearchDiagnostics(
       rejectedCompCount: input.normalized.rejected.length,
       requestedCount,
       selectedProvider: input.providerRouting.selectedProvider,
+    }).filter(([, value]) => value !== undefined)
+  );
+}
+
+function buildNormalizationSummary(normalized: ReturnType<typeof normalizeSoldComps>, rawCompCount: number) {
+  return {
+    acceptedCount: normalized.comps.length,
+    inputCount: rawCompCount,
+    rawCount: rawCompCount,
+    rejectedCount: normalized.rejected.length,
+    rejected: normalized.rejected,
+  };
+}
+
+function buildRejectedReasonCounts(
+  rejected: ReturnType<typeof normalizeSoldComps>['rejected']
+): Array<{ count: number; reason: string }> | undefined {
+  if (rejected.length === 0) {
+    return undefined;
+  }
+
+  const counts = new Map<string, number>();
+
+  for (const entry of rejected) {
+    counts.set(entry.reason, (counts.get(entry.reason) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort(([leftReason], [rightReason]) => leftReason.localeCompare(rightReason))
+    .map(([reason, count]) => ({ count, reason }));
+}
+
+function buildPricingResearchFailureSummary(input: {
+  errorCode: string;
+  normalized: ReturnType<typeof normalizeSoldComps>;
+  providerRawResult: unknown;
+  rawCompCount: number;
+  stats?: PricingStatsResult;
+}): Record<string, unknown> {
+  const providerRecord = getProviderResultRecord(input.providerRawResult);
+  const providerReturnedCount =
+    getProviderResultNumber(providerRecord, 'itemCount', 'output', 'itemCount') ?? input.rawCompCount;
+  const acceptedCompCount = input.normalized.comps.length;
+  const rejectedCompCount = input.normalized.rejected.length;
+  const outcome =
+    providerReturnedCount === 0
+      ? 'provider_returned_zero_items'
+      : acceptedCompCount === 0
+        ? 'provider_returned_items_but_all_rejected'
+        : input.errorCode === JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID
+          ? 'deterministic_suggested_price_invalid_after_filtering'
+          : 'pricing_research_failed';
+
+  return Object.fromEntries(
+    Object.entries({
+      acceptedCompCount,
+      deterministicSuggestedPrice: input.stats?.deterministicSuggestedPrice ?? null,
+      finalAttemptType: getProviderFinalAttemptType(providerRecord),
+      medianSoldPrice: input.stats?.medianSoldPrice ?? null,
+      outcome,
+      providerReturnedCount,
+      rejectedCompCount,
+      rejectedReasonCounts: buildRejectedReasonCounts(input.normalized.rejected),
+      soldCount: input.stats?.soldCount ?? null,
     }).filter(([, value]) => value !== undefined)
   );
 }
@@ -393,13 +528,7 @@ function buildPricingResearchRawResult(
       providerRouting,
       rawCompCount,
     }),
-    normalization: {
-      acceptedCount: normalized.comps.length,
-      inputCount: rawCompCount,
-      rawCount: rawCompCount,
-      rejectedCount: normalized.rejected.length,
-      rejected: normalized.rejected,
-    },
+    normalization: buildNormalizationSummary(normalized, rawCompCount),
     providerRouting: buildProviderRoutingRawResult(providerRouting),
   });
 }
@@ -1169,13 +1298,46 @@ async function markResearchFailedSafely(
   research: ListingPriceResearchRow | null,
   error: SidecarJobError,
   providerResult?: PricingProviderResult,
-  providerRouting?: ProviderRoutingDiagnostics
+  providerRouting?: ProviderRoutingDiagnostics,
+  failureDiagnostics?: {
+    latency: PricingResearchLatencyDiagnostics;
+    llmAttempted: boolean;
+    normalized: ReturnType<typeof normalizeSoldComps>;
+    rawCompCount: number;
+    stats?: PricingStatsResult;
+  }
 ): Promise<void> {
   if (!research) {
     return;
   }
 
+  const providerRawResult = providerResult?.rawResult;
   const failureContext = {
+    ...(providerRawResult ? { providerResult: providerRawResult } : {}),
+    ...(providerRouting ? { providerRouting: buildProviderRoutingRawResult(providerRouting) } : {}),
+    ...(providerRawResult && providerRouting && failureDiagnostics
+      ? {
+          diagnostics: buildPricingResearchDiagnostics({
+            latency: failureDiagnostics.latency,
+            llmAttempted: failureDiagnostics.llmAttempted,
+            normalized: failureDiagnostics.normalized,
+            providerRawResult,
+            providerRouting,
+            rawCompCount: failureDiagnostics.rawCompCount,
+          }),
+          failureSummary: buildPricingResearchFailureSummary({
+            errorCode: error.code,
+            normalized: failureDiagnostics.normalized,
+            providerRawResult,
+            rawCompCount: failureDiagnostics.rawCompCount,
+            stats: failureDiagnostics.stats,
+          }),
+          normalization: buildNormalizationSummary(
+            failureDiagnostics.normalized,
+            failureDiagnostics.rawCompCount
+          ),
+        }
+      : {}),
     failure: Object.fromEntries(
       Object.entries({
         category: asNonEmptyString(error.context.provider_failure_category),
@@ -1190,8 +1352,6 @@ async function markResearchFailedSafely(
           typeof error.context.workflow_safe === 'boolean' ? error.context.workflow_safe : true,
       }).filter(([, value]) => value !== undefined)
     ),
-    ...(providerResult ? { providerResult: providerResult.rawResult } : {}),
-    ...(providerRouting ? { providerRouting: buildProviderRoutingRawResult(providerRouting) } : {}),
   };
 
   const providerWarning = buildProviderFailureWarning(error, providerRouting);
@@ -1283,6 +1443,8 @@ export async function priceListingNow(
   let providerResult: PricingProviderResult | undefined;
   let rawCompCount = 0;
   let normalizedCompCount = 0;
+  let normalizedResult: ReturnType<typeof normalizeSoldComps> | undefined;
+  let statsResult: PricingStatsResult | undefined;
   let createResearchMs: number | undefined;
   let fallbackFetchMs: number | undefined;
   let llmReasoningMs: number | undefined;
@@ -1332,10 +1494,12 @@ export async function priceListingNow(
       providerResult.soldComps,
       buildNormalizeSoldCompsContext(listing, listingId)
     );
+    normalizedResult = normalized;
     normalizationMs = elapsedMs(normalizationStartedAt);
     normalizedCompCount = normalized.comps.length;
     const statsStartedAt = nowMs();
     const stats = runComputeStats(normalized.comps);
+    statsResult = stats;
     jobLogger.info('Completed research_price provider fetch.', {
       acceptedCompCount: normalizedCompCount,
       actualProvider: providerRouting.actualProvider,
@@ -1572,7 +1736,25 @@ export async function priceListingNow(
           research,
           jobError,
           providerResult,
-          providerRouting
+          providerRouting,
+          normalizedResult && providerRouting && providerResult
+            ? {
+                latency: {
+                  createResearchMs,
+                  fallbackFetchMs,
+                  llmReasoningMs,
+                  normalizationMs,
+                  providerFetchMs,
+                  soldCompsUsagePersistMs,
+                  statsMs,
+                  totalMs: elapsedMs(pipelineStartedAt),
+                },
+                llmAttempted,
+                normalized: normalizedResult,
+                rawCompCount,
+                stats: statsResult,
+              }
+            : undefined
         );
       }
     } catch (cleanupError) {

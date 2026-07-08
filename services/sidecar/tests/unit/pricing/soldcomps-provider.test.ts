@@ -344,27 +344,18 @@ describe('SoldComps pricing provider', () => {
       title: 'Johnny Riddle 1955 Topps #98 low grade',
     });
     expect(result.rawResult).toMatchObject({
-      input: {
-        query: 'Johnny Riddle 1955 Topps #98',
-        request: {
-          count: 50,
-          ebaySite: 'ebay.com',
-          keyword: 'Johnny Riddle 1955 Topps #98',
-          page: 1,
-          sortOrder: 'endedRecently',
-        },
-      },
-      output: {
-        hasNextPage: true,
-        itemCount: 3,
+      hasNextPage: true,
+      itemCount: 3,
+      page: 1,
+      providerStatus: 200,
+      query: 'Johnny Riddle 1955 Topps #98',
+      request: {
+        count: 50,
+        ebaySite: 'ebay.com',
         page: 1,
-        totalItems: 3,
+        sortOrder: 'endedRecently',
       },
-      responseHeaders: {
-        'x-usage-limit': '2000',
-        'x-usage-used': '43',
-      },
-      status: 200,
+      totalItems: 3,
       usage: {
         limit: 2000,
         source: 'headers',
@@ -372,6 +363,7 @@ describe('SoldComps pricing provider', () => {
         used: 43,
       },
     });
+    expect(result.rawResult).not.toHaveProperty('responseHeaders');
     expect(result.soldCompsUsage).toEqual({
       limit: 2000,
       source: 'headers',
@@ -546,31 +538,25 @@ describe('SoldComps pricing provider', () => {
     expect(result.query).toBe(relaxedKeyword);
     expect(result.soldComps).toHaveLength(3);
     expect(result.rawResult).toMatchObject({
-      input: {
-        query: relaxedKeyword,
-      },
-      queryFallback: {
-        effectiveQuery: relaxedKeyword,
-        fallbackAttempt: {
-          input: {
-            query: relaxedKeyword,
-          },
-          output: {
-            itemCount: 3,
-          },
-          query: relaxedKeyword,
-        },
-        fallbackAttempted: true,
-        fallbackSucceeded: true,
-        strictAttempt: {
-          input: {
-            query: strictKeyword,
-          },
-          output: {
+      itemCount: 3,
+      query: relaxedKeyword,
+      queryPlan: {
+        attempts: [
+          expect.objectContaining({
+            attemptType: 'strict',
             itemCount: 0,
-          },
-          query: strictKeyword,
-        },
+            query: strictKeyword,
+          }),
+          expect.objectContaining({
+            attemptType: 'relaxed',
+            itemCount: 3,
+            query: relaxedKeyword,
+          }),
+        ],
+        fallbackAttempted: true,
+        fallbackReason: 'strict_query_returned_zero_items',
+        fallbackSucceeded: true,
+        finalAttemptType: 'relaxed',
       },
       usage: {
         used: 12,
@@ -636,29 +622,25 @@ describe('SoldComps pricing provider', () => {
     expect(result.query).toBe(relaxedKeyword);
     expect(result.soldComps).toEqual([]);
     expect(result.rawResult).toMatchObject({
-      input: {
-        query: relaxedKeyword,
-      },
-      queryFallback: {
-        effectiveQuery: relaxedKeyword,
-        fallbackAttempt: {
-          input: {
-            query: relaxedKeyword,
-          },
-          output: {
+      itemCount: 0,
+      query: relaxedKeyword,
+      queryPlan: {
+        attempts: [
+          expect.objectContaining({
+            attemptType: 'strict',
             itemCount: 0,
-          },
-        },
-        fallbackAttempted: true,
-        fallbackSucceeded: false,
-        strictAttempt: {
-          input: {
             query: strictKeyword,
-          },
-          output: {
+          }),
+          expect.objectContaining({
+            attemptType: 'relaxed',
             itemCount: 0,
-          },
-        },
+            query: relaxedKeyword,
+          }),
+        ],
+        fallbackAttempted: true,
+        fallbackReason: 'strict_query_returned_zero_items',
+        fallbackSucceeded: false,
+        finalAttemptType: 'relaxed',
       },
     });
   });
@@ -720,24 +702,23 @@ describe('SoldComps pricing provider', () => {
         code: 'soldcomps_rate_limited',
         query: relaxedKeyword,
         rawResult: {
-          queryFallback: {
+          queryPlan: {
+            attempts: [
+              expect.objectContaining({
+                attemptType: 'strict',
+                itemCount: 0,
+                query: strictKeyword,
+              }),
+            ],
             fallbackAttempted: true,
+            fallbackReason: 'strict_query_returned_zero_items',
             fallbackFailure: {
               category: 'rate_limit',
               code: 'soldcomps_rate_limited',
+              providerStatus: 429,
               query: relaxedKeyword,
-              status: 429,
-              statusCode: 429,
             },
             fallbackSucceeded: false,
-            strictAttempt: {
-              input: {
-                query: strictKeyword,
-              },
-              output: {
-                itemCount: 0,
-              },
-            },
           },
         },
         statusCode: 429,
@@ -772,22 +753,19 @@ describe('SoldComps pricing provider', () => {
     expect(runRequest).toHaveBeenCalledTimes(1);
     expect(result.soldComps).toEqual([]);
     expect(result.rawResult).toMatchObject({
-      output: {
-        hasNextPage: false,
-        itemCount: 0,
-      },
-      queryFallback: {
-        effectiveQuery: buildPricingSearchQuery(baseInput),
+      hasNextPage: false,
+      itemCount: 0,
+      queryPlan: {
+        attempts: [
+          expect.objectContaining({
+            attemptType: 'strict',
+            itemCount: 0,
+            query: buildPricingSearchQuery(baseInput),
+          }),
+        ],
         fallbackAttempted: false,
         fallbackSucceeded: false,
-        strictAttempt: {
-          input: {
-            query: buildPricingSearchQuery(baseInput),
-          },
-          output: {
-            itemCount: 0,
-          },
-        },
+        finalAttemptType: 'strict',
       },
     });
   });
@@ -827,21 +805,18 @@ describe('SoldComps pricing provider', () => {
     expect(runRequest).toHaveBeenCalledTimes(1);
     expect(result.query).toBe(strictKeyword);
     expect(result.rawResult).toMatchObject({
-      input: {
-        query: strictKeyword,
-      },
-      queryFallback: {
-        effectiveQuery: strictKeyword,
+      query: strictKeyword,
+      queryPlan: {
+        attempts: [
+          expect.objectContaining({
+            attemptType: 'strict',
+            itemCount: 3,
+            query: strictKeyword,
+          }),
+        ],
         fallbackAttempted: false,
         fallbackSucceeded: false,
-        strictAttempt: {
-          input: {
-            query: strictKeyword,
-          },
-          output: {
-            itemCount: 3,
-          },
-        },
+        finalAttemptType: 'strict',
       },
     });
   });
@@ -975,8 +950,9 @@ describe('SoldComps pricing provider', () => {
     expect(serialized).not.toContain('secret-token');
     expect(serialized).not.toContain('secret-value');
     expect(serialized).not.toContain('super-secret-token');
-    expect(serialized).toContain('[redacted-url]');
-    expect(serialized).toContain('Bearer [redacted-token]');
+    expect(result.rawResult).not.toHaveProperty('responseHeaders');
+    expect(serialized).not.toContain('authorization');
+    expect(serialized).not.toContain('upgrade');
   });
 
   it('classifies missing auth/config before request', async () => {

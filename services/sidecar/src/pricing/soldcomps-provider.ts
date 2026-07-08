@@ -208,19 +208,14 @@ export function parseSoldCompsResponse(
     query: meta.query ?? parsed.keyword,
     rawResult: {
       fetchedAt,
-      input: {
-        query: redactSoldCompsSensitiveText(meta.query ?? parsed.keyword),
-        request: meta.request ? sanitizeRequestParams(meta.request) : undefined,
-      },
-      output: {
-        hasNextPage: parsed.hasNextPage,
-        itemCount: soldComps.length,
-        page: parsed.page,
-        sampleTitles: soldComps.slice(0, 3).map((comp) => comp.title),
-        totalItems: parsed.totalItems,
-      },
-      responseHeaders: sanitizeHeaders(meta.responseHeaders),
-      status: meta.status,
+      hasNextPage: parsed.hasNextPage,
+      itemCount: soldComps.length,
+      page: parsed.page,
+      providerStatus: meta.status,
+      query: redactSoldCompsSensitiveText(meta.query ?? parsed.keyword),
+      request: meta.request ? sanitizeRequestParams(meta.request) : undefined,
+      sampleTitles: soldComps.slice(0, 3).map((comp) => comp.title),
+      totalItems: parsed.totalItems,
       usage,
     },
     soldCompsUsage: usage,
@@ -268,6 +263,7 @@ export function createSoldCompsPricingProvider(
       if (strictResult.soldComps.length > 0 || strictRequest.keyword === relaxedQuery) {
         return withQueryFallbackDiagnostics({
           effectiveResult: strictResult,
+          relaxedQuery,
           strictResult,
         });
       }
@@ -287,6 +283,7 @@ export function createSoldCompsPricingProvider(
         return withQueryFallbackDiagnostics({
           effectiveResult: fallbackResult,
           fallbackResult,
+          relaxedQuery,
           strictResult,
         });
       } catch (error) {
@@ -295,6 +292,7 @@ export function createSoldCompsPricingProvider(
         }
 
         throw withFallbackFailureDiagnostics(error, {
+          relaxedQuery,
           strictResult,
         });
       }
@@ -348,16 +346,18 @@ function withQueryFallbackDiagnostics(input: {
   effectiveResult: PricingProviderResult;
   fallbackError?: SoldCompsPricingProviderError;
   fallbackResult?: PricingProviderResult;
+  relaxedQuery: string;
   strictResult: PricingProviderResult;
 }): PricingProviderResult {
   return {
     ...input.effectiveResult,
     rawResult: {
       ...toObjectRecord(input.effectiveResult.rawResult),
-      queryFallback: buildQueryFallbackDiagnostics({
-        effectiveQuery: input.effectiveResult.query,
+      queryPlan: buildQueryPlanDiagnostics({
+        effectiveResult: input.effectiveResult,
         fallbackError: input.fallbackError,
         fallbackResult: input.fallbackResult,
+        relaxedQuery: input.relaxedQuery,
         strictResult: input.strictResult,
       }),
     },
@@ -367,14 +367,17 @@ function withQueryFallbackDiagnostics(input: {
 function withFallbackFailureDiagnostics(
   error: SoldCompsPricingProviderError,
   input: {
+    relaxedQuery: string;
     strictResult: PricingProviderResult;
   }
 ): SoldCompsPricingProviderError {
   return new SoldCompsPricingProviderError(error.code, error.category, error.message, error.query, {
     cause: error,
     rawResult: {
-      queryFallback: buildQueryFallbackDiagnostics({
+      queryPlan: buildQueryPlanDiagnostics({
+        effectiveResult: undefined,
         fallbackError: error,
+        relaxedQuery: input.relaxedQuery,
         strictResult: input.strictResult,
       }),
     },
@@ -382,38 +385,82 @@ function withFallbackFailureDiagnostics(
   });
 }
 
-function buildQueryFallbackDiagnostics(input: {
-  effectiveQuery?: string;
+function buildQueryPlanDiagnostics(input: {
+  effectiveResult?: PricingProviderResult;
   fallbackError?: SoldCompsPricingProviderError;
   fallbackResult?: PricingProviderResult;
+  relaxedQuery: string;
   strictResult: PricingProviderResult;
 }): Record<string, unknown> {
+  const attempts = [
+    toAttemptDiagnostics(input.strictResult, {
+      attemptType: 'strict',
+      relaxedQuery: input.relaxedQuery,
+    }),
+    ...(input.fallbackResult
+      ? [
+          toAttemptDiagnostics(input.fallbackResult, {
+            attemptType: 'relaxed',
+            relaxedQuery: input.relaxedQuery,
+          }),
+        ]
+      : []),
+  ];
+  const finalAttemptType =
+    input.effectiveResult === undefined
+      ? undefined
+      : input.effectiveResult.query === input.strictResult.query &&
+          input.strictResult.query !== input.relaxedQuery
+        ? 'strict'
+        : input.effectiveResult.query === input.strictResult.query
+          ? 'strict'
+          : 'relaxed';
+
   return Object.fromEntries(
     Object.entries({
-      effectiveQuery: input.effectiveQuery,
-      fallbackAttempt: input.fallbackResult ? toAttemptDiagnostics(input.fallbackResult) : undefined,
+      attempts,
       fallbackAttempted: input.fallbackResult !== undefined || input.fallbackError !== undefined,
+      fallbackReason:
+        input.fallbackResult !== undefined || input.fallbackError !== undefined
+          ? 'strict_query_returned_zero_items'
+          : undefined,
       fallbackFailure: input.fallbackError
         ? {
-            ...(input.fallbackError.rawResult ? input.fallbackError.rawResult : {}),
             category: input.fallbackError.category,
             code: input.fallbackError.code,
             message: input.fallbackError.message,
+            providerStatus: input.fallbackError.statusCode,
             query: input.fallbackError.query,
-            statusCode: input.fallbackError.statusCode,
           }
         : undefined,
       fallbackSucceeded: input.fallbackResult !== undefined && input.fallbackResult.soldComps.length > 0,
-      strictAttempt: toAttemptDiagnostics(input.strictResult),
+      finalAttemptType,
     }).filter(([, value]) => value !== undefined)
   );
 }
 
-function toAttemptDiagnostics(result: PricingProviderResult): Record<string, unknown> {
-  return {
-    ...toObjectRecord(result.rawResult),
-    query: result.query,
-  };
+function toAttemptDiagnostics(
+  result: PricingProviderResult,
+  options: {
+    attemptType: 'relaxed' | 'strict';
+    relaxedQuery: string;
+  }
+): Record<string, unknown> {
+  const rawResult = toObjectRecord(result.rawResult);
+
+  return Object.fromEntries(
+    Object.entries({
+      attemptType: options.attemptType,
+      fetchedAt: getRawResultString(rawResult, 'fetchedAt'),
+      hasNextPage: getRawResultBoolean(rawResult, 'hasNextPage'),
+      itemCount: getRawResultNumber(rawResult, 'itemCount'),
+      page: getRawResultNumber(rawResult, 'page'),
+      providerStatus: getRawResultNumber(rawResult, 'providerStatus'),
+      query: result.query,
+      sampleTitles: Array.isArray(rawResult.sampleTitles) ? rawResult.sampleTitles : undefined,
+      totalItems: getRawResultNumber(rawResult, 'totalItems'),
+    }).filter(([, value]) => value !== undefined)
+  );
 }
 
 function toObjectRecord(value: unknown): Record<string, unknown> {
@@ -583,20 +630,27 @@ function sanitizeRequestParams(input: SoldCompsRequestParams): Record<string, un
   return {
     count: input.count,
     ebaySite: input.ebaySite,
-      keyword: redactSoldCompsSensitiveText(input.keyword),
     page: input.page,
     sortOrder: input.sortOrder,
   };
 }
 
-function sanitizeHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-  return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key, redactSoldCompsSensitiveText(value)])
-  );
+function getRawResultBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  return typeof record[key] === 'boolean' ? (record[key] as boolean) : undefined;
+}
+
+function getRawResultNumber(record: Record<string, unknown>, key: string): number | undefined {
+  return typeof record[key] === 'number' && Number.isFinite(record[key])
+    ? (record[key] as number)
+    : undefined;
+}
+
+function getRawResultString(record: unknown, key: string): string | undefined {
+  return isRecord(record) && typeof record[key] === 'string' ? (record[key] as string) : undefined;
 }
 
 function parseUsageHeaderValue(value: string | undefined): number | null | 'invalid' {

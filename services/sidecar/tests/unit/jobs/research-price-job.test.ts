@@ -537,33 +537,26 @@ describe('priceListingNow', () => {
             query: relaxedQuery,
             rawResult: {
               fetchedAt: '2026-06-12T10:05:00.000Z',
-              input: {
-                query: relaxedQuery,
-              },
-              output: {
-                itemCount: 3,
-              },
-              queryFallback: {
-                effectiveQuery: relaxedQuery,
-                fallbackAttempt: {
-                  input: {
-                    query: relaxedQuery,
-                  },
-                  output: {
-                    itemCount: 3,
-                  },
-                },
-                fallbackAttempted: true,
-                fallbackSucceeded: true,
-                strictAttempt: {
-                  input: {
+              itemCount: 3,
+              queryPlan: {
+                attempts: [
+                  {
+                    attemptType: 'strict',
+                    itemCount: 0,
                     query: strictQuery,
                   },
-                  output: {
-                    itemCount: 0,
+                  {
+                    attemptType: 'relaxed',
+                    itemCount: 3,
+                    query: relaxedQuery,
                   },
-                },
+                ],
+                fallbackAttempted: true,
+                fallbackReason: 'strict_query_returned_zero_items',
+                fallbackSucceeded: true,
+                finalAttemptType: 'relaxed',
               },
+              query: relaxedQuery,
             },
             soldComps: [
               createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179'),
@@ -587,22 +580,20 @@ describe('priceListingNow', () => {
       expect.objectContaining({
         query: relaxedQuery,
         raw_result_json: expect.objectContaining({
-          input: expect.objectContaining({
-            query: relaxedQuery,
-          }),
-          queryFallback: expect.objectContaining({
-            effectiveQuery: relaxedQuery,
+          queryPlan: expect.objectContaining({
             fallbackAttempted: true,
+            fallbackReason: 'strict_query_returned_zero_items',
             fallbackSucceeded: true,
-            strictAttempt: expect.objectContaining({
-              input: expect.objectContaining({
+            finalAttemptType: 'relaxed',
+            attempts: expect.arrayContaining([
+              expect.objectContaining({
+                attemptType: 'strict',
+                itemCount: 0,
                 query: strictQuery,
               }),
-              output: expect.objectContaining({
-                itemCount: 0,
-              }),
-            }),
+            ]),
           }),
+          query: relaxedQuery,
         }),
       })
     );
@@ -711,33 +702,26 @@ describe('priceListingNow', () => {
               provider: 'soldcomps',
               query: relaxedQuery,
               rawResult: {
-                input: {
-                  query: relaxedQuery,
-                },
-                output: {
-                  itemCount: 0,
-                },
-                queryFallback: {
-                  effectiveQuery: relaxedQuery,
-                  fallbackAttempt: {
-                    input: {
-                      query: relaxedQuery,
-                    },
-                    output: {
+                itemCount: 0,
+                queryPlan: {
+                  attempts: [
+                    {
+                      attemptType: 'strict',
                       itemCount: 0,
-                    },
-                  },
-                  fallbackAttempted: true,
-                  fallbackSucceeded: false,
-                  strictAttempt: {
-                    input: {
                       query: strictQuery,
                     },
-                    output: {
+                    {
+                      attemptType: 'relaxed',
                       itemCount: 0,
+                      query: relaxedQuery,
                     },
-                  },
+                  ],
+                  fallbackAttempted: true,
+                  fallbackReason: 'strict_query_returned_zero_items',
+                  fallbackSucceeded: false,
+                  finalAttemptType: 'relaxed',
                 },
+                query: relaxedQuery,
               },
               soldComps: [],
             }),
@@ -754,16 +738,33 @@ describe('priceListingNow', () => {
       expect.objectContaining({
         error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
         raw_result_json: expect.objectContaining({
+          diagnostics: expect.objectContaining({
+            normalizationAcceptedCount: 0,
+            normalizationRejectedCount: 0,
+            providerReturnedCount: 0,
+          }),
+          failureSummary: expect.objectContaining({
+            finalAttemptType: 'relaxed',
+            outcome: 'provider_returned_zero_items',
+            providerReturnedCount: 0,
+          }),
+          normalization: expect.objectContaining({
+            acceptedCount: 0,
+            rejectedCount: 0,
+          }),
           providerResult: expect.objectContaining({
-            queryFallback: expect.objectContaining({
-              effectiveQuery: relaxedQuery,
+            queryPlan: expect.objectContaining({
               fallbackAttempted: true,
+              fallbackReason: 'strict_query_returned_zero_items',
               fallbackSucceeded: false,
-              strictAttempt: expect.objectContaining({
-                input: expect.objectContaining({
+              finalAttemptType: 'relaxed',
+              attempts: expect.arrayContaining([
+                expect.objectContaining({
+                  attemptType: 'strict',
+                  itemCount: 0,
                   query: strictQuery,
                 }),
-              }),
+              ]),
             }),
           }),
         }),
@@ -814,23 +815,23 @@ describe('priceListingNow', () => {
         relaxedQuery,
         {
           rawResult: {
-            queryFallback: {
+            queryPlan: {
+              attempts: [
+                {
+                  attemptType: 'strict',
+                  itemCount: 0,
+                  query: strictQuery,
+                },
+              ],
               fallbackAttempted: true,
+              fallbackReason: 'strict_query_returned_zero_items',
               fallbackFailure: {
                 category: 'rate_limit',
                 code: 'soldcomps_rate_limited',
+                providerStatus: 429,
                 query: relaxedQuery,
-                statusCode: 429,
               },
               fallbackSucceeded: false,
-              strictAttempt: {
-                input: {
-                  query: strictQuery,
-                },
-                output: {
-                  itemCount: 0,
-                },
-              },
             },
           },
           statusCode: 429,
@@ -874,22 +875,25 @@ describe('priceListingNow', () => {
               providerFailureCode: 'soldcomps_rate_limited',
               query: relaxedQuery,
               rawResult: expect.objectContaining({
-                queryFallback: expect.objectContaining({
-	                  fallbackAttempted: true,
-	                  fallbackSucceeded: false,
-	                  strictAttempt: expect.objectContaining({
-	                    input: expect.objectContaining({
-	                      query: strictQuery,
-	                    }),
-	                  }),
-	                }),
-	              }),
-	            }),
-	          }),
-	        }),
-	      })
-	    );
-	  });
+                queryPlan: expect.objectContaining({
+                  fallbackAttempted: true,
+                  fallbackReason: 'strict_query_returned_zero_items',
+                  fallbackSucceeded: false,
+                  attempts: expect.arrayContaining([
+                    expect.objectContaining({
+                      attemptType: 'strict',
+                      itemCount: 0,
+                      query: strictQuery,
+                    }),
+                  ]),
+                }),
+              }),
+            }),
+          }),
+        }),
+      })
+    );
+  });
 
   it('allows apify pricing mode without preflight rejection', async () => {
     const listing = createListing();
