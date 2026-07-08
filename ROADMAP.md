@@ -41,8 +41,8 @@ RTK.1A | Tooling/RTK | Prototype wrapper-level `rtk view` dispatcher | Add `rtk 
 | 9N.11 | BE/Architecture | Audit sidecar data facade usage | Identify unused SidecarDataAccess methods and possible subdomain splits without changing behavior.
 | 9N.12 | BE/Pricing | Audit pricing barrel imports | Classify pricing/index imports and replace only low-risk runtime imports with direct module imports.
 | 9N.13 | Docs/Architecture | Consolidate backend architecture docs | Keep docs/architecture.md as source of truth while preserving concise routing summaries in README/AGENTS.
-COMPLETED TASKS COMMENTED OUT -->
 | 10 | $DOCS$ | Repo docs need a macro review to reflect the new pricing service and its integration with the existing architecture | General doc cleanup should also be done in this pass |
+COMPLETED TASKS COMMENTED OUT -->
 --------------- READY FOR LIVE PILOT --------------
 | 10 | BE/Archi | Re-evaluate dedicated pricing worker after live pilot | Decide whether to extract pricing into services/pricing-service based on live provider latency, queue impact, failure isolation needs, and local-dev overhead| 9L.2 | $BE/Pricing$ | Add Apify pricing eligibility gate | Low-value or low-confidence lot candidates skip live Apify; only likely singles or manually selected listings spend Apify credits | GPT-5.5 mini | Medium | Protects monthly Apify budget; use listing metadata, Gemini draft confidence, estimated value threshold, duplicate-cache checks, and manual override |
 | 10 | $BE/DB$ | Add manual listing status reconciliation tool | Exported listings can later be batch-marked listed/sold after Seller Hub-managed pilot | GPT-5.5 mini | Low-Medium | Defer until after initial live testing; useful before order sync exists |

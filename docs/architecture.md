@@ -30,6 +30,7 @@
 - Pricing is sidecar-local today.
 - Primary code: `services/sidecar/src/pricing/`
 - Job entry: `services/sidecar/src/jobs/research-price-job.ts`
+- Runtime provider selection comes from `public.app_settings.pricing_provider_mode` with current modes `off`, `soldcomps`, and `apify`.
 - There is no dedicated pricing service in the current runtime.
 
 ### eBay

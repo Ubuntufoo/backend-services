@@ -1,155 +1,163 @@
 # Pricing
 
-## Implemented
+Pricing is a sidecar-local subsystem. Architecture ownership lives in [architecture.md](architecture.md); this page covers provider modes, runtime flow, persistence, diagnostics, and review-workflow integration.
 
-- Sidecar-local pricing code under `services/sidecar/src/pricing/`
+## Current Ownership
+
+- Runtime code: `services/sidecar/src/pricing/`
 - Job entry: `services/sidecar/src/jobs/research-price-job.ts`
-- Job type: `research_price`
-- Persistence: `public.listing_price_research` plus `packages/data/src/repositories/listing-price-research.ts`
-- Fixture provider path via `createFixturePricingProvider()`
-- Live Apify smoke script via `pnpm pricing:smoke-apify -- --listing-id <listing_id>`
-- Comp normalization in `normalizer.ts`
-- Deterministic median-based stats in `stats.ts`
-- Confidence scoring in `confidence.ts`
-- Validated LLM pricing support/config behind deterministic fallback
-- Noisy Apify-like fixture coverage in `services/sidecar/tests/unit/pricing/`
+- LLM-only warning retry: `services/sidecar/src/jobs/retry-pricing-analysis.ts`
+- API integration: `services/sidecar/src/http/data-router.ts`, `services/sidecar/src/http/listing-pricing-analysis.ts`
+- Persistence: `public.listing_price_research`, `packages/data/src/repositories/listing-price-research.ts`
+- Provider-mode resolution: `packages/data/src/repositories/app-settings.ts`
 
-## Current Data Flow
+There is no dedicated extracted pricing service in the current runtime.
 
-1. Create `research_price` job for listing.
-2. Create pending `listing_price_research` row.
-3. Fetch sold comps from fixture provider.
-4. Normalize comps, compute deterministic stats, compute confidence.
-5. Mark `listing_price_research` row succeeded or failed.
-6. On success, update `listings.price` with deterministic suggested price.
+## Provider Modes
 
-## Primary Live Actor Contract
+Authoritative runtime selection comes from `public.app_settings.pricing_provider_mode`.
 
-Primary live sold-comps actor:
-- Configured by `APIFY_PRICE_ACTOR_ID`
-- Purpose: scrape sold eBay listings; return structured sold-card/item comps
+- `off`: pricing disabled
+- `soldcomps`: live SoldComps provider
+- `apify`: live Apify provider
 
-Actor input shape used by actor docs:
+Current helper behavior:
 
-```json
-{
-  "keywords": ["rtx 4080", "rtx 4090"],
-  "categoryId": "58058",
-  "subcategoryId": "",
-  "daysToScrape": 30,
-  "count": 100,
-  "ebaySite": "ebay.com",
-  "sortOrder": "endedRecently",
-  "minPrice": 100,
-  "maxPrice": 500,
-  "itemLocation": "default",
-  "itemCondition": "any"
-}
-```
+- if `pricing_provider_mode` is set to one of the supported values, that value wins
+- if old compatibility state leaves `pricing_service_enabled=false`, provider resolution falls back to `off`
+- if `pricing_provider_mode` is unset or invalid, the current default resolves to `soldcomps`
 
-Actor output shape excerpt:
+## Current Runtime Flow
 
-```json
-{
-  "itemId": "306671421088",
-  "url": "https://www.ebay.com/itm/306671421088",
-  "title": "Apple iPhone 13 Pro Max - 128GB - Unlocked - Cracked Back",
-  "condition": "Pre-Owned",
-  "conditionId": 3000,
-  "categoryId": "58058",
-  "endedAt": "2025-12-22T05:00:00.000Z",
-  "soldPrice": "215",
-  "soldCurrency": "USD",
-  "listingType": "buy_it_now",
-  "isBestOfferAccepted": false,
-  "shippingPrice": "6.20",
-  "shippingCurrency": "USD",
-  "shippingType": "paid",
-  "totalPrice": "221.20",
-  "thumbnailUrl": "https://i.ebayimg.com/thumbs/images/g/abc123/s-l500.jpg",
-  "sellerUsername": "example_seller",
-  "sellerPositivePercent": 99.2,
-  "sellerFeedbackScore": 1842,
-  "sellerType": null,
-  "scrapedAt": "2026-01-19T21:53:17.613Z"
-}
-```
+1. A `research_price` job runs only for eligible `single` listings already in `needs_review` with `sub_status=review_pending`.
+2. Sidecar creates a pending `listing_price_research` row.
+3. Sidecar resolves the selected live provider from `pricing_provider_mode`.
+4. The selected provider fetches sold comps. If that provider fails with a recoverable runtime failure, sidecar attempts the other live provider as a fallback.
+5. Sidecar normalizes sold comps, computes deterministic stats, and computes confidence.
+6. If a pricing analyst is available, sidecar optionally runs LLM pricing analysis on the normalized comps and deterministic stats.
+7. Sidecar persists the succeeded or failed pricing research row, including warning/failure metadata when present.
+8. On success, sidecar may update `listings.price`, but pricing does not advance the listing out of review or publish it.
 
-## Actor Usage Rules
+## Providers
 
-- Do not send eBay `listings.category_id` directly as actor `categoryId`.
-- Do not send eBay `listings.condition_id` directly as actor structured condition field.
-- Only send actor `categoryId`, `subcategoryId`, `itemCondition`, or other structured filters when explicit Apify-side mapping exists in code.
-- Sidecar search query should use plain marketplace search text. Do not include synthetic `category:<id>` or `condition:<id>` fragments unless a future actor-specific query syntax explicitly supports them.
-- Preserve provider input fields useful for search text generation: `listingId`, `title`, `itemSpecifics`, `minSoldComps`.
-- Treat actor `condition` string as authoritative output label.
-- Treat actor `conditionId` output as best-effort lookup only; do not assume exhaustive/stable locale coverage.
-- `soldPrice` may overstate actual transaction value when `isBestOfferAccepted=true`; downstream logic must account for this.
-- `keywords` array is actor-native primary search input. Current sidecar adapter still uses single query text and transforms internally; if adapter expands to true multi-keyword mode, keep same filters across all generated keywords.
-- `subcategoryId` overrides actor `categoryId` when present per actor docs.
-- Supported sites from actor docs: `ebay.com`, `ebay.co.uk`, `ebay.de`, `ebay.fr`, `ebay.it`, `ebay.es`, `ebay.ca`, `ebay.com.au`.
+### Live Providers
 
-## Current Sidecar Mapping
+- `soldcomps`: resolved through `resolveProductionPricingProvider()` and current SoldComps env
+- `apify`: resolved through `resolveProductionPricingProvider()` and current Apify env
 
-- Sidecar provider normalizes listing context into `query`, `facets`, `itemSpecifics`, `listingId`, `title`, `minSoldComps`.
-- Structured actor payload intentionally omits `categoryId` and `conditionId` until repo contains explicit mapping from eBay taxonomy/condition ids to actor-accepted values.
-- Live Apify default requested sold comps: `8` when `APIFY_MIN_SOLD_COMPS` unset.
-- Smoke script exists only to verify live provider path safely; it must not enqueue jobs, mutate listings, or persist `listing_price_research`.
-- Live one-listing pricing script via `pnpm pricing:price-one -- --listing-id <listing_id>` intentionally runs real pricing persistence for exactly one listing.
-- Offline Apify fixtures under `services/sidecar/tests/fixtures/apify/` exist for unit coverage only; live calls belong only in `pnpm pricing:smoke-apify`.
-- Fewer-than-requested sold comps remain valid provider success; downstream stats/confidence decides usefulness.
+### Test / Injected Provider
 
-## Controlled Apify Pilot
+- `fixture`: `createFixturePricingProvider()` exists for tests and injected runs
+- the fixture provider is not the normal production provider-mode path
 
-Use live smoke only for first CLI validation of real Apify pricing output. Keep initial pilot manual and narrow.
+### Current Provider Notes
+
+- Sidecar provider input is built from listing context such as `listingId`, `title`, `itemSpecifics`, and requested comp count.
+- Apify actor payload intentionally avoids direct eBay `category_id` and `condition_id` filters until explicit repo-side mapping exists.
+- `soldPrice` from Apify can overstate actual realized value when `isBestOfferAccepted=true`; downstream pricing logic must account for that.
+- Fewer-than-requested sold comps can still be a successful provider response; downstream normalization, stats, and confidence decide usefulness.
+
+## Deterministic Pricing And Optional LLM Analysis
+
+Deterministic pricing remains the baseline path.
+
+- comp normalization: `normalizer.ts`
+- stats: `stats.ts`
+- confidence: `confidence.ts`
+- condition adjustment summary: `condition-adjustment.ts`
+
+Optional LLM analysis runs after deterministic stats are available.
+
+- it can refine the suggested price through condition adjustment
+- if it fails, returns an invalid price, returns `null`, or returns an out-of-window price, sidecar falls back to the deterministic suggested price
+- warnings are persisted in `llm_reasoning_json` instead of blocking review
+
+Current warning reasons include:
+
+- `llm_analysis_failed`
+- `llm_condition_adjusted_price_invalid`
+- `llm_condition_adjusted_price_out_of_window`
+- `llm_condition_adjusted_price_null`
+- `provider_failure`
+
+## Review Workflow Integration
+
+Listing API serialization includes pricing context:
+
+- `latest_pricing_research`
+- `pricing_analysis_warnings`
+
+Relevant review routes:
+
+- `POST /listings/:listingId/retry-pricing-analysis`
+  - reruns only the LLM pricing-analysis step against persisted comps and existing listing data
+  - does not refetch provider comps
+- `POST /listings/:listingId/pricing-analysis-warnings/dismiss`
+  - persists dismissed warning codes on the current research row
+- `POST /listings/:listingId/retry-pricing`
+  - reruns the broader pricing review workflow rather than only the LLM warning path
+- `GET /app-settings` and `PATCH /app-settings`
+  - expose and update `pricing_provider_mode`
+
+## Persistence
+
+### `listing_price_research`
+
+Each pricing run persists:
+
+- selected provider name on the row
+- provider query and raw provider/runtime result payload
+- normalized comps and sold-count summary
+- deterministic/LLM-derived suggested price outcome
+- `llm_price_explanation`
+- `llm_reasoning_json`
+- `llm_rejected_comp_ids`
+- `dismissed_pricing_warning_codes`
+- failure code/message when the run fails
+
+Workflow-safe provider failures can still produce persisted pricing warnings for the review UI even when the overall research row fails.
+
+### `app_settings`
+
+Pricing-related runtime config currently lives in the singleton settings row:
+
+- `pricing_provider_mode`
+- `soldcomps_usage_snapshot`
+
+When SoldComps is used, sidecar attempts to persist usage snapshot metadata back onto `app_settings`.
+
+## Diagnostics And Commands
+
+Read-only diagnostics:
 
 ```bash
+pnpm pricing:diagnose-soldcomps-config
+pnpm pricing:diagnose-apify-config
+```
+
+Manual provider smoke:
+
+```bash
+pnpm pricing:smoke-soldcomps -- --listing-id <listing_id>
 pnpm pricing:smoke-apify -- --listing-id <listing_id>
+```
+
+Pricing one real listing:
+
+```bash
 pnpm pricing:price-one -- --listing-id <listing_id>
 ```
 
-Safety:
+Command behavior:
 
-- CLI smoke only
-- no job enqueue
-- no DB writes
-- no listing mutation
-- real Apify call; can spend credits
-- `pricing:price-one` intentionally writes `listing_price_research` plus `listings.price` for one listing only
-- keep `app_settings.pricing_service_enabled=true` only while intentionally running live pricing
+- `pricing:smoke-soldcomps` and `pricing:smoke-apify` verify live provider behavior for exactly one listing without enqueueing jobs, mutating listings, or persisting `listing_price_research`
+- `pricing:price-one` intentionally runs the real pricing persistence path for exactly one listing and can update both `listing_price_research` and `listings.price`
 
-Prereqs:
+## Current Guarantees
 
-- valid Apify token/env configured
-- listing exists locally
-- use real listing with assets/draft context sufficient for pricing search
-
-Recommended pilot behavior:
-
-- run 1 listing first
-- inspect logs/output manually
-- do not enable automated pricing until smoke output looks sane
-- keep `app_settings.pricing_service_enabled=false` during initial CLI-only testing
-- global pricing toggle not required for CLI smoke
-- global pricing toggle required for `pricing:price-one`
-
-Failure interpretation:
-
-- rate-limit/quota/provider failures: external; retry later
-- malformed comps or zero/few comps: valid pilot observation, not automatic app failure
-- missing token/config: local setup problem
-
-## Workflow Guarantees
-
-- Pricing currently targets `listing_type === 'single'`.
-- Listing must already be in `needs_review`.
-- Successful pricing may update `listings.price`.
-- Listing remains in `needs_review` / `review_pending`; pricing does not approve or publish it.
-- Pricing failure should not block review/export.
-- Pricing failure should not write listing `last_error_*`; failure stays on job state and `listing_price_research`.
-
-## Pending
-
-- Explicit mapping layer from eBay category/condition ids to actor-native filters
-- Full live Apify pricing rollout in normal `research_price` flow
-- Pricing service extracted from sidecar
+- pricing is sidecar-local today
+- pricing currently targets eligible `single` listings in `needs_review` / `review_pending`
+- pricing success may update `listings.price`
+- pricing does not approve or publish the listing
+- pricing failure should not block review/export
+- pricing failure should not write listing `last_error_*`; failure state belongs on the job and `listing_price_research`

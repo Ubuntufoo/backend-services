@@ -25,5 +25,8 @@
 
 ## Pricing Expectations
 
-- Current documented pricing path is fixture-backed.
-- Presence of Apify env vars or Apify-like fixtures does not mean live pricing provider is enabled in normal flow.
+- Current runtime selection comes from `public.app_settings.pricing_provider_mode`.
+- `pricing_provider_mode=off` disables pricing; unset mode currently resolves to `soldcomps`.
+- `apify` and `soldcomps` are the live provider modes; the fixture provider exists for tests and injected runs, not normal production mode selection.
+- Presence of Apify env vars or fixture coverage alone does not mean that live Apify pricing is active.
+- `retry-pricing-analysis` reruns only the LLM pricing-analysis step against persisted comps; it does not refetch provider comps.

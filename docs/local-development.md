@@ -17,8 +17,6 @@ pnpm dev:sidecar:stdio
 pnpm setup
 ```
 
-```
-
 ## Service Commands
 
 | Area | Command |
