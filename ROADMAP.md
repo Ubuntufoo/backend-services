@@ -2,12 +2,8 @@
 
 Note: Commented out early tasks that have been completed to keep the focus on upcoming work.
 
-Future Consideration:
-Maintain workflow, pricing, and publish abstractions so listing types can expand beyond single and lot. Anticipated future support includes eBay "You Pick" style inventory listings where one listing may represent multiple underlying inventory items.
-
 | Phase | Area | Task | Output |
 | ----: | ---- | ---- | ------ |
-
 <!--
 PREVIOUS ROADMAP TASKS ARCHIVED
 | 9J.18 | FE/Dashboard | Surface pricing-analysis warnings in Operational Summary | Display non-blocking pricing-analysis warnings alongside existing operational issues with concise user-facing messaging |

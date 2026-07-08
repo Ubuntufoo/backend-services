@@ -421,38 +421,73 @@ describe('normalizeSoldComps', () => {
     expect(normalized.comps[0]?.title).toBe(title);
   });
 
-  it('accepts matching target parallel after canonical set phrase', () => {
-    const title = '1997 Fleer Ultra Gold Medallion Darryl Strawberry #G106';
-    const normalized = normalizeSoldComps([buildRawComp({ title })], {
-      itemSpecifics: {
-        'Card Number': 'G106',
-        'Parallel/Variety': 'Gold Medallion',
-        Player: 'Darryl Strawberry',
-        Set: 'Fleer Ultra',
-        Year: '1997',
-      },
-      title: '1997 Fleer Ultra Gold Medallion Darryl Strawberry #G106',
-    });
+  it.each([
+    ['1953 Bowman Color Sal Maglie #96 Good Crease', buildSalMaglieContext()],
+    ['1991 Fleer Pro Vision Darryl Strawberry #12', buildDarrylStrawberryProVisionContext()],
+    ['1999 Topps Chrome Highlight Reels Kobe Bryant #HR4', buildKobeBryantContext()],
+    ['2003 Topps Finest Troy Polamalu #61', buildTroyPolamaluContext()],
+    [
+      '1997 Fleer Ultra Gold Medallion Darryl Strawberry #G106',
+      {
+        itemSpecifics: {
+          'Card Number': 'G106',
+          'Parallel/Variety': 'Gold Medallion',
+          Player: 'Darryl Strawberry',
+          Set: 'Fleer Ultra',
+          Year: '1997',
+        },
+        title: '1997 Fleer Ultra Gold Medallion Darryl Strawberry #G106',
+      } satisfies NormalizeSoldCompsContext,
+    ],
+    [
+      '2023 Panini Prizm Silver Victor Wembanyama #136',
+      {
+        itemSpecifics: {
+          'Card Number': '136',
+          'Insert Set': 'Silver',
+          Player: 'Victor Wembanyama',
+          Set: 'Panini Prizm',
+          Year: '2023',
+        },
+        title: '2023 Panini Prizm Silver Victor Wembanyama #136',
+      } satisfies NormalizeSoldCompsContext,
+    ],
+  ])('accepts exact-card title with loose base-set match "%s"', (title, context) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], context);
 
     expect(normalized.rejected).toEqual([]);
     expect(normalized.comps[0]?.title).toBe(title);
   });
 
-  it('accepts matching target insert after canonical set phrase', () => {
-    const title = '2023 Panini Prizm Silver Victor Wembanyama #136';
-    const normalized = normalizeSoldComps([buildRawComp({ title })], {
-      itemSpecifics: {
-        'Card Number': '136',
-        'Insert Set': 'Silver',
-        Player: 'Victor Wembanyama',
-        Set: 'Panini Prizm',
-        Year: '2023',
-      },
-      title: '2023 Panini Prizm Silver Victor Wembanyama #136',
-    });
+  it('accepts Bowman manufacturer when Set carries Bowman Color child phrase', () => {
+    const title = '1953 Bowman Sal Maglie #96';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildSalMaglieContext());
 
     expect(normalized.rejected).toEqual([]);
     expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('accepts Topps-family title when Set carries Chrome Highlight Reels child phrase', () => {
+    const title = '1999 Topps Kobe Bryant #HR4';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildKobeBryantContext());
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it.each([
+    ['1991 Fleer Pro Vision Darryl Strawberry #21', 'exact_card_number_mismatch'],
+    ['1990 Fleer Pro Vision Darryl Strawberry #12', 'exact_year_mismatch'],
+    ['1991 Fleer Pro Vision Dwight Gooden #12', 'exact_player_mismatch'],
+    ['1991 Donruss Studio Darryl Strawberry #12', 'exact_set_mismatch'],
+  ])('preserves strict exact-card rejection for loose base-set titles "%s"', (title, reason) => {
+    const normalized = normalizeSoldComps(
+      [buildRawComp({ title })],
+      buildDarrylStrawberryProVisionContext()
+    );
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([{ index: 0, reason, title }]);
   });
 
   it.each([
@@ -618,6 +653,58 @@ function buildDarrylStrawberryContext(): NormalizeSoldCompsContext {
       Year: '1997',
     },
     title: '1997 Fleer Darryl Strawberry #179',
+  };
+}
+
+function buildSalMaglieContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '96',
+      Manufacturer: 'Bowman',
+      Player: 'Sal Maglie',
+      Set: 'Bowman Color',
+      Year: '1953',
+    },
+    title: '1953 Bowman Sal Maglie #96',
+  };
+}
+
+function buildDarrylStrawberryProVisionContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '12',
+      Manufacturer: 'Fleer',
+      Player: 'Darryl Strawberry',
+      Set: 'Fleer Pro Vision',
+      Year: '1991',
+    },
+    title: '1991 Fleer Darryl Strawberry #12',
+  };
+}
+
+function buildKobeBryantContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': 'HR4',
+      Manufacturer: 'Topps',
+      Player: 'Kobe Bryant',
+      Set: 'Topps Chrome Highlight Reels',
+      Year: '1999',
+    },
+    title: '1999 Topps Kobe Bryant #HR4',
+  };
+}
+
+function buildTroyPolamaluContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '61',
+      Manufacturer: 'Topps',
+      Player: 'Troy Polamalu',
+      Set: 'Topps Finest',
+      Year: '2003',
+    },
+    title: '2003 Topps Troy Polamalu #61',
   };
 }
 

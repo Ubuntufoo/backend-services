@@ -6,7 +6,6 @@ const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
 const SET_ITEM_SPECIFIC_KEYS = ['Set'] as const;
 const MANUFACTURER_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Card Manufacturer', 'Brand'] as const;
 const CARD_NUMBER_ITEM_SPECIFIC_KEYS = ['Card Number'] as const;
-const PARALLEL_ITEM_SPECIFIC_KEYS = ['Parallel/Variety', 'Insert Set'] as const;
 const TITLE_CARD_NUMBER_PATTERNS = [
   /\bCard\s*#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*No\.?\s*#?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
@@ -32,22 +31,11 @@ const SET_NOISE_TOKENS = new Set([
   'tcg',
   'trading',
 ]);
-const GENERIC_SET_FALLBACK_PHRASES = new Set([
-  'donruss',
-  'fleer',
-  'hoops',
-  'nba hoops',
-  'panini',
-  'score',
-  'skybox',
-  'topps',
-  'upper deck',
-]);
-export interface ExactCardTitleTarget {
+const MULTI_WORD_BASE_BRAND_PAIRS = new Set(['nba hoops', 'upper deck']);
+interface ExactCardTitleTarget {
+  baseSetTokens: string[];
   cardNumber: string | null;
-  parallelPhrases: string[];
   playerPhrase: string | null;
-  setPhrase: string | null;
   year: string | null;
 }
 
@@ -63,14 +51,11 @@ export function buildExactCardTitleTarget(context: NormalizeSoldCompsContext): E
   const fallbackTitle = context.title ?? '';
 
   return {
+    baseSetTokens: getBaseSetTokens(itemSpecifics),
     cardNumber:
       getFirstSpecificValue(itemSpecifics, CARD_NUMBER_ITEM_SPECIFIC_KEYS, normalizeCardNumber) ??
       extractExplicitCardNumber(fallbackTitle),
-    parallelPhrases: getSpecificValues(itemSpecifics, PARALLEL_ITEM_SPECIFIC_KEYS, normalizePhrase),
     playerPhrase: getFirstSpecificValue(itemSpecifics, PLAYER_ITEM_SPECIFIC_KEYS, normalizePhrase),
-    setPhrase:
-      getFirstSpecificValue(itemSpecifics, SET_ITEM_SPECIFIC_KEYS, normalizePhrase) ??
-      getFirstSpecificValue(itemSpecifics, MANUFACTURER_ITEM_SPECIFIC_KEYS, normalizePhrase),
     year:
       getFirstSpecificValue(itemSpecifics, YEAR_ITEM_SPECIFIC_KEYS, normalizeYear) ??
       extractFirstYear(fallbackTitle),
@@ -87,11 +72,7 @@ export function getExactCardTitleMismatchReason(
     return EXACT_CARD_REJECTION_REASONS.playerMismatch;
   }
 
-  if (
-    target.setPhrase &&
-    !matchesSetIdentity(tokens, target.setPhrase, target.playerPhrase, target.parallelPhrases) &&
-    !matchesRelaxedGenericSetIdentity(title, tokens, target)
-  ) {
+  if (target.baseSetTokens.length > 0 && !containsWholePhraseTokens(tokens, target.baseSetTokens)) {
     return EXACT_CARD_REJECTION_REASONS.setMismatch;
   }
 
@@ -107,6 +88,38 @@ export function getExactCardTitleMismatchReason(
   }
 
   return null;
+}
+
+function getBaseSetTokens(itemSpecifics: PricingProviderInput['itemSpecifics']): string[] {
+  if (!itemSpecifics) {
+    return [];
+  }
+
+  for (const key of MANUFACTURER_ITEM_SPECIFIC_KEYS) {
+    const rawValue = itemSpecifics[key];
+    const values = Array.isArray(rawValue) ? rawValue : typeof rawValue === 'string' ? [rawValue] : [];
+
+    for (const value of values) {
+      const tokens = tokenizeBaseBrand(value);
+      if (tokens.length > 0) {
+        return tokens;
+      }
+    }
+  }
+
+  for (const key of SET_ITEM_SPECIFIC_KEYS) {
+    const rawValue = itemSpecifics[key];
+    const values = Array.isArray(rawValue) ? rawValue : typeof rawValue === 'string' ? [rawValue] : [];
+
+    for (const value of values) {
+      const tokens = deriveBaseBrandFromSet(value);
+      if (tokens.length > 0) {
+        return tokens;
+      }
+    }
+  }
+
+  return [];
 }
 
 function getFirstSpecificValue(
@@ -133,32 +146,6 @@ function getFirstSpecificValue(
   return null;
 }
 
-function getSpecificValues(
-  itemSpecifics: PricingProviderInput['itemSpecifics'],
-  keys: readonly string[],
-  normalize: (value: string) => string | null
-): string[] {
-  if (!itemSpecifics) {
-    return [];
-  }
-
-  const values: string[] = [];
-
-  for (const key of keys) {
-    const rawValue = itemSpecifics[key];
-    const candidates = Array.isArray(rawValue) ? rawValue : typeof rawValue === 'string' ? [rawValue] : [];
-
-    for (const candidate of candidates) {
-      const normalized = normalize(candidate);
-      if (normalized && !values.includes(normalized)) {
-        values.push(normalized);
-      }
-    }
-  }
-
-  return values;
-}
-
 function normalizePhrase(value: string): string | null {
   const normalized = value.trim().replace(/\s+/g, ' ');
   return normalized.length > 0 ? normalized : null;
@@ -173,6 +160,29 @@ function normalizeYear(value: string): string | null {
 function normalizeCardNumber(value: string): string | null {
   const normalized = value.trim().replace(/^#\s*/, '');
   return /^[A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4}$/.test(normalized) ? normalized.toUpperCase() : null;
+}
+
+function tokenizeBaseBrand(value: string): string[] {
+  const normalized = normalizePhrase(value);
+  if (!normalized) {
+    return [];
+  }
+
+  return tokenizeTitle(normalized).filter((token) => !SET_NOISE_TOKENS.has(token) && !/^\d+$/.test(token));
+}
+
+function deriveBaseBrandFromSet(value: string): string[] {
+  const tokens = tokenizeBaseBrand(value);
+  if (tokens.length <= 1) {
+    return tokens;
+  }
+
+  const firstPair = `${tokens[0]} ${tokens[1]}`;
+  if (MULTI_WORD_BASE_BRAND_PAIRS.has(firstPair)) {
+    return tokens.slice(0, 2);
+  }
+
+  return tokens.slice(0, 1);
 }
 
 function extractFirstYear(title: string): string | null {
@@ -230,83 +240,6 @@ function stripExplicitCardNumberSpans(title: string): string {
   }
 
   return stripped.replace(/\s+/g, ' ').trim();
-}
-
-function matchesSetIdentity(
-  tokens: string[],
-  setPhrase: string,
-  playerPhrase: string | null,
-  parallelPhrases: string[]
-): boolean {
-  const targetTokens = compactSetTokens(tokenizeTitle(setPhrase));
-  const playerTokens = playerPhrase ? tokenizeTitle(playerPhrase) : [];
-  const parallelTokenGroups = parallelPhrases.map((phrase) => compactSetTokens(tokenizeTitle(phrase))).filter((tokens) => tokens.length > 0);
-  if (targetTokens.length === 0) {
-    return true;
-  }
-
-  const phraseIndexes = findPhraseIndexes(tokens, targetTokens);
-  if (phraseIndexes.length === 0) {
-    return false;
-  }
-
-  return phraseIndexes.some((startIndex) => {
-    const nextTokens = tokens.slice(startIndex + targetTokens.length);
-    const nextToken = nextTokens[0];
-
-    if (
-      parallelTokenGroups.some((parallelTokens) =>
-        parallelTokens.every((token, offset) => nextTokens[offset] === token)
-      )
-    ) {
-      return true;
-    }
-
-    return (
-      !nextToken ||
-      SET_NOISE_TOKENS.has(nextToken) ||
-      nextToken === playerTokens[0] ||
-      /^[a-z]{0,4}\d{1,4}[a-z]{0,4}$/i.test(nextToken)
-    );
-  });
-}
-
-function matchesRelaxedGenericSetIdentity(
-  title: string,
-  tokens: string[],
-  target: ExactCardTitleTarget
-): boolean {
-  if (!target.setPhrase || !target.year) {
-    return false;
-  }
-
-  const targetTokens = compactSetTokens(tokenizeTitle(target.setPhrase));
-  if (!isGenericSetFallbackEligible(targetTokens)) {
-    return false;
-  }
-
-  if (!getTitleYearCandidates(title).includes(target.year)) {
-    return false;
-  }
-
-  const phraseIndexes = findPhraseIndexes(tokens, targetTokens);
-  if (phraseIndexes.length === 0) {
-    return false;
-  }
-
-  return true;
-}
-
-function isGenericSetFallbackEligible(targetTokens: string[]): boolean {
-  if (targetTokens.length === 0) {
-    return false;
-  }
-
-  return GENERIC_SET_FALLBACK_PHRASES.has(targetTokens.join(' '));
-}
-
-function compactSetTokens(tokens: string[]): string[] {
-  return tokens.filter((token) => !SET_NOISE_TOKENS.has(token) && !/^\d+$/.test(token));
 }
 
 function containsWholePhraseTokens(tokens: string[], phraseTokens: string[]): boolean {
