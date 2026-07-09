@@ -44,9 +44,9 @@ RTK.1A | Tooling/RTK | Prototype wrapper-level `rtk view` dispatcher | Add `rtk 
 | 9N.16 | BE/Pricing | Review failed pricing logs and fix | Last price job failed due to 'research_price_suggested_price_invalid' and the response JSON appears flawed.
 | 9N.17A | FE | remove 130POINT from pricing research panel | 130POINT is no longer used and should be removed from the UI.
 | 9N.17B | BE | remove 130POINT from pricing service | Pricing research panel is no longer used and should be removed from the BE pricing service.
-COMPLETED TASKS COMMENTED OUT -->
---------------- READY FOR LIVE PILOT --------------
 | 10A.1 | BE/Docs | Reconfirm card-adjacent eBay taxonomy metadata | Recheck live `EBAY_US` taxonomy, leaf status, item aspects, and condition metadata for card singles/lots categories before behavior changes; confirm at minimum `261328`, `261329`, `183050`, `183051`, `183454`, `183455`, `2611`, `104049`, `38292`, `19113`, `31395`, and `49209`. Sealed packs are out of scope.
+COMPLETED TASKS COMMENTED OUT -->
+--------------- READY FOR LIVE PILOT: SPORTS CARD SINGLES --------------
 | 10A.2 | BE/Docs | Update category ID reference for multi-category card support | Update `backend-services/docs/ebay-category-ids.md` with refreshed results, explicitly separating sports cards, non-sport entertainment cards, and CCG/TCG cards; document that only singles/lots are planned long-term. |
 | 10A.3 | BE/Architecture | Audit sports-card pipeline seams for category-family expansion | Document current impact areas for category families: capture modes, AI draft schema/prompt, category resolver, item-specific validation, pricing query/normalizer, condition mapping, publish payload, and SKU/category code behavior. No runtime behavior changes. |
 | 10A.4 | BE/Architecture | Draft category-family foundation plan | Produce the Phase 1 backend plan for category-family support with sports-card behavior preserved as the regression baseline and non-sport entertainment card singles as the first implementation target.
