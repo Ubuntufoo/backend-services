@@ -174,8 +174,8 @@ function buildAllowedAdjustment(input: {
     return ineligibleAdjustment('comp_condition_median_unavailable');
   }
 
-  const rawPercent = Math.tanh(input.conditionDelta / 2.0) * 0.45;
-  const clampedPercent = clamp(rawPercent, -0.35, 0.35);
+  const rawPercent = Math.tanh(input.conditionDelta / 2.0) * 0.5;
+  const clampedPercent = clamp(rawPercent, -0.4, 0.4);
   const baseLowerBound = input.deterministicMedianPrice * 0.65;
   const baseUpperBound = input.deterministicMedianPrice * 1.35;
   let curvePrice = input.deterministicMedianPrice * (1 + clampedPercent);
