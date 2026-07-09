@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
+  hasActionableRecordCreatedListings,
   prepareRecordCreatedListings,
   type PrepareRecordCreatedListingsResult,
 } from '@/jobs/index.js';
@@ -552,5 +553,55 @@ describe('prepareRecordCreatedListings', () => {
       offset: 2,
       orderByCreatedAt: 'asc',
     });
+  });
+
+  it('finds actionable record_created rows after excluding listings already attempted in the current pass', async () => {
+    const { dataAccess, listingsListByStatus } = createDataAccess([
+      createListingRow({
+        created_at: '2026-05-22T10:00:00.000Z',
+        listing_id: 'LIST-001',
+      }),
+      createListingRow({
+        created_at: '2026-05-22T10:01:00.000Z',
+        listing_id: 'LIST-002',
+        image_urls: ['/processed/LIST-002/LIST-002_01.jpg', '/processed/LIST-002/LIST-002_02.jpg'],
+        sku: 'SKU-002',
+      }),
+    ]);
+
+    await expect(
+      hasActionableRecordCreatedListings({
+        batchSize: 1,
+        dataAccess,
+        excludeListingIds: ['LIST-001'],
+      })
+    ).resolves.toBe(true);
+
+    expect(listingsListByStatus).toHaveBeenNthCalledWith(1, 'record_created', {
+      limit: 1,
+      offset: 0,
+      orderByCreatedAt: 'asc',
+    });
+    expect(listingsListByStatus).toHaveBeenNthCalledWith(2, 'record_created', {
+      limit: 1,
+      offset: 1,
+      orderByCreatedAt: 'asc',
+    });
+  });
+
+  it('ignores skipped-only record_created rows when checking for actionable follow-up work', async () => {
+    const { dataAccess } = createDataAccess([
+      createListingRow({
+        created_at: '2026-05-22T10:00:00.000Z',
+        image_urls: ['https://cdn.example.com/manual-front.jpg'],
+        listing_id: 'manual-001',
+      }),
+    ]);
+
+    await expect(
+      hasActionableRecordCreatedListings({
+        dataAccess,
+      })
+    ).resolves.toBe(false);
   });
 });

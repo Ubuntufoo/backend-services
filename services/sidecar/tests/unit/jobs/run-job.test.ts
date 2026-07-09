@@ -506,12 +506,40 @@ function createDataAccess({
 
     return { ...jobState };
   });
+  const getCurrentListings = () => {
+    const latestByListingId = new Map<string, ListingRow>();
+
+    for (const state of listingStates) {
+      latestByListingId.set(state.listing_id, state);
+    }
+
+    return [...latestByListingId.values()];
+  };
+
   const listingsCreate = vi.fn();
-  const listingsList = vi.fn();
-  const listingsListByStatus = vi.fn();
+  const listingsList = vi.fn(async () => getCurrentListings().map((current) => ({ ...current })));
+  const listingsListByStatus = vi.fn(
+    async (
+      status: ListingRow['status'],
+      options: { limit: number; offset: number; orderByCreatedAt?: 'asc' | 'desc' }
+    ) =>
+      getCurrentListings()
+        .filter((current) => current.status === status)
+        .sort((left, right) =>
+          options.orderByCreatedAt === 'desc'
+            ? right.created_at.localeCompare(left.created_at)
+            : left.created_at.localeCompare(right.created_at)
+        )
+        .slice(options.offset, options.offset + options.limit)
+        .map((current) => ({ ...current }))
+  );
   const listingsSaveImageMetadata = vi.fn();
-  const listingsGetByOfferId = vi.fn(async () => listingStates.at(-1) ?? null);
-  const listingsGetByListingId = vi.fn(async () => listingStates.at(-1) ?? null);
+  const listingsGetByOfferId = vi.fn(async (offerId: string) =>
+    getCurrentListings().find((current) => current.ebay_offer_id === offerId) ?? null
+  );
+  const listingsGetByListingId = vi.fn(async (listingId: string) =>
+    getCurrentListings().find((current) => current.listing_id === listingId) ?? null
+  );
   const listingsUpdate = vi.fn(async (_listingId: string, changes: Partial<ListingRow>) => {
     const current = listingStates.at(-1);
     if (!current) {
@@ -776,6 +804,10 @@ function createDataAccess({
       enqueueGenerateAi: vi.fn(async () => ({
         alreadyQueued: false,
         job: queuedGenerateAiJob,
+      })),
+      enqueueProcessImages: vi.fn(async () => ({
+        alreadyQueued: false,
+        job: queuedProcessImagesJob,
       })),
       enqueuePublish: vi.fn(async () => ({
         alreadyQueued: false,
@@ -2558,6 +2590,160 @@ describe('runSidecarJob', () => {
     });
     expect(result.job.status).toBe('completed');
     expect(result.job.last_error).toBeNull();
+    expect(dataAccess.jobs.enqueueProcessImages).not.toHaveBeenCalled();
+  });
+
+  it('completes process_images before enqueuing a follow-up job when actionable record_created rows remain', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedProcessImagesJob,
+      workflowStates: [
+        createListingRow({
+          created_at: '2026-05-20T12:00:00.000Z',
+          image_urls: ['/processed/LIST-001/LIST-001_01.jpg', '/processed/LIST-001/LIST-001_02.jpg'],
+          listing_id: 'LIST-001',
+          status: 'record_created',
+          sub_status: 'idle',
+        }),
+        createListingRow({
+          created_at: '2026-05-20T12:05:00.000Z',
+          image_urls: ['/processed/LIST-002/LIST-002_01.jpg', '/processed/LIST-002/LIST-002_02.jpg'],
+          listing_id: 'LIST-002',
+          sku: 'SKU-002',
+          status: 'record_created',
+          sub_status: 'idle',
+        }),
+      ],
+    });
+    const prepareRecordCreatedListingsMock = vi.fn(async () => ({
+      exhaustedCandidates: true,
+      failed: [],
+      processed: [
+        createListingRow({
+          image_urls: [
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
+          ],
+          listing_id: 'LIST-001',
+          status: 'assets_ready',
+          sub_status: 'ready_to_generate',
+        }),
+      ],
+      skipped: [],
+    }));
+
+    await runSidecarJob('job-process-images', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareRecordCreatedListings: prepareRecordCreatedListingsMock,
+    });
+
+    expect(dataAccess.jobs.complete).toHaveBeenCalledWith('job-process-images');
+    expect(dataAccess.listings.listByStatus).toHaveBeenCalledWith('record_created', {
+      limit: 25,
+      offset: 0,
+      orderByCreatedAt: 'asc',
+    });
+    expect(dataAccess.jobs.complete.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.jobs.enqueueProcessImages.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    );
+    expect(dataAccess.jobs.enqueueProcessImages).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps completed process_images jobs completed when follow-up enqueue fails after completion', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedProcessImagesJob,
+      workflowStates: [
+        createListingRow({
+          created_at: '2026-05-20T12:00:00.000Z',
+          image_urls: ['/processed/LIST-001/LIST-001_01.jpg', '/processed/LIST-001/LIST-001_02.jpg'],
+          listing_id: 'LIST-001',
+          status: 'record_created',
+          sub_status: 'idle',
+        }),
+        createListingRow({
+          created_at: '2026-05-20T12:05:00.000Z',
+          image_urls: ['/processed/LIST-002/LIST-002_01.jpg', '/processed/LIST-002/LIST-002_02.jpg'],
+          listing_id: 'LIST-002',
+          sku: 'SKU-002',
+          status: 'record_created',
+          sub_status: 'idle',
+        }),
+      ],
+    });
+    dataAccess.jobs.enqueueProcessImages.mockImplementationOnce(async () => {
+      throw new Error('follow-up enqueue failed');
+    });
+    const prepareRecordCreatedListingsMock = vi.fn(async () => ({
+      exhaustedCandidates: true,
+      failed: [],
+      processed: [
+        createListingRow({
+          image_urls: [
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_01.jpg',
+            'https://images.murphyfamilyhobby.dev/listings/list-001/list-001_02.jpg',
+          ],
+          listing_id: 'LIST-001',
+          status: 'assets_ready',
+          sub_status: 'ready_to_generate',
+        }),
+      ],
+      skipped: [],
+    }));
+
+    const result = await runSidecarJob('job-process-images', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareRecordCreatedListings: prepareRecordCreatedListingsMock,
+    });
+
+    expect(dataAccess.jobs.complete).toHaveBeenCalledWith('job-process-images');
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
+    expect(result.job.status).toBe('completed');
+    expect(jobLoggerWarn).toHaveBeenCalledWith(
+      'Failed to enqueue follow-up process_images job after completion.',
+      expect.objectContaining({
+        compactErrorMessage: 'follow-up enqueue failed',
+        event: 'process_images_followup_enqueue_failed',
+        jobId: 'job-process-images',
+      })
+    );
+  });
+
+  it('does not enqueue a follow-up process_images job when only skipped record_created rows remain', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedProcessImagesJob,
+      workflowStates: [
+        createListingRow({
+          created_at: '2026-05-20T12:05:00.000Z',
+          image_urls: ['https://cdn.example.com/manual-front.jpg'],
+          listing_id: 'manual-001',
+          sku: 'SKU-002',
+          status: 'record_created',
+          sub_status: 'idle',
+        }),
+      ],
+    });
+    const prepareRecordCreatedListingsMock = vi.fn(async () => ({
+      exhaustedCandidates: true,
+      failed: [],
+      processed: [],
+      skipped: [
+        {
+          listingId: 'manual-001',
+          reason: 'record_created_skip_non_local_source_images',
+        },
+      ],
+    }));
+
+    await runSidecarJob('job-process-images', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareRecordCreatedListings: prepareRecordCreatedListingsMock,
+    });
+
+    expect(dataAccess.jobs.complete).toHaveBeenCalledWith('job-process-images');
+    expect(dataAccess.jobs.enqueueProcessImages).not.toHaveBeenCalled();
   });
 
   it('requeues recoverable process_images failures with next_run_at', async () => {

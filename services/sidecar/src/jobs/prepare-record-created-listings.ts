@@ -87,6 +87,12 @@ export interface PrepareRecordCreatedListingsResult {
   skipped: PrepareRecordCreatedListingsSkipped[];
 }
 
+export interface HasActionableRecordCreatedListingsOptions {
+  batchSize?: number;
+  dataAccess?: SidecarDataAccess;
+  excludeListingIds?: readonly string[];
+}
+
 class ListingAssetPreparationError extends Error {
   readonly code: string;
 
@@ -409,6 +415,45 @@ async function collectRecordCreatedCandidates(
     exhaustedCandidates,
     skipped,
   };
+}
+
+export async function hasActionableRecordCreatedListings(
+  options: HasActionableRecordCreatedListingsOptions = {}
+): Promise<boolean> {
+  const dataAccess = options.dataAccess ?? getSidecarDataAccess();
+  const batchSize = getBatchSize(options.batchSize);
+  const excludedListingIds = new Set(options.excludeListingIds ?? []);
+  let offset = 0;
+
+  while (true) {
+    const listings = await dataAccess.listings.listByStatus(RECORD_CREATED_STATUS, {
+      limit: batchSize,
+      offset,
+      orderByCreatedAt: 'asc',
+    });
+
+    if (listings.length === 0) {
+      return false;
+    }
+
+    for (const listing of listings) {
+      if (excludedListingIds.has(listing.listing_id)) {
+        continue;
+      }
+
+      const candidate = classifyListingForAssetPreparation(listing);
+
+      if (candidate.kind !== 'skipped') {
+        return true;
+      }
+    }
+
+    offset += listings.length;
+
+    if (listings.length < batchSize) {
+      return false;
+    }
+  }
 }
 
 async function prepareListingAssets(

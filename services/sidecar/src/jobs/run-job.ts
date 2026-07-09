@@ -44,6 +44,7 @@ import {
   toListingErrorContext,
 } from './job-errors.js';
 import {
+  hasActionableRecordCreatedListings,
   prepareRecordCreatedListings,
   type PrepareRecordCreatedListingsResult,
 } from './prepare-record-created-listings.js';
@@ -1018,6 +1019,27 @@ async function runProcessImagesJob(
       now: options.now,
     });
     const completedJob = await options.dataAccess.jobs.complete(job.id);
+
+    try {
+      const attemptedListingIds = [
+        ...result.processed.map((listing) => listing.listing_id),
+        ...result.failed.map((failure) => failure.listingId),
+      ];
+      const shouldEnqueueFollowUp = await hasActionableRecordCreatedListings({
+        dataAccess: options.dataAccess,
+        excludeListingIds: attemptedListingIds,
+      });
+
+      if (shouldEnqueueFollowUp) {
+        await options.dataAccess.jobs.enqueueProcessImages();
+      }
+    } catch (error) {
+      jobLogger.warn('Failed to enqueue follow-up process_images job after completion.', {
+        compactErrorMessage: error instanceof Error ? error.message : String(error),
+        event: 'process_images_followup_enqueue_failed',
+        jobId: job.id,
+      });
+    }
 
     return {
       assetPrepSummary: buildAssetPrepSummary(result),
