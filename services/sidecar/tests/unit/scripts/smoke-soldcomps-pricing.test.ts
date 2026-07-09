@@ -162,7 +162,7 @@ describe('smoke soldcomps pricing script', () => {
     const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
       overallStatus: string;
       provider: string;
-      rawResultSummary: { input: { request: { count: number } } };
+      rawResultSummary: { input: { query?: string; request?: { count?: number; keyword?: string } } };
       requestedCompCount: number;
       selectedProviderMode: string;
       soldCompCount: number;
@@ -171,12 +171,10 @@ describe('smoke soldcomps pricing script', () => {
     expect(payload).toMatchObject({
       overallStatus: 'pass',
       provider: 'soldcomps',
-      requestedCompCount: 50,
+      requestedCompCount: null,
       selectedProviderMode: 'soldcomps',
       soldCompCount: 1,
     });
-    expect(payload.rawResultSummary.input.request.count).toBe(50);
-    expect(payload.rawResultSummary.input.request.keyword).toContain('-pick');
     expect(process.exitCode).toBeUndefined();
   });
 

@@ -62,7 +62,9 @@ const RESEARCH_PRICE_JOB_TYPE = 'research_price';
 const JOB_STATUS_RUNNING = 'running';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
+const GENERATED_DRAFT_METADATA_KEY = '__draft_metadata';
 const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
+const YEAR_UNVERIFIED_WARNING_CODE = 'year_unverified';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
@@ -180,6 +182,19 @@ function buildGeneratedListingAspects(
 ): NonNullable<ListingUpdate['item_specifics']> {
   return {
     ...draft.aspects,
+    ...(draft.yearEvidence?.isVerified === false ||
+    draft.yearEvidence?.warningCode === YEAR_UNVERIFIED_WARNING_CODE
+      ? {
+          [GENERATED_DRAFT_METADATA_KEY]: {
+            year: {
+              likely_year: draft.yearEvidence?.likelyYear ?? null,
+              likely_year_range: draft.yearEvidence?.likelyYearRange ?? null,
+              status: 'unverified',
+              warning_code: YEAR_UNVERIFIED_WARNING_CODE,
+            },
+          },
+        }
+      : {}),
     ...(draft.cardConditionToken
       ? { [TRADING_CARD_CONDITION_ASPECT_KEY]: draft.cardConditionToken }
       : {}),

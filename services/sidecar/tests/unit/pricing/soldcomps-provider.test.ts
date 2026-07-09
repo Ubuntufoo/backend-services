@@ -541,6 +541,7 @@ describe('SoldComps pricing provider', () => {
       itemCount: 3,
       query: relaxedKeyword,
       queryPlan: {
+        attemptedQueries: [strictKeyword, relaxedKeyword],
         attempts: [
           expect.objectContaining({
             attemptType: 'strict',
@@ -557,6 +558,7 @@ describe('SoldComps pricing provider', () => {
         fallbackReason: 'strict_query_returned_zero_items',
         fallbackSucceeded: true,
         finalAttemptType: 'relaxed',
+        soldCompsRequestCount: 2,
       },
       usage: {
         used: 12,
@@ -807,6 +809,7 @@ describe('SoldComps pricing provider', () => {
     expect(result.rawResult).toMatchObject({
       query: strictKeyword,
       queryPlan: {
+        attemptedQueries: [strictKeyword],
         attempts: [
           expect.objectContaining({
             attemptType: 'strict',
@@ -817,6 +820,7 @@ describe('SoldComps pricing provider', () => {
         fallbackAttempted: false,
         fallbackSucceeded: false,
         finalAttemptType: 'strict',
+        soldCompsRequestCount: 1,
       },
     });
   });

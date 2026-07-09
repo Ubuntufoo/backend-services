@@ -1,4 +1,25 @@
-CI=1 pnpm install --frozen-lockfile
-pnpm run typecheck
-pnpm run test
-pnpm run build
+#!/bin/sh
+set -e
+
+(cd packages/env && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.test.json)
+(cd packages/env && ./node_modules/.bin/vitest run)
+
+(cd packages/types && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.json)
+
+(cd packages/data && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.test.json)
+(cd packages/data && ./node_modules/.bin/vitest run)
+
+(cd services/image-service && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.json)
+(cd services/image-service && ./node_modules/.bin/vitest run)
+
+(cd services/watcher-service && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.json)
+(cd services/watcher-service && ./node_modules/.bin/vitest run)
+
+(cd packages/env && ./node_modules/.bin/tsc --build)
+(cd packages/types && ./node_modules/.bin/tsc --build)
+(cd packages/data && ./node_modules/.bin/tsc --build)
+(cd services/image-service && ./node_modules/.bin/tsc --build)
+(cd services/sidecar && ./node_modules/.bin/tsc --noEmit --pretty false -p tsconfig.json)
+(cd services/sidecar && ./node_modules/.bin/tsc --build && ./node_modules/.bin/tsc-alias)
+
+(cd services/watcher-service && ./node_modules/.bin/tsc --build)

@@ -383,6 +383,45 @@ function getProviderQueryPlan(record: Record<string, unknown> | null): Record<st
   return isRecord(record.queryFallback) ? record.queryFallback : null;
 }
 
+function getSoldCompsRequestCount(record: Record<string, unknown> | null): number | undefined {
+  const queryPlan = getProviderQueryPlan(record);
+  const explicitCount = asFiniteNonNegativeInteger(queryPlan?.soldCompsRequestCount);
+
+  if (explicitCount !== undefined) {
+    return explicitCount;
+  }
+
+  if (Array.isArray(queryPlan?.attempts)) {
+    return queryPlan.attempts.length;
+  }
+
+  return undefined;
+}
+
+function getSoldCompsAttemptedQueries(record: Record<string, unknown> | null): string[] | undefined {
+  const queryPlan = getProviderQueryPlan(record);
+
+  if (Array.isArray(queryPlan?.attemptedQueries)) {
+    const attemptedQueries = queryPlan.attemptedQueries.filter(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0
+    );
+
+    return attemptedQueries.length > 0 ? attemptedQueries : undefined;
+  }
+
+  if (Array.isArray(queryPlan?.attempts)) {
+    const attemptedQueries = queryPlan.attempts.flatMap((attempt) =>
+      isRecord(attempt) && typeof attempt.query === 'string' && attempt.query.trim().length > 0
+        ? [attempt.query]
+        : []
+    );
+
+    return attemptedQueries.length > 0 ? attemptedQueries : undefined;
+  }
+
+  return undefined;
+}
+
 function getProviderFinalAttemptType(record: Record<string, unknown> | null): string | undefined {
   const queryPlan = getProviderQueryPlan(record);
   return asNonEmptyString(queryPlan?.finalAttemptType);
@@ -399,11 +438,14 @@ function buildPricingResearchDiagnostics(
   }
 ): Record<string, unknown> {
   const providerRecord = getProviderResultRecord(input.providerRawResult);
+  const providerQueryPlan = getProviderQueryPlan(providerRecord);
   const providerReturnedCount =
     getProviderResultNumber(providerRecord, 'itemCount', 'output', 'itemCount') ??
     (providerRecord ? asFiniteNonNegativeInteger(providerRecord.returnedSoldComps) : undefined) ??
     input.rawCompCount;
   const requestedCount = getProviderRequestedCount(providerRecord);
+  const soldCompsRequestCount = getSoldCompsRequestCount(providerRecord);
+  const soldCompsAttemptedQueries = getSoldCompsAttemptedQueries(providerRecord);
   const providerReportedTotalCount = getProviderResultNumber(
     providerRecord,
     'totalItems',
@@ -435,6 +477,10 @@ function buildPricingResearchDiagnostics(
       rejectedCompCount: input.normalized.rejected.length,
       requestedCount,
       selectedProvider: input.providerRouting.selectedProvider,
+      soldCompsAttemptedQueries,
+      soldCompsFallbackReason: asNonEmptyString(providerQueryPlan?.fallbackReason),
+      soldCompsFinalAttemptType: getProviderFinalAttemptType(providerRecord),
+      soldCompsRequestCount,
     }).filter(([, value]) => value !== undefined)
   );
 }

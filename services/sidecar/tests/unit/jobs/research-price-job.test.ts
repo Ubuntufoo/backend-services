@@ -580,11 +580,19 @@ describe('priceListingNow', () => {
       expect.objectContaining({
         query: relaxedQuery,
         raw_result_json: expect.objectContaining({
+          diagnostics: expect.objectContaining({
+            soldCompsAttemptedQueries: [strictQuery, relaxedQuery],
+            soldCompsFallbackReason: 'strict_query_returned_zero_items',
+            soldCompsFinalAttemptType: 'relaxed',
+            soldCompsRequestCount: 2,
+          }),
           queryPlan: expect.objectContaining({
+            attemptedQueries: [strictQuery, relaxedQuery],
             fallbackAttempted: true,
             fallbackReason: 'strict_query_returned_zero_items',
             fallbackSucceeded: true,
             finalAttemptType: 'relaxed',
+            soldCompsRequestCount: 2,
             attempts: expect.arrayContaining([
               expect.objectContaining({
                 attemptType: 'strict',
@@ -742,6 +750,10 @@ describe('priceListingNow', () => {
             normalizationAcceptedCount: 0,
             normalizationRejectedCount: 0,
             providerReturnedCount: 0,
+            soldCompsAttemptedQueries: [strictQuery, relaxedQuery],
+            soldCompsFallbackReason: 'strict_query_returned_zero_items',
+            soldCompsFinalAttemptType: 'relaxed',
+            soldCompsRequestCount: 2,
           }),
           failureSummary: expect.objectContaining({
             finalAttemptType: 'relaxed',
@@ -754,10 +766,12 @@ describe('priceListingNow', () => {
           }),
           providerResult: expect.objectContaining({
             queryPlan: expect.objectContaining({
+              attemptedQueries: [strictQuery, relaxedQuery],
               fallbackAttempted: true,
               fallbackReason: 'strict_query_returned_zero_items',
               fallbackSucceeded: false,
               finalAttemptType: 'relaxed',
+              soldCompsRequestCount: 2,
               attempts: expect.arrayContaining([
                 expect.objectContaining({
                   attemptType: 'strict',
@@ -1449,7 +1463,7 @@ describe('priceListingNow', () => {
         rawOutput: { model, prompt },
         text: JSON.stringify({
           confidence: 'medium',
-          conditionAdjustedPrice: 5.49,
+          conditionAdjustedPrice: 5.24,
           conditionAdjustmentPercent: -0.1,
           conditionAdjustmentReason: 'Exact target accepted.',
           priceExplanation: 'Deterministic target accepted from explicit condition evidence.',
@@ -1483,7 +1497,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.49);
+    expect(result.suggestedPrice).toBe(5.24);
     expect(spies.resolveForTask).toHaveBeenCalledWith({
       provider: 'google',
       requireJsonOutput: true,
@@ -1497,13 +1511,13 @@ describe('priceListingNow', () => {
           fallback: null,
           modelName: 'gemma-4-31b-it',
           reasoning: expect.objectContaining({
-            conditionAdjustedPrice: 5.49,
+            conditionAdjustedPrice: 5.24,
             confidence: 'medium',
           }),
           status: 'succeeded',
         }),
         pricing_model_name: 'gemma-4-31b-it',
-        suggested_price: 5.49,
+        suggested_price: 5.24,
       })
     );
     expect(spies.markSucceeded.mock.calls[0]?.[0]?.llm_reasoning_json).not.toHaveProperty('warnings');

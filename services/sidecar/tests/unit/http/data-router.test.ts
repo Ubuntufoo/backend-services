@@ -323,6 +323,7 @@ describe('data API router', () => {
       listings: [
         {
           ...listingRow,
+          identity_warnings: [],
           latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
@@ -343,6 +344,7 @@ describe('data API router', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       ...listingRow,
+      identity_warnings: [],
       latest_pricing_research: null,
       pricing_analysis_warnings: [],
     });
@@ -472,11 +474,13 @@ describe('data API router', () => {
       listings: [
         {
           ...listingRow,
+          identity_warnings: [],
           latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
         {
           ...secondListingRow,
+          identity_warnings: [],
           latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },
@@ -550,6 +554,7 @@ describe('data API router', () => {
     expect(detailResponse.status).toBe(200);
     expect(listResponse.body.listings[0]?.pricing_analysis_warnings).toEqual([expectedWarning]);
     expect(detailResponse.body.pricing_analysis_warnings).toEqual([expectedWarning]);
+    expect(detailResponse.body.identity_warnings).toEqual([]);
     expect(listResponse.body.listings[0]?.latest_pricing_research).toEqual(expectedLatestResearch);
     expect(detailResponse.body.latest_pricing_research).toEqual(expectedLatestResearch);
     expect(JSON.stringify(detailResponse.body.pricing_analysis_warnings)).not.toContain(
@@ -583,7 +588,61 @@ describe('data API router', () => {
     expect(detailResponse.status).toBe(200);
     expect(listResponse.body.listings[0]?.pricing_analysis_warnings).toEqual([]);
     expect(detailResponse.body.pricing_analysis_warnings).toEqual([]);
+    expect(detailResponse.body.identity_warnings).toEqual([]);
     expect(detailResponse.body.latest_pricing_research?.research_id).toBe('pricing-research-001');
+  });
+
+  it('exposes per-listing uncertain year warnings and strips internal draft metadata from item specifics', async () => {
+    const dataAccess = createDataAccess();
+    const vintageListingRow = {
+      ...listingRow,
+      item_specifics: {
+        'Card Number': '191',
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+        __draft_metadata: {
+          year: {
+            likely_year: '1955',
+            likely_year_range: '1952-1955',
+            status: 'unverified',
+            warning_code: 'year_unverified',
+          },
+        },
+      },
+      title: 'Ed Stanky Topps #191',
+    };
+    dataAccess.listings.getByListingId = vi.fn(async () => vintageListingRow);
+    dataAccess.listings.list = vi.fn(async () => [vintageListingRow]);
+    const app = createApp(dataAccess);
+
+    const listResponse = await request(app).get('/api/listings');
+    const detailResponse = await request(app).get('/api/listings/LIST-001');
+
+    const expectedWarnings = [
+      {
+        code: 'year_unverified',
+        likely_year: '1955',
+        likely_year_range: '1952-1955',
+        severity: 'warning',
+        summary: 'Card year is unverified.',
+      },
+    ];
+
+    expect(listResponse.status).toBe(200);
+    expect(detailResponse.status).toBe(200);
+    expect(listResponse.body.listings[0]?.identity_warnings).toEqual(expectedWarnings);
+    expect(detailResponse.body.identity_warnings).toEqual(expectedWarnings);
+    expect(listResponse.body.listings[0]?.item_specifics).toEqual({
+      'Card Number': '191',
+      Manufacturer: 'Topps',
+      Player: 'Ed Stanky',
+    });
+    expect(detailResponse.body.item_specifics).toEqual({
+      'Card Number': '191',
+      Manufacturer: 'Topps',
+      Player: 'Ed Stanky',
+    });
+    expect(JSON.stringify(detailResponse.body)).not.toContain('__draft_metadata');
   });
 
   it('exposes failed latest pricing research without raw diagnostics', async () => {
@@ -605,6 +664,7 @@ describe('data API router', () => {
     expect(listResponse.body.listings).toEqual([
       {
         ...listingRow,
+        identity_warnings: [],
         latest_pricing_research: {
           comp_summary: {
             rejected_comp_count: 0,
@@ -638,6 +698,7 @@ describe('data API router', () => {
       },
       {
         ...secondListingRow,
+        identity_warnings: [],
         latest_pricing_research: null,
         pricing_analysis_warnings: [],
       },
@@ -844,6 +905,75 @@ describe('data API router', () => {
     });
   });
 
+  it('preserves internal uncertain-year draft metadata during normal item-specific edits', async () => {
+    const existingListing = {
+      ...listingRow,
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+        __draft_metadata: {
+          year: {
+            likely_year: '1955',
+            likely_year_range: '1952-1955',
+            status: 'unverified',
+            warning_code: 'year_unverified',
+          },
+        },
+      },
+      title: 'Ed Stanky Topps #191',
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => existingListing);
+    dataAccess.listings.update = vi.fn(async (_listingId: string, changes: ListingUpdate) => ({
+      ...existingListing,
+      ...changes,
+      item_specifics: changes.item_specifics ?? existingListing.item_specifics,
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Player: 'Ed Stanky',
+          Team: 'Chicago Cubs',
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+        Team: 'Chicago Cubs',
+        __draft_metadata: {
+          year: {
+            likely_year: '1955',
+            likely_year_range: '1952-1955',
+            status: 'unverified',
+            warning_code: 'year_unverified',
+          },
+        },
+      },
+    });
+    expect(response.body.item_specifics).toEqual({
+      Manufacturer: 'Topps',
+      Player: 'Ed Stanky',
+      Team: 'Chicago Cubs',
+    });
+    expect(response.body.identity_warnings).toEqual([
+      {
+        code: 'year_unverified',
+        likely_year: '1955',
+        likely_year_range: '1952-1955',
+        severity: 'warning',
+        summary: 'Card year is unverified.',
+      },
+    ]);
+    expect(JSON.stringify(response.body)).not.toContain('__draft_metadata');
+  });
+
   it('allows seller-editable patch after pricing failure and preserves failed research visibility', async () => {
     const dataAccess = createDataAccess();
     dataAccess.listings.update = vi.fn(async (_listingId: string, input: ListingUpdate) => ({
@@ -875,6 +1005,7 @@ describe('data API router', () => {
     expect(response.body).toEqual(
       expect.objectContaining({
         listing_id: 'LIST-001',
+        identity_warnings: [],
         price: 27.5,
         seller_hints: 'Manual override after provider outage',
         latest_pricing_research: expect.objectContaining({
@@ -1017,6 +1148,7 @@ describe('data API router', () => {
     expect(response.body).toEqual({
       ...listingRow,
       image_urls: ['https://example.com/front.jpg', 'https://example.com/back.jpg'],
+      identity_warnings: [],
       latest_pricing_research: null,
       pricing_analysis_warnings: [],
       r2_object_keys: ['listings/LIST-001/existing.jpg'],
@@ -1112,6 +1244,7 @@ describe('data API router', () => {
     expect(dataAccess.jobs.enqueuePublish).toHaveBeenCalledWith('LIST-001');
     expect(response.body).toEqual(
       expect.objectContaining({
+        identity_warnings: [],
         listing_id: 'LIST-001',
         price: 24,
         status: 'approved_for_export',
@@ -1235,6 +1368,7 @@ describe('data API router', () => {
       },
       listing: {
         ...preparedListing,
+        identity_warnings: [],
         latest_pricing_research: null,
         pricing_analysis_warnings: [],
       },

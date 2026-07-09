@@ -111,8 +111,18 @@ describe('buildGenerateListingDraftPrompt', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(
-      /Player, Year, Manufacturer, Set, Card Number, Parallel\/Variety, Insert Set/
+      /Player, verified Year, Manufacturer, Set, Card Number, Parallel\/Variety, Insert Set/
     );
+  });
+
+  it('instructs Gemini to omit guessed canonical year details when year is unverified', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/do not guess a canonical Year/i);
+    expect(prompt).toMatch(/do not insert a guessed year into the title/i);
+    expect(prompt).toMatch(/omit canonical Year and Season aspects/i);
+    expect(prompt).toMatch(/"yearEvidence"/);
+    expect(prompt).toMatch(/"warningCode": "year_unverified or omitted"/);
   });
 
   it('strips price from userHints in listing context when explicitly present', () => {

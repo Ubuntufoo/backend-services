@@ -1351,7 +1351,7 @@ describe('runSidecarJob', () => {
       rawModelResponse: { id: 'raw-response-jr-98' },
     }));
 
-    await runSidecarJob('job-generate-ai', {
+    const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
       generateListingDraft: generateListingDraftMock,
       now: () => new Date('2026-05-20T13:00:00.000Z'),
@@ -1372,6 +1372,75 @@ describe('runSidecarJob', () => {
         }),
       })
     );
+  });
+
+  it('persists uncertain vintage year metadata without promoting a canonical Year aspect', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-VINTAGE-191',
+      },
+      listing: createListingRow({
+        listing_id: 'LIST-VINTAGE-191',
+        sku: 'LIST-VINTAGE-191',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Ed Stanky Topps #191',
+      description: 'Vintage single card.',
+      categorySuggestion: 'Sports Trading Cards',
+      cardConditionNote: null,
+      cardConditionToken: null,
+      conditionSuggestion: null,
+      skuCategoryCode: 'BSBL',
+      aspects: {
+        Player: 'Ed Stanky',
+        Year: '1952',
+        Manufacturer: 'Topps',
+        'Card Number': '191',
+      },
+      yearEvidence: {
+        isVerified: false,
+        likelyYear: '1955',
+        likelyYearRange: '1952-1955',
+        warningCode: 'year_unverified',
+      },
+      priceSuggestion: null,
+      confidence: {},
+      warnings: ['Year not visible on the card.'],
+      rawModelResponse: { id: 'raw-response-vintage-191' },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-VINTAGE-191',
+      expect.objectContaining({
+        item_specifics: expect.objectContaining({
+          Player: 'Ed Stanky',
+          Manufacturer: 'Topps',
+          'Card Number': '191',
+          skuCategoryCode: 'BSBL',
+          __draft_metadata: {
+            year: {
+              likely_year: '1955',
+              likely_year_range: '1952-1955',
+              status: 'unverified',
+              warning_code: 'year_unverified',
+            },
+          },
+        }),
+      })
+    );
+
+    const updateInput = (dataAccess.listings.update as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    expect(updateInput?.item_specifics).not.toHaveProperty('Year');
+    expect(updateInput?.title).toBe('Ed Stanky Topps #191');
+    expect(result.listing?.title).toBe('Ed Stanky Topps #191');
   });
 
   it('persists BSBL skuCategoryCode suggestions without changing listing sku or listing_id', async () => {

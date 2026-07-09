@@ -392,6 +392,7 @@ function buildQueryPlanDiagnostics(input: {
   relaxedQuery: string;
   strictResult: PricingProviderResult;
 }): Record<string, unknown> {
+  const fallbackAttempted = input.fallbackResult !== undefined || input.fallbackError !== undefined;
   const attempts = [
     toAttemptDiagnostics(input.strictResult, {
       attemptType: 'strict',
@@ -406,6 +407,9 @@ function buildQueryPlanDiagnostics(input: {
         ]
       : []),
   ];
+  const attemptedQueries = fallbackAttempted
+    ? [input.strictResult.query, input.relaxedQuery]
+    : [input.strictResult.query];
   const finalAttemptType =
     input.effectiveResult === undefined
       ? undefined
@@ -419,11 +423,10 @@ function buildQueryPlanDiagnostics(input: {
   return Object.fromEntries(
     Object.entries({
       attempts,
-      fallbackAttempted: input.fallbackResult !== undefined || input.fallbackError !== undefined,
+      attemptedQueries,
+      fallbackAttempted,
       fallbackReason:
-        input.fallbackResult !== undefined || input.fallbackError !== undefined
-          ? 'strict_query_returned_zero_items'
-          : undefined,
+        fallbackAttempted ? 'strict_query_returned_zero_items' : undefined,
       fallbackFailure: input.fallbackError
         ? {
             category: input.fallbackError.category,
@@ -435,6 +438,7 @@ function buildQueryPlanDiagnostics(input: {
         : undefined,
       fallbackSucceeded: input.fallbackResult !== undefined && input.fallbackResult.soldComps.length > 0,
       finalAttemptType,
+      soldCompsRequestCount: attemptedQueries.length,
     }).filter(([, value]) => value !== undefined)
   );
 }

@@ -64,4 +64,81 @@ describe('parseGeneratedDraft normalization', () => {
       'Gemini response title card number "98" conflicted with aspects["Card Number"] "147"; kept aspect value.'
     );
   });
+
+  it('drops canonical year aspects and guessed title year when yearEvidence marks the year unverified', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Ed Stanky 1952 Topps #191',
+        description: 'Vintage single card.',
+        aspects: {
+          Player: 'Ed Stanky',
+          Year: '1952',
+          Season: '1952',
+          Manufacturer: 'Topps',
+          'Card Number': '191',
+        },
+        yearEvidence: {
+          isVerified: false,
+          likelyYear: '1955',
+          likelyYearRange: '1952-1955',
+          warningCode: 'year_unverified',
+        },
+        warnings: ['Year not visible on the card.'],
+      }),
+      { id: 'raw-response-2' }
+    );
+
+    expect(draft.aspects).toEqual({
+      Player: 'Ed Stanky',
+      Manufacturer: 'Topps',
+      'Card Number': '191',
+    });
+    expect(draft.title).toBe('Ed Stanky Topps #191');
+    expect(draft.yearEvidence).toEqual({
+      isVerified: false,
+      likelyYear: '1955',
+      likelyYearRange: '1952-1955',
+      warningCode: 'year_unverified',
+    });
+    expect(draft.warnings).toContain('Year not visible on the card.');
+  });
+
+  it('treats contradictory yearEvidence as unverified when warningCode forces year_unverified', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Ed Stanky 1952 Topps #191',
+        description: 'Vintage single card.',
+        aspects: {
+          Player: 'Ed Stanky',
+          Year: '1952',
+          Manufacturer: 'Topps',
+          'Card Number': '191',
+        },
+        yearEvidence: {
+          isVerified: true,
+          likelyYear: '1955',
+          likelyYearRange: '1952-1955',
+          warningCode: 'year_unverified',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-3' }
+    );
+
+    expect(draft.title).toBe('Ed Stanky Topps #191');
+    expect(draft.aspects).toEqual({
+      Player: 'Ed Stanky',
+      Manufacturer: 'Topps',
+      'Card Number': '191',
+    });
+    expect(draft.yearEvidence).toEqual({
+      isVerified: false,
+      likelyYear: '1955',
+      likelyYearRange: '1952-1955',
+      warningCode: 'year_unverified',
+    });
+    expect(draft.warnings).toContain(
+      'Gemini response yearEvidence marked the year both verified and unverified; treated it as unverified.'
+    );
+  });
 });

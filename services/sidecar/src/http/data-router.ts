@@ -34,6 +34,7 @@ import {
   type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
 import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options.js';
+import { GENERATED_DRAFT_METADATA_KEY } from '@/pricing/generated-draft-metadata.js';
 import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow, retryPricingReview, RetryPricingReviewError } from '@/jobs/manual-retry.js';
@@ -232,13 +233,17 @@ function mapSellerEditableListingFields(
   input: SellerEditableListingFieldsInput,
   existingItemSpecifics?: ListingUpdate['item_specifics']
 ): ListingUpdate {
-  const itemSpecifics =
+  const itemSpecificsBase =
     input.pricingModifierOptions === undefined
-      ? (input.itemSpecifics as ListingUpdate['item_specifics'])
-      : (mergePricingModifierOptions(
+      ? input.itemSpecifics
+      : mergePricingModifierOptions(
           (input.itemSpecifics ?? existingItemSpecifics ?? {}) as Json,
           input.pricingModifierOptions
-        ) as ListingUpdate['item_specifics']);
+        );
+  const itemSpecifics = preserveInternalDraftMetadata(
+    itemSpecificsBase as ListingUpdate['item_specifics'],
+    existingItemSpecifics
+  );
 
   return {
     category_id: input.categoryId,
@@ -249,6 +254,37 @@ function mapSellerEditableListingFields(
     price: input.price,
     seller_hints: input.sellerHints,
     title: input.title,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function preserveInternalDraftMetadata(
+  nextItemSpecifics: ListingUpdate['item_specifics'],
+  existingItemSpecifics?: ListingUpdate['item_specifics']
+): ListingUpdate['item_specifics'] {
+  if (!isRecord(nextItemSpecifics)) {
+    return nextItemSpecifics;
+  }
+
+  const sanitizedNext = { ...nextItemSpecifics };
+  delete sanitizedNext[GENERATED_DRAFT_METADATA_KEY];
+
+  if (!isRecord(existingItemSpecifics)) {
+    return sanitizedNext;
+  }
+
+  const existingDraftMetadata = existingItemSpecifics[GENERATED_DRAFT_METADATA_KEY];
+
+  if (existingDraftMetadata === undefined) {
+    return sanitizedNext;
+  }
+
+  return {
+    ...sanitizedNext,
+    [GENERATED_DRAFT_METADATA_KEY]: existingDraftMetadata,
   };
 }
 
@@ -461,7 +497,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       const dataAccess = getDataAccess();
       let existingItemSpecifics: ListingUpdate['item_specifics'] | undefined;
 
-      if (body.pricingModifierOptions !== undefined) {
+      if (body.pricingModifierOptions !== undefined || body.itemSpecifics !== undefined) {
         const existingListing = await dataAccess.listings.getByListingId(params.listingId);
 
         if (!existingListing) {

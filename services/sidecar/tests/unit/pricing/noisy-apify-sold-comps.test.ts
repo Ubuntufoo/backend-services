@@ -10,7 +10,7 @@ describe('pricing noisy Apify-like sold comps fixture', () => {
   it('normalizes noisy records into expected accepted comps and ordered rejections', () => {
     const normalized = normalizeSoldComps(NOISY_APIFY_SOLD_COMPS_FIXTURE);
 
-    expect(normalized.comps).toHaveLength(9);
+    expect(normalized.comps).toHaveLength(8);
     expect(normalized.comps.map((comp) => comp.title)).toEqual([
       '2024 Topps Chrome Rookie A',
       '2024 Topps Chrome Rookie B',
@@ -18,7 +18,6 @@ describe('pricing noisy Apify-like sold comps fixture', () => {
       '2024 Topps Chrome Rookie D',
       '2024 Topps Chrome Rookie E',
       '2024 Topps Chrome Rookie F EUR',
-      '2024 Topps Chrome Rookie G Outlier',
       '2024 Topps Chrome Rookie H',
       '2024 Topps Chrome Rookie I',
     ]);
@@ -31,6 +30,7 @@ describe('pricing noisy Apify-like sold comps fixture', () => {
       { index: 8, reason: 'invalid_sold_date', title: 'Invalid Sold Date Record' },
       { index: 9, reason: 'invalid_listing_url', title: 'Invalid URL Record' },
       { index: 12, reason: 'invalid_listing_url', title: 'Non HTTP URL Record' },
+      { index: 14, reason: 'extreme_price_outlier', title: '2024 Topps Chrome Rookie G Outlier' },
     ]);
   });
 
@@ -77,11 +77,11 @@ describe('pricing noisy Apify-like sold comps fixture', () => {
     const stats = computePricingStats(normalized.comps);
 
     expect(stats).toEqual({
-      soldCount: 8,
-      medianSoldPrice: 29,
+      soldCount: 7,
+      medianSoldPrice: 28,
       lowSoldPrice: 20,
-      highSoldPrice: 150,
-      deterministicSuggestedPrice: 29,
+      highSoldPrice: 34,
+      deterministicSuggestedPrice: 28,
       currency: 'USD',
       ignored: [{ id: normalized.comps[5]!.id, reason: 'currency_mismatch' }],
     });
@@ -97,7 +97,7 @@ describe('pricing noisy Apify-like sold comps fixture', () => {
 
     expect(confidence).toEqual({
       confidence: 'medium',
-      reasons: ['strong_comp_count', 'wide_price_spread'],
+      reasons: ['moderate_comp_count'],
     });
     expect(Object.keys(confidence).sort()).toEqual(['confidence', 'reasons']);
     expect(confidence).not.toHaveProperty('singleRecommendation');

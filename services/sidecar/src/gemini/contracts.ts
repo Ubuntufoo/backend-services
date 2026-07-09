@@ -35,6 +35,14 @@ const confidenceSchema = z.object({
   price: z.number().min(0).max(1).optional(),
   aspects: z.number().min(0).max(1).optional(),
 });
+const YEAR_UNVERIFIED_WARNING_CODE = 'year_unverified' as const;
+
+const generatedDraftYearEvidenceSchema = z.object({
+  isVerified: z.boolean().optional(),
+  likelyYear: z.string().nullable().optional(),
+  likelyYearRange: z.string().nullable().optional(),
+  warningCode: z.literal(YEAR_UNVERIFIED_WARNING_CODE).optional(),
+});
 
 const skuCategoryCodeSchema = z.enum(SKU_CATEGORY_CODES);
 
@@ -58,6 +66,7 @@ export const generatedListingDraftSchema = z.object({
   conditionSuggestion: z.string().nullable().optional(),
   skuCategoryCode: skuCategoryCodeSchema.optional(),
   aspects: z.record(aspectValueSchema),
+  yearEvidence: generatedDraftYearEvidenceSchema.optional(),
   priceSuggestion: z.number().finite().nullable().optional(),
   confidence: confidenceSchema.optional(),
   warnings: z.array(z.string()),

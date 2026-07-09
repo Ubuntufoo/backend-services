@@ -7,10 +7,7 @@ import type {
   NormalizedSoldComp,
   RawSoldComp,
 } from './types.js';
-import {
-  buildExactCardTitleTarget,
-  getExactCardTitleMismatchReason,
-} from './exact-card-title.js';
+import { buildExactCardTitleTarget, getExactCardTitleMismatchReason } from './exact-card-title.js';
 import { isGradedListingTitle } from './graded-listing-signals.js';
 import { normalizeSeasonRanges } from './season-range.js';
 
@@ -85,11 +82,9 @@ export function normalizeSoldComps(
   }
 
   const medianAcceptedPrice = calculateMedian(
-    acceptedCandidates
-      .map(({ comp }) => comp.price.value)
-      .sort((left, right) => left - right)
+    acceptedCandidates.map(({ comp }) => comp.price.value).sort((left, right) => left - right)
   );
-  const extremePriceThreshold = medianAcceptedPrice * 3;
+  const extremePriceThreshold = medianAcceptedPrice * 2.5;
   const comps: NormalizedSoldComp[] = [];
 
   acceptedCandidates.forEach(({ index, comp }) => {
@@ -108,9 +103,7 @@ function normalizeSingleSoldComp(
   rawComp: RawSoldComp,
   exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>,
   context: NormalizeSoldCompsContext
-):
-  | Omit<NormalizedSoldComp, 'id' | 'source'>
-  | { reason: string; title: string | null } {
+): Omit<NormalizedSoldComp, 'id' | 'source'> | { reason: string; title: string | null } {
   const title = rawComp.title.trim();
   if (title.length === 0) {
     return { reason: REJECTION_REASONS.blankTitle, title: null };
@@ -135,7 +128,9 @@ function normalizeSingleSoldComp(
   }
 
   const estimatedShipping =
-    context.rawCardSingleShippingDefaults === true ? estimateRawCardSingleShipping(price.value) : null;
+    context.rawCardSingleShippingDefaults === true
+      ? estimateRawCardSingleShipping(price.value)
+      : null;
   if (estimatedShipping !== null) {
     shippingPrice = {
       currency: price.currency,
@@ -212,7 +207,10 @@ function getInvalidTitleReason(
 
   const validationTitle = normalizeSeasonRanges(title, { targetYear: exactCardTarget.year });
 
-  if (exactCardTarget.cardNumber && containsSelectionRangeForExactCard(validationTitle, exactCardTarget.cardNumber)) {
+  if (
+    exactCardTarget.cardNumber &&
+    containsSelectionRangeForExactCard(validationTitle, exactCardTarget.cardNumber)
+  ) {
     return REJECTION_REASONS.excludedSelectionListing;
   }
 
@@ -245,7 +243,10 @@ function containsSelectionRangeForExactCard(title: string, exactTargetCardNumber
   return start !== exactValue || end !== exactValue;
 }
 
-function normalizeMoneyValue(value: { value: number; currency: string }): NormalizedMoneyValue | null {
+function normalizeMoneyValue(value: {
+  value: number;
+  currency: string;
+}): NormalizedMoneyValue | null {
   if (!Number.isFinite(value.value)) {
     return null;
   }
@@ -303,7 +304,7 @@ function createNormalizedCompId(comp: Omit<NormalizedSoldComp, 'id' | 'source'>)
         comp.soldDate,
         comp.listingUrl ?? '',
         comp.condition ?? '',
-      ].join('|'),
+      ].join('|')
     )
     .digest('hex');
 }

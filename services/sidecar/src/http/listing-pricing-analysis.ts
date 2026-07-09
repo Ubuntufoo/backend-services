@@ -1,11 +1,15 @@
 import type { ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
 import type {
+  ListingIdentityWarning,
   ListingLatestPricingResearchFailureSummary,
   ListingLatestPricingResearchCompSummary,
   ListingLatestPricingResearchSummary,
   ListingPricingAnalysisWarning,
   PricingAnalysisWarningFailureSummary,
 } from '@ebay-inventory/types';
+import { readGeneratedDraftYearSignal } from '@/pricing/generated-draft-metadata.js';
+
+const GENERATED_DRAFT_METADATA_KEY = '__draft_metadata';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -442,7 +446,41 @@ export function serializeLatestPricingResearch(
   };
 }
 
+function sanitizeListingItemSpecifics(
+  itemSpecifics: ListingRow['item_specifics']
+): ListingRow['item_specifics'] {
+  const record = asRecord(itemSpecifics);
+
+  if (!record || !(GENERATED_DRAFT_METADATA_KEY in record)) {
+    return itemSpecifics;
+  }
+
+  const { [GENERATED_DRAFT_METADATA_KEY]: _draftMetadata, ...rest } = record;
+  return rest as ListingRow['item_specifics'];
+}
+
+function getListingIdentityWarnings(
+  listing: Pick<ListingRow, 'item_specifics'>
+): ListingIdentityWarning[] {
+  const yearSignal = readGeneratedDraftYearSignal(listing.item_specifics);
+
+  if (!yearSignal?.isUnverified) {
+    return [];
+  }
+
+  return [
+    {
+      code: 'year_unverified',
+      likely_year: yearSignal.likelyYear,
+      likely_year_range: yearSignal.likelyYearRange,
+      severity: 'warning',
+      summary: 'Card year is unverified.',
+    },
+  ];
+}
+
 export type ListingApiResponse = ListingRow & {
+  identity_warnings: ListingIdentityWarning[];
   latest_pricing_research: ListingLatestPricingResearchSummary | null;
   pricing_analysis_warnings: ListingPricingAnalysisWarning[];
 };
@@ -453,6 +491,8 @@ export function serializeListing(
 ): ListingApiResponse {
   return {
     ...listing,
+    item_specifics: sanitizeListingItemSpecifics(listing.item_specifics),
+    identity_warnings: getListingIdentityWarnings(listing),
     latest_pricing_research: serializeLatestPricingResearch(research),
     pricing_analysis_warnings: getListingPricingAnalysisWarnings(listing, research),
   };

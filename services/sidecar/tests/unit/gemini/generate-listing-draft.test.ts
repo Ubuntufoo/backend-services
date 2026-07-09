@@ -380,6 +380,46 @@ describe('generateListingDraft', () => {
     });
   });
 
+  it('preserves verified details while dropping guessed canonical year data for vintage cards', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Ed Stanky 1952 Topps #191',
+        description: 'Vintage single card.',
+        aspects: {
+          Player: 'Ed Stanky',
+          Year: '1952',
+          Manufacturer: 'Topps',
+          'Card Number': '191',
+        },
+        yearEvidence: {
+          isVerified: false,
+          likelyYear: '1955',
+          likelyYearRange: '1952-1955',
+          warningCode: 'year_unverified',
+        },
+        warnings: ['Year not visible on the card.'],
+      })
+    );
+
+    const result = await generateListingDraft({
+      listingId: 'LIST-VINTAGE-001',
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+    });
+
+    expect(result.aspects).toEqual({
+      Player: 'Ed Stanky',
+      Manufacturer: 'Topps',
+      'Card Number': '191',
+    });
+    expect(result.title).toBe('Ed Stanky Topps #191');
+    expect(result.yearEvidence).toEqual({
+      isVerified: false,
+      likelyYear: '1955',
+      likelyYearRange: '1952-1955',
+      warningCode: 'year_unverified',
+    });
+  });
+
   it('parses JSON wrapped in a json code fence', async () => {
     setGeminiResponse(`\`\`\`json
 {

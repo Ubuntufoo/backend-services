@@ -11,6 +11,7 @@ import {
 
 import type { NormalizeSoldCompsContext } from './types.js';
 import type { PricingProviderInput } from './types.js';
+import { readGeneratedDraftYearSignal } from './generated-draft-metadata.js';
 
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') {
@@ -76,8 +77,11 @@ export function buildPricingProviderInput(
   requestedCompCount?: number
 ): PricingProviderInput {
   const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
-  const title =
-    asNonEmptyString(listing.title) ?? buildPricingTitleFromItemSpecifics(itemSpecifics) ?? listingId;
+  const yearSignal = readGeneratedDraftYearSignal(listing.item_specifics);
+  const titleFromItemSpecifics = buildPricingTitleFromItemSpecifics(itemSpecifics);
+  const title = yearSignal?.isUnverified
+    ? titleFromItemSpecifics ?? listingId
+    : asNonEmptyString(listing.title) ?? titleFromItemSpecifics ?? listingId;
 
   return {
     categoryId: listing.category_id,

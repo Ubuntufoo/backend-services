@@ -3,8 +3,12 @@ import {
   type GeneratedListingDraft,
   generatedListingDraftSchema,
 } from './contracts.js';
-import { normalizeSkuCategoryCode } from '@ebay-inventory/types';
+import {
+  normalizeSkuCategoryCode,
+} from '@ebay-inventory/types';
 import { isRawCardConditionToken } from '@/listings/trading-card-conditions.js';
+
+const YEAR_UNVERIFIED_WARNING_CODE = 'year_unverified' as const;
 
 type DraftRecord = Record<string, unknown>;
 type ConfidenceKey = 'title' | 'category' | 'price' | 'aspects';
@@ -78,6 +82,10 @@ function normalizeRequiredString(
 
 function normalizeNullableString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function normalizeBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function normalizeCardConditionToken(
@@ -161,15 +169,33 @@ function extractCardNumberFromTitle(title: string): string | null {
   return null;
 }
 
+function stripUnverifiedYearFromTitle(title: string): string {
+  return title
+    .replace(/\b(?:19\d{2}|20\d{2})(?:\s*[-/]\s*(?:\d{2}|\d{4}))?\b/gu, ' ')
+    .replace(/\(\s*\)/gu, ' ')
+    .replace(/\[\s*\]/gu, ' ')
+    .replace(/\{\s*\}/gu, ' ')
+    .replace(/\s{2,}/gu, ' ')
+    .trim();
+}
+
 export function normalizeGeneratedDraft(
-  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings'>
-): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings'> {
+  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'>
+): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> {
+  let title = draft.title;
   const aspects: AspectRecord = { ...draft.aspects };
   const warnings = [...draft.warnings];
+  const yearEvidence = draft.yearEvidence;
+
+  if (yearEvidence?.isVerified === false) {
+    title = stripUnverifiedYearFromTitle(title);
+    delete aspects.Year;
+    delete aspects.Season;
+  }
 
   const year = getAspectString(aspects, 'Year');
   const season = getAspectString(aspects, 'Season');
-  if (!year && season) {
+  if (!year && season && yearEvidence?.isVerified !== false) {
     aspects.Year = season;
   }
 
@@ -199,7 +225,7 @@ export function normalizeGeneratedDraft(
   }
 
   const normalizedAspectCardNumber = getAspectString(aspects, 'Card Number');
-  const titleCardNumber = extractCardNumberFromTitle(draft.title);
+  const titleCardNumber = extractCardNumberFromTitle(title);
 
   if (!normalizedAspectCardNumber && titleCardNumber) {
     aspects['Card Number'] = titleCardNumber;
@@ -214,10 +240,93 @@ export function normalizeGeneratedDraft(
   }
 
   return {
-    title: draft.title,
+    title,
     aspects,
     warnings,
+    yearEvidence,
   };
+}
+
+function normalizeYearEvidence(
+  value: unknown,
+  warnings: string[]
+): GeneratedListingDraft['yearEvidence'] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const isVerified = normalizeBoolean(value.isVerified);
+  const likelyYear = normalizeNullableString(value.likelyYear);
+  const likelyYearRange = normalizeNullableString(value.likelyYearRange);
+  const warningCode =
+    value.warningCode === YEAR_UNVERIFIED_WARNING_CODE ? YEAR_UNVERIFIED_WARNING_CODE : undefined;
+
+  if (value.isVerified !== undefined && isVerified === undefined) {
+    warnings.push('Gemini response field "yearEvidence.isVerified" was invalid and was discarded.');
+  }
+
+  if (value.likelyYear !== undefined && likelyYear === null && value.likelyYear !== null) {
+    warnings.push('Gemini response field "yearEvidence.likelyYear" was invalid and was discarded.');
+  }
+
+  if (
+    value.likelyYearRange !== undefined &&
+    likelyYearRange === null &&
+    value.likelyYearRange !== null
+  ) {
+    warnings.push(
+      'Gemini response field "yearEvidence.likelyYearRange" was invalid and was discarded.'
+    );
+  }
+
+  if (
+    value.warningCode !== undefined &&
+    value.warningCode !== YEAR_UNVERIFIED_WARNING_CODE
+  ) {
+    warnings.push('Gemini response field "yearEvidence.warningCode" was invalid and was discarded.');
+  }
+
+  if (warningCode === YEAR_UNVERIFIED_WARNING_CODE && isVerified === true) {
+    warnings.push(
+      'Gemini response yearEvidence marked the year both verified and unverified; treated it as unverified.'
+    );
+  }
+
+  if (warningCode === YEAR_UNVERIFIED_WARNING_CODE) {
+    return {
+      isVerified: false,
+      likelyYear,
+      likelyYearRange,
+      warningCode: YEAR_UNVERIFIED_WARNING_CODE,
+    };
+  }
+
+  if (isVerified === false) {
+    return {
+      isVerified: false,
+      likelyYear,
+      likelyYearRange,
+      warningCode: YEAR_UNVERIFIED_WARNING_CODE,
+    };
+  }
+
+  if (isVerified === true) {
+    return {
+      isVerified: true,
+      likelyYear,
+      likelyYearRange,
+    };
+  }
+
+  if (likelyYear || likelyYearRange || warningCode) {
+    return {
+      likelyYear,
+      likelyYearRange,
+      ...(warningCode ? { warningCode } : {}),
+    };
+  }
+
+  return undefined;
 }
 
 function normalizePriceSuggestion(value: unknown, warnings: string[]): number | null {
@@ -298,6 +407,7 @@ export function parseGeneratedDraft(
   const conditionSuggestion = normalizeNullableString(parsed.conditionSuggestion);
   const skuCategoryCode = normalizeSkuCategoryCodeSuggestion(parsed.skuCategoryCode, serviceWarnings);
   const aspects = normalizeAspects(parsed.aspects, serviceWarnings);
+  const yearEvidence = normalizeYearEvidence(parsed.yearEvidence, serviceWarnings);
   const priceSuggestion = normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings);
   const confidence = normalizeConfidence(parsed.confidence, serviceWarnings);
 
@@ -305,6 +415,7 @@ export function parseGeneratedDraft(
     title,
     aspects,
     warnings: [...modelWarnings, ...serviceWarnings],
+    yearEvidence,
   });
 
   return generatedListingDraftSchema.parse({
@@ -316,6 +427,7 @@ export function parseGeneratedDraft(
     conditionSuggestion,
     skuCategoryCode,
     aspects: normalizedDraft.aspects,
+    yearEvidence: normalizedDraft.yearEvidence,
     priceSuggestion,
     confidence,
     warnings: normalizedDraft.warnings,

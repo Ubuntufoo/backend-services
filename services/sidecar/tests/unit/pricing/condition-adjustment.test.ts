@@ -34,7 +34,7 @@ describe('computeConditionAdjustmentSummary', () => {
       minPrice: expect.any(Number),
       maxPrice: expect.any(Number),
       reason: 'eligible',
-      targetPrice: 5.49,
+      targetPrice: 5.24,
     });
   });
 

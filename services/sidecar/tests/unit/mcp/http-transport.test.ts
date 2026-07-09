@@ -234,6 +234,7 @@ describe('HTTP MCP transport', () => {
       listings: [
         {
           ...listingRow,
+          identity_warnings: [],
           latest_pricing_research: null,
           pricing_analysis_warnings: [],
         },

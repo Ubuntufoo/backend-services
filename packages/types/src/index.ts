@@ -200,4 +200,28 @@ export interface ListingLatestPricingResearchSummary {
   updated_at: string;
 }
 
+export const GENERATED_DRAFT_METADATA_KEY = '__draft_metadata' as const;
+export const YEAR_UNVERIFIED_WARNING_CODE = 'year_unverified' as const;
+
+export interface GeneratedDraftYearMetadata {
+  likely_year?: string | null;
+  likely_year_range?: string | null;
+  status: 'unverified';
+  warning_code: typeof YEAR_UNVERIFIED_WARNING_CODE;
+}
+
+export interface GeneratedDraftMetadata {
+  year?: GeneratedDraftYearMetadata | null;
+}
+
+export type ListingIdentityWarningCode = typeof YEAR_UNVERIFIED_WARNING_CODE | (string & {});
+
+export interface ListingIdentityWarning {
+  code: ListingIdentityWarningCode;
+  likely_year: string | null;
+  likely_year_range: string | null;
+  severity: 'warning';
+  summary: string;
+}
+
 export * from './structured-sku.js';
