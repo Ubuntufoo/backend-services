@@ -53,6 +53,7 @@ Current helper behavior:
 ### Current Provider Notes
 
 - Sidecar provider input is built from listing context such as `listingId`, `title`, `itemSpecifics`, and requested comp count.
+- SoldComps live requests currently ask for `75` comps by default unless a narrower explicit `requestedCompCount` is injected.
 - Apify actor payload intentionally avoids direct eBay `category_id` and `condition_id` filters until explicit repo-side mapping exists.
 - `soldPrice` from Apify can overstate actual realized value when `isBestOfferAccepted=true`; downstream pricing logic must account for that.
 - Fewer-than-requested sold comps can still be a successful provider response; downstream normalization, stats, and confidence decide usefulness.

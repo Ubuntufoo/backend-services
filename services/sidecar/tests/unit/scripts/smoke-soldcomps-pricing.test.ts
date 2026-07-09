@@ -153,7 +153,7 @@ describe('smoke soldcomps pricing script', () => {
 
     expect(runRequest).toHaveBeenCalledWith(
       expect.objectContaining({
-        count: 50,
+        count: 75,
         page: 1,
         query: buildExpectedRawCardKeyword('Johnny Riddle 1955 Topps 98'),
       })

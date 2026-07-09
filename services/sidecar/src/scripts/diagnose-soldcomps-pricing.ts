@@ -164,7 +164,7 @@ export async function runDiagnoseSoldCompsPricingCli(
       buildCheck(
         'soldcomps_request_count',
         'pass',
-        'SoldComps live path requests canonical 50 comps.',
+        'SoldComps live path requests canonical 75 comps.',
         {
           value: SOLDCOMPS_SOLD_COMP_REQUEST_COUNT,
         }

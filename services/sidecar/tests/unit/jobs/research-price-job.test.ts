@@ -1080,7 +1080,7 @@ describe('priceListingNow', () => {
               input: {
                 query: 'Johnny Riddle 1955 Topps #98',
                 request: {
-                  count: 50,
+                  count: 75,
                   ebaySite: 'ebay.com',
                   keyword: 'Johnny Riddle 1955 Topps #98',
                   page: 1,
@@ -1206,7 +1206,7 @@ describe('priceListingNow', () => {
       input: {
         query: 'Johnny Riddle 1955 Topps #98',
         request: {
-          count: 50,
+          count: 75,
           ebaySite: 'ebay.com',
           page: 1,
           sortOrder: 'endedRecently',
@@ -1363,7 +1363,7 @@ describe('priceListingNow', () => {
                 query:
                   'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
                 request: {
-                  count: 50,
+                  count: 75,
                   ebaySite: 'ebay.com',
                   keyword:
                     'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
@@ -1402,13 +1402,13 @@ describe('priceListingNow', () => {
         providerHasNextPage: false,
         providerReportedTotalCount: 6,
         providerReturnedCount: 6,
-        requestedCount: 50,
+        requestedCount: 75,
       },
       input: {
         query:
           'John Hadl 1966 Topps #125 -pick -choose -complete -lot -PSA -BGS -SGC -CGC -CSG -TAG -HGA -MBA -GMA -KSA -ISA -WCG -BCCG -Beckett -grade -graded -slab -slabbed -auto -autograph',
         request: {
-          count: 50,
+          count: 75,
           ebaySite: 'ebay.com',
           page: 1,
           sortOrder: 'endedRecently',

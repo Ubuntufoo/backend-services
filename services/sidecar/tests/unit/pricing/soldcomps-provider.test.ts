@@ -72,14 +72,14 @@ describe('SoldComps pricing provider', () => {
     );
   });
 
-  it('uses SoldComps default requested comp count of 50 when input omits requestedCompCount', () => {
+  it('uses SoldComps default requested comp count of 75 when input omits requestedCompCount', () => {
     expect(
       buildSoldCompsRequestParams({
         ...baseInput,
         requestedCompCount: undefined,
       })
     ).toMatchObject({
-      count: 50,
+      count: 75,
     });
   });
 
@@ -254,7 +254,7 @@ describe('SoldComps pricing provider', () => {
     );
     const requestUrl = String(fetch.mock.calls[0]?.[0]);
     expect(requestUrl).toContain('keyword=Johnny+Riddle+1955+Topps+98');
-    expect(requestUrl).toContain('count=50');
+    expect(requestUrl).toContain('count=75');
     expect(requestUrl).toContain('page=1');
     expect(requestUrl).toContain('ebaySite=ebay.com');
     expect(requestUrl).toContain('sortOrder=endedRecently');
@@ -302,7 +302,7 @@ describe('SoldComps pricing provider', () => {
       fetchedAt: '2026-06-15T12:00:00.000Z',
       query: soldCompsFixture.keyword,
       request: {
-        count: 50,
+        count: 75,
         ebaySite: 'ebay.com',
         keyword: soldCompsFixture.keyword,
         page: 1,
@@ -350,7 +350,7 @@ describe('SoldComps pricing provider', () => {
       providerStatus: 200,
       query: 'Johnny Riddle 1955 Topps #98',
       request: {
-        count: 50,
+        count: 75,
         ebaySite: 'ebay.com',
         page: 1,
         sortOrder: 'endedRecently',

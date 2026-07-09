@@ -51,7 +51,7 @@ describe('diagnose soldcomps pricing script', () => {
     };
 
     expect(payload.overallStatus).toBe('pass');
-    expect(payload.requestedCompCount).toBe(50);
+    expect(payload.requestedCompCount).toBe(75);
     expect(payload.selectedProviderMode).toBe('soldcomps');
     expect(payload.checks).toEqual(
       expect.arrayContaining([
@@ -61,7 +61,7 @@ describe('diagnose soldcomps pricing script', () => {
         }),
         expect.objectContaining({
           details: expect.objectContaining({
-            value: 50,
+            value: 75,
           }),
           name: 'soldcomps_request_count',
           status: 'pass',
