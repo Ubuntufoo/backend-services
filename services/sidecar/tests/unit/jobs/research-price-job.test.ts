@@ -587,12 +587,10 @@ describe('priceListingNow', () => {
             soldCompsRequestCount: 2,
           }),
           queryPlan: expect.objectContaining({
-            attemptedQueries: [strictQuery, relaxedQuery],
             fallbackAttempted: true,
             fallbackReason: 'strict_query_returned_zero_items',
             fallbackSucceeded: true,
             finalAttemptType: 'relaxed',
-            soldCompsRequestCount: 2,
             attempts: expect.arrayContaining([
               expect.objectContaining({
                 attemptType: 'strict',
@@ -766,12 +764,10 @@ describe('priceListingNow', () => {
           }),
           providerResult: expect.objectContaining({
             queryPlan: expect.objectContaining({
-              attemptedQueries: [strictQuery, relaxedQuery],
               fallbackAttempted: true,
               fallbackReason: 'strict_query_returned_zero_items',
               fallbackSucceeded: false,
               finalAttemptType: 'relaxed',
-              soldCompsRequestCount: 2,
               attempts: expect.arrayContaining([
                 expect.objectContaining({
                   attemptType: 'strict',

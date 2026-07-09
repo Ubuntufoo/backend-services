@@ -3483,6 +3483,114 @@ describe('runSidecarJob', () => {
       );
     });
 
+    it('logs soldcomps query-fallback diagnostics separately from provider fallback state', async () => {
+      const listing = createListingRow({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Number': '191',
+          Manufacturer: 'Topps',
+          Player: 'Ed Stanky',
+          Year: '1952',
+        },
+        status: 'needs_review',
+        sub_status: 'review_pending',
+        title: 'Ed Stanky Topps #191',
+      });
+      const dataAccess = createDataAccess({
+        job: queuedResearchPriceJob,
+        listing,
+      });
+      const strictQuery =
+        'Ed Stanky 1952 Topps 191 -pick -choose -complete -lot -grade -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -Beckett -auto -autograph';
+      const relaxedQuery = 'Ed Stanky 1952 Topps 191';
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          computeStats: vi.fn(() => createStableResearchPriceStats()),
+          normalizeComps: vi.fn(() => ({
+            comps: createStableResearchPriceComps(),
+            rejected: [],
+          })),
+          pricingProvider: {
+            fetchSoldComps: vi.fn(async () => ({
+              fetchedAt: '2026-07-09T15:50:27.589Z',
+              provider: 'soldcomps',
+              query: relaxedQuery,
+              rawResult: {
+                fetchedAt: '2026-07-09T15:50:27.589Z',
+                hasNextPage: false,
+                itemCount: 50,
+                page: 1,
+                providerStatus: 200,
+                query: relaxedQuery,
+                queryPlan: {
+                  attempts: [
+                    {
+                      attemptType: 'strict',
+                      itemCount: 0,
+                      query: strictQuery,
+                    },
+                    {
+                      attemptType: 'relaxed',
+                      itemCount: 50,
+                      query: relaxedQuery,
+                    },
+                  ],
+                  attemptedQueries: [strictQuery, relaxedQuery],
+                  fallbackAttempted: true,
+                  fallbackReason: 'strict_query_returned_zero_items',
+                  fallbackSucceeded: true,
+                  finalAttemptType: 'relaxed',
+                  soldCompsRequestCount: 2,
+                },
+                totalItems: 50,
+              },
+              soldComps: createStableResearchPriceComps(),
+              soldCompsUsage: {
+                limit: 2000,
+                source: 'headers',
+                updatedAt: '2026-07-09T15:50:27.589Z',
+                used: 48,
+              },
+            })),
+            name: 'soldcomps',
+          },
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Completed research_price provider fetch.',
+        expect.objectContaining({
+          event: 'research_price_provider_result',
+          fallbackAttempted: false,
+          fallbackSucceeded: false,
+          provider: 'soldcomps',
+          soldCompsAttemptedQueries: [strictQuery, relaxedQuery],
+          soldCompsQueryFallbackAttempted: true,
+          soldCompsQueryFallbackReason: 'strict_query_returned_zero_items',
+          soldCompsQueryFallbackSucceeded: true,
+          soldCompsQueryFinalAttemptType: 'relaxed',
+          soldCompsRequestCount: 2,
+        })
+      );
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Succeeded research_price job.',
+        expect.objectContaining({
+          event: 'research_price_succeeded',
+          soldCompsAttemptedQueries: [strictQuery, relaxedQuery],
+          soldCompsQueryFallbackAttempted: true,
+          soldCompsQueryFallbackReason: 'strict_query_returned_zero_items',
+          soldCompsQueryFallbackSucceeded: true,
+          soldCompsQueryFinalAttemptType: 'relaxed',
+          soldCompsRequestCount: 2,
+        })
+      );
+    });
+
     it('preserves explicit injected fixture analyst override over default production analyst', async () => {
       const listing = createListingRow({
         category_id: '261328',
@@ -4280,6 +4388,9 @@ describe('runSidecarJob', () => {
         job: queuedResearchPriceJob,
         listing,
       });
+      const strictQuery =
+        'Ed Stanky 1952 Topps 191 -pick -choose -complete -lot -grade -graded -slab -slabbed -PSA -BGS -SGC -CGC -CSG -Beckett -auto -autograph';
+      const relaxedQuery = 'Ed Stanky 1952 Topps 191';
 
       const result = await runSidecarJob('job-research-price', {
         dataAccess,
@@ -4294,6 +4405,58 @@ describe('runSidecarJob', () => {
             medianSoldPrice: 15,
             soldCount: 12,
           })),
+          normalizeComps: vi.fn(() => ({
+            comps: [],
+            rejected: createStableResearchPriceComps().map((comp, index) => ({
+              index,
+              reason: 'exact_player_mismatch' as const,
+              title: comp.title,
+            })),
+          })),
+          pricingProvider: {
+            fetchSoldComps: vi.fn(async () => ({
+              fetchedAt: '2026-07-09T15:50:27.589Z',
+              provider: 'soldcomps',
+              query: relaxedQuery,
+              rawResult: {
+                fetchedAt: '2026-07-09T15:50:27.589Z',
+                hasNextPage: false,
+                itemCount: 50,
+                page: 1,
+                providerStatus: 200,
+                query: relaxedQuery,
+                queryPlan: {
+                  attempts: [
+                    {
+                      attemptType: 'strict',
+                      itemCount: 0,
+                      query: strictQuery,
+                    },
+                    {
+                      attemptType: 'relaxed',
+                      itemCount: 50,
+                      query: relaxedQuery,
+                    },
+                  ],
+                  attemptedQueries: [strictQuery, relaxedQuery],
+                  fallbackAttempted: true,
+                  fallbackReason: 'strict_query_returned_zero_items',
+                  fallbackSucceeded: true,
+                  finalAttemptType: 'relaxed',
+                  soldCompsRequestCount: 2,
+                },
+                totalItems: 50,
+              },
+              soldComps: createStableResearchPriceComps(),
+              soldCompsUsage: {
+                limit: 2000,
+                source: 'headers',
+                updatedAt: '2026-07-09T15:50:27.589Z',
+                used: 48,
+              },
+            })),
+            name: 'soldcomps',
+          },
         },
       });
 
@@ -4305,6 +4468,20 @@ describe('runSidecarJob', () => {
           error_code: 'research_price_suggested_price_invalid',
           llm_reasoning_json: {},
           pricing_model_name: null,
+        })
+      );
+      expect(jobLoggerWarn).toHaveBeenCalledWith(
+        'Failed research_price job.',
+        expect.objectContaining({
+          event: 'research_price_failed',
+          provider: 'soldcomps',
+          query: relaxedQuery,
+          soldCompsAttemptedQueries: [strictQuery, relaxedQuery],
+          soldCompsQueryFallbackAttempted: true,
+          soldCompsQueryFallbackReason: 'strict_query_returned_zero_items',
+          soldCompsQueryFallbackSucceeded: true,
+          soldCompsQueryFinalAttemptType: 'relaxed',
+          soldCompsRequestCount: 2,
         })
       );
       expect(dataAccess.listings.update).not.toHaveBeenCalled();

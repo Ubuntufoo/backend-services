@@ -427,6 +427,25 @@ function getProviderFinalAttemptType(record: Record<string, unknown> | null): st
   return asNonEmptyString(queryPlan?.finalAttemptType);
 }
 
+function buildSoldCompsQueryLogContext(
+  record: Record<string, unknown> | null
+): Record<string, boolean | number | string | string[]> {
+  const queryPlan = getProviderQueryPlan(record);
+  const soldCompsRequestCount = getSoldCompsRequestCount(record);
+  const soldCompsAttemptedQueries = getSoldCompsAttemptedQueries(record);
+
+  return Object.fromEntries(
+    Object.entries({
+      soldCompsAttemptedQueries,
+      soldCompsQueryFallbackAttempted: asBoolean(queryPlan?.fallbackAttempted),
+      soldCompsQueryFallbackReason: asNonEmptyString(queryPlan?.fallbackReason),
+      soldCompsQueryFallbackSucceeded: asBoolean(queryPlan?.fallbackSucceeded),
+      soldCompsQueryFinalAttemptType: getProviderFinalAttemptType(record),
+      soldCompsRequestCount,
+    }).filter(([, value]) => value !== undefined)
+  ) as Record<string, boolean | number | string | string[]>;
+}
+
 function buildPricingResearchDiagnostics(
   input: {
     latency: PricingResearchLatencyDiagnostics;
@@ -1546,6 +1565,9 @@ export async function priceListingNow(
     const statsStartedAt = nowMs();
     const stats = runComputeStats(normalized.comps);
     statsResult = stats;
+    const soldCompsQueryLogContext = buildSoldCompsQueryLogContext(
+      getProviderResultRecord(providerResult.rawResult)
+    );
     jobLogger.info('Completed research_price provider fetch.', {
       acceptedCompCount: normalizedCompCount,
       actualProvider: providerRouting.actualProvider,
@@ -1561,6 +1583,7 @@ export async function priceListingNow(
       query: redactSensitiveText(providerResult.query),
       rawCompCount,
       selectedProviderMode,
+      ...soldCompsQueryLogContext,
     });
     const deterministicSuggestedPrice = assertValidSuggestedPrice(
       listingId,
@@ -1719,6 +1742,7 @@ export async function priceListingNow(
       pricingModelName,
       rawCompCount,
       soldCount: stats.soldCount,
+      ...soldCompsQueryLogContext,
     });
 
     return {
@@ -1774,6 +1798,10 @@ export async function priceListingNow(
       (caughtError instanceof SidecarJobError
         ? asNonEmptyString(caughtError.context.query)
         : undefined);
+    const soldCompsQueryLogContext = buildSoldCompsQueryLogContext(
+      getProviderResultRecord(providerResult?.rawResult) ??
+        (isRecord(providerFailure.rawResult) ? providerFailure.rawResult : null)
+    );
 
     try {
       if (!researchSucceeded) {
@@ -1829,6 +1857,7 @@ export async function priceListingNow(
       rawCompCount,
       selectedProviderMode,
       workflowSafe: true,
+      ...soldCompsQueryLogContext,
     });
 
     throw jobError;
