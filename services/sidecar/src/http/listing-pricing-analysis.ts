@@ -281,17 +281,60 @@ function getLatestPricingResearchCompSummary(
   research: ListingPriceResearchRow
 ): ListingLatestPricingResearchCompSummary {
   const reasoning = asRecord(research.llm_reasoning_json);
+  const rawResult = asRecord(research.raw_result_json);
+  const diagnostics = asRecord(rawResult?.diagnostics);
+  const normalization = asRecord(rawResult?.normalization);
+  const output = asRecord(rawResult?.output);
+  const providerResult = asRecord(rawResult?.providerResult);
+  const providerResultOutput = asRecord(providerResult?.output);
   const selectedCompIds = asStringArray(reasoning?.selectedCompIds);
   const rejectedCompIdsFromRow = asStringArray(research.llm_rejected_comp_ids);
   const rejectedCompIds =
     rejectedCompIdsFromRow.length > 0 ? rejectedCompIdsFromRow : asStringArray(reasoning?.rejectedCompIds);
+  const normalizationAcceptedCount =
+    firstCount(
+      diagnostics?.normalizationAcceptedCount,
+      diagnostics?.acceptedCompCount,
+      normalization?.acceptedCount,
+      Array.isArray(research.comps) ? research.comps.length : null
+    ) ?? 0;
+  const normalizationRejectedCount =
+    firstCount(
+      diagnostics?.normalizationRejectedCount,
+      diagnostics?.rejectedCompCount,
+      normalization?.rejectedCount,
+      Array.isArray(normalization?.rejected) ? normalization.rejected.length : null
+    ) ?? 0;
+  const providerReturnedCount =
+    firstCount(
+      diagnostics?.providerReturnedCount,
+      diagnostics?.rawCompCount,
+      diagnostics?.normalizationInputCount,
+      normalization?.inputCount,
+      normalization?.rawCount,
+      output?.itemCount,
+      providerResultOutput?.itemCount,
+      providerResult?.returnedSoldComps,
+      normalizationAcceptedCount + normalizationRejectedCount
+    ) ?? 0;
+  const providerReportedTotalCount = firstCount(
+    diagnostics?.providerReportedTotalCount,
+    output?.totalItems,
+    providerResultOutput?.totalItems
+  );
 
   return {
+    normalization_accepted_count: normalizationAcceptedCount,
+    normalization_rejected_count: normalizationRejectedCount,
+    ...(providerReportedTotalCount !== null
+      ? { provider_reported_count: providerReportedTotalCount }
+      : {}),
+    provider_returned_count: providerReturnedCount,
     rejected_comp_count: rejectedCompIds.length,
     rejected_comp_ids: rejectedCompIds,
     selected_comp_count: selectedCompIds.length,
     selected_comp_ids: selectedCompIds,
-    total_comp_count: Array.isArray(research.comps) ? research.comps.length : 0,
+    total_comp_count: normalizationAcceptedCount,
   };
 }
 
@@ -335,13 +378,13 @@ function buildFailureSummary(
     diagnostics?.normalizationAcceptedCount,
     diagnostics?.acceptedCompCount,
     normalization?.acceptedCount,
-    compSummary.selected_comp_count
+    compSummary.normalization_accepted_count
   );
   const rejectedCompCount = firstCount(
     diagnostics?.normalizationRejectedCount,
     diagnostics?.rejectedCompCount,
     normalization?.rejectedCount,
-    compSummary.rejected_comp_count
+    compSummary.normalization_rejected_count
   );
   const rejectedReasonCounts = getRejectedReasonCounts(normalization?.rejected);
 

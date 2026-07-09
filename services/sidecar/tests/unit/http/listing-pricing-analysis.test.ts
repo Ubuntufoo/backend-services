@@ -48,6 +48,59 @@ describe('serializeLatestPricingResearch', () => {
     expect(result?.failure_summary).toBeNull();
   });
 
+  it('exposes normalization and provider counts separately from llm comp selections', () => {
+    const result = serializeLatestPricingResearch(
+      createResearch({
+        comps: [{ id: 'comp-1' }, { id: 'comp-2' }],
+        llm_reasoning_json: {
+          rejectedCompIds: ['comp-2'],
+          selectedCompIds: ['comp-1'],
+        },
+        raw_result_json: {
+          diagnostics: {
+            normalizationAcceptedCount: 2,
+            normalizationRejectedCount: 24,
+            providerReportedTotalCount: 50,
+            providerReturnedCount: 26,
+          },
+        },
+        status: 'succeeded',
+      })
+    );
+
+    expect(result?.comp_summary).toEqual({
+      normalization_accepted_count: 2,
+      normalization_rejected_count: 24,
+      provider_reported_count: 50,
+      provider_returned_count: 26,
+      rejected_comp_count: 1,
+      rejected_comp_ids: ['comp-2'],
+      selected_comp_count: 1,
+      selected_comp_ids: ['comp-1'],
+      total_comp_count: 2,
+    });
+  });
+
+  it('falls back to persisted comps when latest research predates normalization diagnostics', () => {
+    const result = serializeLatestPricingResearch(
+      createResearch({
+        comps: [{ id: 'comp-1' }, { id: 'comp-2' }, { id: 'comp-3' }],
+        status: 'succeeded',
+      })
+    );
+
+    expect(result?.comp_summary).toEqual({
+      normalization_accepted_count: 3,
+      normalization_rejected_count: 0,
+      provider_returned_count: 3,
+      rejected_comp_count: 0,
+      rejected_comp_ids: [],
+      selected_comp_count: 0,
+      selected_comp_ids: [],
+      total_comp_count: 3,
+    });
+  });
+
   it('classifies provider zero results from zero diagnostics', () => {
     const result = serializeLatestPricingResearch(
       createResearch({

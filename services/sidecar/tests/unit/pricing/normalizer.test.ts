@@ -422,6 +422,25 @@ describe('normalizeSoldComps', () => {
   });
 
   it.each([
+    '1963 Topps Set-Break # 68 Gil Hodges/Duke Snider EX-EXMINT *GMCARDS*',
+    '1963 Topps #68 Friendly Foes Gil Hodges / Duke Snider New York Mets (see pics)',
+    '1963 Topps #68 Duke Snider & Gil Hodges Friendly Foes',
+  ])('accepts delimiter-separated multi-player exact-card title "%s"', (title) => {
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildFriendlyFoesContext());
+
+    expect(normalized.rejected).toEqual([]);
+    expect(normalized.comps[0]?.title).toBe(title);
+  });
+
+  it('rejects multi-player exact-card title when a required player token is missing', () => {
+    const title = '1963 Topps #68 Friendly Foes Gil Hodges / Pee Wee Reese';
+    const normalized = normalizeSoldComps([buildRawComp({ title })], buildFriendlyFoesContext());
+
+    expect(normalized.comps).toEqual([]);
+    expect(normalized.rejected).toEqual([{ index: 0, reason: 'exact_player_mismatch', title }]);
+  });
+
+  it.each([
     ['1953 Bowman Color Sal Maglie #96 Good Crease', buildSalMaglieContext()],
     ['1991 Fleer Pro Vision Darryl Strawberry #12', buildDarrylStrawberryProVisionContext()],
     ['1999 Topps Chrome Highlight Reels Kobe Bryant #HR4', buildKobeBryantContext()],
@@ -784,6 +803,19 @@ function buildPeteMaravichContext(): NormalizeSoldCompsContext {
       Year: '1977',
     },
     title: '1977 Topps Pete Maravich #20',
+  };
+}
+
+function buildFriendlyFoesContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '68',
+      Manufacturer: 'Topps',
+      Player: ['Duke Snider', 'Gil Hodges'],
+      Set: 'Topps',
+      Year: '1963',
+    },
+    title: '1963 Topps Friendly Foes #68 Gil Hodges / Duke Snider',
   };
 }
 

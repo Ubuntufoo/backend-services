@@ -101,6 +101,12 @@ const latestPricingResearchRow = {
   provider: 'apify',
   query: 'josh beckett rookie card psa 8',
   raw_result_json: {
+    diagnostics: {
+      normalizationAcceptedCount: 3,
+      normalizationRejectedCount: 24,
+      providerReportedTotalCount: 50,
+      providerReturnedCount: 27,
+    },
     providerResult: {
       input: {
         apiUrl: 'https://user:pass@example.com/private',
@@ -526,6 +532,10 @@ describe('data API router', () => {
     };
     const expectedLatestResearch = {
       comp_summary: {
+        normalization_accepted_count: 3,
+        normalization_rejected_count: 24,
+        provider_reported_count: 50,
+        provider_returned_count: 27,
         rejected_comp_count: 1,
         rejected_comp_ids: ['comp-3'],
         selected_comp_count: 2,
@@ -667,6 +677,9 @@ describe('data API router', () => {
         identity_warnings: [],
         latest_pricing_research: {
           comp_summary: {
+            normalization_accepted_count: 0,
+            normalization_rejected_count: 0,
+            provider_returned_count: 0,
             rejected_comp_count: 0,
             rejected_comp_ids: [],
             selected_comp_count: 0,

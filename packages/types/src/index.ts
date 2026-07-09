@@ -153,6 +153,10 @@ export interface ListingPricingAnalysisWarning {
 }
 
 export interface ListingLatestPricingResearchCompSummary {
+  normalization_accepted_count: number;
+  normalization_rejected_count: number;
+  provider_reported_count?: number;
+  provider_returned_count: number;
   rejected_comp_count: number;
   rejected_comp_ids: string[];
   selected_comp_count: number;

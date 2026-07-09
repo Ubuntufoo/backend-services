@@ -35,9 +35,12 @@ const MULTI_WORD_BASE_BRAND_PAIRS = new Set(['nba hoops', 'upper deck']);
 interface ExactCardTitleTarget {
   baseSetTokens: string[];
   cardNumber: string | null;
+  playerTokenGroups: string[][];
   playerPhrase: string | null;
   year: string | null;
 }
+
+const PLAYER_NAME_DELIMITER_PATTERN = /\s+-\s+|\/|,|&|\bvs\b|\band\b/giu;
 
 export const EXACT_CARD_REJECTION_REASONS = {
   cardNumberMismatch: 'exact_card_number_mismatch',
@@ -55,6 +58,7 @@ export function buildExactCardTitleTarget(context: NormalizeSoldCompsContext): E
     cardNumber:
       getFirstSpecificValue(itemSpecifics, CARD_NUMBER_ITEM_SPECIFIC_KEYS, normalizeCardNumber) ??
       extractExplicitCardNumber(fallbackTitle),
+    playerTokenGroups: getPlayerTokenGroups(itemSpecifics),
     playerPhrase: getFirstSpecificValue(itemSpecifics, PLAYER_ITEM_SPECIFIC_KEYS, normalizePhrase),
     year:
       getFirstSpecificValue(itemSpecifics, YEAR_ITEM_SPECIFIC_KEYS, normalizeYear) ??
@@ -68,7 +72,10 @@ export function getExactCardTitleMismatchReason(
 ): string | null {
   const tokens = tokenizeTitle(title);
 
-  if (target.playerPhrase && !containsWholePhraseTokens(tokens, tokenizeTitle(target.playerPhrase))) {
+  if (
+    target.playerPhrase &&
+    !matchesPlayerTokens(tokens, target.playerPhrase, target.playerTokenGroups)
+  ) {
     return EXACT_CARD_REJECTION_REASONS.playerMismatch;
   }
 
@@ -162,6 +169,35 @@ function normalizeCardNumber(value: string): string | null {
   return /^[A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4}$/.test(normalized) ? normalized.toUpperCase() : null;
 }
 
+function getPlayerTokenGroups(itemSpecifics: PricingProviderInput['itemSpecifics']): string[][] {
+  if (!itemSpecifics) {
+    return [];
+  }
+
+  const groups: string[][] = [];
+
+  for (const key of PLAYER_ITEM_SPECIFIC_KEYS) {
+    const rawValue = itemSpecifics[key];
+    const values = Array.isArray(rawValue) ? rawValue : typeof rawValue === 'string' ? [rawValue] : [];
+
+    for (const value of values) {
+      const normalized = normalizePhrase(value);
+      if (!normalized) {
+        continue;
+      }
+
+      for (const segment of normalized.split(PLAYER_NAME_DELIMITER_PATTERN)) {
+        const tokens = tokenizeTitle(segment);
+        if (tokens.length > 0) {
+          groups.push(tokens);
+        }
+      }
+    }
+  }
+
+  return groups;
+}
+
 function tokenizeBaseBrand(value: string): string[] {
   const normalized = normalizePhrase(value);
   if (!normalized) {
@@ -244,6 +280,36 @@ function stripExplicitCardNumberSpans(title: string): string {
 
 function containsWholePhraseTokens(tokens: string[], phraseTokens: string[]): boolean {
   return findPhraseIndexes(tokens, phraseTokens).length > 0;
+}
+
+function matchesPlayerTokens(
+  titleTokens: string[],
+  playerPhrase: string,
+  playerTokenGroups: string[][]
+): boolean {
+  if (playerTokenGroups.length <= 1) {
+    return containsWholePhraseTokens(titleTokens, tokenizeTitle(playerPhrase));
+  }
+
+  const titleTokenCounts = countTokens(titleTokens);
+
+  for (const [token, count] of countTokens(playerTokenGroups.flat()) ) {
+    if ((titleTokenCounts.get(token) ?? 0) < count) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function countTokens(tokens: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const token of tokens) {
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+
+  return counts;
 }
 
 function findPhraseIndexes(tokens: string[], phraseTokens: string[]): number[] {
