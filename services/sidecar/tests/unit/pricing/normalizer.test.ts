@@ -602,6 +602,46 @@ describe('normalizeSoldComps', () => {
     expect(normalized.comps.map((comp) => comp.title)).toEqual(['First', 'Second', 'Third']);
   });
 
+  it('rejects post-normalization extreme sold-price outlier for Allen Iverson raw comps', () => {
+    const normalized = normalizeSoldComps(
+      [
+        buildRawComp({
+          title: "1996 Collector's Choice Allen Iverson #301 rookie card",
+          price: { value: 2.95, currency: 'USD' },
+          shippingPrice: null,
+        }),
+        buildRawComp({
+          title: "1996 Collector's Choice Allen Iverson #301 RC",
+          price: { value: 3.1, currency: 'USD' },
+          shippingPrice: null,
+        }),
+        buildRawComp({
+          title: "1996 Collector's Choice Allen Iverson #301 raw rookie",
+          price: { value: 3.35, currency: 'USD' },
+          shippingPrice: null,
+        }),
+        buildRawComp({
+          title: "1996 Collector's Choice Allen Iverson #301 clean rookie",
+          price: { value: 3.5, currency: 'USD' },
+          shippingPrice: null,
+        }),
+        buildRawComp({
+          title: "1996 Collector's Choice Allen Iverson #301 sharp rookie",
+          price: { value: 10.4, currency: 'USD' },
+          shippingPrice: null,
+        }),
+      ],
+      buildAllenIversonCollectorsChoiceContext()
+    );
+
+    expect(normalized.comps.map((comp) => comp.price.value)).toEqual([2.95, 3.1, 3.35, 3.5]);
+    expect(normalized.rejected).toContainEqual({
+      index: 4,
+      reason: 'extreme_price_outlier',
+      title: "1996 Collector's Choice Allen Iverson #301 sharp rookie",
+    });
+  });
+
   it('returns rejected rows with index and reason while preserving accepted comps', () => {
     const normalized = normalizeSoldComps([
       buildRawComp({ title: 'Accepted A' }),
@@ -744,6 +784,18 @@ function buildPeteMaravichContext(): NormalizeSoldCompsContext {
       Year: '1977',
     },
     title: '1977 Topps Pete Maravich #20',
+  };
+}
+
+function buildAllenIversonCollectorsChoiceContext(): NormalizeSoldCompsContext {
+  return {
+    itemSpecifics: {
+      'Card Number': '301',
+      Player: 'Allen Iverson',
+      Set: "Collector's Choice",
+      Year: '1996',
+    },
+    title: "1996 Collector's Choice Allen Iverson #301",
   };
 }
 

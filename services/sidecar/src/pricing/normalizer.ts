@@ -20,6 +20,7 @@ const ISO_SOLD_DATE_PATTERN =
 
 const REJECTION_REASONS = {
   blankTitle: 'blank_title',
+  extremePriceOutlier: 'extreme_price_outlier',
   excludedGradedListing: 'excluded_graded_listing',
   excludedSelectionListing: 'excluded_selection_listing',
   invalidPrice: 'invalid_price',
@@ -57,7 +58,7 @@ export function normalizeSoldComps(
   rawSoldComps: RawSoldComp[],
   context: NormalizeSoldCompsContext = {}
 ): NormalizeSoldCompsResult {
-  const comps: NormalizedSoldComp[] = [];
+  const acceptedCandidates: Array<{ index: number; comp: NormalizedSoldComp }> = [];
   const rejected: NormalizeSoldCompsResult['rejected'] = [];
   const exactCardTarget = buildExactCardTitleTarget(context);
 
@@ -69,15 +70,40 @@ export function normalizeSoldComps(
       return;
     }
 
-    comps.push({
-      ...normalized,
-      id: createNormalizedCompId(normalized),
-      source: 'provider',
+    acceptedCandidates.push({
+      index,
+      comp: {
+        ...normalized,
+        id: createNormalizedCompId(normalized),
+        source: 'provider',
+      },
     });
+  });
+
+  if (acceptedCandidates.length === 0) {
+    return { comps: [], rejected };
+  }
+
+  const medianAcceptedPrice = calculateMedian(
+    acceptedCandidates
+      .map(({ comp }) => comp.price.value)
+      .sort((left, right) => left - right)
+  );
+  const extremePriceThreshold = medianAcceptedPrice * 3;
+  const comps: NormalizedSoldComp[] = [];
+
+  acceptedCandidates.forEach(({ index, comp }) => {
+    if (comp.price.value > extremePriceThreshold) {
+      rejected.push({ index, reason: REJECTION_REASONS.extremePriceOutlier, title: comp.title });
+      return;
+    }
+
+    comps.push(comp);
   });
 
   return { comps, rejected };
 }
+
 function normalizeSingleSoldComp(
   rawComp: RawSoldComp,
   exactCardTarget: ReturnType<typeof buildExactCardTitleTarget>,
@@ -246,6 +272,16 @@ function normalizeSoldDate(value: string): Date | null {
   }
 
   return soldDate;
+}
+
+function calculateMedian(sortedValues: readonly number[]): number {
+  const midpoint = Math.floor(sortedValues.length / 2);
+
+  if (sortedValues.length % 2 === 1) {
+    return sortedValues[midpoint] ?? 0;
+  }
+
+  return ((sortedValues[midpoint - 1] ?? 0) + (sortedValues[midpoint] ?? 0)) / 2;
 }
 
 function tryParseUrl(value: string): URL | null {
