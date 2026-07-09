@@ -14,6 +14,7 @@ import {
   dismissListingPriceResearchPricingWarnings,
   createListing,
   enqueueGenerateAiJob,
+  enqueueProcessImagesJob,
   enqueuePublishJob,
   enqueueResearchPriceJob,
   failJob,
@@ -56,6 +57,7 @@ import {
   type DailyUsageIncrementResult,
   type GeminiDailyUsageSummary,
   type EnqueueGenerateAiJobResult,
+  type EnqueueProcessImagesJobResult,
   type EnqueuePublishJobResult,
   type EnqueueResearchPriceJobResult,
   type GeminiJobAttemptAuditUpdate,
@@ -99,6 +101,7 @@ export interface SidecarDataAccess {
     claimDueQueued(jobId: string, now: string): Promise<JobRow | null>;
     complete(jobId: string): Promise<JobRow>;
     enqueueGenerateAi(listingId: string): Promise<EnqueueGenerateAiJobResult>;
+    enqueueProcessImages(): Promise<EnqueueProcessImagesJobResult>;
     enqueuePublish(listingId: string): Promise<EnqueuePublishJobResult>;
     enqueueResearchPrice(listingId: string): Promise<EnqueueResearchPriceJobResult>;
     fail(jobId: string, error: JobErrorUpdateInput): Promise<JobRow>;
@@ -204,6 +207,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       claimDueQueued: async (jobId, now) => await claimDueQueuedJob(client, jobId, now),
       complete: async (jobId) => await completeJob(client, jobId),
       enqueueGenerateAi: async (listingId) => await enqueueGenerateAiJob(client, listingId),
+      enqueueProcessImages: async () => await enqueueProcessImagesJob(client),
       enqueuePublish: async (listingId) => await enqueuePublishJob(client, listingId),
       enqueueResearchPrice: async (listingId) => await enqueueResearchPriceJob(client, listingId),
       fail: async (jobId, error) => await failJob(client, jobId, error),
