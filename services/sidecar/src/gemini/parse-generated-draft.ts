@@ -3,24 +3,28 @@ import {
   type GeneratedListingDraft,
   generatedListingDraftSchema,
 } from './contracts.js';
-import {
-  normalizeSkuCategoryCode,
-} from '@ebay-inventory/types';
+import { normalizeSkuCategoryCode } from '@ebay-inventory/types';
 import { isRawCardConditionToken } from '@/listings/trading-card-conditions.js';
-
-const YEAR_UNVERIFIED_WARNING_CODE = 'year_unverified' as const;
+import {
+  GENERATED_YEAR_EVIDENCE_SOURCE_TYPES,
+  normalizeGeneratedDraftYearFields,
+  type NormalizeGeneratedDraftYearFieldsOptions,
+} from './year-normalization.js';
 
 type DraftRecord = Record<string, unknown>;
 type ConfidenceKey = 'title' | 'category' | 'price' | 'aspects';
 type AspectRecord = Record<string, string | string[]>;
+type YearEvidenceSourceType = (typeof GENERATED_YEAR_EVIDENCE_SOURCE_TYPES)[number];
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const CONFIDENCE_KEYS: ConfidenceKey[] = ['title', 'category', 'price', 'aspects'];
 const TITLE_CARD_NUMBER_PATTERNS = [
   /(?:^|[\s([{])#\s*([A-Za-z0-9-]+)\b/i,
+  /\bNo\.?\s*#?\s*([A-Za-z0-9-]+)\b/i,
   /\bCard\s*#\s*([A-Za-z0-9-]+)\b/i,
   /\bCard\s+No\.?\s*([A-Za-z0-9-]+)\b/i,
   /\bCard\s+Number\s+([A-Za-z0-9-]+)\b/i,
+  /\bCard\s+(?!No\b|No\.\b|Number\b)([A-Za-z0-9-]+)\b/i,
 ];
 
 function extractJsonPayload(rawText: string): string {
@@ -84,8 +88,20 @@ function normalizeNullableString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-function normalizeBoolean(value: unknown): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined;
+function normalizeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+function trimToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeYearEvidenceSourceType(value: unknown): YearEvidenceSourceType | undefined {
+  return typeof value === 'string' &&
+    GENERATED_YEAR_EVIDENCE_SOURCE_TYPES.includes(value as YearEvidenceSourceType)
+    ? (value as YearEvidenceSourceType)
+    : undefined;
 }
 
 function normalizeCardConditionToken(
@@ -100,9 +116,7 @@ function normalizeCardConditionToken(
     return value;
   }
 
-  warnings.push(
-    'Gemini response field "cardConditionToken" was invalid and was reset to null.'
-  );
+  warnings.push('Gemini response field "cardConditionToken" was invalid and was reset to null.');
   return null;
 }
 
@@ -142,7 +156,6 @@ function normalizeAspects(value: unknown, warnings: string[]): Record<string, st
 
 function getAspectString(aspects: AspectRecord, key: string): string | null {
   const value = aspects[key];
-
   return typeof value === 'string' ? value : null;
 }
 
@@ -160,7 +173,6 @@ function extractCardNumberFromTitle(title: string): string | null {
     }
 
     const normalized = normalizeCardNumberValue(candidate);
-
     if (normalized.length > 0) {
       return normalized;
     }
@@ -169,76 +181,31 @@ function extractCardNumberFromTitle(title: string): string | null {
   return null;
 }
 
-function stripUnverifiedYearFromTitle(title: string): string {
-  return title
-    .replace(/\b(?:19\d{2}|20\d{2})(?:\s*[-/]\s*(?:\d{2}|\d{4}))?\b/gu, ' ')
-    .replace(/\(\s*\)/gu, ' ')
-    .replace(/\[\s*\]/gu, ' ')
-    .replace(/\{\s*\}/gu, ' ')
-    .replace(/\s{2,}/gu, ' ')
-    .trim();
-}
-
-function hasYearInTitle(title: string): boolean {
-  return /\b(?:19\d{2}|20\d{2})(?:\s*[-/]\s*(?:\d{2}|\d{4}))?\b/u.test(title);
-}
-
-function normalizeDiscardedYearEvidence(
-  yearEvidence: GeneratedListingDraft['yearEvidence']
-): NonNullable<GeneratedListingDraft['yearEvidence']> {
-  return {
-    isVerified: false,
-    likelyYear: yearEvidence?.likelyYear ?? null,
-    likelyYearRange: yearEvidence?.likelyYearRange ?? null,
-    warningCode: YEAR_UNVERIFIED_WARNING_CODE,
-  };
-}
-
 export function normalizeGeneratedDraft(
-  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'>
+  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'>,
+  options: NormalizeGeneratedDraftYearFieldsOptions = {}
 ): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> {
-  let title = draft.title;
-  const aspects: AspectRecord = { ...draft.aspects };
-  const warnings = [...draft.warnings];
-  let yearEvidence = draft.yearEvidence;
-  const hasYearAspect = Object.prototype.hasOwnProperty.call(aspects, 'Year');
-  const hasSeasonAspect = Object.prototype.hasOwnProperty.call(aspects, 'Season');
-  const hasYearSpecificAspect = hasYearAspect || hasSeasonAspect;
-  const hasTitleYear = hasYearInTitle(title);
-  const hasVerifiedYearEvidence = yearEvidence?.isVerified === true;
+  const yearNormalized = normalizeGeneratedDraftYearFields(
+    {
+      aspects: draft.aspects,
+      title: draft.title,
+      warnings: draft.warnings,
+      yearEvidence: draft.yearEvidence,
+    },
+    options
+  );
 
-  if (!hasVerifiedYearEvidence && hasTitleYear) {
-    title = stripUnverifiedYearFromTitle(title);
-    yearEvidence = normalizeDiscardedYearEvidence(yearEvidence);
-    warnings.push(
-      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
-    );
-  }
+  const aspects: AspectRecord = { ...yearNormalized.aspects };
+  const warnings = [...yearNormalized.warnings];
+  let title = yearNormalized.title;
 
-  if (!hasVerifiedYearEvidence && hasYearSpecificAspect) {
-    title = stripUnverifiedYearFromTitle(title);
-    delete aspects.Year;
-    delete aspects.Season;
-    yearEvidence = normalizeDiscardedYearEvidence(yearEvidence);
-    warnings.push(
-      'Gemini returned Year/Season without verified year evidence; discarded Year/Season and treated the year as unverified.'
-    );
-  } else if (yearEvidence?.isVerified === false) {
-    title = stripUnverifiedYearFromTitle(title);
-    delete aspects.Year;
-    delete aspects.Season;
-  }
-
-  const year = getAspectString(aspects, 'Year');
-  const season = getAspectString(aspects, 'Season');
-  if (!year && season && yearEvidence?.isVerified === true) {
-    aspects.Year = season;
-  }
-
-  const manufacturer = getAspectString(aspects, 'Manufacturer');
-  const cardManufacturer = getAspectString(aspects, 'Card Manufacturer');
+  const manufacturer = trimToNull(getAspectString(aspects, 'Manufacturer'));
+  const cardManufacturer = trimToNull(getAspectString(aspects, 'Card Manufacturer'));
   if (!manufacturer && cardManufacturer) {
     aspects.Manufacturer = cardManufacturer;
+    delete aspects['Card Manufacturer'];
+  } else if (manufacturer && cardManufacturer?.toLowerCase() === manufacturer.toLowerCase()) {
+    delete aspects['Card Manufacturer'];
   }
 
   const player = getAspectString(aspects, 'Player');
@@ -275,11 +242,13 @@ export function normalizeGeneratedDraft(
     );
   }
 
+  title = title.trim();
+
   return {
     title,
     aspects,
     warnings,
-    yearEvidence,
+    yearEvidence: yearNormalized.yearEvidence ?? null,
   };
 }
 
@@ -287,91 +256,53 @@ function normalizeYearEvidence(
   value: unknown,
   warnings: string[]
 ): GeneratedListingDraft['yearEvidence'] {
-  if (!isRecord(value)) {
+  if (value === undefined) {
     return undefined;
   }
 
-  const isVerified = normalizeBoolean(value.isVerified);
-  const likelyYear = normalizeNullableString(value.likelyYear);
-  const likelyYearRange = normalizeNullableString(value.likelyYearRange);
-  const warningCode =
-    value.warningCode === YEAR_UNVERIFIED_WARNING_CODE ? YEAR_UNVERIFIED_WARNING_CODE : undefined;
-
-  if (value.isVerified !== undefined && isVerified === undefined) {
-    warnings.push('Gemini response field "yearEvidence.isVerified" was invalid and was discarded.');
+  if (value === null) {
+    return null;
   }
 
-  if (value.likelyYear !== undefined && likelyYear === null && value.likelyYear !== null) {
-    warnings.push('Gemini response field "yearEvidence.likelyYear" was invalid and was discarded.');
+  if (!isRecord(value)) {
+    warnings.push('Gemini response field "yearEvidence" was invalid and was discarded.');
+    return null;
   }
 
-  if (
-    value.likelyYearRange !== undefined &&
-    likelyYearRange === null &&
-    value.likelyYearRange !== null
-  ) {
-    warnings.push(
-      'Gemini response field "yearEvidence.likelyYearRange" was invalid and was discarded.'
-    );
+  const year = trimToNull(normalizeNullableString(value.year));
+  const sourceType = normalizeYearEvidenceSourceType(value.sourceType);
+  const visibleText = trimToNull(normalizeNullableString(value.visibleText));
+  const imageIndex = normalizeInteger(value.imageIndex);
+
+  if (value.year !== undefined && year === null) {
+    warnings.push('Gemini response field "yearEvidence.year" was invalid and was discarded.');
   }
 
-  if (
-    value.warningCode !== undefined &&
-    value.warningCode !== YEAR_UNVERIFIED_WARNING_CODE
-  ) {
-    warnings.push('Gemini response field "yearEvidence.warningCode" was invalid and was discarded.');
+  if (value.sourceType !== undefined && sourceType === undefined) {
+    warnings.push('Gemini response field "yearEvidence.sourceType" was invalid and was discarded.');
   }
 
-  if (warningCode === YEAR_UNVERIFIED_WARNING_CODE && isVerified === true) {
-    warnings.push(
-      'Gemini response yearEvidence marked the year both verified and unverified; treated it as unverified.'
-    );
+  if (value.visibleText !== undefined && visibleText === null) {
+    warnings.push('Gemini response field "yearEvidence.visibleText" was invalid and was discarded.');
   }
 
-  if (warningCode === YEAR_UNVERIFIED_WARNING_CODE) {
-    return {
-      isVerified: false,
-      likelyYear: likelyYear ?? null,
-      likelyYearRange: likelyYearRange ?? null,
-      warningCode: YEAR_UNVERIFIED_WARNING_CODE,
-    };
+  if (value.imageIndex !== undefined && imageIndex === undefined) {
+    warnings.push('Gemini response field "yearEvidence.imageIndex" was invalid and was discarded.');
   }
 
-  if (isVerified === false) {
-    return {
-      isVerified: false,
-      likelyYear: likelyYear ?? null,
-      likelyYearRange: likelyYearRange ?? null,
-      warningCode: YEAR_UNVERIFIED_WARNING_CODE,
-    };
+  if (!year || !sourceType || !visibleText || imageIndex === undefined) {
+    if (Object.keys(value).length > 0) {
+      warnings.push('Gemini response field "yearEvidence" was incomplete and was discarded.');
+    }
+    return null;
   }
 
-  if (isVerified !== true && (likelyYear || likelyYearRange)) {
-    return {
-      isVerified: false,
-      likelyYear: likelyYear ?? null,
-      likelyYearRange: likelyYearRange ?? null,
-      warningCode: YEAR_UNVERIFIED_WARNING_CODE,
-    };
-  }
-
-  if (isVerified === true) {
-    return {
-      isVerified: true,
-      likelyYear,
-      likelyYearRange,
-    };
-  }
-
-  if (likelyYear || likelyYearRange || warningCode) {
-    return {
-      likelyYear,
-      likelyYearRange,
-      ...(warningCode ? { warningCode } : {}),
-    };
-  }
-
-  return undefined;
+  return {
+    year,
+    sourceType,
+    visibleText,
+    imageIndex,
+  };
 }
 
 function normalizePriceSuggestion(value: unknown, warnings: string[]): number | null {
@@ -439,7 +370,8 @@ function normalizeModelWarnings(value: unknown): string[] {
 
 export function parseGeneratedDraft(
   rawText: string,
-  rawModelResponse: unknown
+  rawModelResponse: unknown,
+  options: NormalizeGeneratedDraftYearFieldsOptions = {}
 ): GeneratedListingDraft {
   const parsed = parseDraftObject(rawText);
   const serviceWarnings: string[] = [];
@@ -456,12 +388,15 @@ export function parseGeneratedDraft(
   const priceSuggestion = normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings);
   const confidence = normalizeConfidence(parsed.confidence, serviceWarnings);
 
-  const normalizedDraft = normalizeGeneratedDraft({
-    title,
-    aspects,
-    warnings: [...modelWarnings, ...serviceWarnings],
-    yearEvidence,
-  });
+  const normalizedDraft = normalizeGeneratedDraft(
+    {
+      title,
+      aspects,
+      warnings: [...modelWarnings, ...serviceWarnings],
+      yearEvidence,
+    },
+    options
+  );
 
   return generatedListingDraftSchema.parse({
     title: normalizedDraft.title,

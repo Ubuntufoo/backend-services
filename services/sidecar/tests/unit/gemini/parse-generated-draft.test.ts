@@ -1,322 +1,340 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeGeneratedDraft, parseGeneratedDraft } from '@/gemini/index.js';
+import { parseGeneratedDraft } from '@/gemini/index.js';
 
-describe('parseGeneratedDraft normalization', () => {
-  it('normalizes alias fields, promotes verified Season to Year, and derives card number', () => {
+describe('parseGeneratedDraft', () => {
+  it('derives Year from validated year evidence and removes duplicate aliases and Season', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
-        title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+        title: '1955 Topps Johnny Riddle #98',
         description: 'Vintage single card.',
         aspects: {
+          Athlete: 'Johnny Riddle',
           'Card Manufacturer': 'Topps',
           Season: '1955',
+          Set: '1955 Topps',
         },
         yearEvidence: {
-          isVerified: true,
+          year: '1955',
+          sourceType: 'copyright_line',
+          visibleText: '© 1955 THE TOPPS COMPANY, INC.',
+          imageIndex: 1,
         },
         warnings: [],
       }),
-      { id: 'raw-response-1' }
+      { id: 'raw-response-1' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe('1955 Topps Johnny Riddle #98');
+    expect(draft.aspects).toEqual({
+      Athlete: 'Johnny Riddle',
+      Player: 'Johnny Riddle',
+      Manufacturer: 'Topps',
+      Set: 'Topps',
+      'Card Number': '98',
+      Year: '1955',
+    });
+    expect(draft.yearEvidence).toEqual({
+      year: '1955',
+      sourceType: 'copyright_line',
+      visibleText: '© 1955 THE TOPPS COMPANY, INC.',
+      imageIndex: 1,
+    });
+  });
+
+  it('removes unsupported title and set years when evidence is absent and preserves card-number years', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Phil Rizzuto 1951 Topps #1951',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Phil Rizzuto',
+          Manufacturer: 'Topps',
+          Set: '1951 Topps',
+          Year: '1951',
+          Season: '1951',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-2' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe('Phil Rizzuto Topps #1951');
+    expect(draft.aspects).toEqual({
+      Player: 'Phil Rizzuto',
+      Manufacturer: 'Topps',
+      Set: 'Topps',
+      'Card Number': '1951',
+    });
+    expect(draft.yearEvidence).toBeNull();
+    expect(draft.warnings).toContain(
+      'Gemini exact year discarded: missing qualifying visible year evidence.'
+    );
+  });
+
+  it('rejects unsupported source types', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Ed Stanky 1952 Topps #191',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Ed Stanky',
+          Manufacturer: 'Topps',
+          Set: '1952 Topps',
+          Year: '1952',
+        },
+        yearEvidence: {
+          year: '1952',
+          sourceType: 'bad_source',
+          visibleText: '© 1952 THE TOPPS COMPANY, INC.',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-3' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('Ed Stanky Topps #191');
+    expect(draft.aspects).toEqual({
+      Player: 'Ed Stanky',
+      Manufacturer: 'Topps',
+      Set: 'Topps',
+      'Card Number': '191',
+    });
+    expect(draft.yearEvidence).toBeNull();
+    expect(draft.warnings).toContain('Gemini response field "yearEvidence.sourceType" was invalid and was discarded.');
+    expect(draft.warnings).toContain('Gemini response field "yearEvidence" was incomplete and was discarded.');
+  });
+
+  it('rejects mismatched visible text years', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Phil Rizzuto 1951 Bowman #17',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Phil Rizzuto',
+          Manufacturer: 'Bowman',
+          Set: '1951 Bowman',
+        },
+        yearEvidence: {
+          year: '1951',
+          sourceType: 'copyright_line',
+          visibleText: 'Career stats through 1954 season',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-4' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('Phil Rizzuto Bowman #17');
+    expect(draft.aspects.Set).toBe('Bowman');
+    expect(draft.yearEvidence).toBeNull();
+    expect(draft.warnings).toContain(
+      'Gemini exact year discarded: visibleText does not contain year "1951".'
+    );
+  });
+
+  it('rejects out-of-range image indexes', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1991 Fleer Pro Vision Michael Jordan #2',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Michael Jordan',
+          Manufacturer: 'Fleer',
+          Set: '1991 Fleer Pro Vision',
+        },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'production_line',
+          visibleText: 'Production 1991 Fleer',
+          imageIndex: 3,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-5' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe('Fleer Pro Vision Michael Jordan #2');
+    expect(draft.aspects.Set).toBe('Fleer Pro Vision');
+    expect(draft.yearEvidence).toBeNull();
+    expect(draft.warnings).toContain(
+      'Gemini exact year discarded: imageIndex must reference a supplied image.'
+    );
+  });
+
+  it('keeps meaningful set variants while removing a redundant validated year', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1953 Bowman Color Mickey Mantle #59',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Mickey Mantle',
+          Manufacturer: 'Bowman',
+          Set: '1953 Bowman Color',
+        },
+        yearEvidence: {
+          year: '1953',
+          sourceType: 'manufacture_line',
+          visibleText: 'Manufactured in 1953 by Bowman Gum, Inc.',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-6' },
+      { imageCount: 1 }
     );
 
     expect(draft.aspects).toMatchObject({
-      'Card Manufacturer': 'Topps',
-      Manufacturer: 'Topps',
-      Season: '1955',
-      Year: '1955',
-      'Card Number': '98',
+      Manufacturer: 'Bowman',
+      Set: 'Bowman Color',
+      Year: '1953',
     });
   });
 
-  it('strips leading hash from existing card number values', () => {
-    const normalized = normalizeGeneratedDraft({
-      title: '1955 Topps Johnny Riddle',
-      aspects: {
-        'Card Number': '#98B',
-      },
-      warnings: [],
-    });
-
-    expect(normalized.aspects['Card Number']).toBe('98B');
-  });
-
-  it('normalizes Player/Athlete alias to canonical Player when Player is missing', () => {
-    const normalized = normalizeGeneratedDraft({
-      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-      aspects: {
-        'Player/Athlete': 'Johnny Riddle',
-      },
-      warnings: [],
-    });
-
-    expect(normalized.aspects.Player).toBe('Johnny Riddle');
-    expect(normalized.aspects['Player/Athlete']).toBe('Johnny Riddle');
-  });
-
-  it('keeps explicit card number when title-derived value conflicts and adds warning', () => {
-    const normalized = normalizeGeneratedDraft({
-      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-      aspects: {
-        'Card Number': '147',
-      },
-      warnings: [],
-    });
-
-    expect(normalized.aspects['Card Number']).toBe('147');
-    expect(normalized.warnings).toContain(
-      'Gemini response title card number "98" conflicted with aspects["Card Number"] "147"; kept aspect value.'
-    );
-  });
-
-  it('drops canonical year aspects and guessed title year when yearEvidence marks the year unverified', () => {
+  it('sanitizes array-valued Set entries individually', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
-        title: 'Ed Stanky 1952 Topps #191',
-        description: 'Vintage single card.',
+        title: 'Mickey Mantle Bowman Color',
+        description: 'Single card.',
         aspects: {
-          Player: 'Ed Stanky',
-          Year: '1952',
-          Season: '1952',
+          Player: 'Mickey Mantle',
+          Manufacturer: 'Bowman',
+          Set: ['1953 Bowman Color', 'Bowman Color 1953'],
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-6b' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.aspects).toMatchObject({
+      Manufacturer: 'Bowman',
+      Set: 'Bowman Color',
+    });
+  });
+
+  it('removes array-valued Year and Season without evidence', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Phil Rizzuto 1951 Topps #17',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Phil Rizzuto',
           Manufacturer: 'Topps',
-          'Card Number': '191',
+          Year: ['1951'],
+          Season: ['1951', '1951-52'],
+          Set: ['1951 Topps'],
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-6c' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.aspects).toEqual({
+      Player: 'Phil Rizzuto',
+      Manufacturer: 'Topps',
+      Set: 'Topps',
+      'Card Number': '17',
+    });
+  });
+
+  it('normalizes conflicting set years even when validated Year differs', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1954 Topps Phil Rizzuto #17',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Phil Rizzuto',
+          Manufacturer: 'Topps',
+          Set: '1951 Topps',
+          Year: '1954',
         },
         yearEvidence: {
-          isVerified: false,
-          likelyYear: '1955',
-          likelyYearRange: '1952-1955',
-          warningCode: 'year_unverified',
-        },
-        warnings: ['Year not visible on the card.'],
-      }),
-      { id: 'raw-response-2' }
-    );
-
-    expect(draft.aspects).toEqual({
-      Player: 'Ed Stanky',
-      Manufacturer: 'Topps',
-      'Card Number': '191',
-    });
-    expect(draft.title).toBe('Ed Stanky Topps #191');
-    expect(draft.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: '1955',
-      likelyYearRange: '1952-1955',
-      warningCode: 'year_unverified',
-    });
-    expect(draft.warnings).toContain('Year not visible on the card.');
-  });
-
-  it('strips guessed Year when yearEvidence is omitted and forces unverified year metadata', () => {
-    const draft = parseGeneratedDraft(
-      JSON.stringify({
-        title: 'Ed Stanky 1952 Topps #191',
-        description: 'Vintage single card.',
-        aspects: {
-          Player: 'Ed Stanky',
-          Year: '1952',
-          Manufacturer: 'Topps',
-          'Card Number': '191',
+          year: '1954',
+          sourceType: 'copyright_line',
+          visibleText: '© 1954 THE TOPPS COMPANY, INC.',
+          imageIndex: 0,
         },
         warnings: [],
       }),
-      { id: 'raw-response-omit-year-evidence' }
+      { id: 'raw-response-6d' },
+      { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Ed Stanky Topps #191');
-    expect(draft.aspects).toEqual({
-      Player: 'Ed Stanky',
+    expect(draft.aspects).toMatchObject({
       Manufacturer: 'Topps',
-      'Card Number': '191',
+      Set: 'Topps',
+      Year: '1954',
     });
-    expect(draft.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: null,
-      likelyYearRange: null,
-      warningCode: 'year_unverified',
-    });
-    expect(draft.warnings).toContain(
-      'Gemini returned Year/Season without verified year evidence; discarded Year/Season and treated the year as unverified.'
-    );
-    expect(draft.warnings).toContain(
-      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
-    );
   });
 
-  it('strips guessed Season when yearEvidence is omitted and does not promote Season to Year', () => {
+  it('drops Year and Season from incomplete yearEvidence payloads', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
-        title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-        description: 'Vintage single card.',
+        title: '1986 Fleer Michael Jordan #57',
+        description: 'Single card.',
         aspects: {
-          'Card Manufacturer': 'Topps',
-          Season: '1955',
-        },
-        warnings: [],
-      }),
-      { id: 'raw-response-omit-season-evidence' }
-    );
-
-    expect(draft.title).toBe('Johnny Riddle Topps #98 St. Louis Cardinals Coach');
-    expect(draft.aspects).toEqual({
-      'Card Manufacturer': 'Topps',
-      Manufacturer: 'Topps',
-      'Card Number': '98',
-    });
-    expect(draft.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: null,
-      likelyYearRange: null,
-      warningCode: 'year_unverified',
-    });
-    expect(draft.warnings).toContain(
-      'Gemini returned Year/Season without verified year evidence; discarded Year/Season and treated the year as unverified.'
-    );
-    expect(draft.warnings).toContain(
-      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
-    );
-  });
-
-  it('strips title year and forces unverified year metadata when title year lacks verified evidence', () => {
-    const draft = parseGeneratedDraft(
-      JSON.stringify({
-        title: 'Ed Stanky 1952 Topps #191',
-        description: 'Vintage single card.',
-        aspects: {
-          Player: 'Ed Stanky',
-          Manufacturer: 'Topps',
-          'Card Number': '191',
-        },
-        warnings: [],
-      }),
-      { id: 'raw-response-title-only-year' }
-    );
-
-    expect(draft.title).toBe('Ed Stanky Topps #191');
-    expect(draft.aspects).toEqual({
-      Player: 'Ed Stanky',
-      Manufacturer: 'Topps',
-      'Card Number': '191',
-    });
-    expect(draft.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: null,
-      likelyYearRange: null,
-      warningCode: 'year_unverified',
-    });
-    expect(draft.warnings).toContain(
-      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
-    );
-  });
-
-  it('preserves verified Year when yearEvidence.isVerified is true', () => {
-    const draft = parseGeneratedDraft(
-      JSON.stringify({
-        title: 'Ed Stanky 1952 Topps #191',
-        description: 'Vintage single card.',
-        aspects: {
-          Player: 'Ed Stanky',
-          Year: '1952',
-          Manufacturer: 'Topps',
-          'Card Number': '191',
+          Player: 'Michael Jordan',
+          Manufacturer: 'Fleer',
+          Year: '1986',
+          Season: '1986-87',
         },
         yearEvidence: {
-          isVerified: true,
+          year: '1986',
+          sourceType: 'copyright_line',
         },
         warnings: [],
       }),
-      { id: 'raw-response-verified-year' }
+      { id: 'raw-response-7' },
+      { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Ed Stanky 1952 Topps #191');
     expect(draft.aspects).toEqual({
-      Player: 'Ed Stanky',
-      Year: '1952',
-      Manufacturer: 'Topps',
-      'Card Number': '191',
+      Player: 'Michael Jordan',
+      Manufacturer: 'Fleer',
+      'Card Number': '57',
     });
-    expect(draft.yearEvidence).toEqual({
-      isVerified: true,
-      likelyYear: null,
-      likelyYearRange: null,
-    });
+    expect(draft.yearEvidence).toBeNull();
+    expect(draft.warnings).toContain('Gemini response field "yearEvidence" was incomplete and was discarded.');
   });
 
-  it('treats contradictory yearEvidence as unverified when warningCode forces year_unverified', () => {
+  it.each([
+    ['#1951', 'Phil Rizzuto Topps #1951'],
+    ['No. 1951', 'Phil Rizzuto Topps No. 1951'],
+    ['No 1951', 'Phil Rizzuto Topps No 1951'],
+    ['Card 1951', 'Phil Rizzuto Topps Card 1951'],
+    ['Card #1951', 'Phil Rizzuto Topps Card #1951'],
+    ['Card No. 1951', 'Phil Rizzuto Topps Card No. 1951'],
+    ['Card No 1951', 'Phil Rizzuto Topps Card No 1951'],
+    ['Card Number 1951', 'Phil Rizzuto Topps Card Number 1951'],
+  ])('preserves protected four-digit card-number form %s while stripping unsupported year', (cardForm, expectedTitle) => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
-        title: 'Ed Stanky 1952 Topps #191',
-        description: 'Vintage single card.',
+        title: `Phil Rizzuto 1951 Topps ${cardForm}`,
+        description: 'Single card.',
         aspects: {
-          Player: 'Ed Stanky',
-          Year: '1952',
+          Player: 'Phil Rizzuto',
           Manufacturer: 'Topps',
-          'Card Number': '191',
+          Set: '1951 Topps',
         },
-        yearEvidence: {
-          isVerified: true,
-          likelyYear: '1955',
-          likelyYearRange: '1952-1955',
-          warningCode: 'year_unverified',
-        },
+        yearEvidence: null,
         warnings: [],
       }),
-      { id: 'raw-response-3' }
+      { id: `raw-response-${cardForm}` },
+      { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Ed Stanky Topps #191');
-    expect(draft.aspects).toEqual({
-      Player: 'Ed Stanky',
-      Manufacturer: 'Topps',
-      'Card Number': '191',
-    });
-    expect(draft.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: '1955',
-      likelyYearRange: '1952-1955',
-      warningCode: 'year_unverified',
-    });
-    expect(draft.warnings).toContain(
-      'Gemini response yearEvidence marked the year both verified and unverified; treated it as unverified.'
-    );
-    expect(draft.warnings).toContain(
-      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
-    );
-  });
-
-  it('treats advisory yearEvidence without isVerified as unverified', () => {
-    const draft = parseGeneratedDraft(
-      JSON.stringify({
-        title: 'Ed Stanky 1952 Topps #191',
-        description: 'Vintage single card.',
-        aspects: {
-          Player: 'Ed Stanky',
-          Year: '1952',
-          Manufacturer: 'Topps',
-          'Card Number': '191',
-        },
-        yearEvidence: {
-          likelyYear: '1955',
-          likelyYearRange: '1952-1955',
-        },
-        warnings: [],
-      }),
-      { id: 'raw-response-advisory-year' }
-    );
-
-    expect(draft.title).toBe('Ed Stanky Topps #191');
-    expect(draft.aspects).toEqual({
-      Player: 'Ed Stanky',
-      Manufacturer: 'Topps',
-      'Card Number': '191',
-    });
-    expect(draft.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: '1955',
-      likelyYearRange: '1952-1955',
-      warningCode: 'year_unverified',
-    });
-    expect(draft.warnings).toContain(
-      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
-    );
+    expect(draft.title).toBe(expectedTitle);
+    expect(draft.aspects.Set).toBe('Topps');
   });
 });

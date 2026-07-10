@@ -152,7 +152,9 @@ export function prepareGenerateListingDraft(
           const parseStartedAt = nowMs();
 
           try {
-            const draft = parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse);
+            const draft = parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse, {
+              imageCount: validatedInput.imageUrls.length,
+            });
 
             return {
               diagnostics: {

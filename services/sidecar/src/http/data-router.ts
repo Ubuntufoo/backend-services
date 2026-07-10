@@ -34,7 +34,11 @@ import {
   type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
 import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options.js';
-import { GENERATED_DRAFT_METADATA_KEY } from '@/pricing/generated-draft-metadata.js';
+import {
+  GENERATED_DRAFT_METADATA_KEY,
+  readCurrentCanonicalYear,
+  readGeneratedDraftYearMetadata,
+} from '@/pricing/generated-draft-metadata.js';
 import type { EbayEnvironmentResponse } from '@/types/ebay.js';
 import { createIdleWorkflowState } from '@/workflow/listing-workflow.js';
 import { retryListingWorkflow, retryPricingReview, RetryPricingReviewError } from '@/jobs/manual-retry.js';
@@ -201,11 +205,13 @@ async function runRoute(
 function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpdate {
   const itemSpecifics =
     input.pricingModifierOptions === undefined
-      ? (input.itemSpecifics as ListingUpdate['item_specifics'])
-      : (mergePricingModifierOptions(
+      ? sanitizeClientDraftMetadata(input.itemSpecifics as ListingUpdate['item_specifics'])
+      : sanitizeClientDraftMetadata(
+          mergePricingModifierOptions(
           (input.itemSpecifics ?? {}) as Json,
           input.pricingModifierOptions
-        ) as ListingUpdate['item_specifics']);
+          ) as ListingUpdate['item_specifics']
+        );
 
   return {
     capture_mode: input.captureMode,
@@ -235,10 +241,12 @@ function mapSellerEditableListingFields(
 ): ListingUpdate {
   const itemSpecificsBase =
     input.pricingModifierOptions === undefined
-      ? input.itemSpecifics
-      : mergePricingModifierOptions(
+      ? sanitizeClientDraftMetadata(input.itemSpecifics as ListingUpdate['item_specifics'])
+      : sanitizeClientDraftMetadata(
+          mergePricingModifierOptions(
           (input.itemSpecifics ?? existingItemSpecifics ?? {}) as Json,
           input.pricingModifierOptions
+          ) as ListingUpdate['item_specifics']
         );
   const itemSpecifics = preserveInternalDraftMetadata(
     itemSpecificsBase as ListingUpdate['item_specifics'],
@@ -261,6 +269,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function sanitizeClientDraftMetadata(
+  itemSpecifics: ListingUpdate['item_specifics']
+): ListingUpdate['item_specifics'] {
+  if (!isRecord(itemSpecifics)) {
+    return itemSpecifics;
+  }
+
+  const sanitizedItemSpecifics = { ...itemSpecifics };
+  delete sanitizedItemSpecifics[GENERATED_DRAFT_METADATA_KEY];
+  return sanitizedItemSpecifics;
+}
+
+function sanitizeClientDraftMetadataRecord(
+  itemSpecifics: Record<string, unknown>
+): Record<string, unknown> {
+  const sanitizedItemSpecifics = { ...itemSpecifics };
+  delete sanitizedItemSpecifics[GENERATED_DRAFT_METADATA_KEY];
+  return sanitizedItemSpecifics;
+}
+
 function preserveInternalDraftMetadata(
   nextItemSpecifics: ListingUpdate['item_specifics'],
   existingItemSpecifics?: ListingUpdate['item_specifics']
@@ -269,23 +297,33 @@ function preserveInternalDraftMetadata(
     return nextItemSpecifics;
   }
 
-  const sanitizedNext = { ...nextItemSpecifics };
-  delete sanitizedNext[GENERATED_DRAFT_METADATA_KEY];
+  const sanitizedNextRecord = sanitizeClientDraftMetadataRecord(nextItemSpecifics);
+  const sanitizedNext = sanitizedNextRecord as ListingUpdate['item_specifics'];
 
   if (!isRecord(existingItemSpecifics)) {
     return sanitizedNext;
   }
 
-  const existingDraftMetadata = existingItemSpecifics[GENERATED_DRAFT_METADATA_KEY];
+  const existingDraftMetadata = readGeneratedDraftYearMetadata(existingItemSpecifics);
+  if (!existingDraftMetadata) {
+    return sanitizedNext;
+  }
 
-  if (existingDraftMetadata === undefined) {
+  if (readCurrentCanonicalYear(sanitizedNext) !== existingDraftMetadata.year) {
     return sanitizedNext;
   }
 
   return {
-    ...sanitizedNext,
-    [GENERATED_DRAFT_METADATA_KEY]: existingDraftMetadata,
-  };
+    ...sanitizedNextRecord,
+    [GENERATED_DRAFT_METADATA_KEY]: {
+      year: {
+        year: existingDraftMetadata.year,
+        source_type: existingDraftMetadata.source_type,
+        visible_text: existingDraftMetadata.visible_text,
+        image_index: existingDraftMetadata.image_index,
+      },
+    },
+  } as ListingUpdate['item_specifics'];
 }
 
 interface AppSettingsApiResponse extends Omit<AppSettingsRow, 'soldcomps_usage_snapshot'> {

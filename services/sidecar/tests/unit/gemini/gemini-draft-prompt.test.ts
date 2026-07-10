@@ -89,7 +89,7 @@ describe('buildGenerateListingDraftPrompt', () => {
 
     expect(prompt).toMatch(/unless those words are genuinely part of/);
     expect(prompt).toMatch(/official set name/);
-    expect(prompt).toMatch(/insert name/);
+    expect(prompt).toMatch(/insert type/);
     expect(prompt).toMatch(/parallel name/);
   });
 
@@ -116,26 +116,65 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).not.toMatch(/strongly inferable: Player, verified Year/i);
   });
 
-  it('requires exact visible or user-provided year before emitting Year or Season', () => {
+  it('requires visible-image year evidence and forbids hint-based year inference', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
+    expect(prompt).toMatch(/Never infer or guess the card year\./);
     expect(prompt).toMatch(
-      /Emit aspects\["Year"\] and aspects\["Season"\] only when the exact year is visible on the card image or explicitly provided in user hints\./
+      /Return yearEvidence only when visible card text explicitly states the production or release year/
     );
-    expect(prompt).toMatch(/do not return aspects\["Year"\], and do not return aspects\["Season"\]/i);
+    expect(prompt).toMatch(/Statistics, biography dates, career dates, card numbers/i);
+    expect(prompt).toMatch(/user hints, and general model knowledge are not year evidence/i);
     expect(prompt).toMatch(/"yearEvidence"/);
-    expect(prompt).toMatch(/"warningCode": "year_unverified or omitted"/);
+    expect(prompt).not.toMatch(/"warningCode"/);
+    expect(prompt).not.toMatch(/likelyYear/);
   });
 
-  it('marks Year and Season as conditional in the expected JSON shape', () => {
+  it('uses the simplified yearEvidence contract and production_line source type', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).not.toMatch(/"Year": "string;/);
+    expect(prompt).not.toMatch(/"Season": "string;/);
+    expect(prompt).toMatch(/"yearEvidence": null,/);
+    expect(prompt).toMatch(/If qualifying visible year evidence exists, replace "yearEvidence": null with:/);
+    expect(prompt).toMatch(/"sourceType": "copyright_line"/);
+    expect(prompt).toMatch(/production_line/);
+  });
+
+  it('requires exact copied visibleText and imageIndex for yearEvidence', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/copy the exact supporting text into yearEvidence\.visibleText/i);
+    expect(prompt).toMatch(/return the zero-based image index containing that text in yearEvidence\.imageIndex/i);
+    expect(prompt).toMatch(/copy the exact four-digit year into yearEvidence\.year/i);
+    expect(prompt).toMatch(/return yearEvidence: null/i);
+  });
+
+  it('forbids Year and Season item specifics from the model', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(
-      /"Year": "string; include only when the exact year is visible on the card image or explicitly provided in user hints"/
+      /Do not generate Year or Season item specifics\. The backend derives canonical Year from validated yearEvidence\./
     );
-    expect(prompt).toMatch(
-      /"Season": "string; include only when the exact year is visible on the card image or explicitly provided in user hints"/
+  });
+
+  it('keeps listing-context user hints available without treating them as year verification evidence', () => {
+    const prompt = buildGenerateListingDraftPrompt(
+      createInput({
+        userHints: {
+          aspects: { Player: 'Test Player', Year: '2020' },
+          notes: 'Some notes',
+          price: 299.99,
+          title: 'A card title',
+        },
+      })
     );
+
+    expect(prompt).toMatch(/"Player": "Test Player"/);
+    expect(prompt).toMatch(/"Year": "2020"/);
+    expect(prompt).toMatch(/"title": "A card title"/);
+    expect(prompt).toMatch(/"notes": "Some notes"/);
+    expect(prompt).toMatch(/existing item specifics, user hints, and general model knowledge are not year evidence/i);
   });
 
   it('strips price from userHints in listing context when explicitly present', () => {
@@ -154,29 +193,6 @@ describe('buildGenerateListingDraftPrompt', () => {
     const contextStart = prompt.indexOf('Listing context:');
     const contextSection = prompt.slice(contextStart);
 
-    expect(contextSection).not.toMatch(/"price"/);
-  });
-
-  it('includes userHints in listing context but strips price when present', () => {
-    const prompt = buildGenerateListingDraftPrompt(
-      createInput({
-        userHints: {
-          aspects: { Player: 'Test Player', Year: '2020' },
-          notes: 'Some notes',
-          price: 299.99,
-          title: 'A card title',
-        },
-      })
-    );
-
-    expect(prompt).toMatch(/"Player": "Test Player"/);
-    expect(prompt).toMatch(/"Year": "2020"/);
-    expect(prompt).toMatch(/"title": "A card title"/);
-    expect(prompt).toMatch(/"notes": "Some notes"/);
-
-    // price should not appear anywhere in the listing context
-    const contextStart = prompt.indexOf('Listing context:');
-    const contextSection = prompt.slice(contextStart);
     expect(contextSection).not.toMatch(/"price"/);
   });
 });

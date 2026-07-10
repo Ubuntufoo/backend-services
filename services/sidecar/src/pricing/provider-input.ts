@@ -11,7 +11,11 @@ import {
 
 import type { NormalizeSoldCompsContext } from './types.js';
 import type { PricingProviderInput } from './types.js';
-import { readGeneratedDraftYearSignal } from './generated-draft-metadata.js';
+import { readAuthorizedGeneratedDraftYearMetadata } from './generated-draft-metadata.js';
+import {
+  sanitizeSetAspectValue,
+  sanitizeTitleYearClaims,
+} from '@/gemini/year-normalization.js';
 
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') {
@@ -24,6 +28,78 @@ function asNonEmptyString(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getSpecificStringValue(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  key: string
+): string | undefined {
+  if (!itemSpecifics) {
+    return undefined;
+  }
+
+  const value = itemSpecifics[key];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    const first = value.find((entry) => typeof entry === 'string' && entry.trim().length > 0);
+    return typeof first === 'string' ? first.trim() : undefined;
+  }
+
+  return undefined;
+}
+
+function getSpecificDisplayValue(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  key: string
+): string | undefined {
+  const value = getSpecificStringValue(itemSpecifics, key);
+  return key === 'Card Number' && value ? `#${value.replace(/^#+/, '')}` : value;
+}
+
+function sanitizePricingItemSpecifics(
+  itemSpecifics: PricingProviderInput['itemSpecifics'],
+  allowedYear?: string | null
+): PricingProviderInput['itemSpecifics'] {
+  if (!itemSpecifics) {
+    return undefined;
+  }
+
+  const sanitized: Record<string, string | string[]> = {};
+
+  for (const [key, value] of Object.entries(itemSpecifics)) {
+    if (key === 'Season') {
+      continue;
+    }
+
+    if (key === 'Year') {
+      if (allowedYear) {
+        sanitized.Year = allowedYear;
+      }
+      continue;
+    }
+
+    if (key === 'Set') {
+      const normalizedSet = sanitizeSetAspectValue(value);
+      if (normalizedSet !== undefined) {
+        sanitized.Set = normalizedSet;
+      }
+      continue;
+    }
+
+    if (value !== null && value !== undefined) {
+      sanitized[key] = value;
+    }
+  }
+
+  if (allowedYear && !sanitized.Year) {
+    sanitized.Year = allowedYear;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 export function getListingItemSpecifics(
@@ -58,13 +134,12 @@ export function buildPricingTitleFromItemSpecifics(
   }
 
   const titleParts = [
-    itemSpecifics.Player,
-    itemSpecifics.Year,
-    itemSpecifics.Manufacturer,
-    itemSpecifics.Set,
-    itemSpecifics['Card Number'],
-  ]
-    .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
+    getSpecificDisplayValue(itemSpecifics, 'Player'),
+    getSpecificDisplayValue(itemSpecifics, 'Year'),
+    getSpecificDisplayValue(itemSpecifics, 'Manufacturer'),
+    getSpecificDisplayValue(itemSpecifics, 'Set'),
+    getSpecificDisplayValue(itemSpecifics, 'Card Number'),
+  ].flatMap((value) => (value ? [value] : []))
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
 
@@ -76,12 +151,22 @@ export function buildPricingProviderInput(
   listingId: string,
   requestedCompCount?: number
 ): PricingProviderInput {
-  const itemSpecifics = getListingItemSpecifics(listing.item_specifics);
-  const yearSignal = readGeneratedDraftYearSignal(listing.item_specifics);
+  const validatedYearEvidence = readAuthorizedGeneratedDraftYearMetadata(listing.item_specifics);
+  const allowedYear = validatedYearEvidence?.year ?? null;
+  const itemSpecifics = sanitizePricingItemSpecifics(
+    getListingItemSpecifics(listing.item_specifics),
+    allowedYear
+  );
   const titleFromItemSpecifics = buildPricingTitleFromItemSpecifics(itemSpecifics);
-  const title = yearSignal?.isUnverified
-    ? titleFromItemSpecifics ?? listingId
-    : asNonEmptyString(listing.title) ?? titleFromItemSpecifics ?? listingId;
+  const rawListingTitle = asNonEmptyString(listing.title);
+  const sanitizedListingTitle = rawListingTitle
+    ? sanitizeTitleYearClaims(rawListingTitle, { allowedYear })
+    : undefined;
+  const title =
+    sanitizedListingTitle ||
+    titleFromItemSpecifics ||
+    getSpecificStringValue(itemSpecifics, 'Player') ||
+    listingId;
 
   return {
     categoryId: listing.category_id,

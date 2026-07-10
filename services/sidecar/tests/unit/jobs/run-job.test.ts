@@ -1090,6 +1090,12 @@ describe('runSidecarJob', () => {
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
         },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
+        },
         priceSuggestion: 249.99,
         confidence: {
           title: 0.91,
@@ -1131,6 +1137,12 @@ describe('runSidecarJob', () => {
         Franchise: 'Utah Jazz',
         Player: 'Michael Jordan',
         Manufacturer: 'Upper Deck',
+      },
+      yearEvidence: {
+        year: '1991',
+        sourceType: 'copyright_line',
+        visibleText: '© 1991 UPPER DECK COMPANY',
+        imageIndex: 1,
       },
       priceSuggestion: 249.99,
       confidence: {
@@ -1200,6 +1212,7 @@ describe('runSidecarJob', () => {
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
+          Year: '1991',
           CategorySuggestion: 'Sports Trading Cards',
           ConditionSuggestion: 'Ungraded',
           skuCategoryCode: 'BSKBL',
@@ -1374,8 +1387,16 @@ describe('runSidecarJob', () => {
       skuCategoryCode: 'BSBL',
       aspects: {
         Athlete: 'Johnny Riddle',
-        'Card Manufacturer': 'Topps',
-        Season: '1955',
+        Player: 'Johnny Riddle',
+        Manufacturer: 'Topps',
+        Year: '1955',
+        'Card Number': '98',
+      },
+      yearEvidence: {
+        year: '1955',
+        sourceType: 'copyright_line',
+        visibleText: '© 1955 THE TOPPS COMPANY, INC.',
+        imageIndex: 1,
       },
       priceSuggestion: null,
       confidence: {},
@@ -1395,18 +1416,24 @@ describe('runSidecarJob', () => {
         item_specifics: expect.objectContaining({
           Athlete: 'Johnny Riddle',
           Player: 'Johnny Riddle',
-          'Card Manufacturer': 'Topps',
           Manufacturer: 'Topps',
-          Season: '1955',
           Year: '1955',
           'Card Number': '98',
+          __draft_metadata: {
+            year: {
+              year: '1955',
+              source_type: 'copyright_line',
+              visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+              image_index: 1,
+            },
+          },
           skuCategoryCode: 'BSBL',
         }),
       })
     );
   });
 
-  it('persists uncertain vintage year metadata without promoting a canonical Year aspect', async () => {
+  it('drops unsupported vintage year claims without persisting draft year metadata', async () => {
     const dataAccess = createDataAccess({
       job: {
         ...queuedGenerateAiJob,
@@ -1427,19 +1454,13 @@ describe('runSidecarJob', () => {
       skuCategoryCode: 'BSBL',
       aspects: {
         Player: 'Ed Stanky',
-        Year: '1952',
         Manufacturer: 'Topps',
         'Card Number': '191',
       },
-      yearEvidence: {
-        isVerified: false,
-        likelyYear: '1955',
-        likelyYearRange: '1952-1955',
-        warningCode: 'year_unverified',
-      },
+      yearEvidence: null,
       priceSuggestion: null,
       confidence: {},
-      warnings: ['Year not visible on the card.'],
+      warnings: [],
       rawModelResponse: { id: 'raw-response-vintage-191' },
     }));
 
@@ -1457,20 +1478,13 @@ describe('runSidecarJob', () => {
           Manufacturer: 'Topps',
           'Card Number': '191',
           skuCategoryCode: 'BSBL',
-          __draft_metadata: {
-            year: {
-              likely_year: '1955',
-              likely_year_range: '1952-1955',
-              status: 'unverified',
-              warning_code: 'year_unverified',
-            },
-          },
         }),
       })
     );
 
     const updateInput = (dataAccess.listings.update as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
     expect(updateInput?.item_specifics).not.toHaveProperty('Year');
+    expect(updateInput?.item_specifics).not.toHaveProperty('__draft_metadata');
     expect(updateInput?.title).toBe('Ed Stanky Topps #191');
     expect(result.listing?.title).toBe('Ed Stanky Topps #191');
   });
@@ -1540,6 +1554,12 @@ describe('runSidecarJob', () => {
         Player: 'Michael Jordan',
         Manufacturer: 'Upper Deck',
       },
+      yearEvidence: {
+        year: '1991',
+        sourceType: 'copyright_line',
+        visibleText: '© 1991 UPPER DECK COMPANY',
+        imageIndex: 1,
+      },
       priceSuggestion: 249.99,
       confidence: {
         title: 0.91,
@@ -1583,6 +1603,12 @@ describe('runSidecarJob', () => {
       aspects: {
         Player: 'Michael Jordan',
         Manufacturer: 'Upper Deck',
+      },
+      yearEvidence: {
+        year: '1991',
+        sourceType: 'copyright_line',
+        visibleText: '© 1991 UPPER DECK COMPANY',
+        imageIndex: 1,
       },
       priceSuggestion: 249.99,
       confidence: {
@@ -1751,6 +1777,12 @@ describe('runSidecarJob', () => {
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
         },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
+        },
         priceSuggestion: 249.99,
         confidence: {
           title: 0.91,
@@ -1794,6 +1826,12 @@ describe('runSidecarJob', () => {
       aspects: {
         Player: 'Michael Jordan',
         Manufacturer: 'Upper Deck',
+      },
+      yearEvidence: {
+        year: '1991',
+        sourceType: 'copyright_line',
+        visibleText: '© 1991 UPPER DECK COMPANY',
+        imageIndex: 1,
       },
       priceSuggestion: 249.99,
       confidence: {
@@ -1920,6 +1958,12 @@ describe('runSidecarJob', () => {
         aspects: {
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
+        },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
         },
         priceSuggestion: 249.99,
         confidence: {
@@ -2056,6 +2100,12 @@ describe('runSidecarJob', () => {
         aspects: {
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
+        },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
         },
         priceSuggestion: 249.99,
         confidence: {
@@ -5480,6 +5530,45 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         userHints: expect.not.objectContaining({
           price: expect.anything(),
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('scrubs year-bearing title and item-specific hints before Gemini input', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        item_specifics: {
+          Player: 'Phil Rizzuto',
+          Set: ['1951 Topps', 'Topps 1951'],
+          Season: ['1951'],
+          Year: ['1951'],
+        },
+        title: 'Phil Rizzuto 1951 Topps #1951',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Phil Rizzuto Topps #1951',
+      description: 'Test description.',
+      aspects: {},
+      warnings: [],
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userHints: expect.objectContaining({
+          aspects: {
+            Player: 'Phil Rizzuto',
+            Set: 'Topps',
+          },
+          title: 'Phil Rizzuto Topps #1951',
         }),
       }),
       expect.anything()

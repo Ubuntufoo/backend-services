@@ -2,14 +2,16 @@ import { extractSeasonStartYear } from './season-range.js';
 import type { NormalizeSoldCompsContext, PricingProviderInput } from './types.js';
 
 const PLAYER_ITEM_SPECIFIC_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
-const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
+const YEAR_ITEM_SPECIFIC_KEYS = ['Year'] as const;
 const SET_ITEM_SPECIFIC_KEYS = ['Set'] as const;
 const MANUFACTURER_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Card Manufacturer', 'Brand'] as const;
 const CARD_NUMBER_ITEM_SPECIFIC_KEYS = ['Card Number'] as const;
 const TITLE_CARD_NUMBER_PATTERNS = [
+  /\bCard\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*No\.?\s*#?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*Number\s*#?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
+  /\bNo\.?\s*#?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /(?:^|[\s(])#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})(?=$|[\s),.-])/gi,
 ] as const;
 const YEAR_PATTERN = /\b(19\d{2}|20\d{2})\b/g;
@@ -60,9 +62,7 @@ export function buildExactCardTitleTarget(context: NormalizeSoldCompsContext): E
       extractExplicitCardNumber(fallbackTitle),
     playerTokenGroups: getPlayerTokenGroups(itemSpecifics),
     playerPhrase: getFirstSpecificValue(itemSpecifics, PLAYER_ITEM_SPECIFIC_KEYS, normalizePhrase),
-    year:
-      getFirstSpecificValue(itemSpecifics, YEAR_ITEM_SPECIFIC_KEYS, normalizeYear) ??
-      extractFirstYear(fallbackTitle),
+    year: getFirstSpecificValue(itemSpecifics, YEAR_ITEM_SPECIFIC_KEYS, normalizeYear),
   };
 }
 
@@ -219,11 +219,6 @@ function deriveBaseBrandFromSet(value: string): string[] {
   }
 
   return tokens.slice(0, 1);
-}
-
-function extractFirstYear(title: string): string | null {
-  const matches = getTitleYearCandidates(title);
-  return matches?.[0] ?? null;
 }
 
 function hasConflictingYear(title: string, targetYear: string): boolean {

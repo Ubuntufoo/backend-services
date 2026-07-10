@@ -8,7 +8,7 @@ import type { PricingProviderInput } from './types.js';
 import { extractSeasonStartYear, normalizeSeasonRanges } from './season-range.js';
 
 const PLAYER_ITEM_SPECIFIC_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
-const YEAR_ITEM_SPECIFIC_KEYS = ['Year', 'Season'] as const;
+const YEAR_ITEM_SPECIFIC_KEYS = ['Year'] as const;
 const MANUFACTURER_ITEM_SPECIFIC_KEYS = ['Manufacturer', 'Card Manufacturer', 'Brand'] as const;
 const CARD_NUMBER_ITEM_SPECIFIC_KEYS = ['Card Number'] as const;
 const QUERY_TITLE_STOPWORDS = new Set([
@@ -92,9 +92,11 @@ const AUTOGRAPH_PATTERNS = [
 ] as const;
 const GRADE_PATTERN = /\b(PSA|BGS|SGC|CGC|CSG|TAG|HGA)\s*(10|[1-9](?:\.\d)?)\b/i;
 const TITLE_CARD_NUMBER_PATTERNS = [
+  /\bCard\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*No\.?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /\bCard\s*Number\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
+  /\bNo\.?\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})\b/gi,
   /(?:^|[\s(])#\s*([A-Za-z]{0,4}\d{1,4}[A-Za-z]{0,4})(?=$|[\s),.-])/gi,
 ] as const;
 const SERIAL_NUMBER_PATTERN = /(?:^|[\s(])(?:#?\d{1,4}\s*\/\s*\d{1,4}|\d{1,4}\s*of\s*\d{1,4})(?:$|[\s)])/i;
@@ -204,13 +206,8 @@ function getPlayer(itemSpecifics: PricingProviderInput['itemSpecifics']): string
 }
 
 function getPrimaryYear(itemSpecifics: PricingProviderInput['itemSpecifics'], title: string): string | undefined {
-  const titleYear = extractYear(title);
-  if (titleYear) {
-    return titleYear;
-  }
-
   const specificYear = getFirstSpecificValue(itemSpecifics, YEAR_ITEM_SPECIFIC_KEYS);
-  return extractYear(specificYear);
+  return extractYear(specificYear ?? undefined);
 }
 
 function extractYear(value: string | undefined): string | undefined {

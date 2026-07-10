@@ -10,29 +10,31 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
   "skuCategoryCode": "BSKBL | BSBL | OTHER",
   "aspects": {
     "Player": "string",
-    "Year": "string; include only when the exact year is visible on the card image or explicitly provided in user hints",
     "Manufacturer": "string",
     "Set": "string",
     "Card Number": "string",
     "Parallel/Variety": "string",
     "Insert Set": "string",
     "Franchise": "string",
-    "Sport": "string",
-    "Card Manufacturer": "string",
-    "Season": "string; include only when the exact year is visible on the card image or explicitly provided in user hints"
+    "Sport": "string"
   },
-  "yearEvidence": {
-    "isVerified": "boolean; true only when the exact year is visible on the card image or explicitly provided in user hints",
-    "likelyYear": "string or null",
-    "likelyYearRange": "string or null",
-    "warningCode": "year_unverified or omitted"
-  },
+  "yearEvidence": null,
   "confidence": {
     "title": 0.0,
     "category": 0.0,
     "aspects": 0.0
   },
   "warnings": ["string"]
+}
+
+If qualifying visible year evidence exists, replace "yearEvidence": null with:
+{
+  "yearEvidence": {
+    "year": "1954",
+    "sourceType": "copyright_line",
+    "visibleText": "© 1954 THE TOPPS COMPANY, INC.",
+    "imageIndex": 1
+  }
 }`;
 
 function omitPriceFromUserHints(
@@ -50,18 +52,18 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
   return [
     'Generate an eBay listing draft for a trading card or card lot.',
     'Use visible image evidence first.',
-    'Use user hints only as supplemental context.',
-    'Listing title must be < 80 characters and use only: player name, verified year when visible, manufacturer, card number, and explicit market-relevant characteristics visible on the card (e.g., Rookie Card, Refractor, parallel, insert, autograph, memorabilia, numbered).',
-    'Do NOT include inferred filler in titles: sport, league, team, franchise, position, role, "coach", "3rd base", or similar—unless those words are genuinely part of an official set name, insert name, or parallel name printed on the card.',
+    'If provided, user hints are supplemental context, not canonical proof.',
+    'Listing title must be < 80 characters and use only: player name, exact year only when visible qualifying text supports it, manufacturer, # card number, and explicit market-relevant characteristics visible on the card (e.g., Rookie Card, Refractor, parallel, insert type e.g. "Grand Slammers" or "Legends", serial numbered).',
+    'Do NOT include inferred filler in titles: sport, league, team, franchise, position, role e.g. "coach", "3rd base", or similar — unless those words are genuinely part of an official set name, insert type, or parallel name printed on the card.',
     'Do not invent grades, certification status, serial numbers, autographs, relics, or rare variants unless they are visible in the images or explicitly provided in the user hints.',
     'Year handling is strict.',
-    'A card year is verified only when the exact year is visibly printed on the card image or explicitly provided in user hints.',
-    'Do not treat checklist memory, player career dates, team uniforms, copyright style, set design, card number, manufacturer, or general trading-card knowledge as verified year evidence.',
-    'For vintage or older cards, most card years are not printed on the card; if the year is not visibly printed or user-provided, do not guess the year.',
-    'When the year is not visible or user-provided, do not infer it from player/team/card-number knowledge, do not put it in the title, do not return aspects["Year"], and do not return aspects["Season"].',
-    'When the year is not visible or user-provided, set yearEvidence.isVerified to false, set yearEvidence.warningCode to "year_unverified", and if useful put only a non-canonical advisory guess in yearEvidence.likelyYear or yearEvidence.likelyYearRange.',
-    'When the year is visible on the card or explicitly provided by user hints, return aspects["Year"], include the year in the title when useful, and set yearEvidence.isVerified to true.',
-    'If you are unsure whether the year is printed or user-provided, treat the year as unverified.',
+    'Never infer or guess the card year.',
+    'Return yearEvidence only when visible card text explicitly states the production or release year in a copyright line, manufacture line, production line, or explicit release-year line.',
+    'Statistics, biography dates, career dates, card numbers, design recognition, set knowledge, player history, existing listing text, existing item specifics, user hints, and general model knowledge are not year evidence.',
+    'If the images do not show qualifying text, return yearEvidence: null and omit exact years from the title and generated item specifics.',
+    'When qualifying text exists, copy the exact supporting text into yearEvidence.visibleText, copy the exact four-digit year into yearEvidence.year, and return the zero-based image index containing that text in yearEvidence.imageIndex.',
+    'Use only these yearEvidence.sourceType values: "copyright_line", "manufacture_line", "production_line", "explicit_release_year".',
+    'If you are unsure whether visible text directly identifies the card production or release year, return yearEvidence: null.',
     'Inspect visible card condition and choose the closest supported raw card condition token when the item appears ungraded.',
     'Supported raw card condition tokens: NEAR_MINT_OR_BETTER, EXCELLENT, VERY_GOOD, POOR.',
     'Do not return PSA/BGS/SGC-style numeric grades.',
@@ -80,8 +82,8 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Do not infer skuCategoryCode from player name alone when sport or card type is unclear.',
     'Do not return free-form category labels for skuCategoryCode such as Basketball, Baseball, MLB, NBA, TCG, or Pokemon.',
     'Emit non-year canonical trading-card pricing aspects when visible or strongly inferable: Player, Manufacturer, Set, Card Number, Parallel/Variety, Insert Set.',
-    'Emit aspects["Year"] and aspects["Season"] only when the exact year is visible on the card image or explicitly provided in user hints.',
-    'Keep eBay-friendly aliases such as Card Manufacturer when useful, but do not omit canonical Manufacturer when that value is verifiably known.',
+    'Do not generate Year or Season item specifics. The backend derives canonical Year from validated yearEvidence.',
+    'Use Manufacturer as the canonical manufacturer field. Do not emit duplicate manufacturer aliases unless strictly necessary.',
     'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98", also return aspects["Card Number"] with value "98" and no leading "#".',
     'Include a Franchise aspect when the team, franchise, or IP is identifiable from the card or user hints.',
     'Examples: Utah Jazz card -> "Franchise": "Utah Jazz"; Pokemon card -> "Franchise": "Pokémon"; Marvel card -> "Franchise": "Marvel".',

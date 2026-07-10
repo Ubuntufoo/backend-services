@@ -17,7 +17,6 @@ import {
   generateListingDraftWithFallback,
   GeminiDraftServiceError,
   GeminiFallbackExecutionError,
-  normalizeGeneratedDraft,
   prepareGenerateListingDraft,
   resolveTradingCardListingIds,
   type GenerateAiAttemptDiagnostics,
@@ -27,8 +26,16 @@ import {
   type PreparedGenerateListingDraft,
   type PreparedGenerateListingDraftExecutionResult,
 } from '@/gemini/index.js';
+import {
+  sanitizeSetAspectValue,
+  sanitizeTitleYearClaims,
+} from '@/gemini/year-normalization.js';
 import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import {
+  buildGeneratedDraftMetadata,
+  GENERATED_DRAFT_METADATA_KEY,
+} from '@/pricing/generated-draft-metadata.js';
 import {
   publishListing as publishApprovedListing,
   type PublishListingDependencies,
@@ -63,9 +70,7 @@ const RESEARCH_PRICE_JOB_TYPE = 'research_price';
 const JOB_STATUS_RUNNING = 'running';
 const CATEGORY_SUGGESTION_ASPECT_KEY = 'CategorySuggestion';
 const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
-const GENERATED_DRAFT_METADATA_KEY = '__draft_metadata';
 const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
-const YEAR_UNVERIFIED_WARNING_CODE = 'year_unverified';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
@@ -150,7 +155,22 @@ function getListingAspectHints(
     })
   );
 
-  return Object.keys(aspects).length > 0 ? aspects : undefined;
+  const sanitizedAspects = Object.fromEntries(
+    Object.entries(aspects).flatMap(([key, value]) => {
+      if (key === 'Year' || key === 'Season') {
+        return [];
+      }
+
+      if (key === 'Set') {
+        const normalizedSet = sanitizeSetAspectValue(value);
+        return normalizedSet !== undefined ? [[key, normalizedSet]] : [];
+      }
+
+      return [[key, value]];
+    })
+  );
+
+  return Object.keys(sanitizedAspects).length > 0 ? sanitizedAspects : undefined;
 }
 
 function getListingNotesHint(listing: ListingRow): string | undefined {
@@ -163,7 +183,15 @@ function getListingNotesHint(listing: ListingRow): string | undefined {
 }
 
 function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHints'] | undefined {
-  const title = asNonEmptyString(listing.title);
+  const title = (() => {
+    const value = asNonEmptyString(listing.title);
+    if (!value) {
+      return undefined;
+    }
+
+    const sanitized = sanitizeTitleYearClaims(value);
+    return sanitized.length > 0 ? sanitized : undefined;
+  })();
   const notes = getListingNotesHint(listing);
   const aspects = getListingAspectHints(listing);
 
@@ -181,21 +209,11 @@ function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHin
 function buildGeneratedListingAspects(
   draft: Awaited<ReturnType<typeof generateListingDraft>>
 ): NonNullable<ListingUpdate['item_specifics']> {
-  return {
+  const draftMetadata = buildGeneratedDraftMetadata(draft.yearEvidence);
+
+  const itemSpecifics: Record<string, unknown> = {
     ...draft.aspects,
-    ...(draft.yearEvidence?.isVerified === false ||
-    draft.yearEvidence?.warningCode === YEAR_UNVERIFIED_WARNING_CODE
-      ? {
-          [GENERATED_DRAFT_METADATA_KEY]: {
-            year: {
-              likely_year: draft.yearEvidence?.likelyYear ?? null,
-              likely_year_range: draft.yearEvidence?.likelyYearRange ?? null,
-              status: 'unverified',
-              warning_code: YEAR_UNVERIFIED_WARNING_CODE,
-            },
-          },
-        }
-      : {}),
+    ...(draftMetadata ? { [GENERATED_DRAFT_METADATA_KEY]: draftMetadata } : {}),
     ...(draft.cardConditionToken
       ? { [TRADING_CARD_CONDITION_ASPECT_KEY]: draft.cardConditionToken }
       : {}),
@@ -205,34 +223,32 @@ function buildGeneratedListingAspects(
     ...(draft.conditionSuggestion
       ? { [CONDITION_SUGGESTION_ASPECT_KEY]: draft.conditionSuggestion }
       : {}),
-    [SKU_CATEGORY_CODE_ASPECT_KEY]: draft.skuCategoryCode,
+    ...(draft.skuCategoryCode ? { [SKU_CATEGORY_CODE_ASPECT_KEY]: draft.skuCategoryCode } : {}),
   };
+
+  return itemSpecifics as NonNullable<ListingUpdate['item_specifics']>;
 }
 
 function buildGeneratedListingReviewUpdate(
   listing: ListingRow,
   draft: Awaited<ReturnType<typeof generateListingDraft>>
 ): ListingUpdate {
-  const normalizedDraft = {
-    ...draft,
-    ...normalizeGeneratedDraft(draft),
-  };
-  const resolvedIds = resolveTradingCardListingIds(listing, normalizedDraft);
+  const resolvedIds = resolveTradingCardListingIds(listing, draft);
 
   return {
     category_id: resolvedIds.category_id,
     condition_id: resolvedIds.condition_id,
-    condition_notes: normalizedDraft.cardConditionNote ?? null,
-    description: normalizedDraft.description,
-    item_specifics: buildGeneratedListingAspects(normalizedDraft),
+    condition_notes: draft.cardConditionNote ?? null,
+    description: draft.description,
+    item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,
     last_error_code: null,
     last_error_context: {},
     last_error_message: null,
-    price: normalizedDraft.priceSuggestion ?? null,
+    price: draft.priceSuggestion ?? null,
     status: 'needs_review',
     sub_status: 'review_pending',
-    title: normalizedDraft.title,
+    title: draft.title,
   };
 }
 

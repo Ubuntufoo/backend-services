@@ -602,7 +602,7 @@ describe('data API router', () => {
     expect(detailResponse.body.latest_pricing_research?.research_id).toBe('pricing-research-001');
   });
 
-  it('exposes per-listing uncertain year warnings and strips internal draft metadata from item specifics', async () => {
+  it('strips internal draft year metadata from item specifics without exposing identity warnings', async () => {
     const dataAccess = createDataAccess();
     const vintageListingRow = {
       ...listingRow,
@@ -612,10 +612,10 @@ describe('data API router', () => {
         Player: 'Ed Stanky',
         __draft_metadata: {
           year: {
-            likely_year: '1955',
-            likely_year_range: '1952-1955',
-            status: 'unverified',
-            warning_code: 'year_unverified',
+            year: '1955',
+            source_type: 'copyright_line',
+            visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+            image_index: 1,
           },
         },
       },
@@ -628,20 +628,10 @@ describe('data API router', () => {
     const listResponse = await request(app).get('/api/listings');
     const detailResponse = await request(app).get('/api/listings/LIST-001');
 
-    const expectedWarnings = [
-      {
-        code: 'year_unverified',
-        likely_year: '1955',
-        likely_year_range: '1952-1955',
-        severity: 'warning',
-        summary: 'Card year is unverified.',
-      },
-    ];
-
     expect(listResponse.status).toBe(200);
     expect(detailResponse.status).toBe(200);
-    expect(listResponse.body.listings[0]?.identity_warnings).toEqual(expectedWarnings);
-    expect(detailResponse.body.identity_warnings).toEqual(expectedWarnings);
+    expect(listResponse.body.listings[0]?.identity_warnings).toEqual([]);
+    expect(detailResponse.body.identity_warnings).toEqual([]);
     expect(listResponse.body.listings[0]?.item_specifics).toEqual({
       'Card Number': '191',
       Manufacturer: 'Topps',
@@ -794,6 +784,39 @@ describe('data API router', () => {
     );
   });
 
+  it('strips client-supplied draft metadata from create requests', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .post('/api/listings')
+      .send({
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Year: '1955',
+          __draft_metadata: {
+            year: {
+              year: '1955',
+              source_type: 'copyright_line',
+              visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+              image_index: 1,
+            },
+          },
+        },
+      });
+
+    expect(response.status).toBe(201);
+    expect(dataAccess.listings.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        item_specifics: {
+          Manufacturer: 'Topps',
+          Year: '1955',
+        },
+      })
+    );
+    expect(JSON.stringify(response.body)).not.toContain('__draft_metadata');
+  });
+
   it('rejects create requests with unknown fields', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);
@@ -918,18 +941,19 @@ describe('data API router', () => {
     });
   });
 
-  it('preserves internal uncertain-year draft metadata during normal item-specific edits', async () => {
+  it('preserves internal validated-year draft metadata during normal item-specific edits', async () => {
     const existingListing = {
       ...listingRow,
       item_specifics: {
         Manufacturer: 'Topps',
         Player: 'Ed Stanky',
+        Year: '1955',
         __draft_metadata: {
           year: {
-            likely_year: '1955',
-            likely_year_range: '1952-1955',
-            status: 'unverified',
-            warning_code: 'year_unverified',
+            year: '1955',
+            source_type: 'copyright_line',
+            visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+            image_index: 1,
           },
         },
       },
@@ -951,6 +975,7 @@ describe('data API router', () => {
           Manufacturer: 'Topps',
           Player: 'Ed Stanky',
           Team: 'Chicago Cubs',
+          Year: '1955',
         },
       });
 
@@ -960,12 +985,13 @@ describe('data API router', () => {
         Manufacturer: 'Topps',
         Player: 'Ed Stanky',
         Team: 'Chicago Cubs',
+        Year: '1955',
         __draft_metadata: {
           year: {
-            likely_year: '1955',
-            likely_year_range: '1952-1955',
-            status: 'unverified',
-            warning_code: 'year_unverified',
+            year: '1955',
+            source_type: 'copyright_line',
+            visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+            image_index: 1,
           },
         },
       },
@@ -974,17 +1000,144 @@ describe('data API router', () => {
       Manufacturer: 'Topps',
       Player: 'Ed Stanky',
       Team: 'Chicago Cubs',
+      Year: '1955',
     });
-    expect(response.body.identity_warnings).toEqual([
-      {
-        code: 'year_unverified',
-        likely_year: '1955',
-        likely_year_range: '1952-1955',
-        severity: 'warning',
-        summary: 'Card year is unverified.',
-      },
-    ]);
+    expect(response.body.identity_warnings).toEqual([]);
     expect(JSON.stringify(response.body)).not.toContain('__draft_metadata');
+  });
+
+  it('strips client-supplied draft metadata from seller updates', async () => {
+    const existingListing = {
+      ...listingRow,
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+      },
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => existingListing);
+    dataAccess.listings.update = vi.fn(async (_listingId: string, changes: ListingUpdate) => ({
+      ...existingListing,
+      ...changes,
+      item_specifics: changes.item_specifics ?? existingListing.item_specifics,
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Year: '1955',
+          __draft_metadata: {
+            year: {
+              year: '1955',
+              source_type: 'copyright_line',
+              visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+              image_index: 1,
+            },
+          },
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Year: '1955',
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('__draft_metadata');
+  });
+
+  it('clears stale draft metadata when seller changes Year', async () => {
+    const existingListing = {
+      ...listingRow,
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+        Year: '1955',
+        __draft_metadata: {
+          year: {
+            year: '1955',
+            source_type: 'copyright_line',
+            visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+            image_index: 1,
+          },
+        },
+      },
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => existingListing);
+    dataAccess.listings.update = vi.fn(async (_listingId: string, changes: ListingUpdate) => ({
+      ...existingListing,
+      ...changes,
+      item_specifics: changes.item_specifics ?? existingListing.item_specifics,
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Player: 'Ed Stanky',
+          Year: '1954',
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+        Year: '1954',
+      },
+    });
+  });
+
+  it('clears stale draft metadata when seller removes Year', async () => {
+    const existingListing = {
+      ...listingRow,
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+        Year: '1955',
+        __draft_metadata: {
+          year: {
+            year: '1955',
+            source_type: 'copyright_line',
+            visible_text: '© 1955 THE TOPPS COMPANY, INC.',
+            image_index: 1,
+          },
+        },
+      },
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => existingListing);
+    dataAccess.listings.update = vi.fn(async (_listingId: string, changes: ListingUpdate) => ({
+      ...existingListing,
+      ...changes,
+      item_specifics: changes.item_specifics ?? existingListing.item_specifics,
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Player: 'Ed Stanky',
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Manufacturer: 'Topps',
+        Player: 'Ed Stanky',
+      },
+    });
   });
 
   it('allows seller-editable patch after pricing failure and preserves failed research visibility', async () => {

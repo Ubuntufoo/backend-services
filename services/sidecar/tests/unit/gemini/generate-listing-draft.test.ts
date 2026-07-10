@@ -235,18 +235,19 @@ describe('generateListingDraft', () => {
     );
     expect(request.prompt).toContain('Include a Franchise aspect when the team, franchise, or IP is identifiable');
     expect(request.prompt).toContain(
-      'Emit canonical trading-card pricing aspects whenever visible or strongly inferable'
+      'Emit non-year canonical trading-card pricing aspects when visible or strongly inferable'
     );
     expect(request.prompt).toContain(
       'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98"'
     );
-    expect(request.prompt).toContain('"Year": "string"');
     expect(request.prompt).toContain('"Manufacturer": "string"');
     expect(request.prompt).toContain('"Set": "string"');
     expect(request.prompt).toContain('"Card Number": "string"');
     expect(request.prompt).toContain('"Parallel/Variety": "string"');
     expect(request.prompt).toContain('"Insert Set": "string"');
     expect(request.prompt).toContain('"Franchise": "string"');
+    expect(request.prompt).toContain('"yearEvidence": null');
+    expect(request.prompt).toContain('If qualifying visible year evidence exists, replace "yearEvidence": null with:');
     expect(request.prompt).toContain(
       '"cardConditionToken": "NEAR_MINT_OR_BETTER | EXCELLENT | VERY_GOOD | POOR | null"'
     );
@@ -258,7 +259,7 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain('"title": "string"');
 
     expect(result).toEqual({
-      title: '1986 Fleer Michael Jordan RC',
+      title: 'Fleer Michael Jordan RC',
       description: 'Visible front and back images suggest an ungraded single card.',
       categorySuggestion: 'Sports Trading Cards',
       cardConditionNote: 'Soft corners visible; condition estimated from photos.',
@@ -270,9 +271,6 @@ describe('generateListingDraft', () => {
         Player: 'Michael Jordan',
         Manufacturer: 'Fleer',
         Sport: 'Basketball',
-        'Card Manufacturer': 'Fleer',
-        Year: '1986-87',
-        Season: '1986-87',
       },
       priceSuggestion: 12500,
       confidence: {
@@ -281,7 +279,11 @@ describe('generateListingDraft', () => {
         price: 0.52,
         aspects: 0.84,
       },
-      warnings: ['Condition cannot be confirmed from photos alone.'],
+      yearEvidence: null,
+      warnings: [
+        'Condition cannot be confirmed from photos alone.',
+        'Gemini exact year discarded: missing qualifying visible year evidence.',
+      ],
       rawModelResponse: rawResponse,
     });
   });
@@ -371,13 +373,11 @@ describe('generateListingDraft', () => {
     expect(result.aspects).toMatchObject({
       Athlete: 'Johnny Riddle',
       Player: 'Johnny Riddle',
-      'Card Manufacturer': 'Topps',
       Manufacturer: 'Topps',
-      Season: '1955',
-      Year: '1955',
       'Card Number': '98',
       Team: 'St. Louis Cardinals',
     });
+    expect(result.title).toBe('Johnny Riddle Topps #98 St. Louis Cardinals Coach');
   });
 
   it('preserves verified details while dropping guessed canonical year data for vintage cards', async () => {
@@ -391,12 +391,7 @@ describe('generateListingDraft', () => {
           Manufacturer: 'Topps',
           'Card Number': '191',
         },
-        yearEvidence: {
-          isVerified: false,
-          likelyYear: '1955',
-          likelyYearRange: '1952-1955',
-          warningCode: 'year_unverified',
-        },
+        yearEvidence: null,
         warnings: ['Year not visible on the card.'],
       })
     );
@@ -412,12 +407,7 @@ describe('generateListingDraft', () => {
       'Card Number': '191',
     });
     expect(result.title).toBe('Ed Stanky Topps #191');
-    expect(result.yearEvidence).toEqual({
-      isVerified: false,
-      likelyYear: '1955',
-      likelyYearRange: '1952-1955',
-      warningCode: 'year_unverified',
-    });
+    expect(result.yearEvidence).toBeNull();
   });
 
   it('parses JSON wrapped in a json code fence', async () => {
@@ -437,7 +427,7 @@ describe('generateListingDraft', () => {
       imageUrls: ['https://cdn.example.com/listing.jpg'],
     });
 
-    expect(result.title).toBe('1989 Upper Deck Ken Griffey Jr.');
+    expect(result.title).toBe('Upper Deck Ken Griffey Jr.');
     expect(result.description).toBe('Single card listing.');
     expect(result.aspects).toEqual({
       Player: 'Ken Griffey Jr.',
@@ -490,6 +480,7 @@ describe('generateListingDraft', () => {
       aspects: {
         Sport: 'Baseball',
       },
+      yearEvidence: null,
       priceSuggestion: null,
       confidence: {},
       warnings: [],
@@ -725,9 +716,7 @@ describe('generateListingDraft', () => {
 
     expect(result.title).toBe('');
     expect(result.description).toBe('');
-    expect(result.aspects).toEqual({
-      Year: ['1990'],
-    });
+    expect(result.aspects).toEqual({});
     expect(result.priceSuggestion).toBeNull();
     expect(result.warnings).toEqual(
       expect.arrayContaining([

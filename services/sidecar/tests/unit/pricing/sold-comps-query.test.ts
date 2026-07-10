@@ -157,9 +157,29 @@ describe('buildSoldCompsQuery', () => {
   });
 
   it.each([
+    ['Johnny Riddle 1955 Topps Card 98 St. Louis Cardinals Coach'],
+    ['Johnny Riddle 1955 Topps No. 98 St. Louis Cardinals Coach'],
+    ['Johnny Riddle 1955 Topps No 98 St. Louis Cardinals Coach'],
+  ])('supports downstream explicit card-number marker %s', (title) => {
+    expect(
+      buildSoldCompsQuery({
+        ...baseInput,
+        conditionId: '4000',
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Player: 'Johnny Riddle',
+          Year: '1955',
+        },
+        title,
+      })
+    ).toBe('Johnny Riddle 1955 Topps 98');
+  });
+
+  it.each([
     ['1993-94 NBA Hoops Michael Jordan #536', 'Michael Jordan 1993 Hoops 536'],
     ['92-93 NBA Hoops Michael Jordan #536', 'Michael Jordan 1992 Hoops 536'],
   ])('normalizes season range in query title "%s"', (title, expectedQuery) => {
+    const expectedYear = expectedQuery.includes('1993') ? '1993' : '1992';
     expect(
       buildSoldCompsQuery({
         ...baseInput,
@@ -169,6 +189,7 @@ describe('buildSoldCompsQuery', () => {
           Manufacturer: 'NBA Hoops',
           Player: 'Michael Jordan',
           Set: 'NBA Hoops',
+          Year: expectedYear,
         },
         title,
       })
@@ -188,6 +209,24 @@ describe('buildSoldCompsQuery', () => {
         title: 'Johnny Riddle 1955 Topps 98 St. Louis Cardinals Coach',
       })
     ).toBe('Johnny Riddle 1955 Topps');
+  });
+
+  it('does not derive canonical year from title when only a protected four-digit card number remains', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          Manufacturer: 'Topps',
+          Player: 'Phil Rizzuto',
+          Set: 'Topps',
+        },
+        listingId: 'Single-001951',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Phil Rizzuto Topps Card 1951',
+      })
+    ).toBe('Phil Rizzuto Topps 1951');
   });
 
   it('keeps lot queries broader and includes lot signal', () => {
@@ -224,7 +263,7 @@ describe('buildSoldCompsQuery', () => {
           Athlete: 'Johnny Riddle',
           Brand: 'Topps',
           Product: 'Johnny Riddle 1955 Topps 98',
-          Season: '1955',
+          Year: '1955',
         },
         listingId: 'Single-000007',
         listingType: 'single',
