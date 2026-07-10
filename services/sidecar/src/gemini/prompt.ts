@@ -10,7 +10,7 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
   "skuCategoryCode": "BSKBL | BSBL | OTHER",
   "aspects": {
     "Player": "string",
-    "Year": "string",
+    "Year": "string; include only when the exact year is visible on the card image or explicitly provided in user hints",
     "Manufacturer": "string",
     "Set": "string",
     "Card Number": "string",
@@ -19,10 +19,10 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
     "Franchise": "string",
     "Sport": "string",
     "Card Manufacturer": "string",
-    "Season": "string"
+    "Season": "string; include only when the exact year is visible on the card image or explicitly provided in user hints"
   },
   "yearEvidence": {
-    "isVerified": "boolean",
+    "isVerified": "boolean; true only when the exact year is visible on the card image or explicitly provided in user hints",
     "likelyYear": "string or null",
     "likelyYearRange": "string or null",
     "warningCode": "year_unverified or omitted"
@@ -79,8 +79,9 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'If unsure, choose OTHER.',
     'Do not infer skuCategoryCode from player name alone when sport or card type is unclear.',
     'Do not return free-form category labels for skuCategoryCode such as Basketball, Baseball, MLB, NBA, TCG, or Pokemon.',
-    'Emit canonical trading-card pricing aspects whenever visible or strongly inferable: Player, verified Year, Manufacturer, Set, Card Number, Parallel/Variety, Insert Set.',
-    'Keep eBay-friendly aliases such as Season and Card Manufacturer when useful, but do not omit canonical Year or Manufacturer when those alias values are verifiably known.',
+    'Emit non-year canonical trading-card pricing aspects when visible or strongly inferable: Player, Manufacturer, Set, Card Number, Parallel/Variety, Insert Set.',
+    'Emit aspects["Year"] and aspects["Season"] only when the exact year is visible on the card image or explicitly provided in user hints.',
+    'Keep eBay-friendly aliases such as Card Manufacturer when useful, but do not omit canonical Manufacturer when that value is verifiably known.',
     'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98", also return aspects["Card Number"] with value "98" and no leading "#".',
     'Include a Franchise aspect when the team, franchise, or IP is identifiable from the card or user hints.',
     'Examples: Utah Jazz card -> "Franchise": "Utah Jazz"; Pokemon card -> "Franchise": "Pokémon"; Marvel card -> "Franchise": "Marvel".',

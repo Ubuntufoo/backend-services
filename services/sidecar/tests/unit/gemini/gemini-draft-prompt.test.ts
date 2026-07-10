@@ -111,18 +111,31 @@ describe('buildGenerateListingDraftPrompt', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(
-      /Player, verified Year, Manufacturer, Set, Card Number, Parallel\/Variety, Insert Set/
+      /Player, Manufacturer, Set, Card Number, Parallel\/Variety, Insert Set/
     );
+    expect(prompt).not.toMatch(/strongly inferable: Player, verified Year/i);
   });
 
-  it('instructs Gemini to omit guessed canonical year details when year is unverified', () => {
+  it('requires exact visible or user-provided year before emitting Year or Season', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
-    expect(prompt).toMatch(/do not guess a canonical Year/i);
-    expect(prompt).toMatch(/do not insert a guessed year into the title/i);
-    expect(prompt).toMatch(/omit canonical Year and Season aspects/i);
+    expect(prompt).toMatch(
+      /Emit aspects\["Year"\] and aspects\["Season"\] only when the exact year is visible on the card image or explicitly provided in user hints\./
+    );
+    expect(prompt).toMatch(/do not return aspects\["Year"\], and do not return aspects\["Season"\]/i);
     expect(prompt).toMatch(/"yearEvidence"/);
     expect(prompt).toMatch(/"warningCode": "year_unverified or omitted"/);
+  });
+
+  it('marks Year and Season as conditional in the expected JSON shape', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(
+      /"Year": "string; include only when the exact year is visible on the card image or explicitly provided in user hints"/
+    );
+    expect(prompt).toMatch(
+      /"Season": "string; include only when the exact year is visible on the card image or explicitly provided in user hints"/
+    );
   });
 
   it('strips price from userHints in listing context when explicitly present', () => {

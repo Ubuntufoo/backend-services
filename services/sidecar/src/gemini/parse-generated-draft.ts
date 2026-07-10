@@ -179,15 +179,51 @@ function stripUnverifiedYearFromTitle(title: string): string {
     .trim();
 }
 
+function hasYearInTitle(title: string): boolean {
+  return /\b(?:19\d{2}|20\d{2})(?:\s*[-/]\s*(?:\d{2}|\d{4}))?\b/u.test(title);
+}
+
+function normalizeDiscardedYearEvidence(
+  yearEvidence: GeneratedListingDraft['yearEvidence']
+): NonNullable<GeneratedListingDraft['yearEvidence']> {
+  return {
+    isVerified: false,
+    likelyYear: yearEvidence?.likelyYear ?? null,
+    likelyYearRange: yearEvidence?.likelyYearRange ?? null,
+    warningCode: YEAR_UNVERIFIED_WARNING_CODE,
+  };
+}
+
 export function normalizeGeneratedDraft(
   draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'>
 ): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> {
   let title = draft.title;
   const aspects: AspectRecord = { ...draft.aspects };
   const warnings = [...draft.warnings];
-  const yearEvidence = draft.yearEvidence;
+  let yearEvidence = draft.yearEvidence;
+  const hasYearAspect = Object.prototype.hasOwnProperty.call(aspects, 'Year');
+  const hasSeasonAspect = Object.prototype.hasOwnProperty.call(aspects, 'Season');
+  const hasYearSpecificAspect = hasYearAspect || hasSeasonAspect;
+  const hasTitleYear = hasYearInTitle(title);
+  const hasVerifiedYearEvidence = yearEvidence?.isVerified === true;
 
-  if (yearEvidence?.isVerified === false) {
+  if (!hasVerifiedYearEvidence && hasTitleYear) {
+    title = stripUnverifiedYearFromTitle(title);
+    yearEvidence = normalizeDiscardedYearEvidence(yearEvidence);
+    warnings.push(
+      'Gemini returned a title year without verified year evidence; discarded the title year and treated the year as unverified.'
+    );
+  }
+
+  if (!hasVerifiedYearEvidence && hasYearSpecificAspect) {
+    title = stripUnverifiedYearFromTitle(title);
+    delete aspects.Year;
+    delete aspects.Season;
+    yearEvidence = normalizeDiscardedYearEvidence(yearEvidence);
+    warnings.push(
+      'Gemini returned Year/Season without verified year evidence; discarded Year/Season and treated the year as unverified.'
+    );
+  } else if (yearEvidence?.isVerified === false) {
     title = stripUnverifiedYearFromTitle(title);
     delete aspects.Year;
     delete aspects.Season;
@@ -195,7 +231,7 @@ export function normalizeGeneratedDraft(
 
   const year = getAspectString(aspects, 'Year');
   const season = getAspectString(aspects, 'Season');
-  if (!year && season && yearEvidence?.isVerified !== false) {
+  if (!year && season && yearEvidence?.isVerified === true) {
     aspects.Year = season;
   }
 
@@ -295,8 +331,8 @@ function normalizeYearEvidence(
   if (warningCode === YEAR_UNVERIFIED_WARNING_CODE) {
     return {
       isVerified: false,
-      likelyYear,
-      likelyYearRange,
+      likelyYear: likelyYear ?? null,
+      likelyYearRange: likelyYearRange ?? null,
       warningCode: YEAR_UNVERIFIED_WARNING_CODE,
     };
   }
@@ -304,8 +340,17 @@ function normalizeYearEvidence(
   if (isVerified === false) {
     return {
       isVerified: false,
-      likelyYear,
-      likelyYearRange,
+      likelyYear: likelyYear ?? null,
+      likelyYearRange: likelyYearRange ?? null,
+      warningCode: YEAR_UNVERIFIED_WARNING_CODE,
+    };
+  }
+
+  if (isVerified !== true && (likelyYear || likelyYearRange)) {
+    return {
+      isVerified: false,
+      likelyYear: likelyYear ?? null,
+      likelyYearRange: likelyYearRange ?? null,
       warningCode: YEAR_UNVERIFIED_WARNING_CODE,
     };
   }
