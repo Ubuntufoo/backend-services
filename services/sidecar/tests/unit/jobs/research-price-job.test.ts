@@ -1459,8 +1459,8 @@ describe('priceListingNow', () => {
         rawOutput: { model, prompt },
         text: JSON.stringify({
           confidence: 'medium',
-          conditionAdjustedPrice: 5.24,
-          conditionAdjustmentPercent: -0.1,
+          conditionAdjustedPrice: 5.17,
+          conditionAdjustmentPercent: -0.1222,
           conditionAdjustmentReason: 'Exact target accepted.',
           priceExplanation: 'Deterministic target accepted from explicit condition evidence.',
           rejectedCompIds: [],
@@ -1493,7 +1493,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.24);
+    expect(result.suggestedPrice).toBe(4.79);
     expect(spies.resolveForTask).toHaveBeenCalledWith({
       provider: 'google',
       requireJsonOutput: true,
@@ -1507,15 +1507,27 @@ describe('priceListingNow', () => {
           fallback: null,
           modelName: 'gemma-4-31b-it',
           reasoning: expect.objectContaining({
-            conditionAdjustedPrice: 5.24,
+            conditionAdjustedPrice: 5.17,
             confidence: 'medium',
           }),
           status: 'succeeded',
         }),
         pricing_model_name: 'gemma-4-31b-it',
-        suggested_price: 5.24,
+        raw_result_json: expect.objectContaining({
+          finalPriceAdjustment: {
+            basePrice: 5.17,
+            competitiveDiscountPercent: 5,
+            recentWindowDays: 90,
+            recentAcceptedCompCount: 4,
+            salesVelocityTier: 'medium',
+            salesVelocityDiscountPercent: 2.5,
+            finalPrice: 4.79,
+          },
+        }),
+        suggested_price: 4.79,
       })
     );
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 4.79 });
     expect(spies.markSucceeded.mock.calls[0]?.[0]?.llm_reasoning_json).not.toHaveProperty('warnings');
   });
 
@@ -1572,12 +1584,12 @@ describe('priceListingNow', () => {
           Manufacturer: 'Topps',
           Player: 'Johnny Riddle',
           Set: 'Topps',
-          Year: '1955',
         }),
         listingType: 'single',
         rawCardSingleShippingDefaults: true,
       })
     );
+    expect(normalizeComps.mock.calls[0]?.[1]?.itemSpecifics).not.toHaveProperty('Year');
   });
 
   it('drops persisted apify diagnostic itemSpecifics and duplicate keywords only at raw_result_json boundary', async () => {
@@ -1918,7 +1930,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.89);
+    expect(result.suggestedPrice).toBe(5.46);
     expect(executeModel).not.toHaveBeenCalled();
     expect(spies.incrementGeminiCallsUsed).not.toHaveBeenCalled();
     expect(spies.markSucceeded).toHaveBeenCalledWith(
@@ -1939,9 +1951,21 @@ describe('priceListingNow', () => {
           ],
         }),
         pricing_model_name: null,
-        suggested_price: 5.89,
+        raw_result_json: expect.objectContaining({
+          finalPriceAdjustment: {
+            basePrice: 5.89,
+            competitiveDiscountPercent: 5,
+            recentWindowDays: 90,
+            recentAcceptedCompCount: 4,
+            salesVelocityTier: 'medium',
+            salesVelocityDiscountPercent: 2.5,
+            finalPrice: 5.46,
+          },
+        }),
+        suggested_price: 5.46,
       })
     );
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 5.46 });
   });
 
   it('uses valid exact condition-adjusted target as final price', async () => {
@@ -2008,7 +2032,7 @@ describe('priceListingNow', () => {
       },
     });
 
-    expect(result.suggestedPrice).toBe(5.63);
+    expect(result.suggestedPrice).toBe(5.21);
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         llm_reasoning_json: expect.objectContaining({
@@ -2018,7 +2042,7 @@ describe('priceListingNow', () => {
             conditionAdjustmentPercent: -0.0441,
           }),
         }),
-        suggested_price: 5.63,
+        suggested_price: 5.21,
       })
     );
   });
@@ -2102,7 +2126,7 @@ describe('priceListingNow', () => {
             }),
           ],
         }),
-        suggested_price: 5.89,
+        suggested_price: 5.46,
       })
     );
   });
@@ -2174,7 +2198,7 @@ describe('priceListingNow', () => {
             }),
           ],
         }),
-        suggested_price: 5.89,
+        suggested_price: 5.46,
       })
     );
   });
@@ -2242,7 +2266,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.89);
+    expect(result.suggestedPrice).toBe(5.46);
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         llm_reasoning_json: expect.objectContaining({
@@ -2275,7 +2299,7 @@ describe('priceListingNow', () => {
           ],
         }),
         pricing_model_name: 'gemma-4-31b-it',
-        suggested_price: 5.89,
+        suggested_price: 5.46,
       })
     );
 

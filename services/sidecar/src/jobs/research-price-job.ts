@@ -15,6 +15,10 @@ import {
   getListingConditionForAdjustment,
 } from '@/pricing/condition-adjustment.js';
 import { computePricingConfidence } from '@/pricing/confidence.js';
+import {
+  computeFinalPriceAdjustment,
+  type FinalPriceAdjustment,
+} from '@/pricing/final-price-adjustment.js';
 import { normalizeSoldComps } from '@/pricing/normalizer.js';
 import {
   buildNormalizeSoldCompsContext,
@@ -573,6 +577,7 @@ function buildPricingResearchRawResult(
   rawCompCount: number,
   normalized: ReturnType<typeof normalizeSoldComps>,
   providerRouting: ProviderRoutingDiagnostics,
+  finalPriceAdjustment: FinalPriceAdjustment,
   latency: PricingResearchLatencyDiagnostics,
   llmAttempted: boolean
 ): Json {
@@ -593,6 +598,7 @@ function buildPricingResearchRawResult(
       providerRouting,
       rawCompCount,
     }),
+    finalPriceAdjustment,
     normalization: buildNormalizationSummary(normalized, rawCompCount),
     providerRouting: buildProviderRoutingRawResult(providerRouting),
   });
@@ -1680,17 +1686,28 @@ export async function priceListingNow(
       );
     }
 
-    const finalSuggestedPrice = assertValidSuggestedPrice(
+    const selectedBasePrice = assertValidSuggestedPrice(
       listingId,
       llmConditionAdjustedPrice ?? deterministicSuggestedPrice,
       'final'
     );
+    const finalPriceAdjustment = computeFinalPriceAdjustment({
+      basePrice: selectedBasePrice,
+      comps: normalized.comps,
+      currentTime: dependencies.now(),
+    });
+    const finalSuggestedPrice = assertValidSuggestedPrice(
+      listingId,
+      finalPriceAdjustment.finalPrice,
+      'final'
+    );
     const medianSoldPrice = assertMedianSoldPrice(listingId, stats.medianSoldPrice);
-    let pricingRawResult = buildPricingResearchRawResult(
+    const pricingRawResult = buildPricingResearchRawResult(
       providerResult.rawResult,
       rawCompCount,
       normalized,
       providerRouting,
+      finalPriceAdjustment,
       {
         createResearchMs,
         fallbackFetchMs,
@@ -1732,6 +1749,7 @@ export async function priceListingNow(
       fallbackAttempted: providerRouting.fallbackAttempted,
       fallbackProvider: providerRouting.fallbackProvider,
       fallbackSucceeded: providerRouting.fallbackSucceeded,
+      finalPriceAdjustment,
       finalSuggestedPrice,
       jobId: options.jobId,
       listingId,
