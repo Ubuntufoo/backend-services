@@ -1938,21 +1938,40 @@ describe('runSidecarJob', () => {
     expect(result.listing?.listing_id).toBe('Single-000001');
   });
 
-  it('falls back to a second configured Gemini route and records both attempts', async () => {
-    const secondRoute = createResolvedAiModelRoute({
-      displayName: 'Gemini 3.1 Pro',
-      modelName: 'gemini-3.1-pro',
-      routeOrder: 2,
+  it('falls through the four configured Gemini routes and records every attempt', async () => {
+    const primaryRoute = createResolvedAiModelRoute({
+      displayName: 'Gemini 3.5 Flash Lite',
+      modelName: 'gemini-3.5-flash-lite',
+      routeOrder: 1,
     });
+    const fallbackRoutes = [
+      createResolvedAiModelRoute({
+        displayName: 'Gemini 3.1 Flash Lite',
+        modelName: 'gemini-3.1-flash-lite',
+        routeOrder: 2,
+      }),
+      createResolvedAiModelRoute({
+        displayName: 'Gemini 3.5 Flash',
+        modelName: 'gemini-3.5-flash',
+        routeOrder: 3,
+      }),
+      createResolvedAiModelRoute({
+        displayName: 'Gemini 3 Flash Preview',
+        modelName: 'gemini-3-flash-preview',
+        routeOrder: 4,
+      }),
+    ];
     const dataAccess = createDataAccess({
-      aiModelRoutes: [resolvedAiModelRoute, secondRoute],
+      aiModelRoutes: [primaryRoute, ...fallbackRoutes],
     });
     const generateListingDraftMock = vi
       .fn()
       .mockRejectedValueOnce(new Error('429 too many requests'))
+      .mockRejectedValueOnce(new Error('RESOURCE_EXHAUSTED: quota reached'))
+      .mockRejectedValueOnce(new Error('503 unavailable'))
       .mockResolvedValueOnce({
         title: '1991 Upper Deck Michael Jordan',
-        description: 'Recovered on fallback model.',
+        description: 'Recovered on final fallback model.',
         categorySuggestion: 'Sports Trading Cards',
         conditionSuggestion: 'Ungraded',
         aspects: {
@@ -1987,69 +2006,34 @@ describe('runSidecarJob', () => {
       requireStructuredOutput: true,
       taskType: 'listing_draft_generation',
     });
-    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
-    expect(generateListingDraftMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        listingId: 'LIST-001',
-      }),
-      { model: 'gemini-3.1-flash-lite' }
-    );
-    expect(generateListingDraftMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        listingId: 'LIST-001',
-      }),
-      { model: 'gemini-3.1-pro' }
-    );
-    expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(1, {
-      attempt_order: 1,
-      job_id: 'job-generate-ai',
-      listing_id: 'LIST-001',
-      metadata: {
-        payload: {
-          imageCount: 2,
-        },
-      },
-      model_name: 'gemini-3.1-flash-lite',
-      provider: 'google',
-      provider_model_id: 'gemini-3.1-flash-lite',
-      routing_source: 'direct_gemini',
-      started_at: '2026-05-20T13:00:00.000Z',
-      status: 'started',
-    });
-    expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(2, {
-      attempt_order: 2,
-      job_id: 'job-generate-ai',
-      listing_id: 'LIST-001',
-      metadata: {
-        payload: {
-          imageCount: 2,
-        },
-      },
-      model_name: 'gemini-3.1-pro',
-      provider: 'google',
-      provider_model_id: 'gemini-3.1-pro',
-      routing_source: 'direct_gemini',
-      started_at: '2026-05-20T13:00:00.000Z',
-      status: 'started',
-    });
-    expect(dataAccess.aiModelAttempts.markFailed).toHaveBeenCalledWith({
-      duration_ms: 0,
-      failure_code: 'generate_ai_failed',
-      failure_message: '429 too many requests',
-      finished_at: '2026-05-20T13:00:00.000Z',
-      id: 'ai-model-attempt-row-id',
-      metadata: {
-        payload: {
-          imageCount: 2,
-        },
-      },
-    });
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(4);
+    for (const [index, model] of [
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+      'gemini-3.5-flash',
+      'gemini-3-flash-preview',
+    ].entries()) {
+      expect(generateListingDraftMock).toHaveBeenNthCalledWith(
+        index + 1,
+        expect.objectContaining({
+          listingId: 'LIST-001',
+        }),
+        { model }
+      );
+      expect(dataAccess.aiModelAttempts.create).toHaveBeenNthCalledWith(
+        index + 1,
+        expect.objectContaining({
+          attempt_order: index + 1,
+          model_name: model,
+          provider_model_id: model,
+        })
+      );
+    }
+    expect(dataAccess.aiModelAttempts.markFailed).toHaveBeenCalledTimes(3);
     expect(dataAccess.aiModelAttempts.markSucceeded).toHaveBeenCalledWith({
       duration_ms: 0,
       finished_at: '2026-05-20T13:00:00.000Z',
-      id: 'ai-model-attempt-row-id-2',
+      id: 'ai-model-attempt-row-id-4',
       metadata: {
         payload: {
           imageCount: 2,
@@ -2057,21 +2041,22 @@ describe('runSidecarJob', () => {
       },
     });
     expect(result.job.status).toBe('completed');
-    expect(result.job.gemini_attempt_count).toBe(2);
-    expect(result.job.gemini_selected_model).toBe('gemini-3.1-pro');
-    expect(result.job.gemini_attempts).toEqual([
-      expect.objectContaining({
-        attempt_order: 1,
-        failure_code: 'generate_ai_failed',
-        model_name: 'gemini-3.1-flash-lite',
-        status: 'failed',
-      }),
-      expect.objectContaining({
-        attempt_order: 2,
-        model_name: 'gemini-3.1-pro',
-        status: 'succeeded',
-      }),
-    ]);
+    expect(result.job.gemini_attempt_count).toBe(4);
+    expect(result.job.gemini_selected_model).toBe('gemini-3-flash-preview');
+    expect(result.job.gemini_attempts).toEqual(
+      [
+        ['gemini-3.5-flash-lite', 'failed'],
+        ['gemini-3.1-flash-lite', 'failed'],
+        ['gemini-3.5-flash', 'failed'],
+        ['gemini-3-flash-preview', 'succeeded'],
+      ].map(([modelName, status], index) =>
+        expect.objectContaining({
+          attempt_order: index + 1,
+          model_name: modelName,
+          status,
+        })
+      )
+    );
     expect(result.listing?.status).toBe('needs_review');
   });
 

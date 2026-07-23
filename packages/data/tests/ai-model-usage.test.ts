@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseDataClient } from '../src/client.js';
-import type { AiModelUsageWindowRow } from '../src/database.js';
+import type { AiModelUsageWindowRow, DailyUsageRow } from '../src/database.js';
 import {
   reserveAiModelUsage,
   reserveAiModelUsageWindow,
   resolveAiModelUsageWindowStart,
 } from '../src/repositories/ai-model-usage.js';
+import { getEffectiveGeminiDailyLimit } from '../src/repositories/daily-usage.js';
 
 type WindowType = 'minute' | 'day';
 
@@ -227,7 +228,199 @@ function createUsageClient() {
   };
 }
 
+type GeminiRouteCapacityTestRow = {
+  catalog: {
+    free_tier_daily_request_limit: number | null;
+    is_enabled: boolean;
+    is_free_tier_eligible: boolean;
+  } | null;
+  model_name: string;
+  route_is_enabled: boolean;
+};
+
+function createGeminiDailyLimitClient(input: {
+  appSettingsLimit: number | null;
+  dailyUsageLimit?: number;
+  routeCapacityRows: GeminiRouteCapacityTestRow[];
+}): SupabaseDataClient {
+  const usageDate = '2026-07-21';
+  const dailyUsage: DailyUsageRow = {
+    gemini_calls_used: 0,
+    gemini_daily_limit: input.dailyUsageLimit ?? 0,
+    order_sync_count: 0,
+    usage_date: usageDate,
+  };
+
+  return {
+    from: vi.fn((name: string) => {
+      if (name === 'daily_usage') {
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('*');
+
+            return {
+              eq: vi.fn((column: string, value: string) => {
+                expect(column).toBe('usage_date');
+                expect(value).toBe(usageDate);
+
+                return {
+                  maybeSingle: vi.fn(async () => ({
+                    data: dailyUsage,
+                    error: null,
+                  })),
+                };
+              }),
+            };
+          }),
+        };
+      }
+
+      if (name === 'app_settings') {
+        return {
+          select: vi.fn((columns: string) => {
+            expect(columns).toBe('*');
+
+            return {
+              eq: vi.fn((column: string, value: string) => {
+                expect(column).toBe('id');
+                expect(value).toBe('default');
+
+                return {
+                  maybeSingle: vi.fn(async () => ({
+                    data: {
+                      gemini_daily_limit: input.appSettingsLimit,
+                    },
+                    error: null,
+                  })),
+                };
+              }),
+            };
+          }),
+        };
+      }
+
+      expect(name).toBe('ai_model_task_routes');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toContain('catalog:ai_model_catalog!inner');
+          expect(columns).toContain('route_is_enabled:is_enabled');
+
+          const filters = [
+            ['task_type', 'listing_draft_generation'],
+            ['provider', 'google'],
+            ['is_enabled', true],
+            ['catalog.is_enabled', true],
+            ['catalog.is_free_tier_eligible', true],
+          ] as const;
+
+          const applyFilter = (index: number): unknown => ({
+            eq: vi.fn((column: string, value: string | boolean) => {
+              expect([column, value]).toEqual(filters[index]);
+
+              if (index === filters.length - 1) {
+                return {
+                  data: input.routeCapacityRows,
+                  error: null,
+                };
+              }
+
+              return applyFilter(index + 1);
+            }),
+          });
+
+          return applyFilter(0);
+        }),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
 describe('ai-model-usage repository', () => {
+  it('honors the canonical 1040 Gemini app-settings limit', async () => {
+    const client = createGeminiDailyLimitClient({
+      appSettingsLimit: 1040,
+      routeCapacityRows: [],
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(client, '2026-07-21')).resolves.toMatchObject({
+      effectiveLimit: 1040,
+      source: 'app_settings',
+    });
+  });
+
+  it('preserves a customized Gemini app-settings limit', async () => {
+    const client = createGeminiDailyLimitClient({
+      appSettingsLimit: 750,
+      routeCapacityRows: [],
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(client, '2026-07-21')).resolves.toMatchObject({
+      effectiveLimit: 750,
+      source: 'app_settings',
+    });
+  });
+
+  it('sums only enabled free-tier Gemini route capacity to 1040', async () => {
+    const eligibleCatalog = {
+      is_enabled: true,
+      is_free_tier_eligible: true,
+    };
+    const client = createGeminiDailyLimitClient({
+      appSettingsLimit: null,
+      routeCapacityRows: [
+        {
+          catalog: { ...eligibleCatalog, free_tier_daily_request_limit: 500 },
+          model_name: 'gemini-3.5-flash-lite',
+          route_is_enabled: true,
+        },
+        {
+          catalog: { ...eligibleCatalog, free_tier_daily_request_limit: 500 },
+          model_name: 'gemini-3.1-flash-lite',
+          route_is_enabled: true,
+        },
+        {
+          catalog: { ...eligibleCatalog, free_tier_daily_request_limit: 20 },
+          model_name: 'gemini-3.5-flash',
+          route_is_enabled: true,
+        },
+        {
+          catalog: { ...eligibleCatalog, free_tier_daily_request_limit: 20 },
+          model_name: 'gemini-3-flash-preview',
+          route_is_enabled: true,
+        },
+        {
+          catalog: { ...eligibleCatalog, free_tier_daily_request_limit: 999 },
+          model_name: 'ignored-disabled-route',
+          route_is_enabled: false,
+        },
+        {
+          catalog: {
+            ...eligibleCatalog,
+            free_tier_daily_request_limit: 999,
+            is_enabled: false,
+          },
+          model_name: 'ignored-disabled-catalog',
+          route_is_enabled: true,
+        },
+        {
+          catalog: {
+            ...eligibleCatalog,
+            free_tier_daily_request_limit: 999,
+            is_free_tier_eligible: false,
+          },
+          model_name: 'ignored-ineligible-catalog',
+          route_is_enabled: true,
+        },
+      ],
+    });
+
+    await expect(getEffectiveGeminiDailyLimit(client, '2026-07-21')).resolves.toMatchObject({
+      effectiveLimit: 1040,
+      source: 'route_capacity',
+    });
+  });
+
   it('creates minute window and increments to 1, then increments existing window', async () => {
     const harness = createUsageClient();
     const windowStart = '2026-06-10T12:34:00.000Z';

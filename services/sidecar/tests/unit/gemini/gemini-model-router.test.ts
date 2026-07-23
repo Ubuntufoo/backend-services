@@ -10,13 +10,13 @@ import {
 
 function createRoute(overrides: Partial<ResolvedAiModelRoute> = {}): ResolvedAiModelRoute {
   return {
-    displayName: 'Gemini 3.1 Flash Lite',
+    displayName: 'Gemini 3.5 Flash Lite',
     fallbackOnQuotaExceeded: true,
     fallbackOnRateLimit: true,
     fallbackOnUnavailable: true,
     freeTierStatus: 'unknown',
     isFreeTierEligible: true,
-    modelName: 'gemini-3.1-flash-lite',
+    modelName: 'gemini-3.5-flash-lite',
     provider: 'google',
     requestsPerDay: null,
     requestsPerMinute: null,
@@ -38,12 +38,12 @@ describe('generateListingDraftWithFallback', () => {
       executeRoute,
       incrementDailyUsage: vi.fn(async () => undefined),
       now: () => new Date('2026-06-01T12:00:00.000Z'),
-      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
     });
 
     expect(executeRoute).toHaveBeenCalledTimes(1);
     expect(result.draft).toEqual({ title: 'draft-1' });
-    expect(result.selectedRoute.modelName).toBe('gemini-3.1-flash-lite');
+    expect(result.selectedRoute.modelName).toBe('gemini-3.5-flash-lite');
     expect(result.attempts).toHaveLength(1);
   });
 
@@ -57,12 +57,47 @@ describe('generateListingDraftWithFallback', () => {
       executeRoute,
       incrementDailyUsage: vi.fn(async () => undefined),
       now: () => new Date('2026-06-01T12:00:00.000Z'),
-      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
     });
 
     expect(executeRoute).toHaveBeenCalledTimes(2);
-    expect(result.selectedRoute.modelName).toBe('gemini-3.1-pro');
+    expect(result.selectedRoute.modelName).toBe('gemini-3.1-flash-lite');
     expect(result.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'succeeded']);
+  });
+
+  it('falls through the canonical four-model route order', async () => {
+    const executeRoute = vi
+      .fn()
+      .mockRejectedValueOnce(new GeminiDraftServiceError('429 rate limit exceeded'))
+      .mockRejectedValueOnce(new GeminiDraftServiceError('RESOURCE_EXHAUSTED: quota reached'))
+      .mockRejectedValueOnce(new GeminiDraftServiceError('503 temporarily unavailable'))
+      .mockResolvedValueOnce({ title: 'draft-4' });
+    const routes = [
+      createRoute(),
+      createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 }),
+      createRoute({ modelName: 'gemini-3.5-flash', routeOrder: 3 }),
+      createRoute({ modelName: 'gemini-3-flash-preview', routeOrder: 4 }),
+    ];
+
+    const result = await generateListingDraftWithFallback({
+      executeRoute,
+      incrementDailyUsage: vi.fn(async () => undefined),
+      now: () => new Date('2026-06-01T12:00:00.000Z'),
+      routes,
+    });
+
+    expect(executeRoute).toHaveBeenCalledTimes(4);
+    expect(executeRoute).toHaveBeenNthCalledWith(1, routes[0]);
+    expect(executeRoute).toHaveBeenNthCalledWith(2, routes[1]);
+    expect(executeRoute).toHaveBeenNthCalledWith(3, routes[2]);
+    expect(executeRoute).toHaveBeenNthCalledWith(4, routes[3]);
+    expect(result.selectedRoute.modelName).toBe('gemini-3-flash-preview');
+    expect(result.attempts.map((attempt) => attempt.status)).toEqual([
+      'failed',
+      'failed',
+      'failed',
+      'succeeded',
+    ]);
   });
 
   it('falls back on quota failures', async () => {
@@ -75,11 +110,11 @@ describe('generateListingDraftWithFallback', () => {
       executeRoute,
       incrementDailyUsage: vi.fn(async () => undefined),
       now: () => new Date('2026-06-01T12:00:00.000Z'),
-      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
     });
 
     expect(executeRoute).toHaveBeenCalledTimes(2);
-    expect(result.selectedRoute.modelName).toBe('gemini-3.1-pro');
+    expect(result.selectedRoute.modelName).toBe('gemini-3.1-flash-lite');
   });
 
   it('falls back on unavailable failures', async () => {
@@ -92,11 +127,11 @@ describe('generateListingDraftWithFallback', () => {
       executeRoute,
       incrementDailyUsage: vi.fn(async () => undefined),
       now: () => new Date('2026-06-01T12:00:00.000Z'),
-      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
     });
 
     expect(executeRoute).toHaveBeenCalledTimes(2);
-    expect(result.selectedRoute.modelName).toBe('gemini-3.1-pro');
+    expect(result.selectedRoute.modelName).toBe('gemini-3.1-flash-lite');
   });
 
   it('stops when matching fallback flag is disabled', async () => {
@@ -111,7 +146,7 @@ describe('generateListingDraftWithFallback', () => {
         now: () => new Date('2026-06-01T12:00:00.000Z'),
         routes: [
           createRoute({ fallbackOnRateLimit: false }),
-          createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 }),
+          createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 }),
         ],
       })
     ).rejects.toBeInstanceOf(GeminiFallbackExecutionError);
@@ -135,7 +170,7 @@ describe('generateListingDraftWithFallback', () => {
         executeRoute,
         incrementDailyUsage: vi.fn(async () => undefined),
         now: () => new Date('2026-06-01T12:00:00.000Z'),
-        routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+        routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
       })
     ).rejects.toBeInstanceOf(GeminiFallbackExecutionError);
 
@@ -153,7 +188,7 @@ describe('generateListingDraftWithFallback', () => {
       executeRoute,
       incrementDailyUsage,
       now: () => new Date('2026-06-01T12:00:00.000Z'),
-      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
     });
 
     expect(incrementDailyUsage).toHaveBeenCalledTimes(2);
@@ -174,7 +209,7 @@ describe('generateListingDraftWithFallback', () => {
       incrementDailyUsage,
       now: () => new Date('2026-06-01T12:00:00.000Z'),
       onAttemptStarted,
-      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+      routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
     });
 
     await expect(promise).rejects.toBeInstanceOf(GeminiFallbackExecutionError);
@@ -194,10 +229,10 @@ describe('generateListingDraftWithFallback', () => {
         executeRoute,
         incrementDailyUsage: vi.fn(async () => undefined),
         now: () => new Date('2026-06-01T12:00:00.000Z'),
-        routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-pro', routeOrder: 2 })],
+        routes: [createRoute(), createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 })],
       })
     ).rejects.toMatchObject({
-      attemptedModels: ['gemini-3.1-flash-lite', 'gemini-3.1-pro'],
+      attemptedModels: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'],
       fallbackExhausted: true,
       finalFallbackKind: 'unavailable',
       name: 'GeminiFallbackExecutionError',
