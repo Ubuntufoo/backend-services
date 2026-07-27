@@ -74,6 +74,8 @@ const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
+const GENERATED_DESCRIPTION_NOTICE =
+  'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 const jobLogger = createLogger('Job');
 const nowMs = () => performance.now();
 const elapsedMs = (startedAt: number) => Math.max(0, Math.round(performance.now() - startedAt));
@@ -229,6 +231,18 @@ function buildGeneratedListingAspects(
   return itemSpecifics as NonNullable<ListingUpdate['item_specifics']>;
 }
 
+function appendGeneratedDescriptionNotice(description: string): string {
+  const generatedDescription = description.trimEnd();
+
+  if (generatedDescription.endsWith(GENERATED_DESCRIPTION_NOTICE)) {
+    return generatedDescription;
+  }
+
+  return generatedDescription
+    ? `${generatedDescription}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+    : GENERATED_DESCRIPTION_NOTICE;
+}
+
 function buildGeneratedListingReviewUpdate(
   listing: ListingRow,
   draft: Awaited<ReturnType<typeof generateListingDraft>>
@@ -239,7 +253,7 @@ function buildGeneratedListingReviewUpdate(
     category_id: resolvedIds.category_id,
     condition_id: resolvedIds.condition_id,
     condition_notes: draft.cardConditionNote ?? null,
-    description: draft.description,
+    description: appendGeneratedDescriptionNotice(draft.description),
     item_specifics: buildGeneratedListingAspects(draft),
     last_error_at: null,
     last_error_code: null,

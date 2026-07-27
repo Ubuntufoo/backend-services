@@ -56,6 +56,9 @@ import {
   createFixturePricingProvider,
 } from '@/pricing/index.js';
 
+const GENERATED_DESCRIPTION_NOTICE =
+  'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
+
 const queuedGenerateAiJob: JobRow = {
   attempts: 0,
   created_at: '2026-05-20T12:00:00.000Z',
@@ -1206,7 +1209,7 @@ describe('runSidecarJob', () => {
         category_id: '261328',
         condition_id: '4000',
         condition_notes: 'Visible edge wear and light corner wear.',
-        description: 'Ungraded single card with visible edge wear.',
+        description: `Ungraded single card with visible edge wear.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
         item_specifics: {
           'Card Condition': 'VERY_GOOD',
           Franchise: 'Utah Jazz',
@@ -1365,6 +1368,44 @@ describe('runSidecarJob', () => {
       }),
     ]);
   });
+
+  it.each([
+    ['normal', 'Original description.', `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`],
+    ['empty', '', GENERATED_DESCRIPTION_NOTICE],
+    ['whitespace-only', '   \n\t', GENERATED_DESCRIPTION_NOTICE],
+    [
+      'already-noticed',
+      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
+  ])(
+    'persists the generated description notice for %s descriptions',
+    async (_case, description, expected) => {
+      const dataAccess = createDataAccess();
+      const generateListingDraftMock = vi.fn(async () => ({
+        title: 'Generated listing',
+        description,
+        categorySuggestion: null,
+        cardConditionNote: null,
+        cardConditionToken: null,
+        conditionSuggestion: null,
+        skuCategoryCode: null,
+        aspects: {},
+        priceSuggestion: null,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-description-notice' },
+      }));
+
+      const result = await runSidecarJob('job-generate-ai', {
+        dataAccess,
+        generateListingDraft: generateListingDraftMock,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      });
+
+      expect(result.listing?.description).toBe(expected);
+    }
+  );
 
   it('normalizes pricing-critical trading card aspects before persistence', async () => {
     const dataAccess = createDataAccess({
@@ -2137,7 +2178,9 @@ describe('runSidecarJob', () => {
       })
     );
     expect(result.job.gemini_selected_model).toBe('gemini-3.5-flash');
-    expect(result.listing?.description).toBe('Recovered after preview-first attempt.');
+    expect(result.listing?.description).toBe(
+      `Recovered after preview-first attempt.\n\n${GENERATED_DESCRIPTION_NOTICE}`
+    );
   });
 
   it('resolves category and condition ids from Gemini suggestions only for trading card singles', async () => {

@@ -52,7 +52,7 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
   return [
     'Generate an eBay listing draft for a trading card or card lot.',
     'Use visible image evidence first.',
-    'If provided, user hints are supplemental context, not canonical proof.',
+    'If provided, user hints are canonical proof.',
     'Listing title must be < 80 characters and use only: player name, exact year only when visible qualifying text supports it, manufacturer, # card number, and explicit market-relevant characteristics visible on the card (e.g., Rookie Card, Refractor, parallel, insert type e.g. "Grand Slammers" or "Legends", serial numbered).',
     'Do NOT include inferred filler in titles: sport, league, team, franchise, position, role e.g. "coach", "3rd base", or similar — unless those words are genuinely part of an official set name, insert type, or parallel name printed on the card.',
     'Do not invent grades, certification status, serial numbers, autographs, relics, or rare variants unless they are visible in the images or explicitly provided in the user hints.',
@@ -69,7 +69,6 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Do not return PSA/BGS/SGC-style numeric grades.',
     'Do not return collector shorthand such as NM-MT, EX-MT, VG-EX, MT, NM, EX, VG, FR, or PR.',
     'For raw ungraded cards, choose the closest supported eBay card condition descriptor.',
-    'When uncertain, choose the lower and more conservative supported condition.',
     'Keep any human-readable condition notes in cardConditionNote only; do not let notes become the condition token.',
     'Be conservative when visible wear exists or image quality is limited.',
     'Set cardConditionNote to a short explanation of the visible condition evidence or uncertainty.',
