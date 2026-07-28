@@ -5,7 +5,7 @@ import type {
   ListingRow,
   ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 const jobLoggerDebug = vi.hoisted(() => vi.fn());
 const jobLoggerError = vi.hoisted(() => vi.fn());
@@ -48,7 +48,8 @@ import {
   PublishRequiredFieldValidationError,
 } from '@/ebay/publish-validation.js';
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
-import { runSidecarJob } from '@/jobs/index.js';
+import type { GeneratedListingDraft } from '@/gemini/contracts.js';
+import { runSidecarJob, type RunSidecarJobOptions } from '@/jobs/index.js';
 import {
   ApifyPricingProviderError,
   FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
@@ -58,6 +59,21 @@ import {
 
 const GENERATED_DESCRIPTION_NOTICE =
   'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
+
+type GenerateListingDraftMock = NonNullable<RunSidecarJobOptions['generateListingDraft']>;
+type PrepareListingDraftMock = NonNullable<RunSidecarJobOptions['prepareListingDraft']>;
+
+function createGeneratedListingDraft(
+  overrides: Partial<GeneratedListingDraft> = {}
+): GeneratedListingDraft {
+  return {
+    aspects: {},
+    description: 'Generated description.',
+    title: 'Generated listing',
+    warnings: [],
+    ...overrides,
+  };
+}
 
 const queuedGenerateAiJob: JobRow = {
   attempts: 0,
@@ -263,6 +279,7 @@ function createListingPriceResearchRow(
   return {
     comps: [],
     created_at: '2026-05-20T13:00:00.000Z',
+    dismissed_pricing_warning_codes: [],
     error_code: null,
     error_message: null,
     id: 'listing-price-research-1',
@@ -284,6 +301,19 @@ function createListingPriceResearchRow(
   };
 }
 
+type DataAccessFixture = SidecarDataAccess & {
+  spies: {
+    jobsComplete: Mock<SidecarDataAccess['jobs']['complete']>;
+    jobsEnqueueProcessImages: Mock<SidecarDataAccess['jobs']['enqueueProcessImages']>;
+    jobsEnqueueResearchPrice: Mock<SidecarDataAccess['jobs']['enqueueResearchPrice']>;
+    listingPriceResearchMarkSucceeded: Mock<
+      SidecarDataAccess['listingPriceResearch']['markSucceeded']
+    >;
+    listingsUpdate: Mock<SidecarDataAccess['listings']['update']>;
+    listingsUpdateWorkflowState: Mock<SidecarDataAccess['listings']['updateWorkflowState']>;
+  };
+};
+
 function expectPricingFailureToPreserveListingWorkflow(
   listing: ListingRow,
   resultListing: ListingRow | null
@@ -299,7 +329,9 @@ function expectPricingFailureToPreserveListingWorkflow(
   });
 }
 
-function expectNoWorkflowErrorFieldsWritten(updates: Array<[string, Partial<ListingRow>]>): void {
+function expectNoWorkflowErrorFieldsWritten(
+  updates: Array<Parameters<SidecarDataAccess['listings']['update']>>
+): void {
   for (const [, changes] of updates) {
     expect(changes).not.toHaveProperty('last_error_at');
     expect(changes).not.toHaveProperty('last_error_code');
@@ -310,7 +342,9 @@ function expectNoWorkflowErrorFieldsWritten(updates: Array<[string, Partial<List
   }
 }
 
-function expectPriceOnlyUpdateWrites(updates: Array<[string, Partial<ListingRow>]>): void {
+function expectPriceOnlyUpdateWrites(
+  updates: Array<Parameters<SidecarDataAccess['listings']['update']>>
+): void {
   expect(updates).not.toHaveLength(0);
 
   for (const [, changes] of updates) {
@@ -382,13 +416,12 @@ function createStableResearchPriceStats() {
 }
 
 function expectDeterministicLlmFallbackPersistence(params: {
-  dataAccess: SidecarDataAccess;
+  dataAccess: DataAccessFixture;
   listing: ListingRow;
   result: Awaited<ReturnType<typeof runSidecarJob>>;
 }): void {
   const { dataAccess, listing, result } = params;
-  const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-    .calls[0]?.[0];
+  const markSucceededInput = dataAccess.spies.listingPriceResearchMarkSucceeded.mock.calls[0]?.[0];
 
   expect(result.job.status).toBe('completed');
   expect(result.listing).toMatchObject({
@@ -425,9 +458,7 @@ function expectDeterministicLlmFallbackPersistence(params: {
   });
   expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
   expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-  expectNoWorkflowErrorFieldsWritten(
-    vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-  );
+  expectNoWorkflowErrorFieldsWritten(dataAccess.spies.listingsUpdate.mock.calls);
   expect(jobLoggerInfo).toHaveBeenCalledWith(
     'Succeeded research_price job.',
     expect.objectContaining({
@@ -437,7 +468,7 @@ function expectDeterministicLlmFallbackPersistence(params: {
   );
 }
 
-function expectNoPricingPreflightWrites(dataAccess: SidecarDataAccess): void {
+function expectNoPricingPreflightWrites(dataAccess: DataAccessFixture): void {
   expect(dataAccess.listings.update).not.toHaveBeenCalled();
   expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
   expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
@@ -482,9 +513,12 @@ function createDataAccess({
     job: JobRow;
   };
   geminiAttemptAuditError?: Error;
-  onListingsUpdate?: (changes: Partial<ListingRow>, current: ListingRow) => void;
+  onListingsUpdate?: (
+    changes: Parameters<SidecarDataAccess['listings']['update']>[1],
+    current: ListingRow
+  ) => void;
   workflowStates?: ListingRow[];
-} = {}): SidecarDataAccess {
+} = {}): DataAccessFixture {
   const listingStates = workflowStates.length > 0 ? [...workflowStates] : listing ? [listing] : [];
   let jobState = job ? { ...job } : null;
   const aiModelAttemptStates: AiModelAttemptRow[] = [];
@@ -537,33 +571,33 @@ function createDataAccess({
         .map((current) => ({ ...current }))
   );
   const listingsSaveImageMetadata = vi.fn();
-  const listingsGetByOfferId = vi.fn(async (offerId: string) =>
-    getCurrentListings().find((current) => current.ebay_offer_id === offerId) ?? null
+  const listingsGetByOfferId = vi.fn(
+    async (offerId: string) =>
+      getCurrentListings().find((current) => current.ebay_offer_id === offerId) ?? null
   );
-  const listingsGetByListingId = vi.fn(async (listingId: string) =>
-    getCurrentListings().find((current) => current.listing_id === listingId) ?? null
+  const listingsGetByListingId = vi.fn(
+    async (listingId: string) =>
+      getCurrentListings().find((current) => current.listing_id === listingId) ?? null
   );
-  const listingsUpdate = vi.fn(async (_listingId: string, changes: Partial<ListingRow>) => {
-    const current = listingStates.at(-1);
-    if (!current) {
-      throw new Error('listing missing');
+  const listingsUpdate = vi.fn<SidecarDataAccess['listings']['update']>(
+    async (_listingId, changes) => {
+      const current = listingStates.at(-1);
+      if (!current) {
+        throw new Error('listing missing');
+      }
+
+      onListingsUpdate?.(changes, current);
+
+      const nextState = {
+        ...current,
+        ...changes,
+      } as ListingRow;
+      listingStates.push(nextState);
+      return nextState;
     }
-
-    onListingsUpdate?.(changes, current);
-
-    const nextState = {
-      ...current,
-      ...changes,
-    } as ListingRow;
-    listingStates.push(nextState);
-    return nextState;
-  });
-  const listingsUpdateWorkflowState = vi.fn(
-    async (input: {
-      listingId: string;
-      status: ListingRow['status'];
-      subStatus: ListingRow['sub_status'];
-    }) => {
+  );
+  const listingsUpdateWorkflowState = vi.fn<SidecarDataAccess['listings']['updateWorkflowState']>(
+    async (input) => {
       const current = listingStates.at(-1);
       if (!current) {
         throw new Error('listing missing');
@@ -602,7 +636,9 @@ function createDataAccess({
     listingPriceResearchStates[listingPriceResearchStates.indexOf(current)] = nextState;
     return { ...nextState };
   });
-  const listingPriceResearchMarkSucceeded = vi.fn(async (input) => {
+  const listingPriceResearchMarkSucceeded = vi.fn<
+    SidecarDataAccess['listingPriceResearch']['markSucceeded']
+  >(async (input) => {
     const current = listingPriceResearchStates.find((candidate) => candidate.id === input.id);
     if (!current) {
       throw new Error('listing price research missing');
@@ -638,6 +674,7 @@ function createDataAccess({
           merchant_location_key: null,
           office_location_name: null,
           pricing_provider_mode: appSettings.pricing_provider_mode,
+          soldcomps_usage_snapshot: null,
           processed_folder_path: null,
           r2_retention_days_after_sold: 30,
           updated_at: '2026-05-20T12:00:00.000Z',
@@ -646,7 +683,47 @@ function createDataAccess({
   );
   const appSettingsUpdate = vi.fn();
 
-  return {
+  const jobsComplete = vi.fn<SidecarDataAccess['jobs']['complete']>(async () => {
+    if (!jobState) {
+      throw new Error('job missing');
+    }
+
+    jobState = {
+      ...jobState,
+      last_error: null,
+      last_error_at: null,
+      last_error_code: null,
+      next_run_at: null,
+      status: 'completed',
+    };
+
+    return { ...jobState };
+  });
+  const jobsEnqueueProcessImages = vi.fn<SidecarDataAccess['jobs']['enqueueProcessImages']>(
+    async () => ({
+      alreadyQueued: false,
+      job: queuedProcessImagesJob,
+    })
+  );
+  const jobsEnqueueResearchPrice = vi.fn<SidecarDataAccess['jobs']['enqueueResearchPrice']>(
+    async (listingId: string) => {
+      if (enqueueResearchPriceError) {
+        throw enqueueResearchPriceError;
+      }
+
+      return (
+        enqueueResearchPriceResult ?? {
+          alreadyQueued: false,
+          job: {
+            ...queuedResearchPriceJob,
+            listing_id: listingId,
+          },
+        }
+      );
+    }
+  );
+
+  const dataAccess = {
     aiModelRoutes: {
       resolveForTask: vi.fn(async () => {
         if (aiModelRouteError) {
@@ -723,6 +800,7 @@ function createDataAccess({
 
         return { ...aiModelAttemptState };
       }),
+      getLatestGeminiUsageAttempt: vi.fn(async () => null),
       markFailed: vi.fn(async (input) => {
         if (aiModelAttemptError) {
           throw aiModelAttemptError;
@@ -788,30 +866,12 @@ function createDataAccess({
 
         return { ...jobState };
       }),
-      complete: vi.fn(async () => {
-        if (!jobState) {
-          throw new Error('job missing');
-        }
-
-        jobState = {
-          ...jobState,
-          last_error: null,
-          last_error_at: null,
-          last_error_code: null,
-          next_run_at: null,
-          status: 'completed',
-        };
-
-        return { ...jobState };
-      }),
+      complete: jobsComplete,
       enqueueGenerateAi: vi.fn(async () => ({
         alreadyQueued: false,
         job: queuedGenerateAiJob,
       })),
-      enqueueProcessImages: vi.fn(async () => ({
-        alreadyQueued: false,
-        job: queuedProcessImagesJob,
-      })),
+      enqueueProcessImages: jobsEnqueueProcessImages,
       enqueuePublish: vi.fn(async () => ({
         alreadyQueued: false,
         job: {
@@ -822,21 +882,7 @@ function createDataAccess({
           max_attempts: 3,
         },
       })),
-      enqueueResearchPrice: vi.fn(async (listingId: string) => {
-        if (enqueueResearchPriceError) {
-          throw enqueueResearchPriceError;
-        }
-
-        return (
-          enqueueResearchPriceResult ?? {
-            alreadyQueued: false,
-            job: {
-              ...queuedResearchPriceJob,
-              listing_id: listingId,
-            },
-          }
-        );
-      }),
+      enqueueResearchPrice: jobsEnqueueResearchPrice,
       fail: vi.fn(async (_jobId: string, error) => {
         if (!jobState) {
           throw new Error('job missing');
@@ -853,6 +899,7 @@ function createDataAccess({
 
         return { ...jobState };
       }),
+      getActiveResearchPriceByListingId: vi.fn(async () => null),
       getById: jobsGetById,
       listDueQueued: vi.fn(async () => []),
       listByListingId: jobsListByListingId,
@@ -883,16 +930,26 @@ function createDataAccess({
           throw geminiAttemptAuditError;
         }
 
-        jobState = {
+        const nextState: JobRow = {
           ...jobState,
           ...audit,
         };
+        jobState = nextState;
 
         return { ...jobState };
       }),
       update: jobsUpdate,
     },
     listings: {
+      approveForExport: vi.fn(async (listingId: string) => {
+        const current = getCurrentListings().find(
+          (candidate) => candidate.listing_id === listingId
+        );
+        if (!current) {
+          throw new Error('listing missing');
+        }
+        return { ...current };
+      }),
       claimApprovedForPublish: vi.fn(async (listingId: string) => {
         const current = listingStates.at(-1);
         if (
@@ -921,16 +978,52 @@ function createDataAccess({
       listApprovedForExport: vi.fn(async () => []),
       list: listingsList,
       listByStatus: listingsListByStatus,
+      prepareForGenerateAi: vi.fn(
+        async (input) =>
+          getCurrentListings().find((candidate) => candidate.listing_id === input.listingId) ?? null
+      ),
       saveImageMetadata: listingsSaveImageMetadata,
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
     },
     listingPriceResearch: {
       create: listingPriceResearchCreate,
+      dismissPricingWarnings: vi.fn(async (input) => {
+        const current = listingPriceResearchStates.find((candidate) => candidate.id === input.id);
+        if (!current) {
+          throw new Error('listing price research missing');
+        }
+        return { ...current };
+      }),
+      getLatestByListingId: vi.fn(
+        async (listingId: string) =>
+          [...listingPriceResearchStates]
+            .reverse()
+            .find((candidate) => candidate.listing_id === listingId) ?? null
+      ),
+      listLatestByListingIds: vi.fn(async (listingIds: string[]) =>
+        listingIds.flatMap((listingId) => {
+          const latest = [...listingPriceResearchStates]
+            .reverse()
+            .find((candidate) => candidate.listing_id === listingId);
+          return latest ? [latest] : [];
+        })
+      ),
       markFailed: listingPriceResearchMarkFailed,
       markSucceeded: listingPriceResearchMarkSucceeded,
     },
-  };
+  } satisfies SidecarDataAccess;
+
+  return Object.assign(dataAccess, {
+    spies: {
+      jobsComplete,
+      jobsEnqueueProcessImages,
+      jobsEnqueueResearchPrice,
+      listingPriceResearchMarkSucceeded,
+      listingsUpdate,
+      listingsUpdateWorkflowState,
+    },
+  });
 }
 
 describe('runSidecarJob', () => {
@@ -1080,7 +1173,7 @@ describe('runSidecarJob', () => {
         },
         payload: payloadDiagnostics,
       },
-      draft: {
+      draft: createGeneratedListingDraft({
         title: '1991 Upper Deck Michael Jordan',
         description: 'Ungraded single card with visible edge wear.',
         categorySuggestion: 'Sports Trading Cards',
@@ -1105,9 +1198,9 @@ describe('runSidecarJob', () => {
         },
         warnings: ['Condition inferred from visible wear only.'],
         rawModelResponse: { id: 'raw-response-1' },
-      },
+      }),
     }));
-    const prepareListingDraftMock = vi.fn(async () => ({
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>(async () => ({
       diagnostics: {
         latency: {
           prepareDraftMs: 14,
@@ -1155,11 +1248,12 @@ describe('runSidecarJob', () => {
       rawModelResponse: { id: 'raw-response-1' },
     };
     const pricingProvider = {
-      fetch: vi.fn(),
+      fetchSoldComps: vi.fn(),
       name: 'fixture' as const,
     };
     const pricingAnalyst = {
       analyze: vi.fn(),
+      name: 'fixture',
     };
 
     const result = await runSidecarJob('job-generate-ai', {
@@ -1186,20 +1280,18 @@ describe('runSidecarJob', () => {
       requireStructuredOutput: true,
       taskType: 'listing_draft_generation',
     });
-    expect(prepareListingDraftMock).toHaveBeenCalledWith(
-      {
-        imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
-        listingId: 'Single-000001',
-        userHints: {
-          aspects: {
-            Player: 'Michael Jordan',
-            Team: ['Chicago Bulls'],
-          },
-          notes: 'Card appears ungraded.',
-          title: 'Possible Jordan insert',
+    expect(prepareListingDraftMock).toHaveBeenCalledWith({
+      imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
+      listingId: 'Single-000001',
+      userHints: {
+        aspects: {
+          Player: 'Michael Jordan',
+          Team: ['Chicago Bulls'],
         },
+        notes: 'Card appears ungraded.',
+        title: 'Possible Jordan insert',
       },
-    );
+    });
     expect(preparedDraftExecuteMock).toHaveBeenCalledWith({
       model: 'gemini-3.1-flash-lite',
     });
@@ -1231,12 +1323,12 @@ describe('runSidecarJob', () => {
       })
     );
     expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
-    expect(vi.mocked(dataAccess.listings.update).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]
+    expect(dataAccess.spies.listingsUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
     );
     expect(
-      vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]
-    ).toBeLessThan(vi.mocked(dataAccess.jobs.complete).mock.invocationCallOrder[0]);
+      dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
+    ).toBeLessThan(dataAccess.spies.jobsComplete.mock.invocationCallOrder[0]);
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
       gemini_attempt_count: 1,
       gemini_attempts: [
@@ -1341,7 +1433,11 @@ describe('runSidecarJob', () => {
         }),
       })
     );
-    expect(Number.isFinite((successLog?.[1] as { generateAiLatency: { totalMs: number } }).generateAiLatency.totalMs)).toBe(true);
+    expect(
+      Number.isFinite(
+        (successLog?.[1] as { generateAiLatency: { totalMs: number } }).generateAiLatency.totalMs
+      )
+    ).toBe(true);
     expect(
       (successLog?.[1] as { generateAiLatency: { totalMs: number } }).generateAiLatency.totalMs
     ).toBeGreaterThanOrEqual(0);
@@ -1355,7 +1451,7 @@ describe('runSidecarJob', () => {
     expect(result.listing?.listing_id).toBe('Single-000001');
     expect(result.listing?.title).toBe(generatedDraft.title);
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
-    expect(pricingProvider.fetch).not.toHaveBeenCalled();
+    expect(pricingProvider.fetchSoldComps).not.toHaveBeenCalled();
     expect(pricingAnalyst.analyze).not.toHaveBeenCalled();
     expect(result.job.status).toBe('completed');
     expect(result.job.gemini_attempt_count).toBe(1);
@@ -1382,20 +1478,21 @@ describe('runSidecarJob', () => {
     'persists the generated description notice for %s descriptions',
     async (_case, description, expected) => {
       const dataAccess = createDataAccess();
-      const generateListingDraftMock = vi.fn(async () => ({
-        title: 'Generated listing',
-        description,
-        categorySuggestion: null,
-        cardConditionNote: null,
-        cardConditionToken: null,
-        conditionSuggestion: null,
-        skuCategoryCode: null,
-        aspects: {},
-        priceSuggestion: null,
-        confidence: {},
-        warnings: [],
-        rawModelResponse: { id: 'raw-response-description-notice' },
-      }));
+      const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+        createGeneratedListingDraft({
+          title: 'Generated listing',
+          description,
+          categorySuggestion: null,
+          cardConditionNote: null,
+          cardConditionToken: null,
+          conditionSuggestion: null,
+          aspects: {},
+          priceSuggestion: null,
+          confidence: {},
+          warnings: [],
+          rawModelResponse: { id: 'raw-response-description-notice' },
+        })
+      );
 
       const result = await runSidecarJob('job-generate-ai', {
         dataAccess,
@@ -1418,32 +1515,34 @@ describe('runSidecarJob', () => {
         sku: 'LIST-JR-98',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
-      description: 'Vintage single card.',
-      categorySuggestion: 'Sports Trading Cards',
-      cardConditionNote: null,
-      cardConditionToken: null,
-      conditionSuggestion: null,
-      skuCategoryCode: 'BSBL',
-      aspects: {
-        Athlete: 'Johnny Riddle',
-        Player: 'Johnny Riddle',
-        Manufacturer: 'Topps',
-        Year: '1955',
-        'Card Number': '98',
-      },
-      yearEvidence: {
-        year: '1955',
-        sourceType: 'copyright_line',
-        visibleText: '© 1955 THE TOPPS COMPANY, INC.',
-        imageIndex: 1,
-      },
-      priceSuggestion: null,
-      confidence: {},
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-jr-98' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: 'Johnny Riddle 1955 Topps #98 St. Louis Cardinals Coach',
+        description: 'Vintage single card.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: null,
+        cardConditionToken: null,
+        conditionSuggestion: null,
+        skuCategoryCode: 'BSBL',
+        aspects: {
+          Athlete: 'Johnny Riddle',
+          Player: 'Johnny Riddle',
+          Manufacturer: 'Topps',
+          Year: '1955',
+          'Card Number': '98',
+        },
+        yearEvidence: {
+          year: '1955',
+          sourceType: 'copyright_line',
+          visibleText: '© 1955 THE TOPPS COMPANY, INC.',
+          imageIndex: 1,
+        },
+        priceSuggestion: null,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-jr-98' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -1485,25 +1584,27 @@ describe('runSidecarJob', () => {
         sku: 'LIST-VINTAGE-191',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: 'Ed Stanky Topps #191',
-      description: 'Vintage single card.',
-      categorySuggestion: 'Sports Trading Cards',
-      cardConditionNote: null,
-      cardConditionToken: null,
-      conditionSuggestion: null,
-      skuCategoryCode: 'BSBL',
-      aspects: {
-        Player: 'Ed Stanky',
-        Manufacturer: 'Topps',
-        'Card Number': '191',
-      },
-      yearEvidence: null,
-      priceSuggestion: null,
-      confidence: {},
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-vintage-191' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: 'Ed Stanky Topps #191',
+        description: 'Vintage single card.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: null,
+        cardConditionToken: null,
+        conditionSuggestion: null,
+        skuCategoryCode: 'BSBL',
+        aspects: {
+          Player: 'Ed Stanky',
+          Manufacturer: 'Topps',
+          'Card Number': '191',
+        },
+        yearEvidence: null,
+        priceSuggestion: null,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-vintage-191' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -1541,23 +1642,25 @@ describe('runSidecarJob', () => {
         sku: 'Single-000001',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1989 Upper Deck Ken Griffey Jr.',
-      description: 'Baseball single card.',
-      categorySuggestion: 'Sports Trading Cards',
-      cardConditionNote: null,
-      cardConditionToken: null,
-      conditionSuggestion: null,
-      skuCategoryCode: 'BSBL',
-      aspects: {
-        Player: 'Ken Griffey Jr.',
-        Sport: 'Baseball',
-      },
-      priceSuggestion: null,
-      confidence: {},
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-baseball' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1989 Upper Deck Ken Griffey Jr.',
+        description: 'Baseball single card.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: null,
+        cardConditionToken: null,
+        conditionSuggestion: null,
+        skuCategoryCode: 'BSBL',
+        aspects: {
+          Player: 'Ken Griffey Jr.',
+          Sport: 'Baseball',
+        },
+        priceSuggestion: null,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-baseball' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -1586,28 +1689,30 @@ describe('runSidecarJob', () => {
         listing_id: 'Single-000001',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1991 Upper Deck Michael Jordan',
-      description: 'Ungraded single card with visible edge wear.',
-      categorySuggestion: 'Sports Trading Cards',
-      conditionSuggestion: 'Ungraded',
-      aspects: {
-        Player: 'Michael Jordan',
-        Manufacturer: 'Upper Deck',
-      },
-      yearEvidence: {
-        year: '1991',
-        sourceType: 'copyright_line',
-        visibleText: '© 1991 UPPER DECK COMPANY',
-        imageIndex: 1,
-      },
-      priceSuggestion: 249.99,
-      confidence: {
-        title: 0.91,
-      },
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-1' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Ungraded single card with visible edge wear.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Player: 'Michael Jordan',
+          Manufacturer: 'Upper Deck',
+        },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-1' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -1636,28 +1741,30 @@ describe('runSidecarJob', () => {
         listing_id: 'Single-000001',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1991 Upper Deck Michael Jordan',
-      description: 'Ungraded single card with visible edge wear.',
-      categorySuggestion: 'Sports Trading Cards',
-      conditionSuggestion: 'Ungraded',
-      aspects: {
-        Player: 'Michael Jordan',
-        Manufacturer: 'Upper Deck',
-      },
-      yearEvidence: {
-        year: '1991',
-        sourceType: 'copyright_line',
-        visibleText: '© 1991 UPPER DECK COMPANY',
-        imageIndex: 1,
-      },
-      priceSuggestion: 249.99,
-      confidence: {
-        title: 0.91,
-      },
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-disabled-pricing' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Ungraded single card with visible edge wear.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Player: 'Michael Jordan',
+          Manufacturer: 'Upper Deck',
+        },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-disabled-pricing' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -1809,28 +1916,30 @@ describe('runSidecarJob', () => {
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
-      generateListingDraft: vi.fn(async () => ({
-        title: '1991 Upper Deck Michael Jordan',
-        description: 'Ungraded single card with visible edge wear.',
-        categorySuggestion: 'Sports Trading Cards',
-        conditionSuggestion: 'Ungraded',
-        aspects: {
-          Player: 'Michael Jordan',
-          Manufacturer: 'Upper Deck',
-        },
-        yearEvidence: {
-          year: '1991',
-          sourceType: 'copyright_line',
-          visibleText: '© 1991 UPPER DECK COMPANY',
-          imageIndex: 1,
-        },
-        priceSuggestion: 249.99,
-        confidence: {
-          title: 0.91,
-        },
-        warnings: [],
-        rawModelResponse: { id: 'raw-response-apify-pricing' },
-      })),
+      generateListingDraft: vi.fn<GenerateListingDraftMock>(async () =>
+        createGeneratedListingDraft({
+          title: '1991 Upper Deck Michael Jordan',
+          description: 'Ungraded single card with visible edge wear.',
+          categorySuggestion: 'Sports Trading Cards',
+          conditionSuggestion: 'Ungraded',
+          aspects: {
+            Player: 'Michael Jordan',
+            Manufacturer: 'Upper Deck',
+          },
+          yearEvidence: {
+            year: '1991',
+            sourceType: 'copyright_line',
+            visibleText: '© 1991 UPPER DECK COMPANY',
+            imageIndex: 1,
+          },
+          priceSuggestion: 249.99,
+          confidence: {
+            title: 0.91,
+          },
+          warnings: [],
+          rawModelResponse: { id: 'raw-response-apify-pricing' },
+        })
+      ),
       now: () => new Date('2026-05-20T13:00:00.000Z'),
     });
 
@@ -1859,28 +1968,30 @@ describe('runSidecarJob', () => {
         listing_id: 'Single-000001',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1991 Upper Deck Michael Jordan',
-      description: 'Ungraded single card with visible edge wear.',
-      categorySuggestion: 'Sports Trading Cards',
-      conditionSuggestion: 'Ungraded',
-      aspects: {
-        Player: 'Michael Jordan',
-        Manufacturer: 'Upper Deck',
-      },
-      yearEvidence: {
-        year: '1991',
-        sourceType: 'copyright_line',
-        visibleText: '© 1991 UPPER DECK COMPANY',
-        imageIndex: 1,
-      },
-      priceSuggestion: 249.99,
-      confidence: {
-        title: 0.91,
-      },
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-1' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Ungraded single card with visible edge wear.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Player: 'Michael Jordan',
+          Manufacturer: 'Upper Deck',
+        },
+        yearEvidence: {
+          year: '1991',
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          imageIndex: 1,
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-1' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -1923,8 +2034,8 @@ describe('runSidecarJob', () => {
     expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
     expect(dataAccess.jobs.complete).toHaveBeenCalledTimes(1);
     expect(
-      vi.mocked(dataAccess.listings.updateWorkflowState).mock.invocationCallOrder[0]
-    ).toBeLessThan(vi.mocked(dataAccess.jobs.enqueueResearchPrice).mock.invocationCallOrder[0]);
+      dataAccess.spies.listingsUpdateWorkflowState.mock.invocationCallOrder[0]
+    ).toBeLessThan(dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]);
     expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(jobLoggerWarn).toHaveBeenCalledWith(
@@ -1949,22 +2060,24 @@ describe('runSidecarJob', () => {
         sku: 'Single-000001',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: 'Pokemon lot',
-      description: 'Mixed lot.',
-      categorySuggestion: 'Collectible Card Games',
-      cardConditionNote: null,
-      cardConditionToken: null,
-      conditionSuggestion: null,
-      skuCategoryCode: 'OTHER',
-      aspects: {
-        Franchise: 'Pokémon',
-      },
-      priceSuggestion: null,
-      confidence: {},
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-other' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: 'Pokemon lot',
+        description: 'Mixed lot.',
+        categorySuggestion: 'Collectible Card Games',
+        cardConditionNote: null,
+        cardConditionToken: null,
+        conditionSuggestion: null,
+        skuCategoryCode: 'OTHER',
+        aspects: {
+          Franchise: 'Pokémon',
+        },
+        priceSuggestion: null,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-other' },
+      })
+    );
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -2190,19 +2303,21 @@ describe('runSidecarJob', () => {
         title: 'Bo Jackson card',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1990 Score Bo Jackson',
-      description: 'Single raw card.',
-      categorySuggestion: 'Sports Trading Cards',
-      cardConditionNote: 'No grading evidence visible.',
-      cardConditionToken: 'EXCELLENT',
-      conditionSuggestion: 'Ungraded',
-      aspects: {},
-      priceSuggestion: 19.99,
-      confidence: {},
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-2' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1990 Score Bo Jackson',
+        description: 'Single raw card.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: 'No grading evidence visible.',
+        cardConditionToken: 'EXCELLENT',
+        conditionSuggestion: 'Ungraded',
+        aspects: {},
+        priceSuggestion: 19.99,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-2' },
+      })
+    );
 
     await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -2227,19 +2342,21 @@ describe('runSidecarJob', () => {
         listing_type: 'lot',
       }),
     });
-    const generateListingDraftMock = vi.fn(async () => ({
-      title: '1990 Score Bo Jackson',
-      description: 'Card lot.',
-      categorySuggestion: 'Sports Trading Cards',
-      cardConditionNote: 'Estimated from limited photos.',
-      cardConditionToken: 'VERY_GOOD',
-      conditionSuggestion: 'Ungraded',
-      aspects: {},
-      priceSuggestion: 19.99,
-      confidence: {},
-      warnings: [],
-      rawModelResponse: { id: 'raw-response-3' },
-    }));
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1990 Score Bo Jackson',
+        description: 'Card lot.',
+        categorySuggestion: 'Sports Trading Cards',
+        cardConditionNote: 'Estimated from limited photos.',
+        cardConditionToken: 'VERY_GOOD',
+        conditionSuggestion: 'Ungraded',
+        aspects: {},
+        priceSuggestion: 19.99,
+        confidence: {},
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-3' },
+      })
+    );
 
     await runSidecarJob('job-generate-ai', {
       dataAccess,
@@ -2677,14 +2794,20 @@ describe('runSidecarJob', () => {
       workflowStates: [
         createListingRow({
           created_at: '2026-05-20T12:00:00.000Z',
-          image_urls: ['/processed/LIST-001/LIST-001_01.jpg', '/processed/LIST-001/LIST-001_02.jpg'],
+          image_urls: [
+            '/processed/LIST-001/LIST-001_01.jpg',
+            '/processed/LIST-001/LIST-001_02.jpg',
+          ],
           listing_id: 'LIST-001',
           status: 'record_created',
           sub_status: 'idle',
         }),
         createListingRow({
           created_at: '2026-05-20T12:05:00.000Z',
-          image_urls: ['/processed/LIST-002/LIST-002_01.jpg', '/processed/LIST-002/LIST-002_02.jpg'],
+          image_urls: [
+            '/processed/LIST-002/LIST-002_01.jpg',
+            '/processed/LIST-002/LIST-002_02.jpg',
+          ],
           listing_id: 'LIST-002',
           sku: 'SKU-002',
           status: 'record_created',
@@ -2721,8 +2844,9 @@ describe('runSidecarJob', () => {
       offset: 0,
       orderByCreatedAt: 'asc',
     });
-    expect(dataAccess.jobs.complete.mock.invocationCallOrder[0]).toBeLessThan(
-      dataAccess.jobs.enqueueProcessImages.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    expect(dataAccess.spies.jobsComplete.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.spies.jobsEnqueueProcessImages.mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY
     );
     expect(dataAccess.jobs.enqueueProcessImages).toHaveBeenCalledTimes(1);
   });
@@ -2733,14 +2857,20 @@ describe('runSidecarJob', () => {
       workflowStates: [
         createListingRow({
           created_at: '2026-05-20T12:00:00.000Z',
-          image_urls: ['/processed/LIST-001/LIST-001_01.jpg', '/processed/LIST-001/LIST-001_02.jpg'],
+          image_urls: [
+            '/processed/LIST-001/LIST-001_01.jpg',
+            '/processed/LIST-001/LIST-001_02.jpg',
+          ],
           listing_id: 'LIST-001',
           status: 'record_created',
           sub_status: 'idle',
         }),
         createListingRow({
           created_at: '2026-05-20T12:05:00.000Z',
-          image_urls: ['/processed/LIST-002/LIST-002_01.jpg', '/processed/LIST-002/LIST-002_02.jpg'],
+          image_urls: [
+            '/processed/LIST-002/LIST-002_01.jpg',
+            '/processed/LIST-002/LIST-002_02.jpg',
+          ],
           listing_id: 'LIST-002',
           sku: 'SKU-002',
           status: 'record_created',
@@ -2748,7 +2878,7 @@ describe('runSidecarJob', () => {
         }),
       ],
     });
-    dataAccess.jobs.enqueueProcessImages.mockImplementationOnce(async () => {
+    dataAccess.spies.jobsEnqueueProcessImages.mockImplementationOnce(async () => {
       throw new Error('follow-up enqueue failed');
     });
     const prepareRecordCreatedListingsMock = vi.fn(async () => ({
@@ -3605,7 +3735,7 @@ describe('runSidecarJob', () => {
           writeOrder.push('listing_update');
         },
       });
-      vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(
+      dataAccess.spies.listingPriceResearchMarkSucceeded.mockImplementationOnce(
         async (input) => {
           writeOrder.push('research_success');
           return createListingPriceResearchRow({
@@ -3676,8 +3806,8 @@ describe('runSidecarJob', () => {
         })
       );
 
-      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-        .calls[0]?.[0];
+      const markSucceededInput =
+        dataAccess.spies.listingPriceResearchMarkSucceeded.mock.calls[0]?.[0];
       expect(markSucceededInput?.suggested_price).toBe(result.listing?.price);
       expect(markSucceededInput?.query).toContain('category:261328');
       expect(markSucceededInput?.query).toContain('condition:2750');
@@ -3692,9 +3822,7 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
         price: markSucceededInput?.suggested_price,
       });
-      expectPriceOnlyUpdateWrites(
-        vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-      );
+      expectPriceOnlyUpdateWrites(dataAccess.spies.listingsUpdate.mock.calls);
       expect(result.listing?.price).not.toBe(listing.price);
       expect(writeOrder).toEqual(['research_success', 'listing_update']);
       expect(createProductionPricingAnalystMock).toHaveBeenCalledWith({
@@ -3815,7 +3943,7 @@ describe('runSidecarJob', () => {
               soldComps: createStableResearchPriceComps(),
               soldCompsUsage: {
                 limit: 2000,
-                source: 'headers',
+                source: 'headers' as const,
                 updatedAt: '2026-07-09T15:50:27.589Z',
                 used: 48,
               },
@@ -3925,8 +4053,8 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
       });
 
-      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-        .calls[0]?.[0];
+      const markSucceededInput =
+        dataAccess.spies.listingPriceResearchMarkSucceeded.mock.calls[0]?.[0];
       expect(markSucceededInput).toMatchObject({
         confidence: 'medium',
         llm_price_explanation: 'Selected comps support tighter midpoint.',
@@ -4038,8 +4166,8 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
       });
 
-      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-        .calls[0]?.[0];
+      const markSucceededInput =
+        dataAccess.spies.listingPriceResearchMarkSucceeded.mock.calls[0]?.[0];
       expect(markSucceededInput).toMatchObject({
         confidence: 'medium',
         llm_price_explanation: 'Comps useful, but no safe override.',
@@ -4335,8 +4463,8 @@ describe('runSidecarJob', () => {
         },
       });
 
-      const markSucceededInput = vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mock
-        .calls[0]?.[0];
+      const markSucceededInput =
+        dataAccess.spies.listingPriceResearchMarkSucceeded.mock.calls[0]?.[0];
       expect(result.job.status).toBe('completed');
       expect(markSucceededInput).toMatchObject({
         confidence: 'high',
@@ -4592,7 +4720,7 @@ describe('runSidecarJob', () => {
         last_error_message: 'keep me',
         price: 19.99,
         status: 'needs_review',
-        sub_status: 'awaiting_manual_review',
+        sub_status: 'idle',
         title: 'Needs review but not pending',
       });
       const fetchSoldComps = vi.fn(async () => {
@@ -4714,7 +4842,7 @@ describe('runSidecarJob', () => {
               soldComps: createStableResearchPriceComps(),
               soldCompsUsage: {
                 limit: 2000,
-                source: 'headers',
+                source: 'headers' as const,
                 updatedAt: '2026-07-09T15:50:27.589Z',
                 used: 48,
               },
@@ -4810,7 +4938,7 @@ describe('runSidecarJob', () => {
         job: queuedResearchPriceJob,
         listing,
       });
-      vi.mocked(dataAccess.listingPriceResearch.markSucceeded).mockImplementationOnce(async () => {
+      dataAccess.spies.listingPriceResearchMarkSucceeded.mockImplementationOnce(async () => {
         throw new Error('write succeeded row failed');
       });
 
@@ -5453,9 +5581,7 @@ describe('runSidecarJob', () => {
         },
       });
 
-      expectNoWorkflowErrorFieldsWritten(
-        vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-      );
+      expectNoWorkflowErrorFieldsWritten(dataAccess.spies.listingsUpdate.mock.calls);
     });
 
     it('fails research_price when listing price update fails after research success without mutating workflow errors', async () => {
@@ -5473,7 +5599,7 @@ describe('runSidecarJob', () => {
         job: queuedResearchPriceJob,
         listing,
       });
-      vi.mocked(dataAccess.listings.update).mockImplementationOnce(async () => {
+      dataAccess.spies.listingsUpdate.mockImplementationOnce(async () => {
         throw new Error('listing price update failed');
       });
 
@@ -5488,9 +5614,7 @@ describe('runSidecarJob', () => {
       expect(dataAccess.listingPriceResearch.markSucceeded).toHaveBeenCalledTimes(1);
       expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
       expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
-      expectPriceOnlyUpdateWrites(
-        vi.mocked(dataAccess.listings.update).mock.calls as Array<[string, Partial<ListingRow>]>
-      );
+      expectPriceOnlyUpdateWrites(dataAccess.spies.listingsUpdate.mock.calls);
     });
   });
 
