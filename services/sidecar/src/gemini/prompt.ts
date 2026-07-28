@@ -83,7 +83,6 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Emit non-year canonical trading-card pricing aspects when visible or strongly inferable: Player, Manufacturer, Set, Card Number, Parallel/Variety, Insert Set.',
     'Do not generate Year or Season item specifics. The backend derives canonical Year from validated yearEvidence.',
     'Use Manufacturer as the canonical manufacturer field. Do not emit duplicate manufacturer aliases unless strictly necessary.',
-    'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98", also return aspects["Card Number"] with value "98" and no leading "#".',
     'Include a Franchise aspect when the team, franchise, or IP is identifiable from the card or user hints.',
     'Examples: Utah Jazz card -> "Franchise": "Utah Jazz"; Pokemon card -> "Franchise": "Pokémon"; Marvel card -> "Franchise": "Marvel".',
     'Prefer cautious language when uncertain.',
