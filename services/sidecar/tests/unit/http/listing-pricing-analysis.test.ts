@@ -46,6 +46,86 @@ describe('serializeLatestPricingResearch', () => {
     );
 
     expect(result?.failure_summary).toBeNull();
+    expect(result?.price_adjustment).toBeNull();
+  });
+
+  it('exposes the persisted adjustment audit for new successful research', () => {
+    const result = serializeLatestPricingResearch(
+      createResearch({
+        median_sold_price: 117.63,
+        raw_result_json: {
+          conditionAdjustment: {
+            listingConditionSignal: {
+              label: 'Near Mint or Better',
+              matchedText: 'NEAR_MINT_OR_BETTER',
+              score: 5,
+              source: 'listing_condition',
+            },
+            listingConditionScore: 5,
+            explicitCompConditionCount: 3,
+            compMedianConditionScore: 5.5,
+            conditionDelta: -0.5,
+            deterministicMedianPrice: 117.63,
+            allowedAdjustment: {
+              eligible: true,
+              targetPrice: 117.63,
+              minPrice: 117.63,
+              maxPrice: 117.63,
+              rawPercent: -0.1225,
+              appliedPercent: 0,
+              reason: 'negative_blocked_for_top_condition',
+            },
+          },
+          finalPriceAdjustment: {
+            basePrice: 117.63,
+            competitiveDiscountPercent: 5,
+            competitiveAdjustedPrice: 111.7485,
+            recentWindowDays: 90,
+            recentAcceptedCompCount: 8,
+            salesVelocityTier: 'high',
+            salesVelocityDiscountPercent: 0,
+            finalPrice: 111.75,
+          },
+        },
+        status: 'succeeded',
+        suggested_price: 111.75,
+      })
+    );
+
+    expect(result?.price_adjustment).toEqual({
+      median_sold_price: 117.63,
+      listing_condition_label: 'Near Mint or Better',
+      listing_condition_score: 5,
+      explicit_comp_condition_count: 3,
+      comp_median_condition_score: 5.5,
+      observed_condition_delta: -0.5,
+      raw_condition_percent: -12.25,
+      applied_condition_percent: 0,
+      condition_adjusted_price: 117.63,
+      condition_reason: 'negative_blocked_for_top_condition',
+      competitive_discount_percent: 5,
+      competitive_adjusted_price: 111.7485,
+      recent_window_days: 90,
+      recent_accepted_comp_count: 8,
+      sales_velocity_tier: 'high',
+      sales_velocity_discount_percent: 0,
+      final_total_adjustment_percent: -5,
+      final_suggested_price: 111.75,
+    });
+  });
+
+  it('returns a null adjustment audit for incomplete successful research', () => {
+    const result = serializeLatestPricingResearch(
+      createResearch({
+        raw_result_json: {
+          conditionAdjustment: { deterministicMedianPrice: 100 },
+          finalPriceAdjustment: { finalPrice: 95 },
+        },
+        status: 'succeeded',
+      })
+    );
+
+    expect(result?.price_adjustment).toBeNull();
   });
 
   it('exposes normalization and provider counts separately from llm comp selections', () => {

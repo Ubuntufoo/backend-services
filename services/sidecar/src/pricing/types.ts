@@ -100,6 +100,7 @@ export interface AllowedConditionAdjustment {
   appliedPercent: number | null;
   reason:
     | 'eligible'
+    | 'negative_blocked_for_top_condition'
     | 'listing_condition_unknown'
     | 'median_price_unavailable'
     | 'insufficient_explicit_comp_conditions'

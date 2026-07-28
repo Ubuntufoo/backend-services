@@ -389,6 +389,94 @@ describe('priceListingNow', () => {
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
+  it('blocks a negative top-condition modifier through persistence and listing update', async () => {
+    const listing = createListing({
+      condition_id: '4000',
+      item_specifics: {
+        'Card Condition': 'NEAR_MINT_OR_BETTER',
+        'Card Number': '1',
+        Manufacturer: 'Topps',
+        Player: 'Sample Player',
+        Set: 'Base',
+        Year: '1993',
+      },
+      title: '1993 Topps #1 Sample Player',
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const normalizedComps = Array.from({ length: 8 }, (_, index) =>
+      createNormalizedComp(
+        `comp-${index + 1}`,
+        '1993 Topps #1 Sample Player NM-MT',
+        117.63
+      )
+    );
+    const normalizeComps = vi.fn().mockReturnValue({
+      comps: normalizedComps,
+      rejected: [],
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      createPricingProvider: () =>
+        ({
+          fetchSoldComps: vi.fn().mockResolvedValue({
+            fetchedAt: '2026-06-12T10:05:00.000Z',
+            provider: 'apify',
+            query: '1993 Topps #1 Sample Player',
+            rawResult: { actorId: 'actor-123' },
+            soldComps: Array.from({ length: 8 }, () =>
+              createVictorComp(
+                117.63,
+                '2026-06-01T10:00:00.000Z',
+                '1993 Topps #1 Sample Player NM-MT'
+              )
+            ),
+          }),
+          name: 'apify',
+        }) as never,
+      dataAccess,
+      normalizeComps,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    });
+
+    expect(result.suggestedPrice).toBe(111.75);
+    expect(spies.markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        median_sold_price: 117.63,
+        raw_result_json: expect.objectContaining({
+          conditionAdjustment: expect.objectContaining({
+            listingConditionScore: 5,
+            explicitCompConditionCount: 8,
+            compMedianConditionScore: 5.5,
+            conditionDelta: -0.5,
+            deterministicMedianPrice: 117.63,
+            allowedAdjustment: {
+              eligible: true,
+              targetPrice: 117.63,
+              minPrice: 117.63,
+              maxPrice: 117.63,
+              rawPercent: -0.1225,
+              appliedPercent: 0,
+              reason: 'negative_blocked_for_top_condition',
+            },
+          }),
+          finalPriceAdjustment: {
+            basePrice: 117.63,
+            competitiveDiscountPercent: 5,
+            competitiveAdjustedPrice: 111.7485,
+            recentWindowDays: 90,
+            recentAcceptedCompCount: 8,
+            salesVelocityTier: 'high',
+            salesVelocityDiscountPercent: 0,
+            finalPrice: 111.75,
+          },
+        }),
+        suggested_price: 111.75,
+      })
+    );
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 111.75 });
+    expect(result.listing.price).toBe(111.75);
+  });
+
   it('does not update listing price when markSucceeded rejects and throws safely', async () => {
     const listing = createListing({ price: 19.99 });
     const { dataAccess, spies } = createDataAccess(listing);
@@ -1514,9 +1602,26 @@ describe('priceListingNow', () => {
         }),
         pricing_model_name: 'gemma-4-31b-it',
         raw_result_json: expect.objectContaining({
+          conditionAdjustment: expect.objectContaining({
+            listingConditionScore: 3,
+            explicitCompConditionCount: 4,
+            compMedianConditionScore: 3.5,
+            conditionDelta: -0.5,
+            deterministicMedianPrice: 5.89,
+            allowedAdjustment: {
+              eligible: true,
+              targetPrice: 5.17,
+              minPrice: 5.17,
+              maxPrice: 5.17,
+              rawPercent: -0.1225,
+              appliedPercent: -0.1222,
+              reason: 'eligible',
+            },
+          }),
           finalPriceAdjustment: {
             basePrice: 5.17,
             competitiveDiscountPercent: 5,
+            competitiveAdjustedPrice: 4.9115,
             recentWindowDays: 90,
             recentAcceptedCompCount: 4,
             salesVelocityTier: 'medium',
@@ -1955,6 +2060,7 @@ describe('priceListingNow', () => {
           finalPriceAdjustment: {
             basePrice: 5.89,
             competitiveDiscountPercent: 5,
+            competitiveAdjustedPrice: 5.5955,
             recentWindowDays: 90,
             recentAcceptedCompCount: 4,
             salesVelocityTier: 'medium',

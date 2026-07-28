@@ -184,6 +184,36 @@ export interface ListingLatestPricingResearchFailureSummary {
   requested_count?: number;
 }
 
+export type ListingPriceAdjustmentConditionReason =
+  | 'eligible'
+  | 'negative_blocked_for_top_condition'
+  | 'listing_condition_unknown'
+  | 'median_price_unavailable'
+  | 'insufficient_explicit_comp_conditions'
+  | 'comp_condition_median_unavailable'
+  | 'target_price_invalid';
+
+export interface ListingLatestPricingResearchPriceAdjustment {
+  median_sold_price: number;
+  listing_condition_label: string | null;
+  listing_condition_score: number | null;
+  explicit_comp_condition_count: number;
+  comp_median_condition_score: number | null;
+  observed_condition_delta: number | null;
+  raw_condition_percent: number | null;
+  applied_condition_percent: number;
+  condition_adjusted_price: number;
+  condition_reason: ListingPriceAdjustmentConditionReason;
+  competitive_discount_percent: number;
+  competitive_adjusted_price: number;
+  recent_window_days: number;
+  recent_accepted_comp_count: number;
+  sales_velocity_tier: 'high' | 'medium' | 'low';
+  sales_velocity_discount_percent: number;
+  final_total_adjustment_percent: number;
+  final_suggested_price: number;
+}
+
 export interface ListingLatestPricingResearchSummary {
   comp_summary: ListingLatestPricingResearchCompSummary;
   confidence: string | null;
@@ -195,6 +225,7 @@ export interface ListingLatestPricingResearchSummary {
   llm_price_explanation: string | null;
   median_sold_price: number | null;
   pricing_model_name: string | null;
+  price_adjustment: ListingLatestPricingResearchPriceAdjustment | null;
   provider: string;
   query: string | null;
   research_id: string;

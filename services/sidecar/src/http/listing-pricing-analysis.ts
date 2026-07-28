@@ -2,7 +2,9 @@ import type { ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
 import type {
   ListingLatestPricingResearchFailureSummary,
   ListingLatestPricingResearchCompSummary,
+  ListingLatestPricingResearchPriceAdjustment,
   ListingLatestPricingResearchSummary,
+  ListingPriceAdjustmentConditionReason,
   ListingPricingAnalysisWarning,
   PricingAnalysisWarningFailureSummary,
 } from '@ebay-inventory/types';
@@ -34,6 +36,15 @@ function asNumber(value: unknown): number | null {
 function asCount(value: unknown): number | null {
   const normalized = asNumber(value);
   return normalized !== null && normalized >= 0 ? Math.trunc(normalized) : null;
+}
+
+function asPositiveNumber(value: unknown): number | null {
+  const normalized = asNumber(value);
+  return normalized !== null && normalized > 0 ? normalized : null;
+}
+
+function asNullableNumber(value: unknown): number | null | undefined {
+  return value === null ? null : (asNumber(value) ?? undefined);
 }
 
 function asStringArray(value: unknown): string[] {
@@ -477,6 +488,7 @@ export function serializeLatestPricingResearch(
     llm_price_explanation: asString(research.llm_price_explanation),
     median_sold_price: asNumber(research.median_sold_price),
     pricing_model_name: asString(research.pricing_model_name),
+    price_adjustment: buildPriceAdjustment(research),
     provider: research.provider,
     query: asString(research.query),
     research_id: research.id,
@@ -485,6 +497,118 @@ export function serializeLatestPricingResearch(
     suggested_price: asNumber(research.suggested_price),
     updated_at: research.updated_at,
   };
+}
+
+const PRICE_ADJUSTMENT_CONDITION_REASONS = new Set<ListingPriceAdjustmentConditionReason>([
+  'eligible',
+  'negative_blocked_for_top_condition',
+  'listing_condition_unknown',
+  'median_price_unavailable',
+  'insufficient_explicit_comp_conditions',
+  'comp_condition_median_unavailable',
+  'target_price_invalid',
+]);
+
+function buildPriceAdjustment(
+  research: ListingPriceResearchRow
+): ListingLatestPricingResearchPriceAdjustment | null {
+  if (research.status !== 'succeeded') {
+    return null;
+  }
+
+  const rawResult = asRecord(research.raw_result_json);
+  const conditionAdjustment = asRecord(rawResult?.conditionAdjustment);
+  const allowedAdjustment = asRecord(conditionAdjustment?.allowedAdjustment);
+  const finalPriceAdjustment = asRecord(rawResult?.finalPriceAdjustment);
+  const listingConditionSignalValue = conditionAdjustment?.listingConditionSignal;
+  const listingConditionSignal =
+    listingConditionSignalValue === null ? null : asRecord(listingConditionSignalValue);
+  const listingConditionLabel =
+    listingConditionSignalValue === null ? null : asString(listingConditionSignal?.label);
+  const listingConditionScore = asNullableNumber(conditionAdjustment?.listingConditionScore);
+  const compMedianConditionScore = asNullableNumber(
+    conditionAdjustment?.compMedianConditionScore
+  );
+  const observedConditionDelta = asNullableNumber(conditionAdjustment?.conditionDelta);
+  const rawConditionPercent = asNullableNumber(allowedAdjustment?.rawPercent);
+  const medianSoldPrice = asPositiveNumber(conditionAdjustment?.deterministicMedianPrice);
+  const conditionAdjustedPrice = asPositiveNumber(finalPriceAdjustment?.basePrice);
+  const competitiveDiscountPercent = asNumber(
+    finalPriceAdjustment?.competitiveDiscountPercent
+  );
+  const competitiveAdjustedPrice = asPositiveNumber(
+    finalPriceAdjustment?.competitiveAdjustedPrice
+  );
+  const recentWindowDays = asCount(finalPriceAdjustment?.recentWindowDays);
+  const recentAcceptedCompCount = asCount(finalPriceAdjustment?.recentAcceptedCompCount);
+  const salesVelocityTier = asString(finalPriceAdjustment?.salesVelocityTier);
+  const salesVelocityDiscountPercent = asNumber(
+    finalPriceAdjustment?.salesVelocityDiscountPercent
+  );
+  const finalSuggestedPrice = asPositiveNumber(finalPriceAdjustment?.finalPrice);
+  const explicitCompConditionCount = asCount(conditionAdjustment?.explicitCompConditionCount);
+  const conditionReason = asString(allowedAdjustment?.reason);
+
+  if (
+    !conditionAdjustment ||
+    !allowedAdjustment ||
+    !finalPriceAdjustment ||
+    (listingConditionSignalValue !== null &&
+      (!listingConditionSignal || listingConditionLabel === null)) ||
+    listingConditionScore === undefined ||
+    compMedianConditionScore === undefined ||
+    observedConditionDelta === undefined ||
+    rawConditionPercent === undefined ||
+    medianSoldPrice === null ||
+    conditionAdjustedPrice === null ||
+    competitiveDiscountPercent === null ||
+    competitiveAdjustedPrice === null ||
+    recentWindowDays === null ||
+    recentAcceptedCompCount === null ||
+    (salesVelocityTier !== 'high' &&
+      salesVelocityTier !== 'medium' &&
+      salesVelocityTier !== 'low') ||
+    salesVelocityDiscountPercent === null ||
+    finalSuggestedPrice === null ||
+    explicitCompConditionCount === null ||
+    !conditionReason ||
+    !PRICE_ADJUSTMENT_CONDITION_REASONS.has(
+      conditionReason as ListingPriceAdjustmentConditionReason
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    median_sold_price: medianSoldPrice,
+    listing_condition_label: listingConditionLabel,
+    listing_condition_score: listingConditionScore,
+    explicit_comp_condition_count: explicitCompConditionCount,
+    comp_median_condition_score: compMedianConditionScore,
+    observed_condition_delta: observedConditionDelta,
+    raw_condition_percent:
+      rawConditionPercent === null ? null : ratioToPercentagePoints(rawConditionPercent),
+    applied_condition_percent: ratioToPercentagePoints(
+      conditionAdjustedPrice / medianSoldPrice - 1
+    ),
+    condition_adjusted_price: conditionAdjustedPrice,
+    condition_reason: conditionReason as ListingPriceAdjustmentConditionReason,
+    competitive_discount_percent: competitiveDiscountPercent,
+    competitive_adjusted_price: competitiveAdjustedPrice,
+    recent_window_days: recentWindowDays,
+    recent_accepted_comp_count: recentAcceptedCompCount,
+    sales_velocity_tier: salesVelocityTier,
+    sales_velocity_discount_percent: salesVelocityDiscountPercent,
+    final_total_adjustment_percent: ratioToPercentagePoints(
+      finalSuggestedPrice / medianSoldPrice - 1
+    ),
+    final_suggested_price: finalSuggestedPrice,
+  };
+}
+
+function ratioToPercentagePoints(value: number): number {
+  const percentagePoints = Number((value * 100).toFixed(2));
+  return Object.is(percentagePoints, -0) ? 0 : percentagePoints;
 }
 
 function sanitizeListingItemSpecifics(

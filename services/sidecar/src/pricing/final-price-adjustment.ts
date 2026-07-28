@@ -9,6 +9,7 @@ export type SalesVelocityTier = 'high' | 'low' | 'medium';
 export interface FinalPriceAdjustment {
   basePrice: number;
   competitiveDiscountPercent: number;
+  competitiveAdjustedPrice: number;
   recentWindowDays: number;
   recentAcceptedCompCount: number;
   salesVelocityTier: SalesVelocityTier;
@@ -53,6 +54,7 @@ export function computeFinalPriceAdjustment(input: {
   return {
     basePrice: input.basePrice,
     competitiveDiscountPercent: COMPETITIVE_DISCOUNT_PERCENT,
+    competitiveAdjustedPrice: Number(competitivelyAdjustedPrice.toFixed(4)),
     recentWindowDays: RECENT_WINDOW_DAYS,
     recentAcceptedCompCount,
     salesVelocityTier: velocityAdjustment.tier,

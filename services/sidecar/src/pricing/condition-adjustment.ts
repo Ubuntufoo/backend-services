@@ -77,6 +77,8 @@ export function computeConditionAdjustmentSummary(
       conditionDelta,
       deterministicMedianPrice,
       explicitCompConditionCount,
+      isTopListingCondition:
+        listingConditionSignal?.matchedText === 'NEAR_MINT_OR_BETTER',
       listingConditionScore,
       stats: input.stats,
     }),
@@ -155,6 +157,7 @@ function buildAllowedAdjustment(input: {
   conditionDelta: number | null;
   deterministicMedianPrice: number | null;
   explicitCompConditionCount: number;
+  isTopListingCondition: boolean;
   listingConditionScore: number | null;
   stats: ConditionAdjustmentInput['stats'];
 }): ConditionAdjustmentSummary['allowedAdjustment'] {
@@ -176,6 +179,19 @@ function buildAllowedAdjustment(input: {
 
   const rawPercent = Math.tanh(input.conditionDelta / 2.0) * 0.5;
   const clampedPercent = clamp(rawPercent, -0.4, 0.4);
+
+  if (input.isTopListingCondition && clampedPercent < 0) {
+    return {
+      eligible: true,
+      targetPrice: input.deterministicMedianPrice,
+      minPrice: input.deterministicMedianPrice,
+      maxPrice: input.deterministicMedianPrice,
+      rawPercent: roundMetric(rawPercent),
+      appliedPercent: 0,
+      reason: 'negative_blocked_for_top_condition',
+    };
+  }
+
   const baseLowerBound = input.deterministicMedianPrice * 0.65;
   const baseUpperBound = input.deterministicMedianPrice * 1.35;
   let curvePrice = input.deterministicMedianPrice * (1 + clampedPercent);

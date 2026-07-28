@@ -8,7 +8,7 @@ const CURRENT_TIME = new Date('2026-07-20T00:00:00.000Z');
 describe('computeFinalPriceAdjustment', () => {
   it('applies only the competitive discount with at least eight recent accepted comps', () => {
     const result = computeFinalPriceAdjustment({
-      basePrice: 100,
+      basePrice: 117.63,
       comps: Array.from({ length: 8 }, (_, index) =>
         buildComp(`2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`)
       ),
@@ -16,13 +16,14 @@ describe('computeFinalPriceAdjustment', () => {
     });
 
     expect(result).toEqual({
-      basePrice: 100,
+      basePrice: 117.63,
       competitiveDiscountPercent: 5,
+      competitiveAdjustedPrice: 111.7485,
       recentWindowDays: 90,
       recentAcceptedCompCount: 8,
       salesVelocityTier: 'high',
       salesVelocityDiscountPercent: 0,
-      finalPrice: 95,
+      finalPrice: 111.75,
     });
   });
 
@@ -38,6 +39,7 @@ describe('computeFinalPriceAdjustment', () => {
     });
 
     expect(result).toMatchObject({
+      competitiveAdjustedPrice: 95,
       recentAcceptedCompCount: 3,
       salesVelocityTier: 'medium',
       salesVelocityDiscountPercent: 2.5,
@@ -53,6 +55,7 @@ describe('computeFinalPriceAdjustment', () => {
     });
 
     expect(result).toMatchObject({
+      competitiveAdjustedPrice: 95,
       recentAcceptedCompCount: 1,
       salesVelocityTier: 'low',
       salesVelocityDiscountPercent: 5,

@@ -34,7 +34,40 @@ describe('computeConditionAdjustmentSummary', () => {
       minPrice: expect.any(Number),
       maxPrice: expect.any(Number),
       reason: 'eligible',
-      targetPrice: 5.24,
+      targetPrice: 5.17,
+    });
+  });
+
+  it('retains the negative curve but blocks it for the top saved condition token', () => {
+    const summary = computeConditionAdjustmentSummary({
+      listingCondition: 'NEAR_MINT_OR_BETTER',
+      comps: [
+        buildComp('comp-1', 'Card A NM-MT', 110),
+        buildComp('comp-2', 'Card B NM/MT', 117.63),
+        buildComp('comp-3', 'Card C NM MT', 125),
+      ],
+      stats: buildStats({
+        medianSoldPrice: 117.63,
+        lowSoldPrice: 110,
+        highSoldPrice: 125,
+      }),
+    });
+
+    expect(summary).toMatchObject({
+      listingConditionScore: 5,
+      explicitCompConditionCount: 3,
+      compMedianConditionScore: 5.5,
+      conditionDelta: -0.5,
+      deterministicMedianPrice: 117.63,
+      allowedAdjustment: {
+        eligible: true,
+        targetPrice: 117.63,
+        minPrice: 117.63,
+        maxPrice: 117.63,
+        rawPercent: -0.1225,
+        appliedPercent: 0,
+        reason: 'negative_blocked_for_top_condition',
+      },
     });
   });
 
@@ -54,6 +87,7 @@ describe('computeConditionAdjustmentSummary', () => {
       eligible: true,
       targetPrice: 13,
       appliedPercent: 0.1304,
+      reason: 'eligible',
     });
   });
 

@@ -577,6 +577,7 @@ function buildPricingResearchRawResult(
   rawCompCount: number,
   normalized: ReturnType<typeof normalizeSoldComps>,
   providerRouting: ProviderRoutingDiagnostics,
+  conditionAdjustment: ConditionAdjustmentSummary,
   finalPriceAdjustment: FinalPriceAdjustment,
   latency: PricingResearchLatencyDiagnostics,
   llmAttempted: boolean
@@ -598,6 +599,7 @@ function buildPricingResearchRawResult(
       providerRouting,
       rawCompCount,
     }),
+    conditionAdjustment,
     finalPriceAdjustment,
     normalization: buildNormalizationSummary(normalized, rawCompCount),
     providerRouting: buildProviderRoutingRawResult(providerRouting),
@@ -1707,6 +1709,7 @@ export async function priceListingNow(
       rawCompCount,
       normalized,
       providerRouting,
+      conditionAdjustment,
       finalPriceAdjustment,
       {
         createResearchMs,
