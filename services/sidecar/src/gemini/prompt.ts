@@ -53,7 +53,7 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Generate an eBay listing draft for a trading card or card lot.',
     'Use visible image evidence first.',
     'If provided, user hints are canonical proof.',
-    'Listing title must be < 80 characters and use only: player name, exact year only when visible qualifying text supports it, manufacturer, # card number, and explicit market-relevant characteristics visible on the card (e.g., Rookie Card, Refractor, parallel, insert type e.g. "Grand Slammers" or "Legends", serial numbered).',
+    'Listing title must be < 80 characters and use only: player name, exact year only when visible qualifying text supports it, manufacturer, card number prefixed with the # symbol (for example, #138), and explicit market-relevant characteristics visible on the card (e.g., Rookie Card, Refractor, parallel, insert type e.g. "Grand Slammers" or "Legends", serial numbered).',
     'Do NOT include inferred filler in titles: sport, league, team, franchise, position, role e.g. "coach", "3rd base", or similar — unless those words are genuinely part of an official set name, insert type, or parallel name printed on the card.',
     'Do not invent grades, certification status, serial numbers, autographs, relics, or rare variants unless they are visible in the images or explicitly provided in the user hints.',
     'Year handling is strict.',
