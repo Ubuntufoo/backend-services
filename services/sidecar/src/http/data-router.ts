@@ -649,6 +649,7 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       }
 
       const preparedListing = await dataAccess.listings.prepareForGenerateAi({
+        autoPricingEnabled: body.autoPricingEnabled,
         expectedUpdatedAt: listing.updated_at,
         listingId: params.listingId,
         sellerHints: body.sellerHints,

@@ -78,6 +78,7 @@ import { requireSingleResult } from '../src/repositories/shared.js';
 
 const listingRow: ListingRow = {
   approved_for_export_at: null,
+  auto_pricing_enabled: true,
   capture_mode: null,
   category_id: null,
   condition_id: null,
@@ -2252,8 +2253,12 @@ describe('shared repositories', () => {
       })
     ).resolves.toEqual(listingRow);
 
+  });
+
+  it('prepareListingForGenerateAi persists auto pricing atomically and rejects stale state', async () => {
     const generateAiReadyListing = {
       ...listingRow,
+      auto_pricing_enabled: false,
       seller_hints: 'Use padded envelope',
       status: 'assets_ready',
       sub_status: 'ready_to_generate',
@@ -2263,6 +2268,7 @@ describe('shared repositories', () => {
       '2026-05-17T00:00:00.000Z',
       (payload) => {
         expect(payload).toEqual({
+          auto_pricing_enabled: false,
           seller_hints: 'Use padded envelope',
           status: 'assets_ready',
           sub_status: 'ready_to_generate',
@@ -2272,6 +2278,7 @@ describe('shared repositories', () => {
 
     await expect(
       prepareListingForGenerateAi(generateAiClient, {
+        autoPricingEnabled: false,
         expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
         listingId: 'LIST-001',
         sellerHints: 'Use padded envelope',
@@ -2283,6 +2290,7 @@ describe('shared repositories', () => {
       '2026-05-17T00:00:00.000Z',
       (payload) => {
         expect(payload).toEqual({
+          auto_pricing_enabled: true,
           status: 'assets_ready',
           sub_status: 'ready_to_generate',
         });
@@ -2291,6 +2299,7 @@ describe('shared repositories', () => {
 
     await expect(
       prepareListingForGenerateAi(staleGenerateAiClient, {
+        autoPricingEnabled: true,
         expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
         listingId: 'LIST-001',
       })

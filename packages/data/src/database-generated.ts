@@ -493,6 +493,7 @@ export type Database = {
       listings: {
         Row: {
           approved_for_export_at: string | null;
+          auto_pricing_enabled: boolean;
           capture_mode: string | null;
           category_id: string | null;
           condition_id: string | null;
@@ -535,6 +536,7 @@ export type Database = {
         };
         Insert: {
           approved_for_export_at?: string | null;
+          auto_pricing_enabled?: boolean;
           capture_mode?: string | null;
           category_id?: string | null;
           condition_id?: string | null;
@@ -577,6 +579,7 @@ export type Database = {
         };
         Update: {
           approved_for_export_at?: string | null;
+          auto_pricing_enabled?: boolean;
           capture_mode?: string | null;
           category_id?: string | null;
           condition_id?: string | null;

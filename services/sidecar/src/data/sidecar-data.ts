@@ -132,6 +132,7 @@ export interface SidecarDataAccess {
       options: ListListingsByStatusOptions
     ): Promise<ListingRow[]>;
     prepareForGenerateAi(input: {
+      autoPricingEnabled: ListingUpdate['auto_pricing_enabled'];
       expectedUpdatedAt?: string;
       listingId: string;
       sellerHints?: ListingUpdate['seller_hints'];

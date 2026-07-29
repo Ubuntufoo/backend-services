@@ -260,7 +260,8 @@ function buildGeneratedListingReviewUpdate(
     last_error_code: null,
     last_error_context: {},
     last_error_message: null,
-    price: draft.priceSuggestion ?? null,
+    price:
+      listing.auto_pricing_enabled === false ? listing.price : (draft.priceSuggestion ?? null),
     status: 'needs_review',
     sub_status: 'review_pending',
     title: draft.title,
@@ -590,6 +591,18 @@ async function enqueueResearchPriceAfterGenerate(
   pricingProviderEnv: ResearchPriceJobDependencies['pricingProviderEnv']
 ): Promise<void> {
   if (!isResearchPriceListingEligible(listing)) {
+    return;
+  }
+
+  if (listing.auto_pricing_enabled === false) {
+    jobLogger.info(
+      'Skipped research_price enqueue after generate_ai because auto pricing is disabled.',
+      {
+        event: 'research_price_enqueue_skipped',
+        listingId: listing.listing_id,
+        reason: 'listing_auto_pricing_disabled',
+      }
+    );
     return;
   }
 

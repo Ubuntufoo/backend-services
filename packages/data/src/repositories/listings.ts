@@ -61,6 +61,7 @@ export interface GeneratedListingFieldsUpdate {
 }
 
 export interface GenerateAiPreparationUpdate {
+  autoPricingEnabled: ListingUpdate['auto_pricing_enabled'];
   expectedUpdatedAt?: string;
   listingId: string;
   sellerHints?: ListingUpdate['seller_hints'];
@@ -443,6 +444,7 @@ export async function prepareListingForGenerateAi(
   input: GenerateAiPreparationUpdate
 ): Promise<ListingRow | null> {
   const changes: ListingUpdate = {
+    auto_pricing_enabled: input.autoPricingEnabled,
     status: 'assets_ready',
     sub_status: 'ready_to_generate',
   };

@@ -107,6 +107,7 @@ export const updateListingWorkflowStateRequestSchema = listingWorkflowStateSchem
 
 export const enqueueGenerateAiRequestSchema = z
   .object({
+    autoPricingEnabled: z.boolean().default(true),
     sellerHints: nullableTrimmedStringSchema('sellerHints'),
   })
   .strict();

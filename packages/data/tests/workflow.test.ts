@@ -8,6 +8,7 @@ import {
 
 const listingRow: ListingRow = {
   approved_for_export_at: null,
+  auto_pricing_enabled: true,
   capture_mode: null,
   category_id: null,
   condition_id: null,

@@ -17,6 +17,7 @@ const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
 const markAiModelAttemptFailedMock = vi.fn();
 const markAiModelAttemptSucceededMock = vi.fn();
+const prepareListingForGenerateAiMock = vi.fn();
 const createListingMock = vi.fn();
 const approveListingForExportMock = vi.fn();
 const updateListingMock = vi.fn();
@@ -81,6 +82,7 @@ vi.mock('@ebay-inventory/data', () => ({
   markListingPriceResearchSucceeded: markListingPriceResearchSucceededMock,
   markAiModelAttemptFailed: markAiModelAttemptFailedMock,
   markAiModelAttemptSucceeded: markAiModelAttemptSucceededMock,
+  prepareListingForGenerateAi: prepareListingForGenerateAiMock,
   resetJobForManualRetry: resetJobForManualRetryMock,
   requeueJob: requeueJobMock,
   saveListingImageMetadata: saveListingImageMetadataMock,
@@ -159,7 +161,7 @@ describe('sidecar data access', () => {
     });
   });
 
-  it('delegates create, approval, update, workflow, and app-settings calls to shared repository helpers', async () => {
+  it('delegates create, approval, prepareForGenerateAi, update, workflow, and app-settings calls to shared repository helpers', async () => {
     const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
     const dataAccess = createSidecarDataAccess();
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -185,6 +187,12 @@ describe('sidecar data access', () => {
     await dataAccess.listings.create(listingInsert);
     await dataAccess.listings.approveForExport('LIST-001');
     await dataAccess.listings.claimApprovedForPublish('LIST-001');
+    await dataAccess.listings.prepareForGenerateAi({
+      autoPricingEnabled: false,
+      expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      listingId: 'LIST-001',
+      sellerHints: 'Use padded envelope',
+    });
     await dataAccess.listings.update('LIST-001', listingUpdate);
     await dataAccess.listings.saveImageMetadata(imageMetadataUpdate);
     await dataAccess.listings.updateWorkflowState(workflowUpdate);
@@ -193,6 +201,12 @@ describe('sidecar data access', () => {
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
     expect(approveListingForExportMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(claimApprovedListingForPublishMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(prepareListingForGenerateAiMock).toHaveBeenCalledWith(client, {
+      autoPricingEnabled: false,
+      expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      listingId: 'LIST-001',
+      sellerHints: 'Use padded envelope',
+    });
     expect(updateListingMock).toHaveBeenCalledWith(client, 'LIST-001', listingUpdate);
     expect(saveListingImageMetadataMock).toHaveBeenCalledWith(client, imageMetadataUpdate);
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);

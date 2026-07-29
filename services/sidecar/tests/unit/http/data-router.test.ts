@@ -13,6 +13,7 @@ import type { PricingAnalyst } from '@/pricing/index.js';
 
 const listingRow = {
   approved_for_export_at: null,
+  auto_pricing_enabled: true,
   capture_mode: null,
   category_id: null,
   condition_id: null,
@@ -1474,7 +1475,7 @@ describe('data API router', () => {
     expect(dataAccess.jobs.enqueuePublish).not.toHaveBeenCalled();
   });
 
-  it('enqueues generate_ai from assets_ready and persists optional seller hints', async () => {
+  it('enqueues generate-ai from assets_ready and defaults auto pricing on', async () => {
     const listingState = {
       ...listingRow,
       seller_hints: null,
@@ -1491,6 +1492,7 @@ describe('data API router', () => {
     dataAccess.listings.getByListingId = vi.fn(async () => listingState);
     dataAccess.listings.prepareForGenerateAi = vi.fn(async (input) => {
       expect(input).toEqual({
+        autoPricingEnabled: true,
         expectedUpdatedAt: '2026-05-17T01:00:00.000Z',
         listingId: 'LIST-001',
         sellerHints: 'Use padded envelope',
@@ -1538,6 +1540,7 @@ describe('data API router', () => {
       },
       listing: {
         ...preparedListing,
+        auto_pricing_enabled: true,
         identity_warnings: [],
         latest_pricing_research: null,
         pricing_analysis_warnings: [],
@@ -1546,6 +1549,65 @@ describe('data API router', () => {
     expect(dataAccess.listings.getByListingId).toHaveBeenCalledWith('LIST-001');
     expect(dataAccess.listings.prepareForGenerateAi).toHaveBeenCalledOnce();
     expect(dataAccess.jobs.enqueueGenerateAi).toHaveBeenCalledOnce();
+  });
+
+  it('persists an explicit false auto-pricing preference for generate-ai', async () => {
+    const listingState = {
+      ...listingRow,
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+      updated_at: '2026-05-17T01:00:00.000Z',
+    } as const;
+    const preparedListing = {
+      ...listingState,
+      auto_pricing_enabled: false,
+    };
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => listingState);
+    dataAccess.listings.prepareForGenerateAi = vi.fn(async () => preparedListing);
+    dataAccess.jobs.enqueueGenerateAi = vi.fn(async () => ({
+      alreadyQueued: false,
+      job: {
+        created_at: '2026-05-17T01:00:01.000Z',
+        id: 'job-generate-ai-row-id',
+        job_type: 'generate_ai',
+        last_error: null,
+        last_error_at: null,
+        last_error_code: null,
+        listing_id: 'LIST-001',
+        next_run_at: null,
+        status: 'queued',
+        updated_at: '2026-05-17T01:00:01.000Z',
+      },
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/generate-ai').send({
+      autoPricingEnabled: false,
+    });
+
+    expect(response.status).toBe(201);
+    expect(dataAccess.listings.prepareForGenerateAi).toHaveBeenCalledWith({
+      autoPricingEnabled: false,
+      expectedUpdatedAt: '2026-05-17T01:00:00.000Z',
+      listingId: 'LIST-001',
+      sellerHints: undefined,
+    });
+    expect(response.body.listing.auto_pricing_enabled).toBe(false);
+  });
+
+  it('rejects non-boolean autoPricingEnabled values for generate-ai', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app).post('/api/listings/LIST-001/generate-ai').send({
+      autoPricingEnabled: 'false',
+    });
+
+    expect(response.status).toBe(400);
+    expect(dataAccess.listings.getByListingId).not.toHaveBeenCalled();
+    expect(dataAccess.listings.prepareForGenerateAi).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueueGenerateAi).not.toHaveBeenCalled();
   });
 
   it('rejects generate_ai enqueue requests when listing is not assets_ready', async () => {
@@ -2556,10 +2618,11 @@ describe('data API router', () => {
   });
 
   describe('retry-pricing', () => {
-    it('queues full pricing retry and returns serialized listing with latest failed pricing research', async () => {
+    it('queues full pricing retry when generate-ai auto pricing is disabled', async () => {
       const dataAccess = createDataAccess();
       dataAccess.listings.getByListingId = vi.fn(async () => ({
         ...publishReadyNeedsReviewListingRow,
+        auto_pricing_enabled: false,
         last_error_code: 'research_price_suggested_price_invalid',
       }));
       dataAccess.jobs.listByListingId = vi.fn(async () => [

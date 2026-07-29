@@ -253,6 +253,7 @@ const resolvedAiModelRoute = createResolvedAiModelRoute();
 function createListingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: null,
+    auto_pricing_enabled: true,
     capture_mode: null,
     category_id: null,
     condition_id: null,
@@ -1811,6 +1812,60 @@ describe('runSidecarJob', () => {
         listingId: 'Single-000001',
         soldCompsEnabled: false,
       })
+    );
+  });
+
+  it('completes generate_ai without pricing work when listing auto pricing is disabled', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        auto_pricing_enabled: false,
+        listing_id: 'Single-000001',
+        price: 199.99,
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Ungraded single card with visible edge wear.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Manufacturer: 'Upper Deck',
+          Player: 'Michael Jordan',
+        },
+        priceSuggestion: 249.99,
+        rawModelResponse: { id: 'raw-response-auto-pricing-disabled' },
+      })
+    );
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(result.listing).toMatchObject({
+      auto_pricing_enabled: false,
+      price: 199.99,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+      title: '1991 Upper Deck Michael Jordan',
+    });
+    expect(dataAccess.appSettings.get).not.toHaveBeenCalled();
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+    expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
+    expect(jobLoggerInfo).toHaveBeenCalledWith(
+      'Skipped research_price enqueue after generate_ai because auto pricing is disabled.',
+      {
+        event: 'research_price_enqueue_skipped',
+        listingId: 'Single-000001',
+        reason: 'listing_auto_pricing_disabled',
+      }
     );
   });
 
