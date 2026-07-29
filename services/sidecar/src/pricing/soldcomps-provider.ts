@@ -23,7 +23,8 @@ import type {
 const SOLDCOMPS_PROVIDER_NAME = 'soldcomps';
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const soldCompsLogger = createLogger('SoldComps');
-const ISO_SOLD_DATE_PATTERN =
+const ISO_SOLD_DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_SOLD_TIMESTAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
 
@@ -43,9 +44,21 @@ const soldCompsItemSchema = z.object({
   endedAt: z
     .string()
     .trim()
-    .refine((value) => ISO_SOLD_DATE_PATTERN.test(value), 'endedAt must be ISO-8601')
+    .refine(isSupportedIsoSoldDate, 'endedAt must be ISO-8601')
     .refine(isValidIsoCalendarDate, 'endedAt must use a valid calendar date')
-    .refine((value) => !Number.isNaN(new Date(value).getTime()), 'endedAt must be valid'),
+    .transform((value, context) => {
+      const normalized = normalizeIsoSoldDate(value);
+
+      if (normalized === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'endedAt must be valid',
+        });
+        return z.NEVER;
+      }
+
+      return normalized;
+    }),
   epid: z.string().trim().min(1).nullable(),
   itemId: z.string().trim().min(1),
   scrapedAt: z.string().trim().min(1),
@@ -91,7 +104,7 @@ const soldCompsErrorSchema = z
   .passthrough();
 
 function isValidIsoCalendarDate(value: string): boolean {
-  const match = ISO_SOLD_DATE_PATTERN.exec(value);
+  const match = ISO_SOLD_DATE_ONLY_PATTERN.exec(value) ?? ISO_SOLD_TIMESTAMP_PATTERN.exec(value);
   if (!match) {
     return false;
   }
@@ -103,6 +116,19 @@ function isValidIsoCalendarDate(value: string): boolean {
   const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
   return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1]!;
+}
+
+function isSupportedIsoSoldDate(value: string): boolean {
+  return ISO_SOLD_DATE_ONLY_PATTERN.test(value) || ISO_SOLD_TIMESTAMP_PATTERN.test(value);
+}
+
+function normalizeIsoSoldDate(value: string): string | null {
+  const timestamp = ISO_SOLD_DATE_ONLY_PATTERN.test(value)
+    ? `${value}T00:00:00.000Z`
+    : value;
+  const parsed = new Date(timestamp);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 export interface SoldCompsFetchInput {

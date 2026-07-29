@@ -372,6 +372,37 @@ describe('SoldComps pricing provider', () => {
     });
   });
 
+  it.each(['2026-07-28', '2026-07-27', '2026-07-26'])(
+    'accepts live date-only endedAt value %s and normalizes it to UTC',
+    (endedAt) => {
+      const result = parseSoldCompsResponse(
+        {
+          ...soldCompsFixture,
+          items: [{ ...soldCompsFixture.items[0], endedAt }],
+        },
+        { query: 'Johnny Riddle 1955 Topps #98' }
+      );
+
+      expect(result.soldComps[0]?.soldDate).toBe(`${endedAt}T00:00:00.000Z`);
+    }
+  );
+
+  it.each([
+    ['2026-06-14T18:42:00Z', '2026-06-14T18:42:00.000Z'],
+    ['2026-06-14T18:42:00.123Z', '2026-06-14T18:42:00.123Z'],
+    ['2026-06-14T18:42:00-05:00', '2026-06-14T23:42:00.000Z'],
+  ])('normalizes accepted timestamp %s to canonical UTC', (endedAt, expected) => {
+    const result = parseSoldCompsResponse(
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt }],
+      },
+      { query: 'Johnny Riddle 1955 Topps #98' }
+    );
+
+    expect(result.soldComps[0]?.soldDate).toBe(expected);
+  });
+
   it('applies raw-card single shipping defaults after soldcomps parse', () => {
     const result = parseSoldCompsResponse(
       {
@@ -885,6 +916,34 @@ describe('SoldComps pricing provider', () => {
       {
         ...soldCompsFixture,
         items: [{ ...soldCompsFixture.items[0], endedAt: '2025-02-29T18:42:00.000Z' }],
+      },
+    ],
+    [
+      'endedAt with unsupported fractional precision',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-06-14T18:42:00.1Z' }],
+      },
+    ],
+    [
+      'endedAt with invalid time',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-06-14T24:01:00.000Z' }],
+      },
+    ],
+    [
+      'endedAt with invalid timezone offset',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-06-14T18:42:00.000+24:00' }],
+      },
+    ],
+    [
+      'empty endedAt',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '' }],
       },
     ],
     [
