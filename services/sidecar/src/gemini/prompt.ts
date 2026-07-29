@@ -86,6 +86,7 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Include a Franchise aspect when the team, franchise, or IP is identifiable from the card or user hints.',
     'Examples: Utah Jazz card -> "Franchise": "Utah Jazz"; Pokemon card -> "Franchise": "Pokémon"; Marvel card -> "Franchise": "Marvel".',
     'Prefer cautious language when uncertain.',
+    'Description should be a concise, factual summary of the card, with no marketing or sales language.',
     'Return strict JSON only with no markdown fences or explanatory prose.',
     'Include warnings for uncertain or missing information.',
     '',
