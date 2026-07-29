@@ -12,7 +12,6 @@ import {
 
 export const DEFAULT_APP_SETTINGS_ID = 'default';
 export const DEFAULT_PRICING_PROVIDER_MODE: PricingProviderMode = 'soldcomps';
-const ENABLED_PRICING_PROVIDER_MODES = new Set<PricingProviderMode>(['soldcomps', 'apify']);
 const PRICING_PROVIDER_MODE_SET = new Set<string>(PRICING_PROVIDER_MODES);
 
 export interface SoldCompsUsageSnapshot {
@@ -30,11 +29,10 @@ type PricingAppSettingsLike = {
 export function getPricingProviderMode(
   appSettings: PricingAppSettingsLike
 ): PricingProviderMode {
-  if (
-    typeof appSettings?.pricing_provider_mode === 'string' &&
-    PRICING_PROVIDER_MODE_SET.has(appSettings.pricing_provider_mode)
-  ) {
-    return appSettings.pricing_provider_mode as PricingProviderMode;
+  if (typeof appSettings?.pricing_provider_mode === 'string') {
+    return PRICING_PROVIDER_MODE_SET.has(appSettings.pricing_provider_mode)
+      ? (appSettings.pricing_provider_mode as PricingProviderMode)
+      : 'off';
   }
 
   if (appSettings?.pricing_service_enabled === false) {
@@ -45,7 +43,7 @@ export function getPricingProviderMode(
 }
 
 export function isPricingProviderModeEnabled(mode: PricingProviderMode): boolean {
-  return ENABLED_PRICING_PROVIDER_MODES.has(mode);
+  return mode === 'soldcomps';
 }
 
 export function isPricingEnabled(

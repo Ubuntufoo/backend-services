@@ -25,6 +25,7 @@ interface DiagnosticCheck {
   message: string;
   name:
     | 'selected_provider_mode'
+    | 'soldcomps_enabled'
     | 'soldcomps_api_key'
     | 'soldcomps_price_timeout_seconds'
     | 'soldcomps_request_count';
@@ -100,6 +101,9 @@ export async function runDiagnoseSoldCompsPricingCli(
       });
 
       checks.push(
+        buildCheck('soldcomps_enabled', 'pass', 'SOLDCOMPS_ENABLED is explicitly true.', {
+          value: true,
+        }),
         buildCheck('soldcomps_api_key', 'pass', 'SOLDCOMPS_API_KEY configured.', {
           configured: true,
           redacted: redactSecret(env.SOLDCOMPS_API_KEY),
@@ -118,12 +122,32 @@ export async function runDiagnoseSoldCompsPricingCli(
         throw error;
       }
 
+      const enabledIssue = error.issues.some((issue) => issue.path[0] === 'SOLDCOMPS_ENABLED');
       const apiKeyIssue = error.issues.some((issue) => issue.path[0] === 'SOLDCOMPS_API_KEY');
       const timeoutIssue = error.issues.some(
         (issue) => issue.path[0] === 'SOLDCOMPS_PRICE_TIMEOUT_SECONDS'
       );
 
       checks.push(
+        buildCheck(
+          'soldcomps_enabled',
+          enabledIssue ? 'fail' : 'pass',
+          enabledIssue
+            ? findIssueMessage(
+                error,
+                'SOLDCOMPS_ENABLED',
+                'SOLDCOMPS_ENABLED must be true to enable live SoldComps requests'
+              )
+            : 'SOLDCOMPS_ENABLED is explicitly true.',
+          {
+            value:
+              process.env.SOLDCOMPS_ENABLED === 'true'
+                ? true
+                : process.env.SOLDCOMPS_ENABLED === 'false'
+                  ? false
+                  : null,
+          }
+        ),
         buildCheck(
           'soldcomps_api_key',
           apiKeyIssue ? 'fail' : 'pass',

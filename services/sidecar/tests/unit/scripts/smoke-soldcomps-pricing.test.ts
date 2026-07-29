@@ -80,6 +80,30 @@ describe('smoke soldcomps pricing script', () => {
     process.exitCode = originalExitCode;
   });
 
+  it('rejects missing live confirmation before data access or provider resolution', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const createDataAccess = vi.fn();
+    const resolvePricingProvider = vi.fn();
+    const { runSmokeSoldCompsPricingCli } = await import(
+      '@/scripts/smoke-soldcomps-pricing.js'
+    );
+
+    await runSmokeSoldCompsPricingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess,
+      resolvePricingProvider,
+    });
+
+    expect(createDataAccess).not.toHaveBeenCalled();
+    expect(resolvePricingProvider).not.toHaveBeenCalled();
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      failure: {
+        code: 'invalid_arguments',
+        message: expect.stringContaining('--confirm-live-soldcomps'),
+      },
+      overallStatus: 'fail',
+    });
+  });
+
   it('uses production soldcomps adapter shape, requests 50 comps by default, surfaces raw-card modifiers', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const runRequest = vi.fn().mockResolvedValue({
@@ -132,7 +156,9 @@ describe('smoke soldcomps pricing script', () => {
     const { runSmokeSoldCompsPricingCli } = await import(
       '@/scripts/smoke-soldcomps-pricing.js'
     );
-    await runSmokeSoldCompsPricingCli(['--listing-id', 'Single-000123'], {
+    await runSmokeSoldCompsPricingCli(
+      ['--listing-id', 'Single-000123', '--confirm-live-soldcomps'],
+      {
       createDataAccess: () =>
         ({
           appSettings: {
@@ -149,13 +175,14 @@ describe('smoke soldcomps pricing script', () => {
           },
         }) as never,
       resolvePricingProvider: () => provider,
-    });
+      }
+    );
 
     expect(runRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 75,
         page: 1,
-        query: buildExpectedRawCardKeyword('Johnny Riddle 1955 Topps 98'),
+        query: buildExpectedRawCardKeyword('Johnny Riddle Topps 98'),
       })
     );
 
@@ -185,7 +212,9 @@ describe('smoke soldcomps pricing script', () => {
       '@/scripts/smoke-soldcomps-pricing.js'
     );
 
-    await runSmokeSoldCompsPricingCli(['--listing-id', 'Single-000123'], {
+    await runSmokeSoldCompsPricingCli(
+      ['--listing-id', 'Single-000123', '--confirm-live-soldcomps'],
+      {
       createDataAccess: () =>
         ({
           appSettings: {
@@ -209,7 +238,8 @@ describe('smoke soldcomps pricing script', () => {
           ),
           name: 'soldcomps',
         }) as never,
-    });
+      }
+    );
 
     const payload = JSON.parse(logSpy.mock.calls[0][0] as string) as {
       failure: { category: string; code: string; message: string; query: string };

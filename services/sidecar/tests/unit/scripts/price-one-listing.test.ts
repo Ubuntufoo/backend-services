@@ -161,10 +161,32 @@ describe('price one listing script', () => {
       },
       overallStatus: 'fail',
       usage: {
-        selectors: ['--listing-id <listing_id>', '--force'],
+        selectors: ['--listing-id <listing_id>', '--confirm-live-soldcomps', '--force'],
       },
     });
     expect(process.exitCode).toBe(1);
+  });
+
+  it('rejects missing live confirmation before data access or pricing resolution', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const createDataAccess = vi.fn();
+    const runPriceListingNow = vi.fn();
+
+    const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
+    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+      createDataAccess,
+      runPriceListingNow,
+    });
+
+    expect(createDataAccess).not.toHaveBeenCalled();
+    expect(runPriceListingNow).not.toHaveBeenCalled();
+    expect(JSON.parse(logSpy.mock.calls[0][0] as string)).toMatchObject({
+      failure: {
+        code: 'invalid_arguments',
+        message: expect.stringContaining('--confirm-live-soldcomps'),
+      },
+      overallStatus: 'fail',
+    });
   });
 
   it('calls canonical pricing function and prints compact success summary', async () => {
@@ -180,7 +202,7 @@ describe('price one listing script', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () => ({}) as never,
       runPriceListingNow,
     });
@@ -269,7 +291,7 @@ describe('price one listing script', () => {
     });
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () => dataAccess,
     });
 
@@ -297,7 +319,7 @@ describe('price one listing script', () => {
     const runPriceListingNow = vi.fn();
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () =>
         ({
           appSettings: {
@@ -334,7 +356,7 @@ describe('price one listing script', () => {
     const runPriceListingNow = vi.fn();
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () =>
         ({
           appSettings: {
@@ -378,7 +400,9 @@ describe('price one listing script', () => {
     });
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--force'], {
+    await runPriceOneListingCli(
+      ['--listing-id', 'Single-000123', '--confirm-live-soldcomps', '--force'],
+      {
       createDataAccess: () =>
         ({
           appSettings: {
@@ -392,7 +416,8 @@ describe('price one listing script', () => {
           },
         }) as never,
       runPriceListingNow,
-    });
+      }
+    );
 
     expect(runPriceListingNow).toHaveBeenCalledTimes(1);
   });
@@ -410,7 +435,7 @@ describe('price one listing script', () => {
     });
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () => ({}) as never,
       resolvePricingProvider,
       runPriceListingNow,
@@ -435,7 +460,7 @@ describe('price one listing script', () => {
     );
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () => ({}) as never,
       runPriceListingNow,
     });
@@ -482,7 +507,7 @@ describe('price one listing script', () => {
     );
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-404'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-404', '--confirm-live-soldcomps'], {
       createDataAccess: () => ({}) as never,
       runPriceListingNow,
     });
@@ -526,7 +551,7 @@ describe('price one listing script', () => {
     );
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () => ({}) as never,
       runPriceListingNow,
     });
@@ -572,7 +597,7 @@ describe('price one listing script', () => {
     );
 
     const { runPriceOneListingCli } = await import('@/scripts/price-one-listing.js');
-    await runPriceOneListingCli(['--listing-id', 'Single-000123'], {
+    await runPriceOneListingCli(['--listing-id', 'Single-000123', '--confirm-live-soldcomps'], {
       createDataAccess: () => ({}) as never,
       runPriceListingNow,
     });
@@ -594,7 +619,6 @@ describe('price one listing script', () => {
       },
       listing_id: 'Single-000123',
       overallStatus: 'fail',
-      selected_provider_mode: 'apify',
       workflow_safe: true,
     });
     expect(payload.failure.message).not.toContain('super-secret-token');

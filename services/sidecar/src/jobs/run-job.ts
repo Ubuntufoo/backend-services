@@ -57,6 +57,7 @@ import {
 } from './prepare-record-created-listings.js';
 import {
   isResearchPriceListingEligible,
+  isSoldCompsRuntimeEnabled,
   runResearchPriceJob,
   type ResearchPriceJobDependencies,
 } from './research-price-job.js';
@@ -585,9 +586,22 @@ async function hasOtherPublishJobsForListing(
 
 async function enqueueResearchPriceAfterGenerate(
   dataAccess: SidecarDataAccess,
-  listing: ListingRow
+  listing: ListingRow,
+  pricingProviderEnv: ResearchPriceJobDependencies['pricingProviderEnv']
 ): Promise<void> {
   if (!isResearchPriceListingEligible(listing)) {
+    return;
+  }
+
+  if (!isSoldCompsRuntimeEnabled(pricingProviderEnv)) {
+    jobLogger.info(
+      'Skipped research_price enqueue after generate_ai because SoldComps runtime is disabled.',
+      {
+        event: 'research_price_enqueue_skipped',
+        listingId: listing.listing_id,
+        soldCompsEnabled: false,
+      }
+    );
     return;
   }
 
@@ -596,9 +610,9 @@ async function enqueueResearchPriceAfterGenerate(
   try {
     const appSettings = await dataAccess.appSettings.get();
     pricingProviderMode = getPricingProviderMode(appSettings);
-    if (!isPricingEnabled(appSettings)) {
+    if (pricingProviderMode !== 'soldcomps' || !isPricingEnabled(appSettings)) {
       jobLogger.info(
-        'Skipped research_price enqueue after generate_ai because pricing provider mode is off.',
+        'Skipped research_price enqueue after generate_ai because pricing provider mode is not soldcomps.',
         {
           event: 'research_price_enqueue_skipped',
           listingId: listing.listing_id,
@@ -627,7 +641,7 @@ async function runGenerateAiJob(
       RunSidecarJobOptions,
       'dataAccess' | 'generateListingDraft' | 'now' | 'prepareListingDraft'
     >
-  >
+  > & { pricingProviderEnv?: ResearchPriceJobDependencies['pricingProviderEnv'] }
 ): Promise<RunSidecarJobResult> {
   const listingId = asNonEmptyString(job.listing_id);
   const errorAt = asIsoTimestamp(options.now);
@@ -949,7 +963,11 @@ async function runGenerateAiJob(
     );
     const listingUpdateMs = elapsedMs(listingUpdateStartedAt);
     const enqueueResearchPriceStartedAt = nowMs();
-    await enqueueResearchPriceAfterGenerate(options.dataAccess, reviewListing);
+    await enqueueResearchPriceAfterGenerate(
+      options.dataAccess,
+      reviewListing,
+      options.pricingProviderEnv
+    );
     const enqueueResearchPriceMs = elapsedMs(enqueueResearchPriceStartedAt);
     const completedJob = await options.dataAccess.jobs.complete(job.id);
 
@@ -1336,6 +1354,7 @@ export async function runSidecarJob(
         generateListingDraft: runGenerateDraft,
         now,
         prepareListingDraft,
+        pricingProviderEnv: options.researchPrice?.pricingProviderEnv,
       });
     case PUBLISH_JOB_TYPE:
       return await runPublishJob(runnableJob, {

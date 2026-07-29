@@ -4567,19 +4567,19 @@ describe('shared repositories', () => {
 
   it('normalizes pricing provider mode from canonical, legacy, and missing settings', () => {
     expect(getPricingProviderMode(appSettingsRow)).toBe('soldcomps');
-    expect(getPricingProviderMode({ pricing_provider_mode: 'apify' })).toBe('apify');
+    expect(getPricingProviderMode({ pricing_provider_mode: 'apify' })).toBe('off');
+    expect(getPricingProviderMode({ pricing_provider_mode: 'unexpected' })).toBe('off');
     expect(getPricingProviderMode({ pricing_service_enabled: false })).toBe('off');
     expect(getPricingProviderMode({ pricing_provider_mode: null })).toBe('soldcomps');
     expect(getPricingProviderMode(null)).toBe('soldcomps');
   });
 
-  it('treats only off as disabled pricing mode', () => {
+  it('enables only selectable soldcomps pricing mode', () => {
     expect(isPricingProviderModeEnabled('off')).toBe(false);
     expect(isPricingProviderModeEnabled('soldcomps')).toBe(true);
-    expect(isPricingProviderModeEnabled('apify')).toBe(true);
     expect(isPricingEnabled({ pricing_provider_mode: 'off' })).toBe(false);
     expect(isPricingEnabled({ pricing_provider_mode: 'soldcomps' })).toBe(true);
-    expect(isPricingEnabled({ pricing_provider_mode: 'apify' })).toBe(true);
+    expect(isPricingEnabled({ pricing_provider_mode: 'apify' })).toBe(false);
     expect(isPricingEnabled({ pricing_service_enabled: false })).toBe(false);
     expect(isPricingEnabled(null)).toBe(true);
   });

@@ -5,7 +5,7 @@ import type {
   ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import { priceListingNow } from '@/jobs/research-price-job.js';
@@ -16,6 +16,20 @@ import {
   createProductionPricingAnalyst,
   SoldCompsPricingProviderError,
 } from '@/pricing/index.js';
+
+const originalSoldCompsEnabled = process.env.SOLDCOMPS_ENABLED;
+
+beforeEach(() => {
+  process.env.SOLDCOMPS_ENABLED = 'true';
+});
+
+afterAll(() => {
+  if (originalSoldCompsEnabled === undefined) {
+    delete process.env.SOLDCOMPS_ENABLED;
+  } else {
+    process.env.SOLDCOMPS_ENABLED = originalSoldCompsEnabled;
+  }
+});
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -74,7 +88,9 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   };
 }
 
-function createResearchRow(overrides: Partial<ListingPriceResearchRow> = {}): ListingPriceResearchRow {
+function createResearchRow(
+  overrides: Partial<ListingPriceResearchRow> = {}
+): ListingPriceResearchRow {
   return {
     comps: [],
     created_at: '2026-06-11T12:05:00.000Z',
@@ -99,9 +115,7 @@ function createResearchRow(overrides: Partial<ListingPriceResearchRow> = {}): Li
   };
 }
 
-function createAppSettings(
-  overrides: Partial<AppSettingsRow> = {}
-): AppSettingsRow {
+function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettingsRow {
   return {
     created_at: '2026-06-11T12:00:00.000Z',
     ebay_policy_ids: {},
@@ -178,46 +192,42 @@ function createDataAccess(
 ) {
   const getByListingId = vi.fn().mockResolvedValue(listing);
   const operationLog: string[] = [];
-  const update = vi.fn().mockImplementation(async (_listingId: string, changes: { price?: number }) =>
-    {
+  const update = vi
+    .fn()
+    .mockImplementation(async (_listingId: string, changes: { price?: number }) => {
       operationLog.push('listing.update');
       return createListing({
         ...(listing ?? createListing()),
         price: changes.price ?? listing?.price ?? null,
       });
-    }
-  );
+    });
   const create = vi.fn().mockImplementation(async () => {
     operationLog.push('research.create');
     return createResearchRow();
   });
-  const markFailed = vi.fn().mockImplementation(async (input) =>
-    {
-      operationLog.push('research.markFailed');
-      return createResearchRow({
-        error_code: input.error_code,
-        error_message: input.error_message,
-        id: input.id,
-        raw_result_json: input.raw_result_json,
-        status: 'failed',
-      });
-    }
-  );
-  const markSucceeded = vi.fn().mockImplementation(async (input) =>
-    {
-      operationLog.push('research.markSucceeded');
-      return createResearchRow({
-        confidence: input.confidence,
-        id: input.id,
-        median_sold_price: input.median_sold_price,
-        query: input.query,
-        raw_result_json: input.raw_result_json,
-        sold_count: input.sold_count,
-        status: 'succeeded',
-        suggested_price: input.suggested_price,
-      });
-    }
-  );
+  const markFailed = vi.fn().mockImplementation(async (input) => {
+    operationLog.push('research.markFailed');
+    return createResearchRow({
+      error_code: input.error_code,
+      error_message: input.error_message,
+      id: input.id,
+      raw_result_json: input.raw_result_json,
+      status: 'failed',
+    });
+  });
+  const markSucceeded = vi.fn().mockImplementation(async (input) => {
+    operationLog.push('research.markSucceeded');
+    return createResearchRow({
+      confidence: input.confidence,
+      id: input.id,
+      median_sold_price: input.median_sold_price,
+      query: input.query,
+      raw_result_json: input.raw_result_json,
+      sold_count: input.sold_count,
+      status: 'succeeded',
+      suggested_price: input.suggested_price,
+    });
+  });
   const resolveForTask = vi.fn().mockImplementation(async () => {
     if (options.aiModelRouteError) {
       throw options.aiModelRouteError;
@@ -284,6 +294,31 @@ function createDataAccess(
 }
 
 describe('priceListingNow', () => {
+  it('skips provider resolution when SoldComps runtime is disabled', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+    const createPricingProvider = vi.fn();
+
+    await expect(
+      priceListingNow(listing.listing_id, {
+        createPricingProvider,
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+        pricingProviderEnv: { SOLDCOMPS_ENABLED: 'false' },
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
+      context: expect.objectContaining({
+        soldcomps_enabled: false,
+      }),
+    });
+
+    expect(createPricingProvider).not.toHaveBeenCalled();
+    expect(spies.create).not.toHaveBeenCalled();
+    expect(spies.markFailed).not.toHaveBeenCalled();
+    expect(spies.update).not.toHaveBeenCalled();
+  });
+
   it('skips provider resolution when pricing disabled', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
@@ -341,10 +376,18 @@ describe('priceListingNow', () => {
         actorId: 'actor-123',
       },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
         createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
         createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
-        createVictorComp(26, '2026-05-29T10:00:00.000Z', '2023 Panini Prizm RC Victor Wembanyama #136'),
+        createVictorComp(
+          26,
+          '2026-05-29T10:00:00.000Z',
+          '2023 Panini Prizm RC Victor Wembanyama #136'
+        ),
       ],
     });
 
@@ -404,11 +447,7 @@ describe('priceListingNow', () => {
     });
     const { dataAccess, spies } = createDataAccess(listing);
     const normalizedComps = Array.from({ length: 8 }, (_, index) =>
-      createNormalizedComp(
-        `comp-${index + 1}`,
-        '1993 Topps #1 Sample Player NM-MT',
-        117.63
-      )
+      createNormalizedComp(`comp-${index + 1}`, '1993 Topps #1 Sample Player NM-MT', 117.63)
     );
     const normalizeComps = vi.fn().mockReturnValue({
       comps: normalizedComps,
@@ -488,10 +527,18 @@ describe('priceListingNow', () => {
         actorId: 'actor-123',
       },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
         createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
         createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
-        createVictorComp(26, '2026-05-29T10:00:00.000Z', '2023 Panini Prizm RC Victor Wembanyama #136'),
+        createVictorComp(
+          26,
+          '2026-05-29T10:00:00.000Z',
+          '2023 Panini Prizm RC Victor Wembanyama #136'
+        ),
       ],
     });
     spies.markSucceeded.mockImplementationOnce(async () => {
@@ -648,8 +695,16 @@ describe('priceListingNow', () => {
             },
             soldComps: [
               createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179'),
-              createVictorComp(22, '2026-05-31T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179 EX'),
-              createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179 NM'),
+              createVictorComp(
+                22,
+                '2026-05-31T10:00:00.000Z',
+                'Darryl Strawberry 1997 Fleer #179 EX'
+              ),
+              createVictorComp(
+                24,
+                '2026-05-30T10:00:00.000Z',
+                'Darryl Strawberry 1997 Fleer #179 NM'
+              ),
             ],
             soldCompsUsage: {
               limit: 50,
@@ -698,50 +753,53 @@ describe('priceListingNow', () => {
     ['negative', -1],
     ['NaN', Number.NaN],
     ['Infinity', Number.POSITIVE_INFINITY],
-  ])('rejects %s deterministic suggested prices before research success or listing update', async (_label, value) => {
-    const listing = createListing({ price: 19.99 });
-    const { dataAccess, spies } = createDataAccess(listing);
+  ])(
+    'rejects %s deterministic suggested prices before research success or listing update',
+    async (_label, value) => {
+      const listing = createListing({ price: 19.99 });
+      const { dataAccess, spies } = createDataAccess(listing);
 
-    await expect(
-      priceListingNow(listing.listing_id, {
-        createPricingProvider: () =>
-          ({
-            fetchSoldComps: vi.fn().mockResolvedValue({
-              fetchedAt: '2026-06-12T10:05:00.000Z',
-              provider: 'fixture',
-              query: 'query',
-              rawResult: {},
-              soldComps: [
-                createVictorComp(20, '2026-06-01T10:00:00.000Z'),
-                createVictorComp(22, '2026-05-31T10:00:00.000Z'),
-              ],
-            }),
-            name: 'fixture',
-          }) as never,
-        computeStats: vi.fn(() => ({
-          currency: 'USD',
-          deterministicSuggestedPrice: value,
-          highSoldPrice: 22,
-          ignored: [],
-          lowSoldPrice: 20,
-          medianSoldPrice: 21,
-          soldCount: 2,
-        })),
-        dataAccess,
-        now: () => new Date('2026-06-12T10:00:00.000Z'),
-      })
-    ).rejects.toMatchObject({
-      code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
-    });
+      await expect(
+        priceListingNow(listing.listing_id, {
+          createPricingProvider: () =>
+            ({
+              fetchSoldComps: vi.fn().mockResolvedValue({
+                fetchedAt: '2026-06-12T10:05:00.000Z',
+                provider: 'fixture',
+                query: 'query',
+                rawResult: {},
+                soldComps: [
+                  createVictorComp(20, '2026-06-01T10:00:00.000Z'),
+                  createVictorComp(22, '2026-05-31T10:00:00.000Z'),
+                ],
+              }),
+              name: 'fixture',
+            }) as never,
+          computeStats: vi.fn(() => ({
+            currency: 'USD',
+            deterministicSuggestedPrice: value,
+            highSoldPrice: 22,
+            ignored: [],
+            lowSoldPrice: 20,
+            medianSoldPrice: 21,
+            soldCount: 2,
+          })),
+          dataAccess,
+          now: () => new Date('2026-06-12T10:00:00.000Z'),
+        })
+      ).rejects.toMatchObject({
+        code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+      });
 
-    expect(spies.markSucceeded).not.toHaveBeenCalled();
-    expect(spies.update).not.toHaveBeenCalled();
-    expect(spies.markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
-      })
-    );
-  });
+      expect(spies.markSucceeded).not.toHaveBeenCalled();
+      expect(spies.update).not.toHaveBeenCalled();
+      expect(spies.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
+        })
+      );
+    }
+  );
 
   it('preserves soldcomps query-fallback diagnostics in failed research persistence', async () => {
     const listing = createListing({
@@ -941,7 +999,9 @@ describe('priceListingNow', () => {
       provider: 'apify',
       query: strictQuery,
       rawResult: { actorId: 'actor-123' },
-      soldComps: [createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179')],
+      soldComps: [
+        createVictorComp(20, '2026-06-01T10:00:00.000Z', 'Darryl Strawberry 1997 Fleer #179'),
+      ],
     });
     const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
       mode === 'soldcomps'
@@ -993,35 +1053,31 @@ describe('priceListingNow', () => {
     );
   });
 
-  it('allows apify pricing mode without preflight rejection', async () => {
+  it('rejects legacy persisted apify mode before provider resolution', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
       listing,
       createAppSettings({ pricing_provider_mode: 'apify' })
     );
+    const createPricingProvider = vi.fn();
 
-    await priceListingNow(listing.listing_id, {
-      createPricingProvider: () =>
-        ({
-          fetchSoldComps: vi.fn().mockResolvedValue({
-            fetchedAt: '2026-06-12T10:05:00.000Z',
-            provider: 'apify',
-            query: 'query',
-            rawResult: { actorId: 'actor-123' },
-            soldComps: [
-              createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
-              createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
-              createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
-            ],
-          }),
-          name: 'apify',
-        }) as never,
-      dataAccess,
-      now: () => new Date('2026-06-12T10:00:00.000Z'),
+    await expect(
+      priceListingNow(listing.listing_id, {
+        createPricingProvider,
+        dataAccess,
+        now: () => new Date('2026-06-12T10:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({
+      code: JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
+      context: expect.objectContaining({
+        invalid_pricing_provider_mode: 'apify',
+        pricing_provider_mode: 'off',
+      }),
     });
 
-    expect(spies.create).toHaveBeenCalledTimes(1);
-    expect(spies.update).toHaveBeenCalledTimes(1);
+    expect(createPricingProvider).not.toHaveBeenCalled();
+    expect(spies.create).not.toHaveBeenCalled();
+    expect(spies.update).not.toHaveBeenCalled();
   });
 
   it('does not inject shared requestedCompCount into apify provider input', async () => {
@@ -1033,7 +1089,11 @@ describe('priceListingNow', () => {
       query: 'query',
       rawResult: { actorId: 'actor-123' },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
         createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
         createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
       ],
@@ -1066,7 +1126,11 @@ describe('priceListingNow', () => {
       query: 'query',
       rawResult: { actorId: 'actor-123' },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
         createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
         createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
       ],
@@ -1222,9 +1286,7 @@ describe('priceListingNow', () => {
       },
     });
 
-    expect(
-      analyze.mock.calls[0]?.[0]?.comps.map((comp: { title: string }) => comp.title)
-    ).toEqual([
+    expect(analyze.mock.calls[0]?.[0]?.comps.map((comp: { title: string }) => comp.title)).toEqual([
       '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE EX/EX+',
       '1955 TOPPS BASEBALL CARD #98 JOHNNY RIDDLE VG',
       '1955 Topps Set Break #98 Johnny Riddle VG-VGEX St Louis Cardinals',
@@ -1366,7 +1428,8 @@ describe('priceListingNow', () => {
               {
                 price: { currency: 'USD', value: 99 },
                 soldDate: '2026-05-30T10:00:00.000Z',
-                title: '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
+                title:
+                  '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
               },
             ],
           }),
@@ -1410,7 +1473,8 @@ describe('priceListingNow', () => {
             rejected: expect.arrayContaining([
               expect.objectContaining({
                 reason: 'exact_card_number_mismatch',
-                title: '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
+                title:
+                  '1997 Fleer Ultra - Darryl Strawberry #G106 Gold Medallion New York Yankees Card',
               }),
             ]),
           }),
@@ -1467,12 +1531,36 @@ describe('priceListingNow', () => {
               },
             },
             soldComps: [
-              createVictorComp(12, '2026-06-01T10:00:00.000Z', '1966 Topps Football #125 John Hadl'),
-              createVictorComp(13, '2026-05-31T10:00:00.000Z', '1966 Topps Football #125 John Hadl EX'),
-              createVictorComp(11, '2026-05-30T10:00:00.000Z', '1966 Topps Football #125 John Hadl VG'),
-              createVictorComp(10, '2026-05-29T10:00:00.000Z', '1966 Topps Football #125 John Hadl low grade'),
-              createVictorComp(14, '2026-05-28T10:00:00.000Z', '1966 Topps Football #125 John Hadl sharp'),
-              createVictorComp(9, '2026-05-27T10:00:00.000Z', '1966 Topps Football #125 John Hadl crease'),
+              createVictorComp(
+                12,
+                '2026-06-01T10:00:00.000Z',
+                '1966 Topps Football #125 John Hadl'
+              ),
+              createVictorComp(
+                13,
+                '2026-05-31T10:00:00.000Z',
+                '1966 Topps Football #125 John Hadl EX'
+              ),
+              createVictorComp(
+                11,
+                '2026-05-30T10:00:00.000Z',
+                '1966 Topps Football #125 John Hadl VG'
+              ),
+              createVictorComp(
+                10,
+                '2026-05-29T10:00:00.000Z',
+                '1966 Topps Football #125 John Hadl low grade'
+              ),
+              createVictorComp(
+                14,
+                '2026-05-28T10:00:00.000Z',
+                '1966 Topps Football #125 John Hadl sharp'
+              ),
+              createVictorComp(
+                9,
+                '2026-05-27T10:00:00.000Z',
+                '1966 Topps Football #125 John Hadl crease'
+              ),
             ],
           }),
           name: 'soldcomps',
@@ -1567,9 +1655,21 @@ describe('priceListingNow', () => {
             query: '1952 Topps #12 Sample Player',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
-              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
-              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(
+                5.89,
+                '2026-06-01T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG-EX'
+              ),
+              createVictorComp(
+                5.89,
+                '2026-05-31T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG/EX'
+              ),
+              createVictorComp(
+                4.7,
+                '2026-05-30T10:00:00.000Z',
+                '1952 Topps #12 Sample Player low grade'
+              ),
               createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
             ],
           }),
@@ -1633,7 +1733,9 @@ describe('priceListingNow', () => {
       })
     );
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 4.79 });
-    expect(spies.markSucceeded.mock.calls[0]?.[0]?.llm_reasoning_json).not.toHaveProperty('warnings');
+    expect(spies.markSucceeded.mock.calls[0]?.[0]?.llm_reasoning_json).not.toHaveProperty(
+      'warnings'
+    );
   });
 
   it('passes raw-card single shipping-default context into normalization', async () => {
@@ -1814,7 +1916,9 @@ describe('priceListingNow', () => {
       },
     });
     expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.actorInput.keywords');
-    expect(markSucceededInput?.raw_result_json).not.toHaveProperty('input.diagnosticContext.itemSpecifics');
+    expect(markSucceededInput?.raw_result_json).not.toHaveProperty(
+      'input.diagnosticContext.itemSpecifics'
+    );
     expect(markSucceededInput?.raw_result_json).not.toHaveProperty('output.sampleTitles');
   });
 
@@ -1887,7 +1991,9 @@ describe('priceListingNow', () => {
     });
     const { dataAccess } = createDataAccess(listing);
     const normalizeComps = vi.fn().mockReturnValue({
-      comps: [createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama Rookie Card', 35)],
+      comps: [
+        createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama Rookie Card', 35),
+      ],
       rejected: [],
     });
 
@@ -1940,7 +2046,9 @@ describe('priceListingNow', () => {
     });
     const { dataAccess } = createDataAccess(listing);
     const normalizeComps = vi.fn().mockReturnValue({
-      comps: [createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama Rookie Card', 35)],
+      comps: [
+        createNormalizedComp('comp-1', '2023 Panini Prizm Victor Wembanyama Rookie Card', 35),
+      ],
       rejected: [],
     });
 
@@ -2021,9 +2129,21 @@ describe('priceListingNow', () => {
             query: '1952 Topps #12 Sample Player',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
-              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
-              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(
+                5.89,
+                '2026-06-01T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG-EX'
+              ),
+              createVictorComp(
+                5.89,
+                '2026-05-31T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG/EX'
+              ),
+              createVictorComp(
+                4.7,
+                '2026-05-30T10:00:00.000Z',
+                '1952 Topps #12 Sample Player low grade'
+              ),
               createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
             ],
           }),
@@ -2121,9 +2241,21 @@ describe('priceListingNow', () => {
             query: '1952 Topps #12 Sample Player',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
-              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
-              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(
+                5.89,
+                '2026-06-01T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG-EX'
+              ),
+              createVictorComp(
+                5.89,
+                '2026-05-31T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG/EX'
+              ),
+              createVictorComp(
+                4.7,
+                '2026-05-30T10:00:00.000Z',
+                '1952 Topps #12 Sample Player low grade'
+              ),
               createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
             ],
           }),
@@ -2185,9 +2317,21 @@ describe('priceListingNow', () => {
             query: '1952 Topps #12 Sample Player',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
-              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
-              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(
+                5.89,
+                '2026-06-01T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG-EX'
+              ),
+              createVictorComp(
+                5.89,
+                '2026-05-31T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG/EX'
+              ),
+              createVictorComp(
+                4.7,
+                '2026-05-30T10:00:00.000Z',
+                '1952 Topps #12 Sample Player low grade'
+              ),
               createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
             ],
           }),
@@ -2269,9 +2413,21 @@ describe('priceListingNow', () => {
             query: '1952 Topps #12 Sample Player',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
-              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
-              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(
+                5.89,
+                '2026-06-01T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG-EX'
+              ),
+              createVictorComp(
+                5.89,
+                '2026-05-31T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG/EX'
+              ),
+              createVictorComp(
+                4.7,
+                '2026-05-30T10:00:00.000Z',
+                '1952 Topps #12 Sample Player low grade'
+              ),
               createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
             ],
           }),
@@ -2281,9 +2437,13 @@ describe('priceListingNow', () => {
       normalizeComps,
       now: () => new Date('2026-06-12T10:00:00.000Z'),
       pricingAnalyst: {
-        analyze: vi.fn().mockRejectedValue(
-          new Error('conditionAdjustedPrice must equal deterministic condition-adjusted target 5.63')
-        ),
+        analyze: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              'conditionAdjustedPrice must equal deterministic condition-adjusted target 5.63'
+            )
+          ),
         name: 'test-analyst',
       },
     });
@@ -2300,7 +2460,8 @@ describe('priceListingNow', () => {
               reason: 'llm_condition_adjusted_price_out_of_window',
               retryable: false,
               severity: 'warning',
-              summary: 'LLM returned off-target condition-adjusted price. Deterministic price used.',
+              summary:
+                'LLM returned off-target condition-adjusted price. Deterministic price used.',
             }),
           ],
         }),
@@ -2358,9 +2519,21 @@ describe('priceListingNow', () => {
             query: '1952 Topps #12 Sample Player',
             rawResult: { actorId: 'actor-123' },
             soldComps: [
-              createVictorComp(5.89, '2026-06-01T10:00:00.000Z', '1952 Topps #12 Sample Player VG-EX'),
-              createVictorComp(5.89, '2026-05-31T10:00:00.000Z', '1952 Topps #12 Sample Player VG/EX'),
-              createVictorComp(4.7, '2026-05-30T10:00:00.000Z', '1952 Topps #12 Sample Player low grade'),
+              createVictorComp(
+                5.89,
+                '2026-06-01T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG-EX'
+              ),
+              createVictorComp(
+                5.89,
+                '2026-05-31T10:00:00.000Z',
+                '1952 Topps #12 Sample Player VG/EX'
+              ),
+              createVictorComp(
+                4.7,
+                '2026-05-30T10:00:00.000Z',
+                '1952 Topps #12 Sample Player low grade'
+              ),
               createVictorComp(6.1, '2026-05-29T10:00:00.000Z', '1952 Topps #12 Sample Player EX'),
             ],
           }),
@@ -2435,7 +2608,11 @@ describe('priceListingNow', () => {
           used: 43,
         },
         soldComps: [
-          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(
+            20,
+            '2026-06-01T10:00:00.000Z',
+            '2023 Panini Prizm Victor Wembanyama #136'
+          ),
           createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
           createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
         ],
@@ -2481,7 +2658,11 @@ describe('priceListingNow', () => {
           used: null,
         },
         soldComps: [
-          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(
+            20,
+            '2026-06-01T10:00:00.000Z',
+            '2023 Panini Prizm Victor Wembanyama #136'
+          ),
           createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
           createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
         ],
@@ -2498,7 +2679,11 @@ describe('priceListingNow', () => {
           used: null,
         },
         soldComps: [
-          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+          createVictorComp(
+            20,
+            '2026-06-01T10:00:00.000Z',
+            '2023 Panini Prizm Victor Wembanyama #136'
+          ),
           createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
           createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
         ],
@@ -2569,7 +2754,11 @@ describe('priceListingNow', () => {
             used: 43,
           },
           soldComps: [
-            createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+            createVictorComp(
+              20,
+              '2026-06-01T10:00:00.000Z',
+              '2023 Panini Prizm Victor Wembanyama #136'
+            ),
             createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
             createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
           ],
@@ -2601,58 +2790,33 @@ describe('priceListingNow', () => {
     );
   });
 
-  it('uses persisted apify mode for runtime provider resolution', async () => {
-    const listing = createListing();
-    const { dataAccess } = createDataAccess(
-      listing,
-      createAppSettings({ pricing_provider_mode: 'apify' })
-    );
-    const resolvePricingProvider = vi.fn().mockReturnValue({
-      fetchSoldComps: vi.fn().mockResolvedValue({
-        fetchedAt: '2026-06-12T10:05:00.000Z',
-        provider: 'apify',
-        query: 'query',
-        rawResult: { provider: 'apify' },
-        soldComps: [
-          createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
-          createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
-          createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
-        ],
-      }),
-      name: 'apify',
-    });
-
-    const result = await priceListingNow(listing.listing_id, {
-      dataAccess,
-      now: () => new Date('2026-06-12T10:00:00.000Z'),
-      resolvePricingProvider,
-    });
-
-    expect(resolvePricingProvider).toHaveBeenCalledWith('apify');
-    expect(result.provider).toBe('apify');
-  });
-
   it('falls back from soldcomps to apify when selected provider call fails', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
       listing,
       createAppSettings({ pricing_provider_mode: 'soldcomps' })
     );
-    const soldCompsFetch = vi.fn().mockRejectedValue(
-      new SoldCompsPricingProviderError(
-        'soldcomps_provider_failure',
-        'provider_failure',
-        'SoldComps upstream failed',
-        'victor query'
-      )
-    );
+    const soldCompsFetch = vi
+      .fn()
+      .mockRejectedValue(
+        new SoldCompsPricingProviderError(
+          'soldcomps_provider_failure',
+          'provider_failure',
+          'SoldComps upstream failed',
+          'victor query'
+        )
+      );
     const apifyFetch = vi.fn().mockResolvedValue({
       fetchedAt: '2026-06-12T10:05:00.000Z',
       provider: 'apify',
       query: 'query',
       rawResult: { actorId: 'actor-123' },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
         createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
         createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
       ],
@@ -2712,44 +2876,55 @@ describe('priceListingNow', () => {
     expect(latency).not.toHaveProperty('updateListingMs');
   });
 
-  it('falls back from apify to soldcomps and persists soldcomps usage snapshot', async () => {
+  it('falls back once to apify when SoldComps returns malformed provider output', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
       listing,
-      createAppSettings({ pricing_provider_mode: 'apify' })
+      createAppSettings({ pricing_provider_mode: 'soldcomps' })
     );
-    const apifyFetch = vi.fn().mockRejectedValue(
-      new ApifyPricingProviderError(
-        'apify_provider_failure',
-        'provider_failure',
-        'Apify upstream failed',
-        'apify query'
+    const soldCompsFetch = vi.fn().mockRejectedValue(
+      new SoldCompsPricingProviderError(
+        'soldcomps_output_invalid',
+        'malformed_output',
+        'SoldComps output malformed: apiKey=soldcomps-secret',
+        'soldcomps query token=soldcomps-secret',
+        {
+          rawResult: {
+            apiKey: 'opaque-primary-api-key',
+            diagnostic: 'Bearer soldcomps-secret',
+            nested: {
+              authorization: 'opaque-primary-authorization',
+              entries: [
+                {
+                  clientSecret: 'opaque-primary-client-secret',
+                  password: 'opaque-primary-password',
+                  tokenCount: 2,
+                },
+              ],
+            },
+          },
+        }
       )
     );
-    const soldCompsFetch = vi.fn().mockResolvedValue({
+    const apifyFetch = vi.fn().mockResolvedValue({
       fetchedAt: '2026-06-12T10:05:00.000Z',
-      provider: 'soldcomps',
-      query: 'query',
+      provider: 'apify',
+      query: 'victor query',
       rawResult: {
-        input: { query: 'query' },
-        output: { itemCount: 3 },
+        actorId: 'actor-123',
+        apiKey: 'opaque-success-api-key',
+        nested: [{ password: 'opaque-success-password', tokenCount: 4 }],
       },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
-        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
-        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(20, '2026-06-01T10:00:00.000Z'),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z'),
       ],
-      soldCompsUsage: {
-        limit: 50,
-        source: 'headers',
-        updatedAt: '2026-06-12T10:05:00.000Z',
-        used: 10,
-      },
     });
     const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
-      mode === 'apify'
-        ? ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
-        : ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+      mode === 'soldcomps'
+        ? ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+        : ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
     );
 
     const result = await priceListingNow(listing.listing_id, {
@@ -2759,35 +2934,57 @@ describe('priceListingNow', () => {
     });
 
     expect(result).toMatchObject({
-      provider: 'soldcomps',
-      selectedProviderMode: 'apify',
+      provider: 'apify',
+      selectedProviderMode: 'soldcomps',
     });
-    expect(spies.updateAppSettings).toHaveBeenCalledWith(
-      {
-        soldcomps_usage_snapshot: {
-          limit: 50,
-          source: 'headers',
-          updatedAt: '2026-06-12T10:05:00.000Z',
-          used: 10,
-        },
-      },
-      'default'
+    expect(soldCompsFetch).toHaveBeenCalledTimes(1);
+    expect(apifyFetch).toHaveBeenCalledTimes(1);
+    expect(resolvePricingProvider.mock.calls.map(([mode]) => mode)).toEqual(
+      expect.arrayContaining(['soldcomps', 'apify'])
     );
-    expect(spies.markSucceeded.mock.calls[0]?.[0]?.raw_result_json).toMatchObject({
+    const rawResultJson = spies.markSucceeded.mock.calls.at(-1)?.[0].raw_result_json;
+    const serializedRawResult = JSON.stringify(rawResultJson);
+    expect(serializedRawResult).not.toContain('soldcomps-secret');
+    expect(serializedRawResult).not.toContain('opaque-primary-api-key');
+    expect(serializedRawResult).not.toContain('opaque-primary-authorization');
+    expect(serializedRawResult).not.toContain('opaque-primary-client-secret');
+    expect(serializedRawResult).not.toContain('opaque-primary-password');
+    expect(serializedRawResult).not.toContain('opaque-success-api-key');
+    expect(serializedRawResult).not.toContain('opaque-success-password');
+    expect(rawResultJson).toMatchObject({
+      apiKey: '[redacted]',
+      nested: [{ password: '[redacted]', tokenCount: 4 }],
+    });
+    expect(rawResultJson).toMatchObject({
       providerRouting: {
-        actualProvider: 'soldcomps',
+        actualProvider: 'apify',
         fallbackAttempted: true,
-        fallbackProvider: 'soldcomps',
+        fallbackProvider: 'apify',
         fallbackSucceeded: true,
         firstProviderFailure: {
-          message: 'Apify upstream failed',
-          provider: 'apify',
-          providerFailureCategory: 'provider_failure',
-          providerFailureCode: 'apify_provider_failure',
-          query: 'apify query',
+          message: 'SoldComps output malformed: [redacted-secret:so***et]',
+          provider: 'soldcomps',
+          providerFailureCategory: 'malformed_output',
+          providerFailureCode: 'soldcomps_output_invalid',
+          query: 'soldcomps query [redacted-secret:so***et]',
+          rawResult: {
+            apiKey: '[redacted]',
+            diagnostic: 'Bearer [redacted-token]',
+            nested: {
+              authorization: '[redacted]',
+              entries: [
+                {
+                  clientSecret: '[redacted]',
+                  password: '[redacted]',
+                  tokenCount: 2,
+                },
+              ],
+            },
+          },
+          workflowSafe: true,
         },
-        selectedProvider: 'apify',
-        selectedProviderMode: 'apify',
+        selectedProvider: 'soldcomps',
+        selectedProviderMode: 'soldcomps',
       },
     });
   });
@@ -2796,22 +2993,26 @@ describe('priceListingNow', () => {
     const listing = createListing();
     const { dataAccess } = createDataAccess(
       listing,
-      createAppSettings({ pricing_provider_mode: 'apify' })
+      createAppSettings({ pricing_provider_mode: 'soldcomps' })
     );
-    const apifyFetch = vi.fn().mockResolvedValue({
+    const soldCompsFetch = vi.fn().mockResolvedValue({
       fetchedAt: '2026-06-12T10:05:00.000Z',
-      provider: 'apify',
+      provider: 'soldcomps',
       query: 'query',
-      rawResult: { actorId: 'actor-123' },
+      rawResult: { provider: 'soldcomps' },
       soldComps: [
-        createVictorComp(20, '2026-06-01T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
       ],
     });
-    const soldCompsFetch = vi.fn();
+    const apifyFetch = vi.fn();
     const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
-      mode === 'apify'
-        ? ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
-        : ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+      mode === 'soldcomps'
+        ? ({ fetchSoldComps: soldCompsFetch, name: 'soldcomps' } as never)
+        : ({ fetchSoldComps: apifyFetch, name: 'apify' } as never)
     );
 
     await expect(
@@ -2833,8 +3034,8 @@ describe('priceListingNow', () => {
       code: JOB_ERROR_CODES.RESEARCH_PRICE_SUGGESTED_PRICE_INVALID,
     });
 
-    expect(apifyFetch).toHaveBeenCalledTimes(1);
-    expect(soldCompsFetch).not.toHaveBeenCalled();
+    expect(soldCompsFetch).toHaveBeenCalledTimes(1);
+    expect(apifyFetch).not.toHaveBeenCalled();
   });
 
   it('fails selected soldcomps mode clearly without fixture fallback when config missing', async () => {
@@ -2845,7 +3046,7 @@ describe('priceListingNow', () => {
       priceListingNow(listing.listing_id, {
         dataAccess,
         now: () => new Date('2026-06-12T10:00:00.000Z'),
-        pricingProviderEnv: {},
+        pricingProviderEnv: { SOLDCOMPS_ENABLED: 'true' },
       })
     ).rejects.toMatchObject({
       category: 'user_fixable',
@@ -2870,14 +3071,16 @@ describe('priceListingNow', () => {
       priceListingNow(listing.listing_id, {
         createPricingProvider: () =>
           ({
-            fetchSoldComps: vi.fn().mockRejectedValue(
-              new ApifyPricingProviderError(
-                'apify_auth_failed',
-                'auth_config',
-                'Bearer super-secret-token https://api.apify.com/v2/acts',
-                'token=super-secret-token'
-              )
-            ),
+            fetchSoldComps: vi
+              .fn()
+              .mockRejectedValue(
+                new ApifyPricingProviderError(
+                  'apify_auth_failed',
+                  'auth_config',
+                  'Bearer super-secret-token https://api.apify.com/v2/acts',
+                  'token=super-secret-token'
+                )
+              ),
             name: 'apify',
           }) as never,
         dataAccess,
@@ -2909,25 +3112,29 @@ describe('priceListingNow', () => {
     const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
       mode === 'soldcomps'
         ? ({
-            fetchSoldComps: vi.fn().mockRejectedValue(
-              new SoldCompsPricingProviderError(
-                'soldcomps_rate_limited',
-                'rate_limit',
-                'Bearer soldcomps-secret token=soldcomps-secret',
-                'player=victor'
-              )
-            ),
+            fetchSoldComps: vi
+              .fn()
+              .mockRejectedValue(
+                new SoldCompsPricingProviderError(
+                  'soldcomps_rate_limited',
+                  'rate_limit',
+                  'Bearer soldcomps-secret token=soldcomps-secret',
+                  'player=victor'
+                )
+              ),
             name: 'soldcomps',
           } as never)
         : ({
-            fetchSoldComps: vi.fn().mockRejectedValue(
-              new ApifyPricingProviderError(
-                'apify_provider_failure',
-                'provider_failure',
-                'Bearer apify-secret token=apify-secret',
-                'player=victor'
-              )
-            ),
+            fetchSoldComps: vi
+              .fn()
+              .mockRejectedValue(
+                new ApifyPricingProviderError(
+                  'apify_provider_failure',
+                  'provider_failure',
+                  'Bearer apify-secret token=apify-secret',
+                  'player=victor'
+                )
+              ),
             name: 'apify',
           } as never)
     );
@@ -2972,35 +3179,44 @@ describe('priceListingNow', () => {
     });
   });
 
-  it('persists fallback diagnostics when alternate provider also fails', async () => {
+  it('persists redacted malformed primary and fallback failure diagnostics when apify also fails', async () => {
     const listing = createListing();
     const { dataAccess, spies } = createDataAccess(
       listing,
-      createAppSettings({ pricing_provider_mode: 'apify' })
+      createAppSettings({ pricing_provider_mode: 'soldcomps' })
     );
     const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
-      mode === 'apify'
+      mode === 'soldcomps'
         ? ({
             fetchSoldComps: vi.fn().mockRejectedValue(
-              new ApifyPricingProviderError(
-                'apify_auth_failed',
-                'auth_config',
-                'Bearer apify-secret',
-                'token=apify-secret'
-              )
-            ),
-            name: 'apify',
-          } as never)
-        : ({
-            fetchSoldComps: vi.fn().mockRejectedValue(
               new SoldCompsPricingProviderError(
-                'soldcomps_rate_limited',
-                'rate_limit',
+                'soldcomps_output_invalid',
+                'malformed_output',
                 'Bearer soldcomps-secret',
-                'token=soldcomps-secret'
+                'token=soldcomps-secret',
+                {
+                  rawResult: {
+                    credential: 'opaque-dual-credential',
+                    diagnostic: 'apiKey=soldcomps-secret',
+                    nested: [{ 'x-api-key': 'opaque-dual-api-key', tokenCount: 3 }],
+                  },
+                }
               )
             ),
             name: 'soldcomps',
+          } as never)
+        : ({
+            fetchSoldComps: vi
+              .fn()
+              .mockRejectedValue(
+                new ApifyPricingProviderError(
+                  'apify_auth_failed',
+                  'auth_config',
+                  'Bearer apify-secret',
+                  'token=apify-secret'
+                )
+              ),
+            name: 'apify',
           } as never)
     );
 
@@ -3011,40 +3227,55 @@ describe('priceListingNow', () => {
         resolvePricingProvider,
       })
     ).rejects.toMatchObject({
-      category: 'recoverable',
+      category: 'user_fixable',
       code: JOB_ERROR_CODES.RESEARCH_PRICE_FAILED,
       context: expect.objectContaining({
         fallback_attempted: true,
-        fallback_provider: 'soldcomps',
+        fallback_provider: 'apify',
         fallback_succeeded: false,
-        provider: 'soldcomps',
-        provider_failure_category: 'rate_limit',
-        provider_failure_code: 'soldcomps_rate_limited',
-        selected_provider: 'apify',
-        selected_provider_mode: 'apify',
+        provider: 'apify',
+        provider_failure_category: 'auth_config',
+        provider_failure_code: 'apify_auth_failed',
+        selected_provider: 'soldcomps',
+        selected_provider_mode: 'soldcomps',
       }),
     });
 
     const markFailedInput = spies.markFailed.mock.calls[0]?.[0];
     expect(JSON.stringify(markFailedInput)).not.toContain('apify-secret');
     expect(JSON.stringify(markFailedInput)).not.toContain('soldcomps-secret');
+    expect(JSON.stringify(markFailedInput)).not.toContain('opaque-dual-credential');
+    expect(JSON.stringify(markFailedInput)).not.toContain('opaque-dual-api-key');
     expect(markFailedInput.raw_result_json).toMatchObject({
       failure: {
-        code: 'soldcomps_rate_limited',
-        provider: 'soldcomps',
+        code: 'apify_auth_failed',
+        provider: 'apify',
       },
       providerRouting: {
-        actualProvider: 'apify',
+        actualProvider: 'soldcomps',
         fallbackAttempted: true,
-        fallbackProvider: 'soldcomps',
-        fallbackSucceeded: false,
-        firstProviderFailure: {
+        fallbackFailure: {
+          message: 'Bearer [redacted-token]',
           provider: 'apify',
           providerFailureCategory: 'auth_config',
           providerFailureCode: 'apify_auth_failed',
+          query: '[redacted-secret:ap***et]',
+          workflowSafe: true,
         },
-        selectedProvider: 'apify',
-        selectedProviderMode: 'apify',
+        fallbackProvider: 'apify',
+        fallbackSucceeded: false,
+        firstProviderFailure: {
+          provider: 'soldcomps',
+          providerFailureCategory: 'malformed_output',
+          providerFailureCode: 'soldcomps_output_invalid',
+          rawResult: {
+            credential: '[redacted]',
+            diagnostic: '[redacted-secret:so***et]',
+            nested: [{ 'x-api-key': '[redacted]', tokenCount: 3 }],
+          },
+        },
+        selectedProvider: 'soldcomps',
+        selectedProviderMode: 'soldcomps',
       },
     });
   });

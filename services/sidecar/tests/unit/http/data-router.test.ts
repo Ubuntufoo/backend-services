@@ -550,6 +550,7 @@ describe('data API router', () => {
       listing_id: 'LIST-001',
       llm_price_explanation: 'Condition-adjusted midpoint from selected comps.',
       median_sold_price: 22,
+      price_adjustment: null,
       pricing_model_name: 'gemma-4-31b-it',
       provider: 'apify',
       query: 'josh beckett rookie card psa 8',
@@ -588,7 +589,9 @@ describe('data API router', () => {
       dismissed_pricing_warning_codes: ['llm_analysis_failed'],
     };
     dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => dismissedResearchRow);
-    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [dismissedResearchRow]);
+    dataAccess.listingPriceResearch.listLatestByListingIds = vi.fn(async () => [
+      dismissedResearchRow,
+    ]);
     const app = createApp(dataAccess);
 
     const listResponse = await request(app).get('/api/listings');
@@ -688,6 +691,7 @@ describe('data API router', () => {
           listing_id: 'LIST-001',
           llm_price_explanation: null,
           median_sold_price: null,
+          price_adjustment: null,
           pricing_model_name: null,
           provider: 'apify',
           query: 'failed query',
@@ -2154,6 +2158,23 @@ describe('data API router', () => {
     });
   });
 
+  it('serializes legacy apify pricing mode operationally as off', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.appSettings.get = vi.fn(async () => ({
+      ...appSettingsRow,
+      pricing_provider_mode: 'apify',
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app).get('/api/app-settings');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 'default',
+      pricing_provider_mode: 'off',
+    });
+  });
+
   it('returns null public SoldComps usage when persisted snapshot malformed', async () => {
     const dataAccess = createDataAccess();
     dataAccess.appSettings.get = vi.fn(async () => ({
@@ -2171,26 +2192,29 @@ describe('data API router', () => {
     expect(response.body).not.toHaveProperty('soldcomps_usage_snapshot');
   });
 
-  it('updates pricing_provider_mode through app settings', async () => {
-    const dataAccess = createDataAccess();
-    const app = createApp(dataAccess);
+  it.each(['off', 'soldcomps'] as const)(
+    'updates pricing_provider_mode to selectable mode %s',
+    async (pricingProviderMode) => {
+      const dataAccess = createDataAccess();
+      const app = createApp(dataAccess);
 
-    const response = await request(app).patch('/api/app-settings').send({
-      pricingProviderMode: 'off',
-    });
+      const response = await request(app).patch('/api/app-settings').send({
+        pricingProviderMode,
+      });
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      id: 'default',
-      pricing_provider_mode: 'off',
-    });
-    expect(dataAccess.appSettings.update).toHaveBeenCalledWith(
-      {
-        pricing_provider_mode: 'off',
-      },
-      'default'
-    );
-  });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        id: 'default',
+        pricing_provider_mode: pricingProviderMode,
+      });
+      expect(dataAccess.appSettings.update).toHaveBeenCalledWith(
+        {
+          pricing_provider_mode: pricingProviderMode,
+        },
+        'default'
+      );
+    }
+  );
 
   it('rejects invalid app settings update payloads', async () => {
     const dataAccess = createDataAccess();
@@ -2198,6 +2222,9 @@ describe('data API router', () => {
 
     const invalidModeResponse = await request(app).patch('/api/app-settings').send({
       pricingProviderMode: 'fixture',
+    });
+    const internalFallbackModeResponse = await request(app).patch('/api/app-settings').send({
+      pricingProviderMode: 'apify',
     });
     const legacyFieldResponse = await request(app).patch('/api/app-settings').send({
       pricingServiceEnabled: false,
@@ -2209,7 +2236,17 @@ describe('data API router', () => {
       error: 'invalid_request',
       details: [
         {
-          message: "Invalid enum value. Expected 'off' | 'soldcomps' | 'apify', received 'fixture'",
+          message: "Invalid enum value. Expected 'off' | 'soldcomps', received 'fixture'",
+          path: 'pricingProviderMode',
+        },
+      ],
+    });
+    expect(internalFallbackModeResponse.status).toBe(400);
+    expect(internalFallbackModeResponse.body).toEqual({
+      error: 'invalid_request',
+      details: [
+        {
+          message: "Invalid enum value. Expected 'off' | 'soldcomps', received 'apify'",
           path: 'pricingProviderMode',
         },
       ],
@@ -2603,7 +2640,9 @@ describe('data API router', () => {
         sub_status: 'idle',
       }));
       dataAccess.jobs.listByListingId = vi.fn(async () => []);
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => failedLatestPricingResearchRow);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => failedLatestPricingResearchRow
+      );
       const app = createApp(dataAccess);
 
       const response = await request(app).post('/api/listings/LIST-001/retry-pricing').send({});
@@ -2699,7 +2738,9 @@ describe('data API router', () => {
   describe('pricing-analysis-warnings dismissal', () => {
     it('dismisses requested warning codes and returns updated listing', async () => {
       const dataAccess = createDataAccess();
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => latestPricingResearchRow);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => latestPricingResearchRow
+      );
       dataAccess.listingPriceResearch.dismissPricingWarnings = vi.fn(async (input) => ({
         ...latestPricingResearchRow,
         dismissed_pricing_warning_codes: input.dismissed_pricing_warning_codes,
@@ -2716,7 +2757,9 @@ describe('data API router', () => {
         id: 'pricing-research-001',
       });
       expect(response.body.listing.pricing_analysis_warnings).toEqual([]);
-      expect(response.body.listing.latest_pricing_research.research_id).toBe('pricing-research-001');
+      expect(response.body.listing.latest_pricing_research.research_id).toBe(
+        'pricing-research-001'
+      );
     });
 
     it('preserves unrelated warnings when dismissing one code', async () => {
@@ -2757,7 +2800,9 @@ describe('data API router', () => {
 
     it('returns unchanged listing when submitted codes are unknown', async () => {
       const dataAccess = createDataAccess();
-      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(async () => latestPricingResearchRow);
+      dataAccess.listingPriceResearch.getLatestByListingId = vi.fn(
+        async () => latestPricingResearchRow
+      );
       const app = createApp(dataAccess);
 
       const response = await request(app)

@@ -28,6 +28,7 @@ import {
 } from '@/pricing/provider-input.js';
 import {
   type LivePricingProviderMode,
+  type ProductionPricingProviderMode,
   resolveProductionPricingProvider,
 } from '@/pricing/provider-resolver.js';
 import { ProductionPricingAnalystError } from '@/pricing/production-llm-pricing-analyst.js';
@@ -53,6 +54,7 @@ import type {
 import {
   compactRedactedMessage,
   redactPricingSensitiveText,
+  sanitizeRedactedUnknown,
 } from '../pricing/provider-shared.js';
 import { createLogger } from '@/utils/logger.js';
 import {
@@ -69,6 +71,13 @@ const SUPPORTED_PRICING_PROVIDER_NAMES = new Set([
   APIFY_PROVIDER_NAME,
   FIXTURE_PROVIDER_NAME,
   SOLDCOMPS_PROVIDER_NAME,
+]);
+const SOLDCOMPS_APIFY_FALLBACK_CATEGORIES = new Set([
+  'malformed_output',
+  'provider_failure',
+  'provider_unavailable',
+  'rate_limit',
+  'timeout_network',
 ]);
 const jobLogger = createLogger('Job');
 const LLM_PRICING_FACT_KEYS: readonly LlmPricingPromptFactKey[] = [
@@ -90,6 +99,10 @@ const PRICING_ANALYSIS_WARNING_REASONS = new Set<PricingAnalysisWarningReason>([
 const nowMs = () => performance.now();
 const elapsedMs = (startedAt: number) => Math.max(0, Math.round(performance.now() - startedAt));
 
+export function isSoldCompsRuntimeEnabled(env: EnvSource = process.env): boolean {
+  return env.SOLDCOMPS_ENABLED === 'true';
+}
+
 export interface ResearchPriceJobDependencies {
   createPricingProvider?: () => PricingProvider;
   computeConfidence?: (input: {
@@ -103,7 +116,7 @@ export interface ResearchPriceJobDependencies {
   pricingProviderEnv?: EnvSource;
   pricingAnalyst?: PricingAnalyst;
   pricingProvider?: PricingProvider;
-  resolvePricingProvider?: (mode: LivePricingProviderMode) => PricingProvider;
+  resolvePricingProvider?: (mode: ProductionPricingProviderMode) => PricingProvider;
 }
 
 export interface RunResearchPriceJobResult {
@@ -140,6 +153,7 @@ interface ProviderRoutingDiagnostics {
   actualProvider?: string;
   fallbackAttempted: boolean;
   fallbackProvider?: string;
+  fallbackFailure?: ProviderRoutingFailureDetails;
   fallbackSucceeded: boolean;
   firstProviderFailure?: ProviderRoutingFailureDetails;
   selectedProvider: string;
@@ -375,7 +389,9 @@ function getProviderRequestedCount(record: Record<string, unknown> | null): numb
   return asFiniteNonNegativeInteger(request?.count);
 }
 
-function getProviderQueryPlan(record: Record<string, unknown> | null): Record<string, unknown> | null {
+function getProviderQueryPlan(
+  record: Record<string, unknown> | null
+): Record<string, unknown> | null {
   if (!record) {
     return null;
   }
@@ -402,7 +418,9 @@ function getSoldCompsRequestCount(record: Record<string, unknown> | null): numbe
   return undefined;
 }
 
-function getSoldCompsAttemptedQueries(record: Record<string, unknown> | null): string[] | undefined {
+function getSoldCompsAttemptedQueries(
+  record: Record<string, unknown> | null
+): string[] | undefined {
   const queryPlan = getProviderQueryPlan(record);
 
   if (Array.isArray(queryPlan?.attemptedQueries)) {
@@ -450,16 +468,14 @@ function buildSoldCompsQueryLogContext(
   ) as Record<string, boolean | number | string | string[]>;
 }
 
-function buildPricingResearchDiagnostics(
-  input: {
-    latency: PricingResearchLatencyDiagnostics;
-    llmAttempted: boolean;
-    normalized: ReturnType<typeof normalizeSoldComps>;
-    providerRawResult: unknown;
-    providerRouting: ProviderRoutingDiagnostics;
-    rawCompCount: number;
-  }
-): Record<string, unknown> {
+function buildPricingResearchDiagnostics(input: {
+  latency: PricingResearchLatencyDiagnostics;
+  llmAttempted: boolean;
+  normalized: ReturnType<typeof normalizeSoldComps>;
+  providerRawResult: unknown;
+  providerRouting: ProviderRoutingDiagnostics;
+  rawCompCount: number;
+}): Record<string, unknown> {
   const providerRecord = getProviderResultRecord(input.providerRawResult);
   const providerQueryPlan = getProviderQueryPlan(providerRecord);
   const providerReturnedCount =
@@ -508,7 +524,10 @@ function buildPricingResearchDiagnostics(
   );
 }
 
-function buildNormalizationSummary(normalized: ReturnType<typeof normalizeSoldComps>, rawCompCount: number) {
+function buildNormalizationSummary(
+  normalized: ReturnType<typeof normalizeSoldComps>,
+  rawCompCount: number
+) {
   return {
     acceptedCount: normalized.comps.length,
     inputCount: rawCompCount,
@@ -545,7 +564,8 @@ function buildPricingResearchFailureSummary(input: {
 }): Record<string, unknown> {
   const providerRecord = getProviderResultRecord(input.providerRawResult);
   const providerReturnedCount =
-    getProviderResultNumber(providerRecord, 'itemCount', 'output', 'itemCount') ?? input.rawCompCount;
+    getProviderResultNumber(providerRecord, 'itemCount', 'output', 'itemCount') ??
+    input.rawCompCount;
   const acceptedCompCount = input.normalized.comps.length;
   const rejectedCompCount = input.normalized.rejected.length;
   const outcome =
@@ -588,9 +608,10 @@ function buildPricingResearchRawResult(
     !Array.isArray(providerRawResult)
       ? { ...providerRawResult }
       : { providerRawResult };
+  const redactedBase = sanitizeRedactedUnknown(base) as Record<string, unknown>;
 
   return asJson({
-    ...(sanitizePersistedPricingRawResult(base) as Record<string, unknown>),
+    ...(sanitizePersistedPricingRawResult(redactedBase) as Record<string, unknown>),
     diagnostics: buildPricingResearchDiagnostics({
       latency,
       llmAttempted,
@@ -651,7 +672,9 @@ function getProviderFailureDetails(error: unknown): {
         asNonEmptyString(error.message) ??
         providerFailureMessage
     ),
-    rawResult: isRecord(error.rawResult) ? asJson(error.rawResult) : undefined,
+    rawResult: isRecord(error.rawResult)
+      ? asJson(sanitizeRedactedUnknown(error.rawResult))
+      : undefined,
     query: asNonEmptyString(error.query)
       ? redactSensitiveText(asNonEmptyString(error.query)!)
       : undefined,
@@ -718,6 +741,7 @@ function buildProviderRoutingRawResult(
     Object.entries({
       actualProvider: providerRouting.actualProvider,
       fallbackAttempted: providerRouting.fallbackAttempted,
+      fallbackFailure: providerRouting.fallbackFailure,
       fallbackProvider: providerRouting.fallbackProvider,
       fallbackSucceeded: providerRouting.fallbackSucceeded,
       firstProviderFailure: providerRouting.firstProviderFailure,
@@ -1083,21 +1107,34 @@ async function getEnabledPricingProviderMode(
 ): Promise<LivePricingProviderMode> {
   const appSettings = await dependencies.dataAccess.appSettings.get();
   const pricingProviderMode = getPricingProviderMode(appSettings);
+  const soldCompsRuntimeEnabled = isSoldCompsRuntimeEnabled(dependencies.pricingProviderEnv);
 
-  if (pricingProviderMode !== 'off' && isPricingEnabled(appSettings)) {
-    return pricingProviderMode;
+  if (
+    soldCompsRuntimeEnabled &&
+    pricingProviderMode === 'soldcomps' &&
+    isPricingEnabled(appSettings)
+  ) {
+    return 'soldcomps';
   }
+
+  const invalidPersistedMode = appSettings?.pricing_provider_mode === 'apify';
 
   throw buildResearchPriceError(
     JOB_ERROR_CODES.RESEARCH_PRICE_DISABLED,
-    options.executionSource === 'cli'
-      ? 'Pricing provider mode off. pricing:price-one skipped.'
-      : `Pricing provider mode off. research_price skipped for job "${options.jobId ?? 'unknown'}".`,
+    invalidPersistedMode
+      ? 'Persisted pricing provider mode "apify" is not selectable. Use "off" or "soldcomps".'
+      : !soldCompsRuntimeEnabled
+        ? 'SoldComps runtime disabled. SOLDCOMPS_ENABLED must equal "true".'
+        : options.executionSource === 'cli'
+          ? 'Pricing provider mode off. pricing:price-one skipped.'
+          : `Pricing provider mode off. research_price skipped for job "${options.jobId ?? 'unknown'}".`,
     {
       ...(options.executionSource ? { execution_source: options.executionSource } : {}),
       ...(options.jobId ? { job_id: options.jobId } : {}),
+      ...(invalidPersistedMode ? { invalid_pricing_provider_mode: 'apify' } : {}),
       pricing_provider_mode: pricingProviderMode,
       settings_source: appSettings ? 'app_settings' : 'default',
+      soldcomps_enabled: soldCompsRuntimeEnabled,
       workflow_safe: true,
     }
   );
@@ -1139,17 +1176,9 @@ function resolvePricingProvider(
   );
 }
 
-function getFallbackProviderMode(
-  selectedProviderMode: LivePricingProviderMode
-): LivePricingProviderMode {
-  return selectedProviderMode === SOLDCOMPS_PROVIDER_NAME
-    ? APIFY_PROVIDER_NAME
-    : SOLDCOMPS_PROVIDER_NAME;
-}
-
 function resolvePricingProviderForMode(
   dependencies: ResearchPriceJobDependencies,
-  requestedProviderMode: LivePricingProviderMode,
+  requestedProviderMode: ProductionPricingProviderMode,
   selectedProviderMode: LivePricingProviderMode
 ): PricingProvider {
   if (requestedProviderMode === selectedProviderMode) {
@@ -1185,7 +1214,8 @@ async function fetchProviderResultWithFallback(
   listing: ListingRow,
   listingId: string,
   dependencies: ResearchPriceJobDependencies,
-  selectedProviderMode: LivePricingProviderMode
+  selectedProviderMode: LivePricingProviderMode,
+  options: PriceListingNowOptions
 ): Promise<{
   latency: Pick<PricingResearchLatencyDiagnostics, 'fallbackFetchMs' | 'providerFetchMs'>;
   pricingProvider: PricingProvider;
@@ -1204,7 +1234,14 @@ async function fetchProviderResultWithFallback(
     selectedProvider: pricingProvider.name,
     selectedProviderMode,
   };
-  const providerInput = buildPricingProviderInput(listing, listingId);
+  const providerInput: PricingProviderInput = {
+    ...buildPricingProviderInput(listing, listingId),
+    requestContext: {
+      correlationId: options.jobId ?? `${options.executionSource ?? 'job'}:${listingId}`,
+      executionSource: options.executionSource ?? 'job',
+      ...(options.jobId ? { jobId: options.jobId } : {}),
+    },
+  };
   const primaryFetchStartedAt = nowMs();
 
   try {
@@ -1217,7 +1254,11 @@ async function fetchProviderResultWithFallback(
       providerRouting,
     };
   } catch (error) {
-    const fallbackProviderMode = getFallbackProviderMode(selectedProviderMode);
+    if (!isQualifyingSoldCompsFallbackFailure(error, pricingProvider)) {
+      throw error;
+    }
+
+    const fallbackProviderMode: ProductionPricingProviderMode = APIFY_PROVIDER_NAME;
     const providerFetchMs = elapsedMs(primaryFetchStartedAt);
     providerRouting.fallbackProvider = fallbackProviderMode;
     providerRouting.firstProviderFailure = buildProviderRoutingFailureDetails(
@@ -1259,6 +1300,10 @@ async function fetchProviderResultWithFallback(
         providerRouting,
       };
     } catch (fallbackError) {
+      providerRouting.fallbackFailure = buildProviderRoutingFailureDetails(
+        fallbackError,
+        fallbackProvider.name
+      );
       throw new ProviderFallbackExecutionError(
         asCompactErrorMessage(fallbackError),
         pricingProvider,
@@ -1267,6 +1312,19 @@ async function fetchProviderResultWithFallback(
       );
     }
   }
+}
+
+function isQualifyingSoldCompsFallbackFailure(
+  error: unknown,
+  pricingProvider: PricingProvider
+): boolean {
+  const failure = getProviderFailureDetails(error);
+  return (
+    pricingProvider.name === SOLDCOMPS_PROVIDER_NAME &&
+    failure.provider === SOLDCOMPS_PROVIDER_NAME &&
+    failure.providerFailureCategory !== undefined &&
+    SOLDCOMPS_APIFY_FALLBACK_CATEGORIES.has(failure.providerFailureCategory)
+  );
 }
 
 function assertResearchPriceListingEligible(listing: ListingRow): void {
@@ -1551,7 +1609,13 @@ export async function priceListingNow(
       pricingProvider,
       providerResult,
       providerRouting,
-    } = await fetchProviderResultWithFallback(listing, listingId, dependencies, selectedProviderMode));
+    } = await fetchProviderResultWithFallback(
+      listing,
+      listingId,
+      dependencies,
+      selectedProviderMode,
+      options
+    ));
     if (providerResult.provider === SOLDCOMPS_PROVIDER_NAME) {
       const soldCompsUsagePersistStartedAt = nowMs();
       await persistSoldCompsUsageSnapshot(
@@ -1905,6 +1969,20 @@ export async function runResearchPriceJob(
     return {
       job: failedJob,
       listing: null,
+    };
+  }
+
+  if (!isSoldCompsRuntimeEnabled(dependencies.pricingProviderEnv)) {
+    jobLogger.info('Skipped research_price job because SoldComps runtime is disabled.', {
+      event: 'research_price_runtime_disabled',
+      jobId: job.id,
+      listingId,
+      soldCompsEnabled: false,
+    });
+
+    return {
+      job: await dependencies.dataAccess.jobs.complete(job.id),
+      listing: await getListingSafely(dependencies.dataAccess, listingId),
     };
   }
 

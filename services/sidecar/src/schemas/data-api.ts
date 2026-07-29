@@ -115,7 +115,7 @@ export const updatePricingProviderModeRequestSchema = z
   .object({
     pricingProviderMode: z.enum(PRICING_PROVIDER_MODES, {
       required_error: 'pricingProviderMode is required',
-      invalid_type_error: 'pricingProviderMode must be off, soldcomps, or apify',
+      invalid_type_error: 'pricingProviderMode must be off or soldcomps',
     }),
   })
   .strict();
@@ -127,15 +127,11 @@ export const dismissPricingAnalysisWarningsRequestSchema = z
   .strict();
 
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
-export type SellerEditableListingFieldsInput = z.infer<
-  typeof sellerEditableListingFieldsSchema
->;
+export type SellerEditableListingFieldsInput = z.infer<typeof sellerEditableListingFieldsSchema>;
 export type CreateListingRequest = z.infer<typeof createListingRequestSchema>;
 export type ListingIdParams = z.infer<typeof listingIdParamsSchema>;
 export type UpdateListingRequest = z.infer<typeof updateListingRequestSchema>;
-export type UpdateListingImageUrlsRequest = z.infer<
-  typeof updateListingImageUrlsRequestSchema
->;
+export type UpdateListingImageUrlsRequest = z.infer<typeof updateListingImageUrlsRequestSchema>;
 export type UpdateListingWorkflowStateRequest = z.infer<
   typeof updateListingWorkflowStateRequestSchema
 >;

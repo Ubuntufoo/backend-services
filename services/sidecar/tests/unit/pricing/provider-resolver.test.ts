@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  isSelectablePricingProviderMode,
   PricingProviderResolverError,
   resolveProductionPricingProvider,
 } from '@/pricing/index.js';
@@ -15,6 +16,7 @@ describe('pricing provider resolver', () => {
     const provider = resolveProductionPricingProvider({
       createSoldCompsProvider,
       env: {
+        SOLDCOMPS_ENABLED: 'true',
         SOLDCOMPS_API_KEY: 'soldcomps-key',
         SOLDCOMPS_PRICE_TIMEOUT_SECONDS: '45',
       },
@@ -41,6 +43,7 @@ describe('pricing provider resolver', () => {
       createSoldCompsProvider,
       env: {
         APIFY_PRICE_TIMEOUT_SECONDS: '0',
+        SOLDCOMPS_ENABLED: 'true',
         SOLDCOMPS_API_KEY: 'soldcomps-key',
         SOLDCOMPS_PRICE_TIMEOUT_SECONDS: '   ',
       },
@@ -56,7 +59,7 @@ describe('pricing provider resolver', () => {
     );
   });
 
-  it('maps apify mode to apify provider with validated config', () => {
+  it('constructs apify only as an internal provider with validated config', () => {
     const createApifyProvider = vi.fn().mockReturnValue({
       fetchSoldComps: vi.fn(),
       name: 'apify',
@@ -123,7 +126,34 @@ describe('pricing provider resolver', () => {
         env: {},
         mode: 'soldcomps',
       })
-    ).toThrow(/SOLDCOMPS_API_KEY is required/);
+    ).toThrow(/SOLDCOMPS_ENABLED is required/);
+  });
+
+  it('requires explicit SoldComps enablement before provider construction', () => {
+    expect(() =>
+      resolveProductionPricingProvider({
+        env: {
+          SOLDCOMPS_API_KEY: 'soldcomps-key',
+        },
+        mode: 'soldcomps',
+      })
+    ).toThrow(/SOLDCOMPS_ENABLED is required/);
+
+    expect(() =>
+      resolveProductionPricingProvider({
+        env: {
+          SOLDCOMPS_API_KEY: 'soldcomps-key',
+          SOLDCOMPS_ENABLED: 'false',
+        },
+        mode: 'soldcomps',
+      })
+    ).toThrow(/SOLDCOMPS_ENABLED must be true/);
+  });
+
+  it('accepts only off and soldcomps as selectable pricing modes', () => {
+    expect(isSelectablePricingProviderMode('off')).toBe(true);
+    expect(isSelectablePricingProviderMode('soldcomps')).toBe(true);
+    expect(isSelectablePricingProviderMode('apify')).toBe(false);
   });
 
   it('fails apify mode clearly when selected config missing', () => {
@@ -146,6 +176,7 @@ describe('pricing provider resolver', () => {
     expect(() =>
       resolveProductionPricingProvider({
         env: {
+          SOLDCOMPS_ENABLED: 'true',
           SOLDCOMPS_API_KEY: 'soldcomps-key',
           SOLDCOMPS_PRICE_TIMEOUT_SECONDS: '0',
         },
@@ -177,6 +208,7 @@ describe('pricing provider resolver', () => {
       createSoldCompsProvider,
       env: {
         APIFY_PRICE_TIMEOUT_SECONDS: '0',
+        SOLDCOMPS_ENABLED: 'true',
         SOLDCOMPS_API_KEY: 'soldcomps-key',
       },
       mode: 'soldcomps',

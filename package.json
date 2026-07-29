@@ -15,8 +15,11 @@
     "url": "https://github.com/Ubuntufoo/backend-services/issues"
   },
   "scripts": {
+    "app:dev": "node ./scripts/run-app-dev-profile.mjs app:dev",
+    "app:dev:no-pricing": "node ./scripts/run-app-dev-profile.mjs app:dev:no-pricing",
     "build": "pnpm -r --if-present build",
     "dev": "pnpm --filter sidecar dev",
+    "dev:safe": "node ./scripts/run-app-dev-profile.mjs dev:safe",
     "dev:sidecar": "pnpm --filter sidecar dev",
     "dev:sidecar:stdio": "pnpm --filter sidecar dev:stdio",
     "ebay:diagnose-offer": "pnpm --filter sidecar ebay:diagnose-offer",

@@ -407,11 +407,13 @@ describe('loadEnv', () => {
   it('loads selected soldcomps pricing env without full sidecar contract', () => {
     const env = loadSoldCompsPricingEnv({
       env: {
+        SOLDCOMPS_ENABLED: 'true',
         SOLDCOMPS_API_KEY: 'soldcomps-key',
       },
     });
 
     expect(env).toEqual({
+      SOLDCOMPS_ENABLED: 'true',
       SOLDCOMPS_API_KEY: 'soldcomps-key',
       SOLDCOMPS_PRICE_TIMEOUT_SECONDS: '120',
     });

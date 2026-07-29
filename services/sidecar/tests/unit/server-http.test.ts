@@ -90,8 +90,10 @@ describe('HTTP sidecar startup', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    expect(isSidecarJobRunnerEnabled({})).toBe(true);
+    expect(isSidecarJobRunnerEnabled({})).toBe(false);
+    expect(isSidecarJobRunnerEnabled({ SIDECAR_JOB_RUNNER_ENABLED: '' })).toBe(false);
     expect(isSidecarJobRunnerEnabled({ SIDECAR_JOB_RUNNER_ENABLED: 'false' })).toBe(false);
+    expect(isSidecarJobRunnerEnabled({ SIDECAR_JOB_RUNNER_ENABLED: 'true' })).toBe(true);
 
     const started = await startSidecarHttpServer({
       config: createConfig(),

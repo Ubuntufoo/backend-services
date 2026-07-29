@@ -5,7 +5,7 @@ import type {
   ListingRow,
   ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 const jobLoggerDebug = vi.hoisted(() => vi.fn());
 const jobLoggerError = vi.hoisted(() => vi.fn());
@@ -13,6 +13,7 @@ const jobLoggerInfo = vi.hoisted(() => vi.fn());
 const jobLoggerWarn = vi.hoisted(() => vi.fn());
 const createProductionPricingAnalystMock = vi.hoisted(() => vi.fn());
 const resolveProductionPricingProviderMock = vi.hoisted(() => vi.fn());
+const originalSoldCompsEnabled = process.env.SOLDCOMPS_ENABLED;
 
 vi.mock('@/utils/logger.js', async () => {
   const actual = await vi.importActual<typeof import('@/utils/logger.js')>('@/utils/logger.js');
@@ -30,12 +31,24 @@ vi.mock('@/utils/logger.js', async () => {
   };
 });
 
-vi.mock('@/pricing/index.js', async () => {
-  const actual = await vi.importActual<typeof import('@/pricing/index.js')>('@/pricing/index.js');
+vi.mock('@/pricing/production-llm-pricing-analyst.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/pricing/production-llm-pricing-analyst.js')
+  >('@/pricing/production-llm-pricing-analyst.js');
 
   return {
     ...actual,
     createProductionPricingAnalyst: createProductionPricingAnalystMock,
+  };
+});
+
+vi.mock('@/pricing/provider-resolver.js', async () => {
+  const actual = await vi.importActual<typeof import('@/pricing/provider-resolver.js')>(
+    '@/pricing/provider-resolver.js'
+  );
+
+  return {
+    ...actual,
     resolveProductionPricingProvider: resolveProductionPricingProviderMock,
   };
 });
@@ -55,6 +68,7 @@ import {
   FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
   createFixtureLlmPricingAnalyst,
   createFixturePricingProvider,
+  SoldCompsPricingProviderError,
 } from '@/pricing/index.js';
 
 const GENERATED_DESCRIPTION_NOTICE =
@@ -153,6 +167,7 @@ const queuedResearchPriceJob: JobRow = {
 };
 
 beforeEach(() => {
+  process.env.SOLDCOMPS_ENABLED = 'true';
   createProductionPricingAnalystMock.mockReset();
   jobLoggerDebug.mockReset();
   jobLoggerError.mockReset();
@@ -180,6 +195,14 @@ beforeEach(() => {
     name: 'google_pricing_reasoning',
   }));
   resolveProductionPricingProviderMock.mockImplementation(() => createFixturePricingProvider());
+});
+
+afterAll(() => {
+  if (originalSoldCompsEnabled === undefined) {
+    delete process.env.SOLDCOMPS_ENABLED;
+  } else {
+    process.env.SOLDCOMPS_ENABLED = originalSoldCompsEnabled;
+  }
 });
 
 const startedAiModelAttemptRow: AiModelAttemptRow = {
@@ -1307,7 +1330,14 @@ describe('runSidecarJob', () => {
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
-          Year: '1991',
+          __draft_metadata: {
+            year: {
+              image_index: 1,
+              source_type: 'copyright_line',
+              visible_text: '© 1991 UPPER DECK COMPANY',
+              year: '1991',
+            },
+          },
           CategorySuggestion: 'Sports Trading Cards',
           ConditionSuggestion: 'Ungraded',
           skuCategoryCode: 'BSKBL',
@@ -1727,6 +1757,63 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
+  it('does not enqueue research_price after generate_ai when SoldComps runtime is disabled', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'Single-000001',
+      },
+      listing: createListingRow({
+        listing_id: 'Single-000001',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        title: '1991 Upper Deck Michael Jordan',
+        description: 'Ungraded single card with visible edge wear.',
+        categorySuggestion: 'Sports Trading Cards',
+        conditionSuggestion: 'Ungraded',
+        aspects: {
+          Manufacturer: 'Upper Deck',
+          Player: 'Michael Jordan',
+        },
+        yearEvidence: {
+          imageIndex: 1,
+          sourceType: 'copyright_line',
+          visibleText: '© 1991 UPPER DECK COMPANY',
+          year: '1991',
+        },
+        priceSuggestion: 249.99,
+        confidence: {
+          title: 0.91,
+        },
+        warnings: [],
+        rawModelResponse: { id: 'raw-response-no-pricing' },
+      })
+    );
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      researchPrice: {
+        pricingProviderEnv: { SOLDCOMPS_ENABLED: 'false' },
+      },
+    });
+
+    expect(result.job.status).toBe('completed');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
+    expect(dataAccess.appSettings.get).not.toHaveBeenCalled();
+    expect(jobLoggerInfo).toHaveBeenCalledWith(
+      'Skipped research_price enqueue after generate_ai because SoldComps runtime is disabled.',
+      expect.objectContaining({
+        event: 'research_price_enqueue_skipped',
+        listingId: 'Single-000001',
+        soldCompsEnabled: false,
+      })
+    );
+  });
+
   it('does not enqueue research_price after generate_ai success when pricing provider mode is off', async () => {
     const dataAccess = createDataAccess({
       appSettings: {
@@ -1778,11 +1865,12 @@ describe('runSidecarJob', () => {
     expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
     expect(dataAccess.appSettings.get).toHaveBeenCalledOnce();
     expect(jobLoggerInfo).toHaveBeenCalledWith(
-      'Skipped research_price enqueue after generate_ai because pricing provider mode is off.',
+      'Skipped research_price enqueue after generate_ai because pricing provider mode is not soldcomps.',
       expect.objectContaining({
         event: 'research_price_enqueue_skipped',
         listingId: 'Single-000001',
         pricingProviderMode: 'off',
+        settingsSource: 'app_settings',
       })
     );
   });
@@ -1899,7 +1987,7 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
-  it('continues research_price enqueue after generate_ai success when pricing provider mode is apify', async () => {
+  it('skips research_price enqueue after generate_ai success when legacy mode is apify', async () => {
     const dataAccess = createDataAccess({
       appSettings: {
         id: 'default',
@@ -1944,14 +2032,14 @@ describe('runSidecarJob', () => {
     });
 
     expect(result.job.status).toBe('completed');
-    expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
+    expect(dataAccess.jobs.enqueueResearchPrice).not.toHaveBeenCalled();
   });
 
   it('keeps generate_ai success when research_price enqueue fails after review transition', async () => {
     const dataAccess = createDataAccess({
       appSettings: {
         id: 'default',
-        pricing_provider_mode: 'apify',
+        pricing_provider_mode: 'soldcomps',
       },
       enqueueResearchPriceError: new Error('research enqueue failed'),
       job: {
@@ -2044,7 +2132,7 @@ describe('runSidecarJob', () => {
         error: 'research enqueue failed',
         listingId: 'Single-000001',
         phase: 'post_generate_ai_enqueue',
-        pricingProviderMode: 'apify',
+        pricingProviderMode: 'soldcomps',
       }
     );
   });
@@ -3856,7 +3944,7 @@ describe('runSidecarJob', () => {
         'Succeeded research_price job.',
         expect.objectContaining({
           confidence: markSucceededInput?.confidence,
-          deterministicSuggestedPrice: markSucceededInput?.suggested_price,
+          deterministicSuggestedPrice: 5.89,
           event: 'research_price_succeeded',
           finalSuggestedPrice: markSucceededInput?.suggested_price,
           jobId: 'job-research-price',
@@ -4048,7 +4136,7 @@ describe('runSidecarJob', () => {
         last_error_code: listing.last_error_code,
         last_error_context: listing.last_error_context,
         last_error_message: listing.last_error_message,
-        price: 14.44,
+        price: 13.03,
         status: 'needs_review',
         sub_status: 'review_pending',
       });
@@ -4069,7 +4157,7 @@ describe('runSidecarJob', () => {
           status: 'succeeded',
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
-        suggested_price: 14.44,
+        suggested_price: 13.03,
       });
       expect(markSucceededInput?.confidence).toBe('medium');
       expect(markSucceededInput?.llm_reasoning_json).toMatchObject({
@@ -4082,7 +4170,7 @@ describe('runSidecarJob', () => {
         expect.arrayContaining([expect.any(String)])
       );
       expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
-        price: 14.44,
+        price: 13.03,
       });
       expect(pricingAnalyst.analyze).toHaveBeenCalledTimes(1);
       expect(jobLoggerInfo).toHaveBeenCalledWith(
@@ -4096,7 +4184,7 @@ describe('runSidecarJob', () => {
         'Succeeded research_price job.',
         expect.objectContaining({
           event: 'research_price_succeeded',
-          finalSuggestedPrice: 14.44,
+          finalSuggestedPrice: 13.03,
           llmStatus: 'succeeded',
           pricingModelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
         })
@@ -4197,7 +4285,7 @@ describe('runSidecarJob', () => {
       expect(jobLoggerInfo).toHaveBeenCalledWith(
         'Fell back to deterministic research_price after null LLM condition adjustment.',
         expect.objectContaining({
-          deterministicSuggestedPrice: markSucceededInput?.suggested_price,
+          deterministicSuggestedPrice: 5.89,
           event: 'research_price_llm_fallback',
           fallbackReason: 'llm_condition_adjusted_price_null',
           jobId: 'job-research-price',
@@ -4475,7 +4563,7 @@ describe('runSidecarJob', () => {
           },
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
-        suggested_price: 14.44,
+        suggested_price: 13.03,
       });
       expect(markSucceededInput?.confidence).toBe('high');
     });
@@ -4597,7 +4685,53 @@ describe('runSidecarJob', () => {
       );
     });
 
-    it('resolves persisted apify mode for normal queued runtime', async () => {
+    it('completes queued research_price without provider execution when SoldComps runtime is disabled', async () => {
+      const fetchSoldComps = vi.fn(async () => {
+        throw new Error('should not run');
+      });
+      const dataAccess = createDataAccess({
+        appSettings: {
+          id: 'default',
+          pricing_provider_mode: 'soldcomps',
+        },
+        job: queuedResearchPriceJob,
+        listing: createListingRow({
+          status: 'needs_review',
+          sub_status: 'review_pending',
+          title: 'No-pricing runtime listing',
+        }),
+      });
+
+      const result = await runSidecarJob('job-research-price', {
+        dataAccess,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+        researchPrice: {
+          pricingProvider: {
+            fetchSoldComps,
+            name: 'fixture',
+          },
+          pricingProviderEnv: { SOLDCOMPS_ENABLED: 'false' },
+        },
+      });
+
+      expect(result.job.status).toBe('completed');
+      expect(fetchSoldComps).not.toHaveBeenCalled();
+      expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
+      expect(dataAccess.appSettings.get).not.toHaveBeenCalled();
+      expectNoPricingPreflightWrites(dataAccess);
+      expect(resolveProductionPricingProviderMock).not.toHaveBeenCalled();
+      expect(jobLoggerInfo).toHaveBeenCalledWith(
+        'Skipped research_price job because SoldComps runtime is disabled.',
+        expect.objectContaining({
+          event: 'research_price_runtime_disabled',
+          jobId: 'job-research-price',
+          listingId: 'LIST-001',
+          soldCompsEnabled: false,
+        })
+      );
+    });
+
+    it('rejects persisted apify mode for normal queued runtime', async () => {
       const dataAccess = createDataAccess({
         appSettings: {
           id: 'default',
@@ -4616,20 +4750,17 @@ describe('runSidecarJob', () => {
         now: () => new Date('2026-05-20T13:00:00.000Z'),
       });
 
-      expect(result.job.status).toBe('completed');
-      expect(resolveProductionPricingProviderMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          mode: 'apify',
-        })
-      );
+      expect(result.job.status).toBe('failed');
+      expect(result.job.last_error_code).toBe('research_price_disabled');
+      expect(resolveProductionPricingProviderMock).not.toHaveBeenCalled();
     });
 
     it('fails selected live provider config without falling back to fixture runtime', async () => {
       resolveProductionPricingProviderMock.mockImplementationOnce(() => {
-        throw new ApifyPricingProviderError(
-          'apify_auth_config_invalid',
+        throw new SoldCompsPricingProviderError(
+          'soldcomps_auth_config_invalid',
           'auth_config',
-          'Apify pricing provider misconfigured: APIFY_TOKEN and APIFY_PRICE_ACTOR_ID required.',
+          'SoldComps pricing provider misconfigured: SOLDCOMPS_ENABLED=true and SOLDCOMPS_API_KEY required.',
           'query'
         );
       });
@@ -4640,12 +4771,12 @@ describe('runSidecarJob', () => {
         last_error_message: 'keep me',
         status: 'needs_review',
         sub_status: 'review_pending',
-        title: 'Missing apify config listing',
+        title: 'Missing SoldComps config listing',
       });
       const dataAccess = createDataAccess({
         appSettings: {
           id: 'default',
-          pricing_provider_mode: 'apify',
+          pricing_provider_mode: 'soldcomps',
         },
         job: queuedResearchPriceJob,
         listing,
@@ -4658,7 +4789,7 @@ describe('runSidecarJob', () => {
 
       expect(result.job.status).toBe('failed');
       expect(result.job.last_error_code).toBe('research_price_failed');
-      expect(result.job.last_error).toContain('Apify pricing provider misconfigured');
+      expect(result.job.last_error).toContain('SoldComps pricing provider misconfigured');
       expectPricingFailureToPreserveListingWorkflow(listing, result.listing);
       expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
       expect(dataAccess.listingPriceResearch.markFailed).not.toHaveBeenCalled();
@@ -5065,9 +5196,23 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
         title: 'Broken provider listing',
       });
-      const fetchSoldComps = vi.fn(async () => {
-        throw new Error('fixture exploded');
-      });
+      const fetchSoldComps = vi.fn().mockRejectedValue(
+        new SoldCompsPricingProviderError(
+          'soldcomps_provider_failure',
+          'provider_failure',
+          'SoldComps provider exploded',
+          'broken provider listing'
+        )
+      );
+      const apifyProvider = createFixturePricingProvider();
+      const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+        mode === 'soldcomps'
+          ? ({ fetchSoldComps, name: 'soldcomps' } as never)
+          : ({
+              fetchSoldComps: apifyProvider.fetchSoldComps.bind(apifyProvider),
+              name: 'apify',
+            } as never)
+      );
       const dataAccess = createDataAccess({
         job: queuedResearchPriceJob,
         listing,
@@ -5077,10 +5222,7 @@ describe('runSidecarJob', () => {
         dataAccess,
         now: () => new Date('2026-05-20T13:00:00.000Z'),
         researchPrice: {
-          pricingProvider: {
-            fetchSoldComps,
-            name: 'fixture',
-          },
+          resolvePricingProvider,
         },
       });
 
@@ -5343,13 +5485,11 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
         title: 'Broken provider listing',
       });
-      const providerError = Object.assign(
-        new Error('fixture exploded https://images.example/card.jpg'),
-        {
-          code: 'fixture_fetch_failed',
-          provider: 'fixture',
-          query: 'victor wembanyama prizm',
-        }
+      const providerError = new SoldCompsPricingProviderError(
+        'soldcomps_provider_failure',
+        'provider_failure',
+        'SoldComps exploded https://images.example/card.jpg',
+        'victor wembanyama prizm'
       );
       const fetchSoldComps = vi.fn(async () => {
         throw providerError;
@@ -5358,15 +5498,21 @@ describe('runSidecarJob', () => {
         job: queuedResearchPriceJob,
         listing,
       });
+      const apifyProvider = createFixturePricingProvider();
+      const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
+        mode === 'soldcomps'
+          ? ({ fetchSoldComps, name: 'soldcomps' } as never)
+          : ({
+              fetchSoldComps: apifyProvider.fetchSoldComps.bind(apifyProvider),
+              name: 'apify',
+            } as never)
+      );
 
       const result = await runSidecarJob('job-research-price', {
         dataAccess,
         now: () => new Date('2026-05-20T13:00:00.000Z'),
         researchPrice: {
-          pricingProvider: {
-            fetchSoldComps,
-            name: 'fixture',
-          },
+          resolvePricingProvider,
         },
       });
 
@@ -5376,10 +5522,10 @@ describe('runSidecarJob', () => {
         expect.objectContaining({
           event: 'research_price_provider_fallback_started',
           fallbackProvider: 'apify',
-          firstProvider: 'fixture',
+          firstProvider: 'soldcomps',
           listingId: 'LIST-001',
-          providerFailureCode: 'fixture_fetch_failed',
-          providerFailureMessage: 'fixture exploded [redacted-url]',
+          providerFailureCode: 'soldcomps_provider_failure',
+          providerFailureMessage: 'SoldComps exploded [redacted-url]',
           query: 'victor wembanyama prizm',
         })
       );

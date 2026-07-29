@@ -9,6 +9,11 @@ export interface PricingProviderInput {
   itemSpecifics?: Record<string, string | string[] | null | undefined>;
   pricingModifierOptions?: PricingModifierOptions;
   requestedCompCount?: number;
+  requestContext?: {
+    correlationId: string;
+    executionSource: 'cli' | 'job';
+    jobId?: string;
+  };
 }
 
 export interface RawSoldComp {

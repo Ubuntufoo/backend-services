@@ -11,13 +11,13 @@ export function redactPricingSensitiveText(value: string): string {
 }
 
 export function truncateRedactedText(value: string, maxLength = 240): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
+  const normalized = redactPricingSensitiveText(value).replace(/\s+/g, ' ').trim();
 
   if (normalized.length <= maxLength) {
-    return redactPricingSensitiveText(normalized);
+    return normalized;
   }
 
-  return `${redactPricingSensitiveText(normalized.slice(0, maxLength - 3))}...`;
+  return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
 export function compactRedactedMessage(value: string, maxLength = 240): string {
@@ -79,11 +79,33 @@ export function sanitizeRedactedUnknown(value: unknown): unknown {
 
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entryValue]) => [key, sanitizeRedactedUnknown(entryValue)])
+      Object.entries(value).map(([key, entryValue]) => [
+        key,
+        isSensitiveDiagnosticKey(key) ? '[redacted]' : sanitizeRedactedUnknown(entryValue),
+      ])
     );
   }
 
   return value;
+}
+
+function isSensitiveDiagnosticKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+
+  return (
+    normalized === 'key' ||
+    normalized.endsWith('apikey') ||
+    normalized.endsWith('token') ||
+    normalized.startsWith('authorization') ||
+    normalized.endsWith('authorization') ||
+    normalized.startsWith('credential') ||
+    normalized.endsWith('credential') ||
+    normalized.endsWith('credentials') ||
+    normalized.startsWith('password') ||
+    normalized.endsWith('password') ||
+    normalized.startsWith('secret') ||
+    normalized.endsWith('secret')
+  );
 }
 
 function maskSecret(value: string): string {

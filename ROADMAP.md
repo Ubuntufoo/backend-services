@@ -8,6 +8,8 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 PREVIOUS ROADMAP TASKS ARCHIVED
 COMPLETED TASKS COMMENTED OUT -->
 --------------- READY FOR LIVE PILOT: SPORTS CARD SINGLES --------------
+| Fix |  BE/Pricing | Skip comp API and LLM reasoning for known sports-card singles | Add a new `skip_comp_api` checkbox beside the generate button that bypasses the comp API call and LLM reasoning step, returning only the Gemini listing output. |
+| Fix | BE/Discovery | Review image ingestion pipeline/watcher mechanics | Analyze the current image ingestion pipeline and watcher mechanics to identify potential issues with the ordering of card-front and card-back images in the ebay gallery view. |
 | 10A.1 | BE/Discovery | Confirm read-only production Browse search entitlement | Verify the production eBay keyset can mint an application token and call `GET /buy/browse/v1/item_summary/search`; record the effective Browse quota and any Buy API license or Developer Support prerequisites without adding transactional buying capabilities. |
 | 10A.2 | BE/Discovery | Validate seller exclusion identifier in production | Resolve the authenticated seller identity through the existing user-token path, test the exact value accepted by Browse `excludeSellers`, and prove a known own listing is excluded from marketplace results. |
 | 10A.3 | BE/Discovery | Validate exact-card active-search recall | Run sanitized production searches for several known sports cards, compare Browse candidates with visible eBay results, and confirm category, condition, fixed-price, query, and local title-filter behavior before implementation. |

@@ -62,15 +62,19 @@ function parseNonEmptyValue(value: string | undefined, name: string): string {
   return value.trim();
 }
 
-function buildUsage(): { command: string; selectors: string[] } {
+function buildUsage(): { command: string; requestBudget: string; selectors: string[] } {
   return {
-    command: 'pnpm pricing:smoke-soldcomps -- --listing-id <listing_id>',
-    selectors: ['--listing-id <listing_id>'],
+    command:
+      'pnpm pricing:smoke-soldcomps -- --listing-id <listing_id> --confirm-live-soldcomps',
+    requestBudget:
+      'One execution may consume up to two SoldComps requests. A separate manual retry may consume up to two additional requests.',
+    selectors: ['--listing-id <listing_id>', '--confirm-live-soldcomps'],
   };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const normalizedArgv = argv[0] === '--' ? argv.slice(1) : argv;
+  let confirmLiveSoldComps = false;
   const listingIds: string[] = [];
 
   for (let index = 0; index < normalizedArgv.length; index += 1) {
@@ -79,6 +83,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (current === '--listing-id') {
       listingIds.push(parseNonEmptyValue(normalizedArgv[index + 1], '--listing-id'));
       index += 1;
+      continue;
+    }
+
+    if (current === '--confirm-live-soldcomps') {
+      confirmLiveSoldComps = true;
       continue;
     }
 
@@ -101,6 +110,15 @@ function parseArgs(argv: string[]): ParsedArgs {
     return {
       code: 'invalid_arguments',
       message: 'Multiple selectors supplied. Exactly one selector required.',
+      ok: false,
+    };
+  }
+
+  if (!confirmLiveSoldComps) {
+    return {
+      code: 'invalid_arguments',
+      message:
+        'Live SoldComps confirmation required. Re-run with --confirm-live-soldcomps; --force is not confirmation.',
       ok: false,
     };
   }
@@ -246,7 +264,6 @@ export async function runSmokeSoldCompsPricingCli(
   dependencies: SmokeSoldCompsPricingCliDependencies = {}
 ): Promise<void> {
   const capture = createStreamCapture();
-  loadRootEnvironment();
   const parsedArgs = parseArgs(argv);
 
   try {
@@ -270,6 +287,8 @@ export async function runSmokeSoldCompsPricingCli(
       return;
     }
 
+    loadRootEnvironment();
+
     const dataAccess = dependencies.createDataAccess?.() ?? createSidecarDataAccess(process.env);
     const [appSettings, listing] = await Promise.all([
       dataAccess.appSettings.get(),
@@ -287,9 +306,13 @@ export async function runSmokeSoldCompsPricingCli(
         env: process.env,
         mode: 'soldcomps',
       });
-    const providerResult = await provider.fetchSoldComps(
-      buildPricingProviderInput(listing, listing.listing_id)
-    );
+    const providerResult = await provider.fetchSoldComps({
+      ...buildPricingProviderInput(listing, listing.listing_id),
+      requestContext: {
+        correlationId: `cli:${listing.listing_id}`,
+        executionSource: 'cli',
+      },
+    });
 
     capture.restore();
     console.log(JSON.stringify(buildSuccessPayload(listing, selectedProviderMode, providerResult), null, 2));

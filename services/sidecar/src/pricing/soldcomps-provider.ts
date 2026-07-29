@@ -11,6 +11,7 @@ import {
   truncateRedactedText,
 } from './provider-shared.js';
 import { buildSoldCompsKeyword } from './soldcomps-keyword.js';
+import { createLogger } from '@/utils/logger.js';
 import type {
   PricingProvider,
   PricingProviderInput,
@@ -21,8 +22,9 @@ import type {
 
 const SOLDCOMPS_PROVIDER_NAME = 'soldcomps';
 const DEFAULT_TIMEOUT_SECONDS = 120;
+const soldCompsLogger = createLogger('SoldComps');
 const ISO_SOLD_DATE_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const URL_PROTOCOLS = new Set(['http:', 'https:']);
 
 const numericValueSchema = z.union([
@@ -42,6 +44,7 @@ const soldCompsItemSchema = z.object({
     .string()
     .trim()
     .refine((value) => ISO_SOLD_DATE_PATTERN.test(value), 'endedAt must be ISO-8601')
+    .refine(isValidIsoCalendarDate, 'endedAt must use a valid calendar date')
     .refine((value) => !Number.isNaN(new Date(value).getTime()), 'endedAt must be valid'),
   epid: z.string().trim().min(1).nullable(),
   itemId: z.string().trim().min(1),
@@ -86,6 +89,21 @@ const soldCompsErrorSchema = z
     used: z.number().finite().optional(),
   })
   .passthrough();
+
+function isValidIsoCalendarDate(value: string): boolean {
+  const match = ISO_SOLD_DATE_PATTERN.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1]!;
+}
 
 export interface SoldCompsFetchInput {
   apiBaseUrl: string;
@@ -228,6 +246,7 @@ export function createSoldCompsPricingProvider(
   dependencies: SoldCompsPricingProviderDependencies = {}
 ): PricingProvider {
   const now = dependencies.now ?? (() => new Date());
+  const usesDefaultTransport = dependencies.fetch === undefined && dependencies.runRequest === undefined;
   const runRequest =
     dependencies.runRequest ??
     ((input: SoldCompsFetchInput) =>
@@ -249,13 +268,25 @@ export function createSoldCompsPricingProvider(
         );
       }
 
+      if (usesDefaultTransport && isUnitTestRuntime()) {
+        throw new SoldCompsPricingProviderError(
+          'soldcomps_live_transport_blocked_in_test',
+          'auth_config',
+          'SoldComps live default transport blocked in unit-test runtime. Inject fetch or runRequest.',
+          input.title
+        );
+      }
+
       const strictRequest = buildSoldCompsRequestParams(input);
       const relaxedQuery = buildSoldCompsQuery(input);
       const strictResult = await executeSoldCompsRequest({
         apiBaseUrl: config.apiBaseUrl ?? SOLDCOMPS_API_BASE_URL,
         apiKey: config.apiKey,
+        attemptType: 'strict',
+        listingId: input.listingId,
         now,
         request: strictRequest,
+        requestContext: input.requestContext,
         runRequest,
         timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
       });
@@ -274,8 +305,11 @@ export function createSoldCompsPricingProvider(
         const fallbackResult = await executeSoldCompsRequest({
           apiBaseUrl: config.apiBaseUrl ?? SOLDCOMPS_API_BASE_URL,
           apiKey: config.apiKey,
+          attemptType: 'relaxed',
+          listingId: input.listingId,
           now,
           request: fallbackRequest,
+          requestContext: input.requestContext,
           runRequest,
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
         });
@@ -303,14 +337,26 @@ export function createSoldCompsPricingProvider(
 async function executeSoldCompsRequest(input: {
   apiBaseUrl: string;
   apiKey: string;
+  attemptType: 'relaxed' | 'strict';
+  listingId: string;
   now: () => Date;
   request: SoldCompsRequestParams;
+  requestContext?: PricingProviderInput['requestContext'];
   runRequest: (input: SoldCompsFetchInput) => Promise<SoldCompsFetchResult>;
   timeoutSeconds: number;
 }): Promise<PricingProviderResult> {
   const fetchedAt = input.now().toISOString();
 
   try {
+    soldCompsLogger.info('Starting SoldComps request.', {
+      attemptType: input.attemptType,
+      correlationId: input.requestContext?.correlationId ?? `pricing:${input.listingId}`,
+      event: 'soldcomps_request_started',
+      executionSource: input.requestContext?.executionSource ?? 'job',
+      jobId: input.requestContext?.jobId,
+      listingId: input.listingId,
+      processId: process.pid,
+    });
     const raw = await input.runRequest({
       apiBaseUrl: input.apiBaseUrl,
       apiKey: input.apiKey,
@@ -340,6 +386,10 @@ async function executeSoldCompsRequest(input: {
       { cause: error instanceof Error ? error : undefined }
     );
   }
+}
+
+function isUnitTestRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === 'test' || env.VITEST === 'true';
 }
 
 function withQueryFallbackDiagnostics(input: {

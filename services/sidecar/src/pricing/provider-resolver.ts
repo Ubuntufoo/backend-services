@@ -15,24 +15,26 @@ import {
 } from './soldcomps-provider.js';
 import type { PricingProvider } from './types.js';
 
-export type LivePricingProviderMode = 'apify' | 'soldcomps';
+export type LivePricingProviderMode = 'soldcomps';
+export type ProductionPricingProviderMode = 'apify' | LivePricingProviderMode;
+export type SelectablePricingProviderMode = 'off' | LivePricingProviderMode;
 
 export interface ResolveProductionPricingProviderInput {
   apifyProviderDependencies?: ApifyPricingProviderDependencies;
   createApifyProvider?: typeof createApifyPricingProvider;
   createSoldCompsProvider?: typeof createSoldCompsPricingProvider;
   env?: EnvSource;
-  mode: LivePricingProviderMode;
+  mode: ProductionPricingProviderMode;
   soldCompsProviderDependencies?: SoldCompsPricingProviderDependencies;
 }
 
 export class PricingProviderResolverError extends Error {
   readonly category = 'auth_config';
   readonly code: string;
-  readonly provider: LivePricingProviderMode;
+  readonly provider: ProductionPricingProviderMode;
   readonly workflowSafe = true;
 
-  constructor(provider: LivePricingProviderMode, message: string, options?: ErrorOptions) {
+  constructor(provider: ProductionPricingProviderMode, message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = 'PricingProviderResolverError';
     this.code = `${provider}_config_invalid`;
@@ -97,7 +99,7 @@ function resolveApifyPricingProvider(
 }
 
 function toPricingProviderResolverError(
-  provider: LivePricingProviderMode,
+  provider: ProductionPricingProviderMode,
   error: unknown
 ): PricingProviderResolverError {
   if (error instanceof PricingProviderResolverError) {
@@ -113,4 +115,10 @@ function toPricingProviderResolverError(
     error instanceof Error ? error.message : String(error),
     error instanceof Error ? { cause: error } : undefined
   );
+}
+
+export function isSelectablePricingProviderMode(
+  value: unknown
+): value is SelectablePricingProviderMode {
+  return value === 'off' || value === 'soldcomps';
 }

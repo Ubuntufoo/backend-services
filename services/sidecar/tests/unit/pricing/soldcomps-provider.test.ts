@@ -20,6 +20,7 @@ import {
   redactSoldCompsSensitiveText,
 } from '@/pricing/index.js';
 import { buildSoldCompsKeyword } from '@/pricing/soldcomps-keyword.js';
+import { truncateRedactedText } from '@/pricing/provider-shared.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,7 +101,9 @@ describe('SoldComps pricing provider', () => {
     expect(buildSoldCompsRequestParams(input).keyword).toBe(
       buildExpectedRawCardKeyword('Darryl Strawberry 1997 Fleer 179')
     );
-    expect(buildSoldCompsRequestParams(input).keyword).toBe(buildApifyActorInput(input).keywords[0]);
+    expect(buildSoldCompsRequestParams(input).keyword).toBe(
+      buildApifyActorInput(input).keywords[0]
+    );
   });
 
   it('keeps noisy sport terms out of SoldComps keyword', () => {
@@ -119,9 +122,7 @@ describe('SoldComps pricing provider', () => {
         listingId: 'Single-000014',
         title: '1966 Topps Football #125 John Hadl',
       }).keyword
-    ).toBe(
-      buildExpectedRawCardKeyword('John Hadl 1966 Topps 125')
-    );
+    ).toBe(buildExpectedRawCardKeyword('John Hadl 1966 Topps 125'));
   });
 
   it('applies lean graded negatives to raw-card SoldComps searches', () => {
@@ -150,7 +151,9 @@ describe('SoldComps pricing provider', () => {
   });
 
   it('does not append raw-card grading exclusions for graded targets', () => {
-    expect(buildSoldCompsRequestParams(baseInput).keyword).toBe('Johnny Riddle 1955 Topps 98 graded');
+    expect(buildSoldCompsRequestParams(baseInput).keyword).toBe(
+      'Johnny Riddle 1955 Topps 98 graded'
+    );
   });
 
   it('keeps rookie, RC, and set-break comps allowed in raw SoldComps keywords', () => {
@@ -183,10 +186,7 @@ describe('SoldComps pricing provider', () => {
       title: 'Darryl Strawberry 1997 Fleer #179',
     } as const;
 
-    const keyword = buildSoldCompsKeyword(
-      rawInput,
-      'Darryl Strawberry 1997 Fleer #179 -pick -PSA'
-    );
+    const keyword = buildSoldCompsKeyword(rawInput, 'Darryl Strawberry 1997 Fleer #179 -pick -PSA');
 
     expect(keyword).toBe(
       buildExpectedRawCardKeyword('Darryl Strawberry 1997 Fleer #179 -pick -PSA', {
@@ -429,9 +429,7 @@ describe('SoldComps pricing provider', () => {
   });
 
   it('returns missing usage snapshot when SoldComps headers absent', () => {
-    expect(
-      parseSoldCompsUsageHeaders(undefined, '2026-06-15T12:00:00.000Z')
-    ).toEqual({
+    expect(parseSoldCompsUsageHeaders(undefined, '2026-06-15T12:00:00.000Z')).toEqual({
       limit: null,
       source: 'missing',
       updatedAt: '2026-06-15T12:00:00.000Z',
@@ -827,20 +825,97 @@ describe('SoldComps pricing provider', () => {
 
   it.each([
     ['missing keyword', { ...soldCompsFixture, keyword: undefined }],
-    ['missing title', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], title: null }] }],
-    ['missing soldPrice', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldPrice: null }] }],
-    ['missing soldCurrency', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldCurrency: null }] }],
-    ['invalid shippingPrice', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], shippingPrice: 'free' }] }],
-    ['invalid endedAt', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], endedAt: 'not-a-date' }] }],
-    ['invalid url', { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], url: 'ftp://example.com/item/1' }] }],
+    [
+      'missing title',
+      { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], title: null }] },
+    ],
+    [
+      'missing soldPrice',
+      { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldPrice: null }] },
+    ],
+    [
+      'missing soldCurrency',
+      { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], soldCurrency: null }] },
+    ],
+    [
+      'invalid shippingPrice',
+      { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], shippingPrice: 'free' }] },
+    ],
+    [
+      'invalid endedAt text',
+      { ...soldCompsFixture, items: [{ ...soldCompsFixture.items[0], endedAt: 'not-a-date' }] },
+    ],
+    [
+      'endedAt without timezone',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-06-14T18:42:00' }],
+      },
+    ],
+    [
+      'endedAt with non-ISO US date',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '06/14/2026 18:42:00' }],
+      },
+    ],
+    [
+      'endedAt with impossible ISO month',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-13-14T18:42:00.000Z' }],
+      },
+    ],
+    [
+      'endedAt with February 30',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-02-30T18:42:00.000Z' }],
+      },
+    ],
+    [
+      'endedAt with April 31',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2026-04-31T18:42:00.000Z' }],
+      },
+    ],
+    [
+      'endedAt with February 29 in a non-leap year',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], endedAt: '2025-02-29T18:42:00.000Z' }],
+      },
+    ],
+    [
+      'invalid url',
+      {
+        ...soldCompsFixture,
+        items: [{ ...soldCompsFixture.items[0], url: 'ftp://example.com/item/1' }],
+      },
+    ],
   ])('rejects malformed provider output: %s', (_label, payload) => {
-    expect(() => parseSoldCompsResponse(payload, { query: 'Johnny Riddle 1955 Topps #98' })).toThrowError(
+    expect(() =>
+      parseSoldCompsResponse(payload, { query: 'Johnny Riddle 1955 Topps #98' })
+    ).toThrowError(
       expect.objectContaining({
         category: 'malformed_output',
         code: 'soldcomps_output_invalid',
         workflowSafe: true,
       })
     );
+  });
+
+  it('accepts a valid leap-day ISO timestamp with timezone', () => {
+    expect(() =>
+      parseSoldCompsResponse(
+        {
+          ...soldCompsFixture,
+          items: [{ ...soldCompsFixture.items[0], endedAt: '2024-02-29T18:42:00-05:00' }],
+        },
+        { query: 'Johnny Riddle 1955 Topps #98' }
+      )
+    ).not.toThrow();
   });
 
   it.each([
@@ -971,6 +1046,21 @@ describe('SoldComps pricing provider', () => {
     });
   });
 
+  it('blocks default live transport in unit tests before global fetch', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const provider = createSoldCompsPricingProvider({
+      apiKey: 'sc_test-token',
+    });
+
+    await expect(provider.fetchSoldComps(baseInput)).rejects.toMatchObject({
+      category: 'auth_config',
+      code: 'soldcomps_live_transport_blocked_in_test',
+      workflowSafe: true,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
   it('redacts token-like fragments from messages', () => {
     expect(
       redactSoldCompsSensitiveText(
@@ -991,6 +1081,14 @@ describe('SoldComps pricing provider', () => {
     expect(redacted).not.toContain('apiKey=secret');
     expect(redacted).not.toContain('access_token=secret');
     expect(redacted).toContain('Bearer [redacted-token]');
+  });
+
+  it('redacts sensitive text before truncating diagnostics', () => {
+    const diagnostic = `${'x'.repeat(230)} apiKey=opaque-secret-value trailing context`;
+    const truncated = truncateRedactedText(diagnostic, 240);
+
+    expect(truncated).not.toContain('opaque-secret-value');
+    expect(truncated.length).toBeLessThanOrEqual(240);
   });
 
   it('surfaces provider failures through typed SoldComps provider errors', async () => {
@@ -1061,7 +1159,11 @@ function buildExpectedRawCardKeyword(
     return `${baseQuery} ${DEFAULT_RAW_CARD_EXCLUSIONS.join(' ')}`;
   }
 
-  const existingNegatives = new Set((baseQuery.match(/-\S+/g) ?? []).map((value) => value.toLowerCase()));
-  const appended = DEFAULT_RAW_CARD_EXCLUSIONS.filter((value) => !existingNegatives.has(value.toLowerCase()));
+  const existingNegatives = new Set(
+    (baseQuery.match(/-\S+/g) ?? []).map((value) => value.toLowerCase())
+  );
+  const appended = DEFAULT_RAW_CARD_EXCLUSIONS.filter(
+    (value) => !existingNegatives.has(value.toLowerCase())
+  );
   return `${baseQuery} ${appended.join(' ')}`;
 }

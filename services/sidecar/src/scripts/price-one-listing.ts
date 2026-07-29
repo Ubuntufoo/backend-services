@@ -77,15 +77,19 @@ function parseNonEmptyValue(value: string | undefined, name: string): string {
   return value.trim();
 }
 
-function buildUsage(): { command: string; selectors: string[] } {
+function buildUsage(): { command: string; requestBudget: string; selectors: string[] } {
   return {
-    command: 'pnpm pricing:price-one -- --listing-id <listing_id> [--force]',
-    selectors: ['--listing-id <listing_id>', '--force'],
+    command:
+      'pnpm pricing:price-one -- --listing-id <listing_id> --confirm-live-soldcomps [--force]',
+    requestBudget:
+      'One execution may consume up to two SoldComps requests. A separate manual retry may consume up to two additional requests.',
+    selectors: ['--listing-id <listing_id>', '--confirm-live-soldcomps', '--force'],
   };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const normalizedArgv = argv[0] === '--' ? argv.slice(1) : argv;
+  let confirmLiveSoldComps = false;
   let force = false;
   const listingIds: string[] = [];
 
@@ -108,6 +112,10 @@ function parseArgs(argv: string[]): ParsedArgs {
 
     if (current === '--force') {
       force = true;
+      continue;
+    }
+    if (current === '--confirm-live-soldcomps') {
+      confirmLiveSoldComps = true;
       continue;
     }
 
@@ -134,6 +142,15 @@ function parseArgs(argv: string[]): ParsedArgs {
     };
   }
 
+  if (!confirmLiveSoldComps) {
+    return {
+      code: 'invalid_arguments',
+      message:
+        'Live SoldComps confirmation required. Re-run with --confirm-live-soldcomps; --force is not confirmation.',
+      ok: false,
+    };
+  }
+
   return {
     force,
     listingId: listingIds[0],
@@ -149,12 +166,10 @@ function toFailurePayload(error: unknown, listingId?: string): Record<string, un
       : typeof (errorRecord as { context?: { provider?: unknown } }).context?.provider === 'string'
         ? ((errorRecord as { context: { provider: string } }).context.provider ?? undefined)
         : undefined;
-  const selectedProviderMode =
-    typeof (errorRecord as { context?: { pricing_provider_mode?: unknown } }).context
-      ?.pricing_provider_mode === 'string'
-      ? ((errorRecord as { context: { pricing_provider_mode: LivePricingProviderMode } }).context
-          .pricing_provider_mode ?? undefined)
-      : undefined;
+  const pricingProviderMode = (errorRecord as {
+    context?: { pricing_provider_mode?: unknown };
+  }).context?.pricing_provider_mode;
+  const selectedProviderMode = pricingProviderMode === 'soldcomps' ? pricingProviderMode : undefined;
   const category =
     typeof (errorRecord as { category?: unknown }).category === 'string'
       ? (errorRecord as { category: string }).category
@@ -217,7 +232,7 @@ async function getSelectedProviderModeForCli(
     return 'soldcomps';
   }
 
-  return getPricingProviderMode(await getAppSettings());
+  return getPricingProviderMode(await getAppSettings()) === 'soldcomps' ? 'soldcomps' : 'off';
 }
 
 function buildExistingResearchSkippedPayload(
@@ -306,7 +321,6 @@ export async function runPriceOneListingCli(
   dependencies: PriceOneListingCliDependencies = {}
 ): Promise<void> {
   const capture = createStreamCapture();
-  loadRootEnvironment();
   const parsedArgs = parseArgs(argv);
 
   try {
@@ -329,6 +343,8 @@ export async function runPriceOneListingCli(
       process.exitCode = 1;
       return;
     }
+
+    loadRootEnvironment();
 
     const dataAccess =
       dependencies.createDataAccess?.() ?? createSidecarDataAccess(process.env);

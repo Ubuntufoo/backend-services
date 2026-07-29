@@ -79,6 +79,10 @@ export const apifyPricingEnvSchema = z.object({
 export type ApifyPricingEnv = z.infer<typeof apifyPricingEnvSchema>;
 
 export const soldCompsPricingEnvSchema = z.object({
+  SOLDCOMPS_ENABLED: requiredNonEmptyString('SOLDCOMPS_ENABLED').refine(
+    (value) => value === 'true',
+    'SOLDCOMPS_ENABLED must be true to enable live SoldComps requests'
+  ),
   SOLDCOMPS_API_KEY: requiredNonEmptyString('SOLDCOMPS_API_KEY'),
   SOLDCOMPS_PRICE_TIMEOUT_SECONDS: optionalPositiveIntegerStringWithDefault(
     'SOLDCOMPS_PRICE_TIMEOUT_SECONDS',

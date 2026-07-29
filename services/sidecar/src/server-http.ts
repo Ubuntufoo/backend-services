@@ -92,7 +92,7 @@ function logAuthState(config: HttpTransportConfig): void {
 
 export function isSidecarJobRunnerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const rawValue = env[SIDECAR_JOB_RUNNER_ENABLED]?.trim().toLowerCase();
-  return rawValue !== '0' && rawValue !== 'false';
+  return rawValue === 'true';
 }
 
 async function closeServer(server: Server): Promise<void> {
@@ -134,9 +134,11 @@ export async function startSidecarHttpServer(
     : null;
 
   if (jobRunner) {
-    console.log('Sidecar job runner started.');
+    console.log(`Sidecar job runner started via ${SIDECAR_JOB_RUNNER_ENABLED}=true.`);
   } else {
-    console.log(`Sidecar job runner disabled via ${SIDECAR_JOB_RUNNER_ENABLED}=false.`);
+    console.log(
+      `Sidecar job runner disabled. Set ${SIDECAR_JOB_RUNNER_ENABLED}=true to enable background job processing.`
+    );
   }
 
   const close = async (): Promise<void> => {
