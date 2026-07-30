@@ -21,6 +21,7 @@ import {
   serializeListing,
 } from '@/http/listing-pricing-analysis.js';
 import {
+  abandonListingRequestSchema,
   dismissPricingAnalysisWarningsRequestSchema,
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
@@ -35,6 +36,10 @@ import {
 } from '@/schemas/data-api.js';
 import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options.js';
 import {
+  abandonNeedsReviewListing,
+  ListingAbandonmentError,
+} from '@/listings/abandon-needs-review-listing.js';
+import {
   GENERATED_DRAFT_METADATA_KEY,
   readCurrentCanonicalYear,
   readGeneratedDraftYearMetadata,
@@ -48,6 +53,10 @@ import { createProductionPricingAnalyst } from '@/pricing/production-llm-pricing
 import type { PricingAnalyst } from '@/pricing/types.js';
 
 export interface DataApiRouterOptions {
+  abandonListing?: (
+    listingId: string,
+    dataAccess: SidecarDataAccess
+  ) => Promise<{ abandoned: true; listingId: string }>;
   dataAccess?: SidecarDataAccess;
   pricingAnalyst?: PricingAnalyst;
 }
@@ -184,6 +193,15 @@ function sendPricingReviewRetryError(res: Response, error: unknown): void {
 
   if (error instanceof SidecarJobError && error.code === JOB_ERROR_CODES.DUPLICATE_ACTIVE_JOB) {
     sendJsonError(res, 409, error.code, error.message);
+    return;
+  }
+
+  sendRouteError(res, error);
+}
+
+function sendListingAbandonmentError(res: Response, error: unknown): void {
+  if (error instanceof ListingAbandonmentError) {
+    sendJsonError(res, error.statusCode, error.code, error.message);
     return;
   }
 
@@ -673,6 +691,31 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         listing: await serializeListingWithLatestPricingAnalysis(dataAccess, preparedListing),
       });
     });
+  });
+
+  router.post('/listings/:listingId/abandon', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    const body = parseOrSend(res, abandonListingRequestSchema, req.body);
+    if (!body) {
+      return;
+    }
+
+    return runRoute(
+      res,
+      async () => {
+        const dataAccess = getDataAccess();
+        const result = options.abandonListing
+          ? await options.abandonListing(params.listingId, dataAccess)
+          : await abandonNeedsReviewListing(params.listingId, { dataAccess });
+
+        res.status(200).json(result);
+      },
+      sendListingAbandonmentError
+    );
   });
 
   router.post('/listings/:listingId/retry', async (req: Request, res: Response) => {

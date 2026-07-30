@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const sendMock = vi.fn();
 const s3ClientMock = vi.fn();
+const deleteObjectCommandMock = vi.fn(function DeleteObjectCommandMock(
+  this: { input?: unknown },
+  input: unknown
+) {
+  Object.assign(this, { input });
+});
 const putObjectCommandMock = vi.fn(function PutObjectCommandMock(
   this: { input?: unknown },
   input: unknown
@@ -10,6 +16,7 @@ const putObjectCommandMock = vi.fn(function PutObjectCommandMock(
 });
 
 vi.mock('@aws-sdk/client-s3', () => ({
+  DeleteObjectCommand: deleteObjectCommandMock,
   PutObjectCommand: putObjectCommandMock,
   S3Client: class S3ClientMock {
     constructor(input: unknown) {
@@ -29,10 +36,11 @@ const r2Env = {
   R2_PUBLIC_BASE_URL: 'https://images.example.com/',
 } as NodeJS.ProcessEnv;
 
-describe('shared R2 image upload service', () => {
+describe('shared R2 image storage service', () => {
   afterEach(() => {
     sendMock.mockReset();
     s3ClientMock.mockClear();
+    deleteObjectCommandMock.mockClear();
     putObjectCommandMock.mockClear();
   });
 
@@ -208,5 +216,66 @@ describe('shared R2 image upload service', () => {
     ).rejects.toThrow(/body must not be empty/);
 
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('deletes only normalized exact object keys', async () => {
+    sendMock.mockResolvedValue({});
+
+    const { deleteR2Objects } = await import('../src/index.js');
+
+    await deleteR2Objects(
+      [
+        ' listings/LIST-001/front.jpg ',
+        '',
+        'listings/LIST-001/back.jpg',
+        'listings/LIST-001/front.jpg',
+      ],
+      { env: r2Env }
+    );
+
+    expect(deleteObjectCommandMock).toHaveBeenCalledTimes(2);
+    expect(deleteObjectCommandMock).toHaveBeenNthCalledWith(1, {
+      Bucket: 'listing-images',
+      Key: 'listings/LIST-001/front.jpg',
+    });
+    expect(deleteObjectCommandMock).toHaveBeenNthCalledWith(2, {
+      Bucket: 'listing-images',
+      Key: 'listings/LIST-001/back.jpg',
+    });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats an empty exact-key list as a successful no-op', async () => {
+    const { deleteR2Objects } = await import('../src/index.js');
+
+    await expect(deleteR2Objects(['', '   '], { env: {} })).resolves.toBeUndefined();
+
+    expect(s3ClientMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('treats missing objects as deleted when R2 accepts the idempotent delete', async () => {
+    sendMock.mockResolvedValue({ $metadata: { httpStatusCode: 204 } });
+
+    const { deleteR2Objects } = await import('../src/index.js');
+
+    await expect(
+      deleteR2Objects(['listings/LIST-001/missing.jpg'], { env: r2Env })
+    ).resolves.toBeUndefined();
+  });
+
+  it('surfaces object deletion failures without continuing to later keys', async () => {
+    sendMock.mockRejectedValueOnce(new Error('R2 delete failed'));
+
+    const { deleteR2Objects } = await import('../src/index.js');
+
+    await expect(
+      deleteR2Objects(
+        ['listings/LIST-001/front.jpg', 'listings/LIST-001/back.jpg'],
+        { env: r2Env }
+      )
+    ).rejects.toThrow('R2 delete failed');
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
   });
 });

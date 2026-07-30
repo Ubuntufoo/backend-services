@@ -46,6 +46,12 @@ export const listingIdParamsSchema = z.object({
   listingId: trimmedStringSchema('listingId'),
 });
 
+export const abandonListingRequestSchema = z
+  .object({
+    confirmed: z.literal(true),
+  })
+  .strict();
+
 export const editableListingFieldsSchema = z
   .object({
     captureMode: captureModeSchema.nullable().optional(),
@@ -128,6 +134,7 @@ export const dismissPricingAnalysisWarningsRequestSchema = z
   .strict();
 
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
+export type AbandonListingRequest = z.infer<typeof abandonListingRequestSchema>;
 export type SellerEditableListingFieldsInput = z.infer<typeof sellerEditableListingFieldsSchema>;
 export type CreateListingRequest = z.infer<typeof createListingRequestSchema>;
 export type ListingIdParams = z.infer<typeof listingIdParamsSchema>;

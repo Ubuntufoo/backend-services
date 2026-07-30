@@ -32,6 +32,20 @@ export async function getOrderByOrderId(
   return requireOptionalResult(result);
 }
 
+export async function hasOrderForListing(
+  client: SupabaseDataClient,
+  listingId: string
+): Promise<boolean> {
+  const result = (await client
+    .from('orders')
+    .select('id')
+    .eq('listing_id', listingId)
+    .limit(1)
+    .maybeSingle()) as SingleResult<Pick<OrderRow, 'id'>>;
+
+  return requireOptionalResult(result) !== null;
+}
+
 export async function updateOrder(
   client: SupabaseDataClient,
   orderId: string,

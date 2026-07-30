@@ -67,6 +67,11 @@ export interface GenerateAiPreparationUpdate {
   sellerHints?: ListingUpdate['seller_hints'];
 }
 
+export interface DeleteNeedsReviewListingInput {
+  expectedUpdatedAt: string;
+  listingId: string;
+}
+
 export interface PublishedListingUpdate {
   ebayListingId?: ListingUpdate['ebay_listing_id'];
   ebayListingStatus?: ListingUpdate['ebay_listing_status'];
@@ -258,6 +263,22 @@ export async function getListingByListingId(
     .from('listings')
     .select('*')
     .eq('listing_id', listingId)
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  return requireOptionalResult(result);
+}
+
+export async function deleteNeedsReviewListing(
+  client: SupabaseDataClient,
+  input: DeleteNeedsReviewListingInput
+): Promise<ListingRow | null> {
+  const result = (await client
+    .from('listings')
+    .delete()
+    .eq('listing_id', input.listingId)
+    .eq('status', 'needs_review')
+    .eq('updated_at', input.expectedUpdatedAt)
+    .select()
     .maybeSingle()) as SingleResult<ListingRow>;
 
   return requireOptionalResult(result);

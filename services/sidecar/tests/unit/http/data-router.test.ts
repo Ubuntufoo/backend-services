@@ -7,8 +7,12 @@ import type {
   ListingWorkflowTransitionInput,
 } from '@ebay-inventory/data';
 import { ListingWorkflowTransitionConflictError } from '@ebay-inventory/data';
-import { createDataApiRouter } from '@/http/data-router.js';
+import {
+  createDataApiRouter,
+  type DataApiRouterOptions,
+} from '@/http/data-router.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+import { ListingAbandonmentError } from '@/listings/abandon-needs-review-listing.js';
 import type { PricingAnalyst } from '@/pricing/index.js';
 
 const listingRow = {
@@ -238,6 +242,7 @@ function createDataAccess(): SidecarDataAccess {
         ...listingRow,
         ...input,
       })),
+      deleteNeedsReview: vi.fn(async () => null),
       getByListingId: vi.fn(async () => listingRow),
       listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(async () => [listingRow]),
@@ -282,6 +287,9 @@ function createDataAccess(): SidecarDataAccess {
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
+    orders: {
+      hasByListingId: vi.fn(async () => false),
+    },
     appSettings: {
       create: vi.fn(),
       get: vi.fn(async () => appSettingsRow),
@@ -293,10 +301,14 @@ function createDataAccess(): SidecarDataAccess {
   };
 }
 
-function createApp(dataAccess: SidecarDataAccess, pricingAnalyst?: PricingAnalyst): Express {
+function createApp(
+  dataAccess: SidecarDataAccess,
+  pricingAnalyst?: PricingAnalyst,
+  abandonListing?: DataApiRouterOptions['abandonListing']
+): Express {
   const app = express();
   app.use(express.json());
-  app.use('/api', createDataApiRouter({ dataAccess, pricingAnalyst }));
+  app.use('/api', createDataApiRouter({ abandonListing, dataAccess, pricingAnalyst }));
   return app;
 }
 
@@ -2922,6 +2934,69 @@ describe('data API router', () => {
       expect(response.status).toBe(400);
       expect(response.body).toMatchObject({
         error: 'invalid_request',
+      });
+    });
+  });
+
+  describe('POST /api/listings/:listingId/abandon', () => {
+    it.each([
+      {},
+      { confirmed: false },
+      { confirmed: 'true' },
+      { confirmed: true, unexpected: 'field' },
+    ])('rejects invalid or non-strict confirmation body %#', async (body) => {
+      const dataAccess = createDataAccess();
+      const abandonListing = vi.fn();
+      const app = createApp(dataAccess, undefined, abandonListing);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/abandon')
+        .send(body);
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ error: 'invalid_request' });
+      expect(abandonListing).not.toHaveBeenCalled();
+    });
+
+    it('returns the compact stable success response', async () => {
+      const dataAccess = createDataAccess();
+      const abandonListing = vi.fn(async () => ({
+        abandoned: true as const,
+        listingId: 'LIST-001',
+      }));
+      const app = createApp(dataAccess, undefined, abandonListing);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/abandon')
+        .send({ confirmed: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ abandoned: true, listingId: 'LIST-001' });
+      expect(abandonListing).toHaveBeenCalledWith('LIST-001', dataAccess);
+    });
+
+    it.each([
+      ['not_found', 404],
+      ['listing_abandonment_status_unsupported', 409],
+      ['listing_abandonment_active_job', 409],
+      ['listing_abandonment_order_exists', 409],
+      ['listing_abandonment_ebay_trace', 409],
+      ['listing_abandonment_state_stale', 409],
+    ] as const)('maps %s service errors to HTTP %i', async (code, statusCode) => {
+      const dataAccess = createDataAccess();
+      const abandonListing = vi.fn(async () => {
+        throw new ListingAbandonmentError(code, statusCode, `Expected ${code} error.`);
+      });
+      const app = createApp(dataAccess, undefined, abandonListing);
+
+      const response = await request(app)
+        .post('/api/listings/LIST-001/abandon')
+        .send({ confirmed: true });
+
+      expect(response.status).toBe(statusCode);
+      expect(response.body).toEqual({
+        error: code,
+        message: `Expected ${code} error.`,
       });
     });
   });

@@ -70,6 +70,7 @@ export {
   buildR2ImageObjectKey,
   buildPublicImageUrl,
   createR2ImageStorageClient,
+  deleteR2Objects,
   loadR2ImageStorageConfig,
   uploadImage,
   type R2ImageStorageConfig,
@@ -155,6 +156,7 @@ export {
   approveListingForExport,
   claimApprovedListingForPublish,
   createListing,
+  deleteNeedsReviewListing,
   getListingByOfferId,
   getListingByListingId,
   listApprovedForExportListings,
@@ -167,6 +169,7 @@ export {
   savePublishedListing,
   updateListing,
   type ListApprovedForExportListingsOptions,
+  type DeleteNeedsReviewListingInput,
   type GenerateAiPreparationUpdate,
   type GeneratedListingFieldsUpdate,
   type ListListingsByStatusOptions,
@@ -178,7 +181,12 @@ export {
   finalizeListingSkuForExportApproval,
   ListingWorkflowTransitionConflictError,
 } from './listing-approval.js';
-export { createOrder, getOrderByOrderId, updateOrder } from './repositories/orders.js';
+export {
+  createOrder,
+  getOrderByOrderId,
+  hasOrderForListing,
+  updateOrder,
+} from './repositories/orders.js';
 export {
   ListingWorkflowStateError,
   assertValidListingWorkflowStateInput,

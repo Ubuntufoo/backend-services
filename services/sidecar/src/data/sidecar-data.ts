@@ -11,6 +11,8 @@ import {
   DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   createListingPriceResearch,
+  deleteNeedsReviewListing,
+  hasOrderForListing,
   dismissListingPriceResearchPricingWarnings,
   createListing,
   enqueueGenerateAiJob,
@@ -55,6 +57,7 @@ import {
   type ResolvedAiModelRoute,
   type CreateAiModelAttemptInput,
   type DailyUsageIncrementResult,
+  type DeleteNeedsReviewListingInput,
   type GeminiDailyUsageSummary,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
@@ -123,6 +126,7 @@ export interface SidecarDataAccess {
     approveForExport(listingId: string): Promise<ListingRow>;
     claimApprovedForPublish(listingId: string): Promise<ListingRow | null>;
     create(input: ListingInsert): Promise<ListingRow>;
+    deleteNeedsReview(input: DeleteNeedsReviewListingInput): Promise<ListingRow | null>;
     getByOfferId(offerId: string): Promise<ListingRow | null>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
     listApprovedForExport(options: ListApprovedForExportListingsOptions): Promise<ListingRow[]>;
@@ -155,6 +159,9 @@ export interface SidecarDataAccess {
       input: Parameters<typeof markListingPriceResearchSucceeded>[1]
     ): Promise<ListingPriceResearchRow>;
   };
+  orders: {
+    hasByListingId(listingId: string): Promise<boolean>;
+  };
 }
 
 let cachedSidecarDataAccess: SidecarDataAccess | undefined;
@@ -182,6 +189,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       claimApprovedForPublish: async (listingId) =>
         await claimApprovedListingForPublish(client, listingId),
       create: async (input) => await createListing(client, input),
+      deleteNeedsReview: async (input) => await deleteNeedsReviewListing(client, input),
       getByOfferId: async (offerId) => await getListingByOfferId(client, offerId),
       getByListingId: async (listingId) => await getListingByListingId(client, listingId),
       listApprovedForExport: async (options) =>
@@ -224,6 +232,9 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       updateGeminiAttemptAudit: async (jobId, audit) =>
         await setGeminiJobAttemptAudit(client, jobId, audit),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
+    },
+    orders: {
+      hasByListingId: async (listingId) => await hasOrderForListing(client, listingId),
     },
     appSettings: {
       create: async (input) => await createAppSettings(client, input),

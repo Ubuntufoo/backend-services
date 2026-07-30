@@ -15,10 +15,12 @@ const listApprovedForExportListingsMock = vi.fn();
 const getLatestGeminiUsageAttemptMock = vi.fn();
 const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
+const hasOrderForListingMock = vi.fn();
 const markAiModelAttemptFailedMock = vi.fn();
 const markAiModelAttemptSucceededMock = vi.fn();
 const prepareListingForGenerateAiMock = vi.fn();
 const createListingMock = vi.fn();
+const deleteNeedsReviewListingMock = vi.fn();
 const approveListingForExportMock = vi.fn();
 const updateListingMock = vi.fn();
 const claimApprovedListingForPublishMock = vi.fn();
@@ -59,6 +61,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createAppSettings: createAppSettingsMock,
   createListing: createListingMock,
   createListingPriceResearch: createListingPriceResearchMock,
+  deleteNeedsReviewListing: deleteNeedsReviewListingMock,
   approveListingForExport: approveListingForExportMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
   enqueueGenerateAiJob: enqueueGenerateAiJobMock,
@@ -70,6 +73,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getLatestListingPriceResearchByListingId: getLatestListingPriceResearchByListingIdMock,
   getListingByOfferId: getListingByOfferIdMock,
   getListingByListingId: getListingByListingIdMock,
+  hasOrderForListing: hasOrderForListingMock,
   incrementGeminiCallsUsed: incrementGeminiCallsUsedMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
   listDueQueuedJobs: listDueQueuedJobsMock,
@@ -161,7 +165,7 @@ describe('sidecar data access', () => {
     });
   });
 
-  it('delegates create, approval, prepareForGenerateAi, update, workflow, and app-settings calls to shared repository helpers', async () => {
+  it('delegates listing mutations, order checks, and app-settings calls to shared repository helpers', async () => {
     const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
     const dataAccess = createSidecarDataAccess();
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -185,6 +189,10 @@ describe('sidecar data access', () => {
     } as ListingWorkflowTransitionInput;
 
     await dataAccess.listings.create(listingInsert);
+    await dataAccess.listings.deleteNeedsReview({
+      expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      listingId: 'LIST-001',
+    });
     await dataAccess.listings.approveForExport('LIST-001');
     await dataAccess.listings.claimApprovedForPublish('LIST-001');
     await dataAccess.listings.prepareForGenerateAi({
@@ -197,8 +205,13 @@ describe('sidecar data access', () => {
     await dataAccess.listings.saveImageMetadata(imageMetadataUpdate);
     await dataAccess.listings.updateWorkflowState(workflowUpdate);
     await dataAccess.appSettings.get();
+    await dataAccess.orders.hasByListingId('LIST-001');
 
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
+    expect(deleteNeedsReviewListingMock).toHaveBeenCalledWith(client, {
+      expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      listingId: 'LIST-001',
+    });
     expect(approveListingForExportMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(claimApprovedListingForPublishMock).toHaveBeenCalledWith(client, 'LIST-001');
     expect(prepareListingForGenerateAiMock).toHaveBeenCalledWith(client, {
@@ -211,6 +224,7 @@ describe('sidecar data access', () => {
     expect(saveListingImageMetadataMock).toHaveBeenCalledWith(client, imageMetadataUpdate);
     expect(updateListingWorkflowStateMock).toHaveBeenCalledWith(client, workflowUpdate);
     expect(getAppSettingsMock).toHaveBeenCalledWith(client, 'default');
+    expect(hasOrderForListingMock).toHaveBeenCalledWith(client, 'LIST-001');
   });
 
   it('delegates remaining job, usage, and pricing calls to shared repository helpers', async () => {

@@ -19,6 +19,7 @@ import {
   createAppSettings,
   createListing,
   createOrder,
+  deleteNeedsReviewListing,
   DEFAULT_ORDER_SYNC_DAILY_LIMIT,
   DailyUsageLimitExceededError,
   enqueueGenerateAiJob,
@@ -39,6 +40,7 @@ import {
   listLatestListingPriceResearchByListingIds,
   getListingByListingId,
   getOrderByOrderId,
+  hasOrderForListing,
   getOrCreateDailyUsage,
   incrementGeminiCallsUsed,
   incrementOrderSyncCount,
@@ -308,6 +310,80 @@ function createSelectClient<TTable extends string, TRow>(
             };
           }),
         })),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createConditionalListingDeleteClient(expectedRow: ListingRow | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listings');
+
+      return {
+        delete: vi.fn(() => ({
+          eq: vi.fn((listingIdColumn: string, listingId: string) => {
+            expect(listingIdColumn).toBe('listing_id');
+            expect(listingId).toBe('LIST-001');
+
+            return {
+              eq: vi.fn((statusColumn: string, status: string) => {
+                expect(statusColumn).toBe('status');
+                expect(status).toBe('needs_review');
+
+                return {
+                  eq: vi.fn((updatedAtColumn: string, updatedAt: string) => {
+                    expect(updatedAtColumn).toBe('updated_at');
+                    expect(updatedAt).toBe('2026-05-17T00:00:00.000Z');
+
+                    return {
+                      select: vi.fn(() => ({
+                        maybeSingle: vi.fn(async () => ({
+                          data: expectedRow,
+                          error: null,
+                        })),
+                      })),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        })),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createOrderExistsForListingClient(orderId: string | null): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('orders');
+
+      return {
+        select: vi.fn((columns: string) => {
+          expect(columns).toBe('id');
+
+          return {
+            eq: vi.fn((column: string, value: string) => {
+              expect(column).toBe('listing_id');
+              expect(value).toBe('LIST-001');
+
+              return {
+                limit: vi.fn((limit: number) => {
+                  expect(limit).toBe(1);
+
+                  return {
+                    maybeSingle: vi.fn(async () => ({
+                      data: orderId ? { id: orderId } : null,
+                      error: null,
+                    })),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
       };
     }),
   } as unknown as SupabaseDataClient;
@@ -1820,6 +1896,28 @@ describe('shared repositories', () => {
         sub_status: 'idle',
       },
     ]);
+  });
+
+  it('conditionally deletes only an unchanged needs-review listing', async () => {
+    const deletedListing: ListingRow = {
+      ...listingRow,
+      status: 'needs_review',
+      sub_status: 'review_pending',
+    };
+
+    await expect(
+      deleteNeedsReviewListing(createConditionalListingDeleteClient(deletedListing), {
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+        listingId: 'LIST-001',
+      })
+    ).resolves.toEqual(deletedListing);
+
+    await expect(
+      deleteNeedsReviewListing(createConditionalListingDeleteClient(null), {
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+        listingId: 'LIST-001',
+      })
+    ).resolves.toBeNull();
   });
 
   it('accepts base and structured sku values while keeping listing ids immutable', async () => {
@@ -4048,6 +4146,13 @@ describe('shared repositories', () => {
     await expect(updateOrder(updateClient, 'ORDER-001', { fulfillment_status: 'shipped' })).resolves.toEqual(
       orderRow
     );
+
+    await expect(
+      hasOrderForListing(createOrderExistsForListingClient('order-row-id'), 'LIST-001')
+    ).resolves.toBe(true);
+    await expect(
+      hasOrderForListing(createOrderExistsForListingClient(null), 'LIST-001')
+    ).resolves.toBe(false);
   });
 
   it('creates today daily usage row when missing', async () => {

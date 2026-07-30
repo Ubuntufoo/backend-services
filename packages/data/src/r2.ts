@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { loadR2Env } from '@ebay-inventory/env';
 
 export interface R2ImageStorageConfig {
@@ -30,6 +30,12 @@ interface UploadImageOptions {
   config?: R2ImageStorageConfig;
   env?: NodeJS.ProcessEnv;
   objectKey?: string;
+}
+
+interface DeleteR2ObjectsOptions {
+  client?: Pick<S3Client, 'send'>;
+  config?: R2ImageStorageConfig;
+  env?: NodeJS.ProcessEnv;
 }
 
 const R2_REGION = 'auto' as const;
@@ -159,4 +165,29 @@ export async function uploadImage(
     objectKey,
     publicUrl: buildPublicImageUrl(config.publicBaseUrl, objectKey),
   };
+}
+
+export async function deleteR2Objects(
+  objectKeys: readonly string[],
+  options: DeleteR2ObjectsOptions = {}
+): Promise<void> {
+  const exactObjectKeys = [
+    ...new Set(objectKeys.map((key) => key.trim()).filter((key) => key.length > 0)),
+  ];
+
+  if (exactObjectKeys.length === 0) {
+    return;
+  }
+
+  const config = options.config ?? loadR2ImageStorageConfig(options.env);
+  const client = options.client ?? createR2ImageStorageClientFromConfig(config);
+
+  for (const objectKey of exactObjectKeys) {
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: config.bucketName,
+        Key: objectKey,
+      })
+    );
+  }
 }
