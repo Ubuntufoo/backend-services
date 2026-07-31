@@ -169,12 +169,13 @@ export function validateRequiredItemSpecificsForCategory({
   satisfiedAspectNames?: string[];
 }): void {
   const satisfiedNames = new Set(satisfiedAspectNames.map(normalizeAspectKey));
+  const effectiveItemSpecifics = getEffectiveItemSpecificsForCategoryValidation(listing);
   const missingFields = requiredAspectNames
     .filter((aspectName) => {
       const normalizedName = normalizeAspectKey(aspectName);
       return (
         !satisfiedNames.has(normalizedName) &&
-        !hasRequiredAspectValue(listing.item_specifics, aspectName)
+        !hasRequiredAspectValue(effectiveItemSpecifics, aspectName)
       );
     })
     .map((aspectName) => createMissingAspectField(aspectName));

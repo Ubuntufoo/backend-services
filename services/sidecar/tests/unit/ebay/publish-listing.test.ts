@@ -3,6 +3,7 @@ import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { publishListing } from '@/ebay/publish-listing.js';
+import type { PublishListingDependencies } from '@/ebay/publish-listing.js';
 import { PublishListingValidationError } from '@/ebay/publish-validation.js';
 import type { PublishListingError } from '@/ebay/publish-validation.js';
 import type { EbayConfig } from '@/types/ebay.js';
@@ -53,9 +54,12 @@ function createTaxonomyAspectsResponse(requiredAspectNames: string[]) {
   };
 }
 
+type MockedFunction<T extends (...args: any[]) => any> = ReturnType<typeof vi.fn> & T;
+
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
+    auto_pricing_enabled: true,
     capture_mode: null,
     category_id: '1234',
     condition_id: '4000',
@@ -119,6 +123,7 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     merchant_location_key: 'warehouse-1',
     office_location_name: null,
     processed_folder_path: '/processed',
+    pricing_provider_mode: 'soldcomps',
     soldcomps_usage_snapshot: null,
     r2_retention_days_after_sold: 30,
     updated_at: '2026-05-24T11:00:00.000Z',
@@ -198,7 +203,7 @@ function createFetchResponse(
 }
 
 function createSuccessfulImageFetchMock() {
-  return vi.fn(async (_input: string | URL, init?: RequestInit) => {
+  return vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase();
 
     if (method === 'HEAD') {
@@ -217,13 +222,15 @@ function createSuccessfulImageFetchMock() {
       },
       status: 200,
     });
-  });
+  }) as typeof globalThis.fetch;
 }
 
-function createOfferAlreadyExistsError(options: {
-  offerId?: string;
-  includeOfferIdParameter?: boolean;
-} = {}) {
+function createOfferAlreadyExistsError(
+  options: {
+    offerId?: string;
+    includeOfferIdParameter?: boolean;
+  } = {}
+) {
   const offerId = options.offerId ?? 'OFFER-RECOVERED';
 
   return new EbayApiRequestError(
@@ -235,7 +242,8 @@ function createOfferAlreadyExistsError(options: {
         errorId: 25002,
         longMessage: 'Offer entity already exists.',
         message: 'Offer entity already exists.',
-        parameters: options.includeOfferIdParameter === false ? [] : [{ name: 'offerId', value: offerId }],
+        parameters:
+          options.includeOfferIdParameter === false ? [] : [{ name: 'offerId', value: offerId }],
       },
     ],
     409
@@ -267,18 +275,28 @@ function createDependencies({
   dataAccess: SidecarDataAccess;
   fetch: typeof globalThis.fetch;
   inventoryApi: {
-    createOffer: ReturnType<typeof vi.fn>;
-    createOrReplaceInventoryItem: ReturnType<typeof vi.fn>;
-    getInventoryLocation: ReturnType<typeof vi.fn>;
-    getOffers: ReturnType<typeof vi.fn>;
-    publishOffer: ReturnType<typeof vi.fn>;
+    createOffer: MockedFunction<PublishListingDependencies['inventoryApi']['createOffer']>;
+    createOrReplaceInventoryItem: MockedFunction<
+      PublishListingDependencies['inventoryApi']['createOrReplaceInventoryItem']
+    >;
+    getInventoryLocation: MockedFunction<
+      PublishListingDependencies['inventoryApi']['getInventoryLocation']
+    >;
+    getOffers: MockedFunction<PublishListingDependencies['inventoryApi']['getOffers']>;
+    publishOffer: MockedFunction<PublishListingDependencies['inventoryApi']['publishOffer']>;
   };
   metadataApi: {
-    getItemConditionPolicies: ReturnType<typeof vi.fn>;
+    getItemConditionPolicies: MockedFunction<
+      PublishListingDependencies['metadataApi']['getItemConditionPolicies']
+    >;
   };
   taxonomyApi: {
-    getDefaultCategoryTreeId: ReturnType<typeof vi.fn>;
-    getItemAspectsForCategory: ReturnType<typeof vi.fn>;
+    getDefaultCategoryTreeId: MockedFunction<
+      PublishListingDependencies['taxonomyApi']['getDefaultCategoryTreeId']
+    >;
+    getItemAspectsForCategory: MockedFunction<
+      PublishListingDependencies['taxonomyApi']['getItemAspectsForCategory']
+    >;
   };
   listingUpdates: { listingId: string; changes: Partial<ListingRow> }[];
   imagePublicBaseUrl: string | null;
@@ -286,15 +304,24 @@ function createDependencies({
   runtimeConfig: Pick<EbayConfig, 'environment' | 'marketplaceId'>;
 } {
   const inventoryApi = {
-    createOffer: vi.fn(async () => createOfferResult),
-    createOrReplaceInventoryItem: vi.fn(async () => undefined),
+    createOffer: vi.fn(async () => createOfferResult) as MockedFunction<
+      PublishListingDependencies['inventoryApi']['createOffer']
+    >,
+    createOrReplaceInventoryItem: vi.fn(async () => undefined) as MockedFunction<
+      PublishListingDependencies['inventoryApi']['createOrReplaceInventoryItem']
+    >,
     getInventoryLocation: vi.fn(async () => ({
-      merchantLocationKey: runtimeConfig.environment === 'production' ? 'live-warehouse-1' : 'warehouse-1',
+      merchantLocationKey:
+        runtimeConfig.environment === 'production' ? 'live-warehouse-1' : 'warehouse-1',
       merchantLocationStatus: 'ENABLED',
       name: 'Warehouse',
-    })),
-    getOffers: vi.fn(async () => getOffersResult),
-    publishOffer: vi.fn(async () => publishOfferResult),
+    })) as MockedFunction<PublishListingDependencies['inventoryApi']['getInventoryLocation']>,
+    getOffers: vi.fn(async () => getOffersResult) as MockedFunction<
+      PublishListingDependencies['inventoryApi']['getOffers']
+    >,
+    publishOffer: vi.fn(async () => publishOfferResult) as MockedFunction<
+      PublishListingDependencies['inventoryApi']['publishOffer']
+    >,
   };
   const metadataApi = {
     getItemConditionPolicies: vi.fn(async () =>
@@ -308,25 +335,27 @@ function createDependencies({
           name: 'Poor',
         },
       ])
-    ),
+    ) as MockedFunction<PublishListingDependencies['metadataApi']['getItemConditionPolicies']>,
   };
   const taxonomyApi = {
-    getDefaultCategoryTreeId: vi.fn(async () => ({ categoryTreeId: '0' })),
-    getItemAspectsForCategory: vi.fn(async () => ({ aspects: [] })),
+    getDefaultCategoryTreeId: vi.fn(async () => ({ categoryTreeId: '0' })) as MockedFunction<
+      PublishListingDependencies['taxonomyApi']['getDefaultCategoryTreeId']
+    >,
+    getItemAspectsForCategory: vi.fn(async () => ({ aspects: [] })) as MockedFunction<
+      PublishListingDependencies['taxonomyApi']['getItemAspectsForCategory']
+    >,
   };
 
   const listingsGetByListingId = vi.fn(async () => listing);
   const appSettingsGet = vi.fn(async () => appSettings);
-  const listingsUpdateWorkflowState = vi.fn(async (input: {
-    listingId: string;
-    status: string;
-    subStatus: string;
-  }) => ({
-    ...(listing ?? createListing()),
-    listing_id: input.listingId,
-    status: input.status,
-    sub_status: input.subStatus,
-  }));
+  const listingsUpdateWorkflowState = vi.fn(
+    async (input: { listingId: string; status: string; subStatus: string }) => ({
+      ...(listing ?? createListing()),
+      listing_id: input.listingId,
+      status: input.status,
+      sub_status: input.subStatus,
+    })
+  );
   const listingUpdates: { listingId: string; changes: Partial<ListingRow> }[] = [];
   const listingsUpdate = vi.fn(async (currentListingId: string, changes: Partial<ListingRow>) => {
     listingUpdates.push({
@@ -342,8 +371,12 @@ function createDependencies({
   });
 
   const dataAccess: SidecarDataAccess = {
+    aiModelRoutes: {
+      resolveForTask: vi.fn(),
+    },
     aiModelAttempts: {
       create: vi.fn(),
+      getLatestGeminiUsageAttempt: vi.fn(),
       markFailed: vi.fn(),
       markSucceeded: vi.fn(),
     },
@@ -360,28 +393,50 @@ function createDependencies({
       claimDueQueued: vi.fn(),
       complete: vi.fn(),
       enqueueGenerateAi: vi.fn(),
+      enqueueProcessImages: vi.fn(),
       enqueuePublish: vi.fn(),
+      enqueueResearchPrice: vi.fn(),
       fail: vi.fn(),
+      getActiveResearchPriceByListingId: vi.fn(),
       getById: vi.fn(),
       listByListingId: vi.fn(),
+      listByListingIds: vi.fn(),
       listDueQueued: vi.fn(),
       listStaleRunning: vi.fn(),
       resetForManualRetry: vi.fn(),
       requeue: vi.fn(),
+      updateGeminiAttemptAudit: vi.fn(),
       update: vi.fn(),
     },
     listings: {
+      approveForExport: vi.fn(async () => listing ?? createListing()),
       claimApprovedForPublish: vi.fn(),
       create: vi.fn(),
+      deleteNeedsReview: vi.fn(async () => listing),
+      deleteSandboxCleaned: vi.fn(async () => listing),
       getByListingId: listingsGetByListingId,
+      getByOfferId: vi.fn(async () => listing),
+      getBySku: vi.fn(async () => listing),
       listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(),
       listByStatus: vi.fn(),
+      prepareForGenerateAi: vi.fn(async () => listing),
       saveImageMetadata: vi.fn(),
       update: listingsUpdate,
       updateWorkflowState: listingsUpdateWorkflowState,
     },
-  };
+    listingPriceResearch: {
+      create: vi.fn(),
+      dismissPricingWarnings: vi.fn(),
+      getLatestByListingId: vi.fn(),
+      listLatestByListingIds: vi.fn(),
+      markFailed: vi.fn(),
+      markSucceeded: vi.fn(),
+    },
+    orders: {
+      hasByListingId: vi.fn(),
+    },
+  } as SidecarDataAccess;
 
   return {
     dataAccess,
@@ -662,7 +717,9 @@ describe('publishListing', () => {
         },
       }),
     });
-    dependencies.inventoryApi.getInventoryLocation.mockRejectedValue(new Error('Location not found.'));
+    dependencies.inventoryApi.getInventoryLocation.mockRejectedValue(
+      new Error('Location not found.')
+    );
 
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       code: 'LISTING_NOT_READY',
@@ -961,10 +1018,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
       createTaxonomyAspectsResponse(['Card Condition', 'Franchise'])
@@ -983,10 +1039,12 @@ describe('publishListing', () => {
         }),
       })
     );
-    expect(dependencies.metadataApi.getItemConditionPolicies.mock.invocationCallOrder[0]).toBeLessThan(
-      dependencies.taxonomyApi.getDefaultCategoryTreeId.mock.invocationCallOrder[0]!
-    );
-    expect(dependencies.taxonomyApi.getItemAspectsForCategory.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(
+      dependencies.metadataApi.getItemConditionPolicies.mock.invocationCallOrder[0]
+    ).toBeLessThan(dependencies.taxonomyApi.getDefaultCategoryTreeId.mock.invocationCallOrder[0]!);
+    expect(
+      dependencies.taxonomyApi.getItemAspectsForCategory.mock.invocationCallOrder[0]
+    ).toBeLessThan(
       dependencies.inventoryApi.createOrReplaceInventoryItem.mock.invocationCallOrder[0]!
     );
   });
@@ -1029,7 +1087,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
-  it('allows trading-card lot publish with injected Player/Athlete=Various', async () => {
+  it('allows trading-card lot publish when live taxonomy requires Player/Athlete', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         capture_mode: 'lot_3_image',
@@ -1044,11 +1102,15 @@ describe('publishListing', () => {
         },
       }),
     });
+
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
+    );
+
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Player/Athlete'])
     );
 
     await publishListing('Lot-0001', dependencies);
@@ -1085,10 +1147,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
 
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
@@ -1111,10 +1172,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
       createTaxonomyAspectsResponse(['Franchise', 'Game'])
@@ -1159,10 +1219,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
       createTaxonomyAspectsResponse(['Franchise', 'Game'])
@@ -1190,10 +1249,9 @@ describe('publishListing', () => {
     });
 
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
       createTaxonomyAspectsResponse(['Franchise'])
@@ -1218,10 +1276,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
       createTaxonomyAspectsResponse(['Franchise'])
@@ -1258,10 +1315,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183050',
+      })
     );
 
     await publishListing('Lot-0001', dependencies);
@@ -1827,7 +1883,11 @@ describe('publishListing', () => {
     const result = await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
-    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledWith(STRUCTURED_SINGLE_SKU, 'EBAY_US', 25);
+    expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      'EBAY_US',
+      25
+    );
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalledWith('OFFER-RECOVERED');
     expect(dependencies.listingUpdates).toEqual([
       {
@@ -1977,8 +2037,7 @@ describe('publishListing', () => {
         listingId: 'LIST-001',
         stage: 'offer',
       },
-      message:
-        `eBay reported an existing offer for SKU "${STRUCTURED_SINGLE_SKU}" but no offerId could be resolved.`,
+      message: `eBay reported an existing offer for SKU "${STRUCTURED_SINGLE_SKU}" but no offerId could be resolved.`,
     } satisfies Partial<PublishListingError>);
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledTimes(1);
     expect(dependencies.inventoryApi.getOffers).toHaveBeenCalledTimes(1);

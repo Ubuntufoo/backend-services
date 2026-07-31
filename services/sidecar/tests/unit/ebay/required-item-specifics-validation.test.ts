@@ -141,6 +141,18 @@ describe('required item specifics validation', () => {
     });
   });
 
+  it('uses the effective lot player default during live required-aspect validation', () => {
+    expect(() =>
+      validateRequiredItemSpecificsForCategory({
+        listing: createListing({
+          capture_mode: 'lot_3_image',
+          item_specifics: { Franchise: 'Star Wars' },
+        }),
+        requiredAspectNames: ['Player/Athlete'],
+      })
+    ).not.toThrow();
+  });
+
   it('throws field-level issues for missing live required aspects without stale local rules', () => {
     expect(() =>
       validateRequiredItemSpecificsForCategory({
