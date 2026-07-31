@@ -85,8 +85,10 @@ function createDataAccess(currentListing: ListingRow | null = listing): SidecarD
       listByListingId: vi.fn(async () => []),
     },
     listings: {
+      deleteSandboxCleaned: vi.fn(async () => null),
       deleteNeedsReview: vi.fn(async () => currentListing),
       getByListingId: vi.fn(async () => currentListing),
+      getBySku: vi.fn(async () => currentListing),
     },
     orders: {
       hasByListingId: vi.fn(async () => false),

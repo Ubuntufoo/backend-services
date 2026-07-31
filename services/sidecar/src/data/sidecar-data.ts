@@ -11,6 +11,7 @@ import {
   DEFAULT_APP_SETTINGS_ID,
   createAppSettings,
   createListingPriceResearch,
+  deleteSandboxCleanedListing,
   deleteNeedsReviewListing,
   hasOrderForListing,
   dismissListingPriceResearchPricingWarnings,
@@ -29,6 +30,7 @@ import {
   listLatestListingPriceResearchByListingIds,
   getListingByOfferId,
   getListingByListingId,
+  getListingBySku,
   incrementGeminiCallsUsed,
   listApprovedForExportListings,
   listDueQueuedJobs,
@@ -58,6 +60,7 @@ import {
   type CreateAiModelAttemptInput,
   type DailyUsageIncrementResult,
   type DeleteNeedsReviewListingInput,
+  type DeleteSandboxCleanedListingInput,
   type GeminiDailyUsageSummary,
   type EnqueueGenerateAiJobResult,
   type EnqueueProcessImagesJobResult,
@@ -116,19 +119,18 @@ export interface SidecarDataAccess {
     listStaleRunning(cutoff: string): Promise<JobRow[]>;
     resetForManualRetry(jobId: string, now: string): Promise<JobRow | null>;
     requeue(jobId: string, error: JobErrorUpdateInput, nextRunAt: string): Promise<JobRow>;
-    updateGeminiAttemptAudit(
-      jobId: string,
-      audit: GeminiJobAttemptAuditUpdate
-    ): Promise<JobRow>;
+    updateGeminiAttemptAudit(jobId: string, audit: GeminiJobAttemptAuditUpdate): Promise<JobRow>;
     update(jobId: string, changes: JobUpdate): Promise<JobRow>;
   };
   listings: {
     approveForExport(listingId: string): Promise<ListingRow>;
     claimApprovedForPublish(listingId: string): Promise<ListingRow | null>;
     create(input: ListingInsert): Promise<ListingRow>;
+    deleteSandboxCleaned(input: DeleteSandboxCleanedListingInput): Promise<ListingRow | null>;
     deleteNeedsReview(input: DeleteNeedsReviewListingInput): Promise<ListingRow | null>;
     getByOfferId(offerId: string): Promise<ListingRow | null>;
     getByListingId(listingId: string): Promise<ListingRow | null>;
+    getBySku(sku: string): Promise<ListingRow | null>;
     listApprovedForExport(options: ListApprovedForExportListingsOptions): Promise<ListingRow[]>;
     list(): Promise<ListingRow[]>;
     listByStatus(
@@ -189,9 +191,11 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       claimApprovedForPublish: async (listingId) =>
         await claimApprovedListingForPublish(client, listingId),
       create: async (input) => await createListing(client, input),
+      deleteSandboxCleaned: async (input) => await deleteSandboxCleanedListing(client, input),
       deleteNeedsReview: async (input) => await deleteNeedsReviewListing(client, input),
       getByOfferId: async (offerId) => await getListingByOfferId(client, offerId),
       getByListingId: async (listingId) => await getListingByListingId(client, listingId),
+      getBySku: async (sku) => await getListingBySku(client, sku),
       listApprovedForExport: async (options) =>
         await listApprovedForExportListings(client, options),
       list: async () => await listListings(client),

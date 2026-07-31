@@ -42,6 +42,17 @@ function createTradingCardConditionPoliciesResponse(
   };
 }
 
+function createTaxonomyAspectsResponse(requiredAspectNames: string[]) {
+  return {
+    aspects: requiredAspectNames.map((localizedAspectName) => ({
+      localizedAspectName,
+      aspectConstraint: {
+        aspectRequired: true,
+      },
+    })),
+  };
+}
+
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: '2026-05-24T12:00:00.000Z',
@@ -392,8 +403,8 @@ describe('publishListing', () => {
     const result = await publishListing('LIST-001', dependencies);
 
     expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
-    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).not.toHaveBeenCalled();
-    expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).toHaveBeenCalledWith('EBAY_US');
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '1234');
     expect(dependencies.inventoryApi.getInventoryLocation).toHaveBeenCalledWith('warehouse-1');
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
       STRUCTURED_SINGLE_SKU,
@@ -690,7 +701,7 @@ describe('publishListing', () => {
       STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         condition: 'USED_VERY_GOOD',
-        conditionDescription: 'Visible corner wear.',
+        conditionDescription: undefined,
         conditionDescriptors: [
           {
             name: '40001',
@@ -734,6 +745,43 @@ describe('publishListing', () => {
           {
             name: '40001',
             values: ['400011'],
+          },
+        ],
+      })
+    );
+  });
+
+  it('maps CCG play-condition labels to category-specific descriptor ids', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183454',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'EXCELLENT',
+          Game: 'Pokemon',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400015', name: 'Lightly played (Excellent)' }],
+        { categoryId: '183454' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Card Condition', 'Game'])
+    );
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        conditionDescription: undefined,
+        conditionDescriptors: [
+          {
+            name: '40001',
+            values: ['400015'],
           },
         ],
       })
@@ -785,7 +833,7 @@ describe('publishListing', () => {
         }),
       })
     );
-    expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '183050');
   });
 
   it('covers Single-000004 legacy EX-MT sandbox case with conservative normalization', async () => {
@@ -830,7 +878,7 @@ describe('publishListing', () => {
     );
   });
 
-  it('continues trading-card publish when metadata omits Card Condition descriptor', async () => {
+  it('fails closed when metadata omits Card Condition descriptor', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '261328',
@@ -847,26 +895,21 @@ describe('publishListing', () => {
       })
     );
 
-    await publishListing('LIST-001', dependencies);
-
-    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
-      STRUCTURED_SINGLE_SKU,
-      expect.objectContaining({
-        conditionDescriptors: undefined,
-        product: expect.objectContaining({
-          aspects: {
-            'Card Condition': ['Very good'],
-            Player: ['Michael Jordan'],
-          },
-        }),
-      })
-    );
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    } satisfies Partial<PublishListingError>);
+    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
   });
 
-  it('blocks sports-card publish when local required item specifics are missing', async () => {
+  it('blocks publish when a live taxonomy required aspect is missing', async () => {
     const dependencies = createDependencies({
       listing: createListing({
-        category_id: '183050',
+        category_id: '261328',
         condition_id: '4000',
         item_specifics: {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
@@ -875,26 +918,24 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183050' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }])
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Sport'])
     );
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       code: 'LISTING_NOT_READY',
       context: {
         fields: [
           {
-            acceptedKeys: ['Manufacturer', 'Card Manufacturer'],
-            aspectName: 'Manufacturer',
-            field: 'item_specifics.Manufacturer',
-            message: 'Manufacturer is required for this eBay category before publishing.',
+            acceptedKeys: ['Sport'],
+            aspectName: 'Sport',
+            field: 'item_specifics.Sport',
+            message: 'Sport is required for this eBay category before publishing.',
             scope: 'listing',
           },
         ],
-        issues: [
-          'Manufacturer is required for this eBay category before publishing.',
-        ],
+        issues: ['Sport is required for this eBay category before publishing.'],
         kind: 'user_fixable',
         listingId: 'LIST-001',
         stage: 'validate',
@@ -906,7 +947,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
-  it('allows sports-card publish when local required item specifics are present', async () => {
+  it('allows publish when live taxonomy aspects and structured Card Condition are satisfied', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '183050',
@@ -925,6 +966,9 @@ describe('publishListing', () => {
         { categoryId: '183050' }
       )
     );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Card Condition', 'Franchise'])
+    );
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
@@ -939,6 +983,50 @@ describe('publishListing', () => {
         }),
       })
     );
+    expect(dependencies.metadataApi.getItemConditionPolicies.mock.invocationCallOrder[0]).toBeLessThan(
+      dependencies.taxonomyApi.getDefaultCategoryTreeId.mock.invocationCallOrder[0]!
+    );
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory.mock.invocationCallOrder[0]).toBeLessThan(
+      dependencies.inventoryApi.createOrReplaceInventoryItem.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it.each([
+    {
+      configure: (dependencies: ReturnType<typeof createDependencies>) => {
+        dependencies.taxonomyApi.getDefaultCategoryTreeId = vi.fn(async () => {
+          throw new Error('taxonomy unavailable');
+        });
+      },
+      causeMessage: 'taxonomy unavailable',
+      label: 'default tree retrieval failure',
+    },
+    {
+      configure: (dependencies: ReturnType<typeof createDependencies>) => {
+        dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({ aspects: [{}] }));
+      },
+      causeMessage: 'Taxonomy item aspects response contains an invalid aspect name.',
+      label: 'malformed aspects response',
+    },
+  ])('fails closed before inventory mutation on $label', async ({ configure, causeMessage }) => {
+    const dependencies = createDependencies();
+    configure(dependencies);
+
+    const error = await publishListing('LIST-001', dependencies).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      code: 'INVENTORY_ITEM_UPSERT_FAILED',
+      context: {
+        listingId: 'LIST-001',
+        stage: 'metadata',
+      },
+      message:
+        'Failed to fetch or parse required item aspects for listing "LIST-001" in category "1234".',
+    } satisfies Partial<PublishListingError>);
+    expect((error as Error).cause).toMatchObject({ message: causeMessage });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
   });
 
   it('allows trading-card lot publish with injected Player/Athlete=Various', async () => {
@@ -980,7 +1068,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.publishOffer).toHaveBeenCalled();
   });
 
-  it('keeps single-card validation strict when capture_mode is not lot_3_image', async () => {
+  it('does not enforce stale Player/Athlete rules for non-sport category 183050', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         capture_mode: 'single_2_image',
@@ -1003,27 +1091,16 @@ describe('publishListing', () => {
       )
     );
 
-    await expect(publishListing('Lot-0001', dependencies)).rejects.toMatchObject({
-      code: 'LISTING_NOT_READY',
-      context: {
-        fields: [
-          {
-            acceptedKeys: ['Player/Athlete', 'Player', 'Athlete'],
-            aspectName: 'Player/Athlete',
-            field: 'item_specifics.Player/Athlete',
-            message: 'Player/Athlete is required for this eBay category before publishing.',
-            scope: 'listing',
-          },
-        ],
-        validationCode: 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING',
-      },
-    } satisfies Partial<PublishListingError>);
-    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
-    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
-    expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse([])
+    );
+
+    await publishListing('Lot-0001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalled();
   });
 
-  it('aggregates multiple missing local required item specifics', async () => {
+  it('aggregates multiple missing live taxonomy aspects', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '183050',
@@ -1039,27 +1116,30 @@ describe('publishListing', () => {
         { categoryId: '183050' }
       )
     );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Franchise', 'Game'])
+    );
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       context: {
         fields: [
           {
-            acceptedKeys: ['Manufacturer', 'Card Manufacturer'],
-            aspectName: 'Manufacturer',
-            field: 'item_specifics.Manufacturer',
-            message: 'Manufacturer is required for this eBay category before publishing.',
+            acceptedKeys: ['Franchise'],
+            aspectName: 'Franchise',
+            field: 'item_specifics.Franchise',
+            message: 'Franchise is required for this eBay category before publishing.',
             scope: 'listing',
           },
           {
-            acceptedKeys: ['Player/Athlete', 'Player', 'Athlete'],
-            aspectName: 'Player/Athlete',
-            field: 'item_specifics.Player/Athlete',
-            message: 'Player/Athlete is required for this eBay category before publishing.',
+            acceptedKeys: ['Game'],
+            aspectName: 'Game',
+            field: 'item_specifics.Game',
+            message: 'Game is required for this eBay category before publishing.',
             scope: 'listing',
           },
         ],
         issues: [
-          'Manufacturer is required for this eBay category before publishing.',
-          'Player/Athlete is required for this eBay category before publishing.',
+          'Franchise is required for this eBay category before publishing.',
+          'Game is required for this eBay category before publishing.',
         ],
         validationCode: 'CATEGORY_REQUIRED_ITEM_SPECIFICS_MISSING',
       },
@@ -1073,8 +1153,8 @@ describe('publishListing', () => {
         condition_id: '4000',
         item_specifics: {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
-          Manufacturer: ' ',
-          Player: '   ',
+          Franchise: ' ',
+          Game: '   ',
         },
       }),
     });
@@ -1084,11 +1164,14 @@ describe('publishListing', () => {
         { categoryId: '183050' }
       )
     );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Franchise', 'Game'])
+    );
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       context: {
         issues: [
-          'Manufacturer is required for this eBay category before publishing.',
-          'Player/Athlete is required for this eBay category before publishing.',
+          'Franchise is required for this eBay category before publishing.',
+          'Game is required for this eBay category before publishing.',
         ],
       },
     } satisfies Partial<PublishListingError>);
@@ -1101,8 +1184,7 @@ describe('publishListing', () => {
         category_id: '183050',
         item_specifics: {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
-          Manufacturer: [],
-          Player: ['Michael Jordan'],
+          Franchise: [],
         },
       }),
     });
@@ -1113,23 +1195,25 @@ describe('publishListing', () => {
         { categoryId: '183050' }
       )
     );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Franchise'])
+    );
 
     await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
       context: {
-        issues: ['Manufacturer is required for this eBay category before publishing.'],
+        issues: ['Franchise is required for this eBay category before publishing.'],
       },
     } satisfies Partial<PublishListingError>);
   });
 
-  it('accepts alias item-specific keys for local required aspect rules', async () => {
+  it('matches live taxonomy aspect names case-insensitively', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '183050',
         condition_id: '4000',
         item_specifics: {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
-          'Card Manufacturer': 'Fleer',
-          Athlete: 'Michael Jordan',
+          FRANCHISE: 'Star Wars',
         },
       }),
     });
@@ -1138,6 +1222,9 @@ describe('publishListing', () => {
         [{ id: '400010', name: 'Near mint or better' }],
         { categoryId: '183050' }
       )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse(['Franchise'])
     );
 
     await publishListing('LIST-001', dependencies);
@@ -1147,8 +1234,7 @@ describe('publishListing', () => {
       expect.objectContaining({
         product: expect.objectContaining({
           aspects: {
-            Athlete: ['Michael Jordan'],
-            'Card Manufacturer': ['Fleer'],
+            FRANCHISE: ['Star Wars'],
           },
         }),
       })
@@ -1193,7 +1279,7 @@ describe('publishListing', () => {
     );
   });
 
-  it('does not block unknown categories with no local required-aspect rule', async () => {
+  it('retrieves live taxonomy aspects for non-trading-card categories too', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '9999',
@@ -1206,8 +1292,8 @@ describe('publishListing', () => {
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.metadataApi.getItemConditionPolicies).not.toHaveBeenCalled();
-    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).not.toHaveBeenCalled();
-    expect(dependencies.taxonomyApi.getItemAspectsForCategory).not.toHaveBeenCalled();
+    expect(dependencies.taxonomyApi.getDefaultCategoryTreeId).toHaveBeenCalledWith('EBAY_US');
+    expect(dependencies.taxonomyApi.getItemAspectsForCategory).toHaveBeenCalledWith('0', '9999');
   });
 
   it.each([

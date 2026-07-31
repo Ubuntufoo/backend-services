@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getRawCardConditionCandidateLabels,
   getRawCardConditionDescriptorValueId,
   getRawCardConditionDisplayLabel,
   normalizeRawCardConditionToken,
@@ -23,17 +24,39 @@ describe('trading card conditions', () => {
   });
 
   it.each([
-    ['NEAR_MINT_OR_BETTER', '400010', 'Near mint or better'],
-    ['EXCELLENT', '400011', 'Excellent'],
-    ['VERY_GOOD', '400012', 'Very good'],
-    ['POOR', '400013', 'Poor'],
+    ['261328', 'NEAR_MINT_OR_BETTER', '400010', 'Near mint or better'],
+    ['261328', 'EXCELLENT', '400011', 'Excellent'],
+    ['261328', 'VERY_GOOD', '400012', 'Very good'],
+    ['261328', 'POOR', '400013', 'Poor'],
+    ['183050', 'NEAR_MINT_OR_BETTER', '400010', 'Near mint or better'],
+    ['183050', 'EXCELLENT', '400011', 'Excellent'],
+    ['183050', 'VERY_GOOD', '400012', 'Very good'],
+    ['183050', 'POOR', '400013', 'Poor'],
+    ['183454', 'NEAR_MINT_OR_BETTER', '400010', 'Near mint or better'],
+    ['183454', 'EXCELLENT', '400015', 'Lightly played (Excellent)'],
+    ['183454', 'VERY_GOOD', '400016', 'Moderately played (Very good)'],
+    ['183454', 'POOR', '400017', 'Heavily played (Poor)'],
   ] as const)(
-    'maps supported token %s to descriptor id %s and label %s',
-    (token, descriptorValueId, displayLabel) => {
-      expect(getRawCardConditionDescriptorValueId(token)).toBe(descriptorValueId);
-      expect(getRawCardConditionDisplayLabel(token)).toBe(displayLabel);
+    'maps category %s token %s to descriptor id %s',
+    (categoryId, token, descriptorValueId, categoryLabel) => {
+      expect(getRawCardConditionDescriptorValueId(categoryId, token)).toBe(descriptorValueId);
+      expect(getRawCardConditionCandidateLabels(categoryId, token)).toContain(categoryLabel);
     }
   );
+
+  it.each([
+    ['NEAR_MINT_OR_BETTER', 'Near mint or better'],
+    ['EXCELLENT', 'Excellent'],
+    ['VERY_GOOD', 'Very good'],
+    ['POOR', 'Poor'],
+  ] as const)('returns display label for %s', (token, displayLabel) => {
+    expect(getRawCardConditionDisplayLabel(token)).toBe(displayLabel);
+  });
+
+  it('does not fall back to sports descriptor mappings for unsupported categories', () => {
+    expect(getRawCardConditionDescriptorValueId('9999', 'EXCELLENT')).toBeNull();
+    expect(getRawCardConditionCandidateLabels('9999', 'EXCELLENT')).toEqual([]);
+  });
 
   it('rejects unsupported tokens', () => {
     expect(normalizeRawCardConditionToken('NEAR MINT')).toBeNull();

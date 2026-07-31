@@ -1,7 +1,7 @@
 import { EbayApiRequestError } from '@/api/client.js';
 import type { EbaySellerApi } from '@/api/index.js';
+import { parseStructuredSku } from '@ebay-inventory/types';
 
-export const DEFAULT_SANDBOX_CLEANUP_PREFIXES = ['Single-', 'Lot-'] as const;
 export const MAX_GENERATED_SANDBOX_SKUS = 500;
 const SANDBOX_SKU_SUFFIX_WIDTH = 6;
 
@@ -43,6 +43,7 @@ export interface SandboxCleanupPlan {
 export interface SandboxCleanupDeleteOutcome {
   deletedInventoryItem: boolean;
   deletedOffers: string[];
+  endedListings: string[];
   errors: string[];
   sku: string;
   skippedMissing: string[];
@@ -61,6 +62,7 @@ export interface SandboxCleanupResolvedPlan extends SandboxCleanupPlan {
 
 export interface SandboxCleanupDependencies {
   api: Pick<EbaySellerApi, 'inventory' | 'trading'>;
+  env: NodeJS.ProcessEnv;
 }
 
 export interface SandboxCleanupInput {
@@ -82,8 +84,17 @@ interface SandboxCleanupSelection {
   to?: number;
 }
 
-function isSandboxEnvironment(): boolean {
-  return process.env.EBAY_ENVIRONMENT === 'sandbox';
+export interface SandboxCleanupCandidateSelection {
+  candidateSkus: string[];
+  from?: number;
+  prefixes: string[];
+  skus: string[];
+  sourceMode: SandboxCleanupSourceMode;
+  to?: number;
+}
+
+function isSandboxEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.EBAY_ENVIRONMENT === 'sandbox';
 }
 
 function normalizeText(value: string): string {
@@ -218,6 +229,27 @@ function buildGeneratedSkus(prefixes: string[], from: number, to: number): strin
   return dedupePreserveOrder(skus);
 }
 
+function requireCanonicalStructuredSku(sku: string, flagName: '--sku' | '--prefix'): void {
+  const candidate = flagName === '--prefix' ? `${sku}000001` : sku;
+
+  try {
+    const parsed = parseStructuredSku(candidate);
+    if (flagName === '--prefix' && sku !== `${parsed.categoryCode}-${parsed.listingType}-`) {
+      throw new Error('prefix mismatch');
+    }
+  } catch {
+    const expected =
+      flagName === '--sku'
+        ? 'BSKBL-Single-000016, BSBL-Single-000001, or OTHER-Lot-000123'
+        : 'BSKBL-Single-, BSBL-Single-, or OTHER-Lot-';
+    throw new Error(
+      `${flagName} must be a canonical structured ${
+        flagName === '--sku' ? 'SKU' : 'SKU prefix'
+      } such as ${expected}. Local listing IDs such as Single-000016 are not accepted.`
+    );
+  }
+}
+
 function resolveSourceSelection(input: SandboxCleanupInput): SandboxCleanupSelection {
   const prefixes = normalizeStrings(input.prefixes);
   const skus = dedupePreserveOrder(normalizeStrings(input.skus));
@@ -230,6 +262,10 @@ function resolveSourceSelection(input: SandboxCleanupInput): SandboxCleanupSelec
 
     if (input.allowLargeRange) {
       throw new Error('--allow-large-range requires --prefix with --from/--to.');
+    }
+
+    for (const sku of skus) {
+      requireCanonicalStructuredSku(sku, '--sku');
     }
 
     return {
@@ -247,6 +283,10 @@ function resolveSourceSelection(input: SandboxCleanupInput): SandboxCleanupSelec
 
     if (prefixes.length === 0) {
       throw new Error('--prefix is required when using --from/--to.');
+    }
+
+    for (const prefix of prefixes) {
+      requireCanonicalStructuredSku(prefix, '--prefix');
     }
 
     const from = parsePositiveInteger(input.from, '--from');
@@ -281,9 +321,9 @@ function resolveSourceSelection(input: SandboxCleanupInput): SandboxCleanupSelec
         'Broad inventory-list cleanup mode is disabled because the eBay sandbox inventory list endpoint is unreliable.',
         'Use explicit SKU cleanup or generated range cleanup instead.',
         'Examples:',
-        '  --sku Single-000001',
-        '  --prefix Single- --from 1 --to 50',
-        '  --prefix Single- --prefix Lot- --from 1 --to 50',
+        '  --sku BSKBL-Single-000001',
+        '  --prefix BSKBL-Single- --from 1 --to 50',
+        '  --prefix BSKBL-Single- --prefix OTHER-Lot- --from 1 --to 50',
       ].join('\n')
     );
   }
@@ -297,11 +337,29 @@ function resolveSourceSelection(input: SandboxCleanupInput): SandboxCleanupSelec
       'Broad inventory-list cleanup mode is disabled because the eBay sandbox inventory list endpoint is unreliable.',
       'Use explicit SKU cleanup or generated range cleanup instead.',
       'Examples:',
-      '  pnpm ebay:cleanup-sandbox -- --sku Single-000001',
-      '  pnpm ebay:cleanup-sandbox -- --prefix Single- --from 1 --to 50',
-      '  pnpm ebay:cleanup-sandbox -- --prefix Single- --prefix Lot- --from 1 --to 50',
+      '  pnpm ebay:cleanup-sandbox -- --sku BSKBL-Single-000001',
+      '  pnpm ebay:cleanup-sandbox -- --prefix BSKBL-Single- --from 1 --to 50',
+      '  pnpm ebay:cleanup-sandbox -- --prefix BSKBL-Single- --prefix OTHER-Lot- --from 1 --to 50',
     ].join('\n')
   );
+}
+
+export function resolveSandboxCleanupCandidateSelection(
+  input: SandboxCleanupInput = {}
+): SandboxCleanupCandidateSelection {
+  const selection = resolveSourceSelection(input);
+
+  return {
+    candidateSkus:
+      selection.sourceMode === 'range'
+        ? buildGeneratedSkus(selection.prefixes, selection.from!, selection.to!)
+        : selection.skus,
+    from: selection.from,
+    prefixes: selection.prefixes,
+    skus: selection.skus,
+    sourceMode: selection.sourceMode,
+    to: selection.to,
+  };
 }
 
 async function inspectCandidateSku(
@@ -309,56 +367,44 @@ async function inspectCandidateSku(
   sku: string,
   options: { probeInventoryIfNoOffers: boolean }
 ): Promise<SandboxCleanupCandidateInspection> {
+  let offers: SandboxCleanupOfferSummary[] = [];
+
   try {
     const response = await api.inventory.getOffers(sku);
-    const offers = toRecordArray(response.offers)
+    offers = toRecordArray(response.offers)
       .map(getOfferSummary)
       .filter((offer): offer is SandboxCleanupOfferSummary => offer !== undefined);
-
-    if (offers.length > 0) {
-      return {
-        inventoryExists: true,
-        offers,
-        sku,
-      };
-    }
-
-    if (!options.probeInventoryIfNoOffers) {
-      return {
-        inventoryExists: true,
-        offers,
-        sku,
-      };
-    }
-
-    try {
-      await api.inventory.getInventoryItem(sku);
-      return {
-        inventoryExists: true,
-        offers,
-        sku,
-      };
-    } catch (error) {
-      if (isMissingResourceError(error)) {
-        return {
-          inventoryExists: false,
-          offers: [],
-          sku,
-        };
-      }
-
+  } catch (error) {
+    if (!isMissingResourceError(error)) {
       throw error;
     }
+  }
+
+  if (offers.length > 0 || !options.probeInventoryIfNoOffers) {
+    return {
+      inventoryExists: true,
+      offers,
+      sku,
+    };
+  }
+
+  try {
+    await api.inventory.getInventoryItem(sku);
+    return {
+      inventoryExists: true,
+      offers: [],
+      sku,
+    };
   } catch (error) {
-    if (isMissingResourceError(error)) {
-      return {
-        inventoryExists: false,
-        offers: [],
-        sku,
-      };
+    if (!isMissingResourceError(error)) {
+      throw error;
     }
 
-    throw error;
+    return {
+      inventoryExists: false,
+      offers: [],
+      sku,
+    };
   }
 }
 
@@ -428,9 +474,10 @@ export async function resolveSandboxCleanupApi(
 
 async function resolveSandboxCleanupResolvedPlanWithApi(
   selection: SandboxCleanupSelection,
-  api: Pick<EbaySellerApi, 'inventory' | 'trading'>
+  api: Pick<EbaySellerApi, 'inventory' | 'trading'>,
+  env: NodeJS.ProcessEnv
 ): Promise<SandboxCleanupResolvedPlan> {
-  if (!isSandboxEnvironment()) {
+  if (!isSandboxEnvironment(env)) {
     throw new Error('EBAY_ENVIRONMENT must be set to "sandbox" before running sandbox cleanup.');
   }
 
@@ -462,6 +509,7 @@ function buildDeleteOutcome(inspection: SandboxCleanupCandidateInspection): Sand
     return {
       deletedInventoryItem: false,
       deletedOffers: [],
+      endedListings: [],
       errors: [],
       sku: inspection.sku,
       skippedMissing: [`inventory:${inspection.sku}`],
@@ -472,6 +520,7 @@ function buildDeleteOutcome(inspection: SandboxCleanupCandidateInspection): Sand
   return {
     deletedInventoryItem: false,
     deletedOffers: [],
+    endedListings: [],
     errors: [],
     sku: inspection.sku,
     skippedMissing: [],
@@ -508,6 +557,7 @@ export async function performSandboxCleanup(
       if (listingId && offerStatus === 'PUBLISHED') {
         try {
           await api.trading.endListing(listingId);
+          outcome.endedListings.push(listingId);
         } catch (error) {
           if (!isMissingResourceError(error)) {
             outcome.errors.push(
@@ -569,20 +619,22 @@ export async function resolveSandboxCleanupPlan(
   input: SandboxCleanupInput = {},
   dependencies: Partial<SandboxCleanupDependencies> = {}
 ): Promise<SandboxCleanupResolvedPlan> {
-  if (!isSandboxEnvironment()) {
+  const env = dependencies.env ?? process.env;
+  if (!isSandboxEnvironment(env)) {
     throw new Error('EBAY_ENVIRONMENT must be set to "sandbox" before running sandbox cleanup.');
   }
 
   const selection = resolveSourceSelection(input);
   const api = await resolveSandboxCleanupApi(dependencies);
-  return await resolveSandboxCleanupResolvedPlanWithApi(selection, api);
+  return await resolveSandboxCleanupResolvedPlanWithApi(selection, api, env);
 }
 
 export async function runSandboxCleanup(
   input: SandboxCleanupInput = {},
   dependencies: Partial<SandboxCleanupDependencies> = {}
 ): Promise<SandboxCleanupRunResult> {
-  if (!isSandboxEnvironment()) {
+  const env = dependencies.env ?? process.env;
+  if (!isSandboxEnvironment(env)) {
     throw new Error('EBAY_ENVIRONMENT must be set to "sandbox" before running sandbox cleanup.');
   }
 
@@ -592,7 +644,8 @@ export async function runSandboxCleanup(
     const api = await resolveSandboxCleanupApi(dependencies);
     const { inspections: _inspections, ...plan } = await resolveSandboxCleanupResolvedPlanWithApi(
       selection,
-      api
+      api,
+      env
     );
     return {
       ...plan,
@@ -607,7 +660,11 @@ export async function runSandboxCleanup(
   }
 
   const api = await resolveSandboxCleanupApi(dependencies);
-  const { inspections, ...plan } = await resolveSandboxCleanupResolvedPlanWithApi(selection, api);
+  const { inspections, ...plan } = await resolveSandboxCleanupResolvedPlanWithApi(
+    selection,
+    api,
+    env
+  );
   const outcomes = await performSandboxCleanup(api, inspections);
   const success = outcomes.every((outcome) => outcome.status !== 'failed');
 

@@ -19,6 +19,7 @@ import {
   createAppSettings,
   createListing,
   createOrder,
+  deleteSandboxCleanedListing,
   deleteNeedsReviewListing,
   DEFAULT_ORDER_SYNC_DAILY_LIMIT,
   DailyUsageLimitExceededError,
@@ -39,6 +40,7 @@ import {
   getLatestListingPriceResearchByListingId,
   listLatestListingPriceResearchByListingIds,
   getListingByListingId,
+  getListingBySku,
   getOrderByOrderId,
   hasOrderForListing,
   getOrCreateDailyUsage,
@@ -343,6 +345,62 @@ function createConditionalListingDeleteClient(expectedRow: ListingRow | null): S
                           error: null,
                         })),
                       })),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        })),
+      };
+    }),
+  } as unknown as SupabaseDataClient;
+}
+
+function createConditionalSandboxListingDeleteClient(
+  expectedRow: ListingRow | null
+): SupabaseDataClient {
+  return {
+    from: vi.fn((name: string) => {
+      expect(name).toBe('listings');
+
+      return {
+        delete: vi.fn(() => ({
+          eq: vi.fn((listingIdColumn: string, listingId: string) => {
+            expect(listingIdColumn).toBe('listing_id');
+            expect(listingId).toBe('LIST-001');
+
+            return {
+              eq: vi.fn((skuColumn: string, sku: string) => {
+                expect(skuColumn).toBe('sku');
+                expect(sku).toBe('BSKBL-Single-000001');
+
+                return {
+                  eq: vi.fn((updatedAtColumn: string, updatedAt: string) => {
+                    expect(updatedAtColumn).toBe('updated_at');
+                    expect(updatedAt).toBe('2026-05-17T00:00:00.000Z');
+
+                    return {
+                      in: vi.fn((statusColumn: string, statuses: string[]) => {
+                        expect(statusColumn).toBe('status');
+                        expect(statuses).toEqual(['exported', 'listed']);
+
+                        return {
+                          is: vi.fn((soldAtColumn: string, soldAt: null) => {
+                            expect(soldAtColumn).toBe('sold_at');
+                            expect(soldAt).toBeNull();
+
+                            return {
+                              select: vi.fn(() => ({
+                                maybeSingle: vi.fn(async () => ({
+                                  data: expectedRow,
+                                  error: null,
+                                })),
+                              })),
+                            };
+                          }),
+                        };
+                      }),
                     };
                   }),
                 };
@@ -1806,6 +1864,28 @@ describe('shared repositories', () => {
     const fetchClient = createSelectClient('listings', listingRow, 'listing_id', 'LIST-001');
     await expect(getListingByListingId(fetchClient, 'LIST-001')).resolves.toEqual(listingRow);
 
+    const skuLookupClient = createLimitedLookupClient(
+      'listings',
+      [listingRow],
+      'sku',
+      'BSKBL-Single-000001',
+      2
+    );
+    await expect(getListingBySku(skuLookupClient, 'BSKBL-Single-000001')).resolves.toEqual(
+      listingRow
+    );
+
+    const duplicateSkuLookupClient = createLimitedLookupClient(
+      'listings',
+      [listingRow, { ...listingRow, id: 'listing-row-id-2', listing_id: 'LIST-002' }],
+      'sku',
+      'BSKBL-Single-000001',
+      2
+    );
+    await expect(getListingBySku(duplicateSkuLookupClient, 'BSKBL-Single-000001')).rejects.toThrow(
+      'Multiple local listings found for sku "BSKBL-Single-000001".'
+    );
+
     const offerLookupClient = createLimitedLookupClient(
       'listings',
       [listingRow],
@@ -1914,6 +1994,31 @@ describe('shared repositories', () => {
 
     await expect(
       deleteNeedsReviewListing(createConditionalListingDeleteClient(null), {
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+        listingId: 'LIST-001',
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('conditionally deletes only the exact unchanged non-sold sandbox-cleaned listing', async () => {
+    const deletedListing: ListingRow = {
+      ...listingRow,
+      sku: 'BSKBL-Single-000001',
+      status: 'exported',
+      sold_at: null,
+    };
+
+    await expect(
+      deleteSandboxCleanedListing(createConditionalSandboxListingDeleteClient(deletedListing), {
+        expectedSku: 'BSKBL-Single-000001',
+        expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+        listingId: 'LIST-001',
+      })
+    ).resolves.toEqual(deletedListing);
+
+    await expect(
+      deleteSandboxCleanedListing(createConditionalSandboxListingDeleteClient(null), {
+        expectedSku: 'BSKBL-Single-000001',
         expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
         listingId: 'LIST-001',
       })

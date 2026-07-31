@@ -2,11 +2,9 @@
 
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
-import {
-  runSandboxCleanup,
-  type SandboxCleanupInput,
-} from '@/ebay/sandbox-cleanup.js';
+import type { SandboxCleanupInput } from '@/ebay/sandbox-cleanup.js';
 import { loadRootEnvironment } from '@/config/env-paths.js';
+import { runSandboxListingCleanup } from '@/listings/delete-sandbox-listing.js';
 
 loadRootEnvironment();
 
@@ -111,13 +109,15 @@ function printSummary(summary: unknown): void {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-export async function runCleanupEbaySandboxCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+export async function runCleanupEbaySandboxCli(
+  argv: string[] = process.argv.slice(2)
+): Promise<void> {
   const args = parseArgs(argv);
 
   if (args.delete && !args.confirmSandboxCleanup) {
     throw new Error('Destructive sandbox cleanup requires --confirm-sandbox-cleanup.');
   }
-  const report = await runSandboxCleanup(args);
+  const report = await runSandboxListingCleanup(args);
 
   printSummary({
     candidateCount: report.candidateCount,
@@ -125,6 +125,7 @@ export async function runCleanupEbaySandboxCli(argv: string[] = process.argv.sli
     foundSkus: report.foundSkus,
     from: report.from,
     missingSkus: report.missingSkus,
+    localOutcomes: report.localOutcomes,
     offersBySku: report.offersBySku,
     prefixes: report.prefixes,
     skus: report.skus,
@@ -139,6 +140,7 @@ export async function runCleanupEbaySandboxCli(argv: string[] = process.argv.sli
   printSummary({
     candidateCount: report.candidateCount,
     mode: 'delete',
+    localOutcomes: report.localOutcomes,
     outcomes: report.outcomes,
     success: report.success,
   });

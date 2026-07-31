@@ -13,6 +13,7 @@ import {
 } from '@/http/data-router.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { ListingAbandonmentError } from '@/listings/abandon-needs-review-listing.js';
+import { SandboxListingDeletionError } from '@/listings/delete-sandbox-listing.js';
 import type { PricingAnalyst } from '@/pricing/index.js';
 
 const listingRow = {
@@ -242,8 +243,10 @@ function createDataAccess(): SidecarDataAccess {
         ...listingRow,
         ...input,
       })),
+      deleteSandboxCleaned: vi.fn(async () => null),
       deleteNeedsReview: vi.fn(async () => null),
       getByListingId: vi.fn(async () => listingRow),
+      getBySku: vi.fn(async () => listingRow),
       listApprovedForExport: vi.fn(async () => []),
       list: vi.fn(async () => [listingRow]),
       listByStatus: vi.fn(async () => [listingRow]),
@@ -304,11 +307,15 @@ function createDataAccess(): SidecarDataAccess {
 function createApp(
   dataAccess: SidecarDataAccess,
   pricingAnalyst?: PricingAnalyst,
-  abandonListing?: DataApiRouterOptions['abandonListing']
+  abandonListing?: DataApiRouterOptions['abandonListing'],
+  deleteSandboxListing?: DataApiRouterOptions['deleteSandboxListing']
 ): Express {
   const app = express();
   app.use(express.json());
-  app.use('/api', createDataApiRouter({ abandonListing, dataAccess, pricingAnalyst }));
+  app.use(
+    '/api',
+    createDataApiRouter({ abandonListing, dataAccess, deleteSandboxListing, pricingAnalyst })
+  );
   return app;
 }
 
@@ -2992,6 +2999,145 @@ describe('data API router', () => {
       const response = await request(app)
         .post('/api/listings/LIST-001/abandon')
         .send({ confirmed: true });
+
+      expect(response.status).toBe(statusCode);
+      expect(response.body).toEqual({
+        error: code,
+        message: `Expected ${code} error.`,
+      });
+    });
+  });
+
+  describe('POST /api/listings/:listingId/delete-sandbox', () => {
+    const sandboxListing = {
+      ...listingRow,
+      ebay_offer_id: 'OFFER-001',
+      exported_at: '2026-07-30T12:00:00.000Z',
+      sku: 'BSKBL-Single-000001',
+      status: 'exported',
+      updated_at: '2026-07-30T12:05:00.000Z',
+    };
+
+    it.each([
+      {},
+      {
+        confirmed: false,
+        expectedSku: 'BSKBL-Single-000001',
+        expectedUpdatedAt: sandboxListing.updated_at,
+      },
+      {
+        confirmed: true,
+        expectedSku: 'Single-000001',
+        expectedUpdatedAt: sandboxListing.updated_at,
+      },
+      { confirmed: true, expectedSku: 'BSKBL-Single-000001', expectedUpdatedAt: 'not-a-date' },
+      {
+        confirmed: true,
+        expectedSku: 'BSKBL-Single-000001',
+        expectedUpdatedAt: sandboxListing.updated_at,
+        unexpected: true,
+      },
+    ])('rejects invalid deletion body %#', async (body) => {
+      const dataAccess = createDataAccess();
+      const deleteSandboxListing = vi.fn();
+      const app = createApp(dataAccess, undefined, undefined, deleteSandboxListing);
+
+      const response = await request(app).post('/api/listings/LIST-001/delete-sandbox').send(body);
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ error: 'invalid_request' });
+      expect(deleteSandboxListing).not.toHaveBeenCalled();
+    });
+
+    it('loads the row, verifies exact SKU/timestamp, and returns the stable success payload', async () => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => sandboxListing as never);
+      const success = {
+        deleted: true as const,
+        listingId: 'LIST-001',
+        localOutcome: {
+          databaseDeleted: true as const,
+          r2ObjectCount: 2,
+          status: 'deleted' as const,
+          watcherDirectoryRemoved: true as const,
+        },
+        remoteOutcome: {
+          deletedInventoryItem: true,
+          deletedOfferCount: 1,
+          endedListingCount: 1,
+          missingResourceCount: 0,
+          status: 'deleted' as const,
+        },
+        sku: 'BSKBL-Single-000001',
+      };
+      const deleteSandboxListing = vi.fn(async () => success);
+      const app = createApp(dataAccess, undefined, undefined, deleteSandboxListing);
+
+      const response = await request(app).post('/api/listings/LIST-001/delete-sandbox').send({
+        confirmed: true,
+        expectedSku: sandboxListing.sku,
+        expectedUpdatedAt: sandboxListing.updated_at,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(success);
+      expect(deleteSandboxListing).toHaveBeenCalledWith(
+        {
+          expectedSku: sandboxListing.sku,
+          expectedUpdatedAt: sandboxListing.updated_at,
+          listingId: 'LIST-001',
+        },
+        dataAccess
+      );
+    });
+
+    it('returns 404 for a missing row and 409 for stale or mismatched row state', async () => {
+      const missingDataAccess = createDataAccess();
+      missingDataAccess.listings.getByListingId = vi.fn(async () => null);
+      const missingApp = createApp(missingDataAccess, undefined, undefined, vi.fn());
+      const body = {
+        confirmed: true,
+        expectedSku: sandboxListing.sku,
+        expectedUpdatedAt: sandboxListing.updated_at,
+      };
+
+      expect(
+        (await request(missingApp).post('/api/listings/LIST-404/delete-sandbox').send(body)).status
+      ).toBe(404);
+
+      const mismatchDataAccess = createDataAccess();
+      mismatchDataAccess.listings.getByListingId = vi.fn(async () => sandboxListing as never);
+      const mismatchApp = createApp(mismatchDataAccess, undefined, undefined, vi.fn());
+      const mismatchResponse = await request(mismatchApp)
+        .post('/api/listings/LIST-001/delete-sandbox')
+        .send({ ...body, expectedSku: 'BSBL-Single-000001' });
+      const staleResponse = await request(mismatchApp)
+        .post('/api/listings/LIST-001/delete-sandbox')
+        .send({ ...body, expectedUpdatedAt: '2026-07-30T12:06:00.000Z' });
+
+      expect(mismatchResponse.status).toBe(409);
+      expect(mismatchResponse.body.error).toBe('sandbox_cleanup_sku_mismatch');
+      expect(staleResponse.status).toBe(409);
+      expect(staleResponse.body.error).toBe('sandbox_cleanup_state_stale');
+    });
+
+    it.each([
+      ['sandbox_environment_required', 409],
+      ['sandbox_cleanup_remote_failed', 502],
+      ['sandbox_cleanup_local_failed', 500],
+    ] as const)('maps %s service errors to HTTP %i', async (code, statusCode) => {
+      const dataAccess = createDataAccess();
+      dataAccess.listings.getByListingId = vi.fn(async () => sandboxListing as never);
+      const deleteSandboxListing = vi.fn(async () => {
+        throw new SandboxListingDeletionError(code, statusCode, `Expected ${code} error.`);
+      });
+      const app = createApp(dataAccess, undefined, undefined, deleteSandboxListing);
+
+      const response = await request(app).post('/api/listings/LIST-001/delete-sandbox').send({
+        confirmed: true,
+        expectedSku: sandboxListing.sku,
+        expectedUpdatedAt: sandboxListing.updated_at,
+      });
 
       expect(response.status).toBe(statusCode);
       expect(response.body).toEqual({

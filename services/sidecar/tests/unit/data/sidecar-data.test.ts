@@ -15,11 +15,13 @@ const listApprovedForExportListingsMock = vi.fn();
 const getLatestGeminiUsageAttemptMock = vi.fn();
 const getListingByOfferIdMock = vi.fn();
 const getListingByListingIdMock = vi.fn();
+const getListingBySkuMock = vi.fn();
 const hasOrderForListingMock = vi.fn();
 const markAiModelAttemptFailedMock = vi.fn();
 const markAiModelAttemptSucceededMock = vi.fn();
 const prepareListingForGenerateAiMock = vi.fn();
 const createListingMock = vi.fn();
+const deleteSandboxCleanedListingMock = vi.fn();
 const deleteNeedsReviewListingMock = vi.fn();
 const approveListingForExportMock = vi.fn();
 const updateListingMock = vi.fn();
@@ -61,6 +63,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createAppSettings: createAppSettingsMock,
   createListing: createListingMock,
   createListingPriceResearch: createListingPriceResearchMock,
+  deleteSandboxCleanedListing: deleteSandboxCleanedListingMock,
   deleteNeedsReviewListing: deleteNeedsReviewListingMock,
   approveListingForExport: approveListingForExportMock,
   createSupabaseServiceClient: createSupabaseServiceClientMock,
@@ -73,6 +76,7 @@ vi.mock('@ebay-inventory/data', () => ({
   getLatestListingPriceResearchByListingId: getLatestListingPriceResearchByListingIdMock,
   getListingByOfferId: getListingByOfferIdMock,
   getListingByListingId: getListingByListingIdMock,
+  getListingBySku: getListingBySkuMock,
   hasOrderForListing: hasOrderForListingMock,
   incrementGeminiCallsUsed: incrementGeminiCallsUsedMock,
   listApprovedForExportListings: listApprovedForExportListingsMock,
@@ -124,6 +128,7 @@ describe('sidecar data access', () => {
       queuedOnly: true,
     });
     await dataAccess.listings.getByListingId('LIST-001');
+    await dataAccess.listings.getBySku('BSKBL-Single-000001');
     await dataAccess.listings.getByOfferId('OFFER-001');
     await dataAccess.aiModelAttempts.getLatestGeminiUsageAttempt();
     await dataAccess.listingPriceResearch.getLatestByListingId('LIST-001');
@@ -149,6 +154,7 @@ describe('sidecar data access', () => {
       queuedOnly: true,
     });
     expect(getListingByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
+    expect(getListingBySkuMock).toHaveBeenCalledWith(client, 'BSKBL-Single-000001');
     expect(getListingByOfferIdMock).toHaveBeenCalledWith(client, 'OFFER-001');
     expect(getLatestGeminiUsageAttemptMock).toHaveBeenCalledWith(client);
     expect(getLatestListingPriceResearchByListingIdMock).toHaveBeenCalledWith(client, 'LIST-001');
@@ -189,6 +195,11 @@ describe('sidecar data access', () => {
     } as ListingWorkflowTransitionInput;
 
     await dataAccess.listings.create(listingInsert);
+    await dataAccess.listings.deleteSandboxCleaned({
+      expectedSku: 'BSKBL-Single-000001',
+      expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      listingId: 'LIST-001',
+    });
     await dataAccess.listings.deleteNeedsReview({
       expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
       listingId: 'LIST-001',
@@ -208,6 +219,11 @@ describe('sidecar data access', () => {
     await dataAccess.orders.hasByListingId('LIST-001');
 
     expect(createListingMock).toHaveBeenCalledWith(client, listingInsert);
+    expect(deleteSandboxCleanedListingMock).toHaveBeenCalledWith(client, {
+      expectedSku: 'BSKBL-Single-000001',
+      expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
+      listingId: 'LIST-001',
+    });
     expect(deleteNeedsReviewListingMock).toHaveBeenCalledWith(client, {
       expectedUpdatedAt: '2026-05-17T00:00:00.000Z',
       listingId: 'LIST-001',

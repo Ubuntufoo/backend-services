@@ -52,11 +52,31 @@ const LEGACY_RAW_CARD_CONDITION_TOKEN_NORMALIZATION: Record<
   PR: 'POOR',
 };
 
-const RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS: Record<RawCardConditionToken, string> = {
+const SPORTS_AND_NON_SPORT_DESCRIPTOR_VALUE_IDS: Record<RawCardConditionToken, string> = {
   NEAR_MINT_OR_BETTER: '400010',
   EXCELLENT: '400011',
   VERY_GOOD: '400012',
   POOR: '400013',
+};
+const CCG_DESCRIPTOR_VALUE_IDS: Record<RawCardConditionToken, string> = {
+  NEAR_MINT_OR_BETTER: '400010',
+  EXCELLENT: '400015',
+  VERY_GOOD: '400016',
+  POOR: '400017',
+};
+const RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS_BY_CATEGORY: Record<
+  string,
+  Record<RawCardConditionToken, string>
+> = {
+  '183050': SPORTS_AND_NON_SPORT_DESCRIPTOR_VALUE_IDS,
+  '183454': CCG_DESCRIPTOR_VALUE_IDS,
+  '261328': SPORTS_AND_NON_SPORT_DESCRIPTOR_VALUE_IDS,
+};
+const CCG_RAW_CARD_CONDITION_LABELS: Record<RawCardConditionToken, string> = {
+  NEAR_MINT_OR_BETTER: 'Near mint or better',
+  EXCELLENT: 'Lightly played (Excellent)',
+  VERY_GOOD: 'Moderately played (Very good)',
+  POOR: 'Heavily played (Poor)',
 };
 
 export const TRADING_CARD_CATEGORY_IDS = new Set(['183050', '183454', '261328']);
@@ -104,12 +124,27 @@ export function getRawCardConditionDisplayLabel(token: RawCardConditionToken): s
   return RAW_CARD_CONDITION_DISPLAY_LABELS[token];
 }
 
-export function getRawCardConditionCandidateLabels(token: RawCardConditionToken): string[] {
-  return [token, getRawCardConditionDisplayLabel(token)];
+export function getRawCardConditionCandidateLabels(
+  categoryId: string,
+  token: RawCardConditionToken
+): string[] {
+  if (!RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS_BY_CATEGORY[categoryId.trim()]) {
+    return [];
+  }
+
+  const labels = [token, getRawCardConditionDisplayLabel(token)];
+  if (categoryId.trim() === '183454') {
+    labels.push(CCG_RAW_CARD_CONDITION_LABELS[token]);
+  }
+
+  return [...new Set(labels)];
 }
 
-export function getRawCardConditionDescriptorValueId(token: RawCardConditionToken): string {
-  return RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS[token];
+export function getRawCardConditionDescriptorValueId(
+  categoryId: string,
+  token: RawCardConditionToken
+): string | null {
+  return RAW_CARD_CONDITION_DESCRIPTOR_VALUE_IDS_BY_CATEGORY[categoryId.trim()]?.[token] ?? null;
 }
 
 export function getSavedRawCardConditionToken(

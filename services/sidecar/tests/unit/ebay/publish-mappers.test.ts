@@ -180,9 +180,28 @@ describe('publish mappers', () => {
         values: ['400012'],
       },
     ]);
+    expect(payload.conditionDescription).toBeUndefined();
     expect(payload.product?.aspects).toEqual({
       Franchise: ['Utah Jazz'],
       Player: ['Michael Jordan'],
+    });
+  });
+
+  it('keeps condition description and Card Condition aspect when descriptors are empty', () => {
+    const payload = mapListingToInventoryItemPayload(
+      createListing({
+        category_id: '183050',
+        item_specifics: {
+          'Card Condition': 'VERY_GOOD',
+        },
+      }),
+      createAppSettings(),
+      { conditionDescriptors: [] }
+    );
+
+    expect(payload.conditionDescription).toBe('Minor wear on corners.');
+    expect(payload.product?.aspects).toEqual({
+      'Card Condition': ['Very good'],
     });
   });
 
@@ -244,6 +263,7 @@ describe('publish mappers', () => {
       availableQuantity: 1,
       categoryId: '1234',
       format: 'FIXED_PRICE',
+      listingDuration: 'GTC',
       listingDescription: 'Detailed listing description.',
       listingPolicies: {
         fulfillmentPolicyId: 'FULFILLMENT-1',

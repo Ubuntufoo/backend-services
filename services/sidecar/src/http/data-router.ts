@@ -22,6 +22,7 @@ import {
 } from '@/http/listing-pricing-analysis.js';
 import {
   abandonListingRequestSchema,
+  deleteSandboxListingRequestSchema,
   dismissPricingAnalysisWarningsRequestSchema,
   enqueueGenerateAiRequestSchema,
   createListingRequestSchema,
@@ -39,6 +40,12 @@ import {
   abandonNeedsReviewListing,
   ListingAbandonmentError,
 } from '@/listings/abandon-needs-review-listing.js';
+import {
+  deleteSandboxListingById,
+  SandboxListingDeletionError,
+  type DeleteSandboxListingByIdInput,
+  type DeleteSandboxListingSuccess,
+} from '@/listings/delete-sandbox-listing.js';
 import {
   GENERATED_DRAFT_METADATA_KEY,
   readCurrentCanonicalYear,
@@ -58,6 +65,10 @@ export interface DataApiRouterOptions {
     dataAccess: SidecarDataAccess
   ) => Promise<{ abandoned: true; listingId: string }>;
   dataAccess?: SidecarDataAccess;
+  deleteSandboxListing?: (
+    input: DeleteSandboxListingByIdInput,
+    dataAccess: SidecarDataAccess
+  ) => Promise<DeleteSandboxListingSuccess>;
   pricingAnalyst?: PricingAnalyst;
 }
 
@@ -201,6 +212,15 @@ function sendPricingReviewRetryError(res: Response, error: unknown): void {
 
 function sendListingAbandonmentError(res: Response, error: unknown): void {
   if (error instanceof ListingAbandonmentError) {
+    sendJsonError(res, error.statusCode, error.code, error.message);
+    return;
+  }
+
+  sendRouteError(res, error);
+}
+
+function sendSandboxListingDeletionError(res: Response, error: unknown): void {
+  if (error instanceof SandboxListingDeletionError) {
     sendJsonError(res, error.statusCode, error.code, error.message);
     return;
   }
@@ -715,6 +735,62 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
         res.status(200).json(result);
       },
       sendListingAbandonmentError
+    );
+  });
+
+  router.post('/listings/:listingId/delete-sandbox', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, listingIdParamsSchema, req.params);
+    if (!params) {
+      return;
+    }
+
+    const body = parseOrSend(res, deleteSandboxListingRequestSchema, req.body);
+    if (!body) {
+      return;
+    }
+
+    return runRoute(
+      res,
+      async () => {
+        const dataAccess = getDataAccess();
+        const listing = await dataAccess.listings.getByListingId(params.listingId);
+
+        if (!listing) {
+          throw new SandboxListingDeletionError(
+            'not_found',
+            404,
+            `Listing "${params.listingId}" was not found.`
+          );
+        }
+
+        if (listing.sku !== body.expectedSku) {
+          throw new SandboxListingDeletionError(
+            'sandbox_cleanup_sku_mismatch',
+            409,
+            `Listing SKU changed or does not match "${body.expectedSku}". Refresh and retry.`
+          );
+        }
+
+        if (listing.updated_at !== body.expectedUpdatedAt) {
+          throw new SandboxListingDeletionError(
+            'sandbox_cleanup_state_stale',
+            409,
+            `Listing "${params.listingId}" changed. Refresh and retry.`
+          );
+        }
+
+        const input = {
+          expectedSku: body.expectedSku,
+          expectedUpdatedAt: body.expectedUpdatedAt,
+          listingId: params.listingId,
+        };
+        const result = options.deleteSandboxListing
+          ? await options.deleteSandboxListing(input, dataAccess)
+          : await deleteSandboxListingById(input, { dataAccess });
+
+        res.status(200).json(result);
+      },
+      sendSandboxListingDeletionError
     );
   });
 

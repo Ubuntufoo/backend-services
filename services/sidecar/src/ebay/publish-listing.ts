@@ -47,7 +47,11 @@ import {
   resolvePublishConfig,
   type ResolvedPublishConfig,
 } from '@/ebay/publish-config.js';
-import { validateRequiredItemSpecificsForCategory } from '@/ebay/required-item-specifics-validation.js';
+import {
+  getCategoryTreeIdFromTaxonomyResponse,
+  getRequiredAspectNamesFromTaxonomyResponse,
+  validateRequiredItemSpecificsForCategory,
+} from '@/ebay/required-item-specifics-validation.js';
 
 type PublishInventoryApi = Pick<
   InventoryApi,
@@ -154,18 +158,21 @@ function getListingLabel(listing: Pick<ListingRow, 'listing_id'>): string {
 }
 
 function matchesRawCardConditionValue(
+  categoryId: string,
   token: RawCardConditionToken,
   valueId: string | null | undefined,
   valueName: string | null | undefined
 ): boolean {
   const normalizedValueId = valueId?.trim();
   const normalizedValueName = normalizeLookupText(valueName);
+  const expectedValueId = getRawCardConditionDescriptorValueId(categoryId, token);
 
   return (
-    normalizedValueId === getRawCardConditionDescriptorValueId(token) ||
-    getRawCardConditionCandidateLabels(token).some(
-    (candidate) => normalizeLookupText(candidate) === normalizedValueName
-    )
+    expectedValueId !== null &&
+    (normalizedValueId === expectedValueId ||
+      getRawCardConditionCandidateLabels(categoryId, token).some(
+        (candidate) => normalizeLookupText(candidate) === normalizedValueName
+      ))
   );
 }
 
@@ -268,26 +275,15 @@ async function resolveTradingCardConditionDescriptors(
   );
   const descriptor = getTradingCardConditionDescriptor(condition);
   if (!descriptor?.conditionDescriptorId) {
-    // Some sandbox/live category policies omit Card Condition descriptors entirely; fall back to
-    // normal aspects so metadata gaps do not block publish for otherwise valid reviewed listings.
-    publishLogger.debug('Trading-card condition metadata had no relevant descriptor; falling back.', {
-      availableConditionIds: policy?.itemConditions?.map((candidate) => candidate.conditionId ?? '[missing]') ?? [],
-      availableDescriptorNames:
-        policy?.itemConditions?.flatMap((candidate) =>
-          candidate.conditionDescriptors?.map(
-            (descriptorCandidate) => descriptorCandidate.conditionDescriptorName ?? '[missing]'
-          ) ?? []
-        ) ?? [],
-      category_id: listing.category_id,
-      condition_id: listing.condition_id,
-      listing_id: listing.listing_id,
-      saved_token: savedToken,
-    });
-    return undefined;
+    throw buildTradingCardValidationError(
+      listing,
+      buildTradingCardMismatchIssue(listing, savedToken, descriptor)
+    );
   }
 
   const descriptorValue = descriptor?.conditionDescriptorValues?.find((candidate) =>
     matchesRawCardConditionValue(
+      listing.category_id!.trim(),
       savedToken,
       candidate.conditionDescriptorValueId,
       candidate.conditionDescriptorValueName
@@ -304,6 +300,30 @@ async function resolveTradingCardConditionDescriptors(
       values: [descriptorValue.conditionDescriptorValueId],
     },
   ];
+}
+
+async function getRequiredCategoryAspectNames(
+  listing: ListingRow,
+  marketplaceId: string,
+  taxonomyApi: PublishTaxonomyApi
+): Promise<string[]> {
+  const listingLabel = getListingLabel(listing);
+  const categoryId = listing.category_id!.trim();
+
+  try {
+    const categoryTreeResponse = await taxonomyApi.getDefaultCategoryTreeId(marketplaceId);
+    const categoryTreeId = getCategoryTreeIdFromTaxonomyResponse(categoryTreeResponse);
+    const aspectsResponse = await taxonomyApi.getItemAspectsForCategory(categoryTreeId, categoryId);
+    return getRequiredAspectNamesFromTaxonomyResponse(aspectsResponse);
+  } catch (error) {
+    throw wrapPublishStageError(
+      'INVENTORY_ITEM_UPSERT_FAILED',
+      'metadata',
+      listing.listing_id,
+      `Failed to fetch or parse required item aspects for listing "${listingLabel}" in category "${categoryId}".`,
+      error
+    );
+  }
 }
 
 function getCauseMessage(error: unknown): string {
@@ -624,9 +644,6 @@ export async function publishListing(
 
   const publishConfig = publishConfigResult.config;
 
-  validateRequiredItemSpecificsForCategory({
-    listing,
-  });
   await assertListingImageUrlsReadyForEbay(listing, {
     allowedPublicBaseUrl: resolvedDependencies.imagePublicBaseUrl,
     fetch: resolvedDependencies.fetch,
@@ -638,6 +655,19 @@ export async function publishListing(
     publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
+  const requiredAspectNames = await getRequiredCategoryAspectNames(
+    listing,
+    publishConfig.marketplaceId,
+    resolvedDependencies.taxonomyApi
+  );
+  validateRequiredItemSpecificsForCategory({
+    listing,
+    requiredAspectNames,
+    satisfiedAspectNames:
+      conditionDescriptors && conditionDescriptors.length > 0
+        ? [TRADING_CARD_CONDITION_ASPECT_KEY]
+        : [],
+  });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
   });

@@ -1,38 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loadRootEnvironmentMock = vi.fn();
-const runSandboxCleanupMock = vi.fn();
+const runSandboxListingCleanupMock = vi.fn();
 
 vi.mock('@/config/env-paths.js', () => ({
   loadRootEnvironment: loadRootEnvironmentMock,
 }));
 
-vi.mock('@/ebay/sandbox-cleanup.js', () => ({
-  runSandboxCleanup: runSandboxCleanupMock,
+vi.mock('@/listings/delete-sandbox-listing.js', () => ({
+  runSandboxListingCleanup: runSandboxListingCleanupMock,
 }));
 
 describe('cleanup ebay sandbox script', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    runSandboxCleanupMock.mockResolvedValue({
+    runSandboxListingCleanupMock.mockResolvedValue({
       candidateCount: 1,
-      candidateSkus: ['Single-000001'],
-      foundSkus: ['Single-000001'],
+      candidateSkus: ['BSKBL-Single-000001'],
+      foundSkus: ['BSKBL-Single-000001'],
       from: 1,
       mode: 'dry-run',
       missingSkus: [],
+      localOutcomes: [],
       outcomes: [],
       offersBySku: {
-        'Single-000001': [
+        'BSKBL-Single-000001': [
           {
             offerId: 'OFFER-1',
-            sku: 'Single-000001',
+            sku: 'BSKBL-Single-000001',
             status: 'PUBLISHED',
           },
         ],
       },
-      prefixes: ['Single-'],
-      skus: ['Single-000001'],
+      prefixes: ['BSKBL-Single-'],
+      skus: ['BSKBL-Single-000001'],
       sourceMode: 'sku',
       success: true,
       to: 1,
@@ -47,32 +48,33 @@ describe('cleanup ebay sandbox script', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { runCleanupEbaySandboxCli } = await import('@/scripts/cleanup-ebay-sandbox.js');
 
-    await runCleanupEbaySandboxCli(['--sku', 'Single-000001']);
+    await runCleanupEbaySandboxCli(['--sku', 'BSKBL-Single-000001']);
 
-    expect(runSandboxCleanupMock).toHaveBeenCalledWith(
+    expect(runSandboxListingCleanupMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        skus: ['Single-000001'],
+        skus: ['BSKBL-Single-000001'],
       })
     );
     expect(logSpy).toHaveBeenCalledWith(
       JSON.stringify(
         {
           candidateCount: 1,
-          candidateSkus: ['Single-000001'],
-          foundSkus: ['Single-000001'],
+          candidateSkus: ['BSKBL-Single-000001'],
+          foundSkus: ['BSKBL-Single-000001'],
           from: 1,
           missingSkus: [],
+          localOutcomes: [],
           offersBySku: {
-            'Single-000001': [
+            'BSKBL-Single-000001': [
               {
                 offerId: 'OFFER-1',
-                sku: 'Single-000001',
+                sku: 'BSKBL-Single-000001',
                 status: 'PUBLISHED',
               },
             ],
           },
-          prefixes: ['Single-'],
-          skus: ['Single-000001'],
+          prefixes: ['BSKBL-Single-'],
+          skus: ['BSKBL-Single-000001'],
           sourceMode: 'sku',
           to: 1,
         },
@@ -84,19 +86,20 @@ describe('cleanup ebay sandbox script', () => {
 
   it('parses generated range mode and prints delete summary after confirmation', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    runSandboxCleanupMock.mockResolvedValueOnce({
+    runSandboxListingCleanupMock.mockResolvedValueOnce({
       candidateCount: 2,
-      candidateSkus: ['Single-000001', 'Single-000002'],
-      foundSkus: ['Single-000001', 'Single-000002'],
+      candidateSkus: ['BSKBL-Single-000001', 'BSKBL-Single-000002'],
+      foundSkus: ['BSKBL-Single-000001', 'BSKBL-Single-000002'],
       from: 1,
       mode: 'delete',
       missingSkus: [],
+      localOutcomes: [],
       outcomes: [
         {
           deletedInventoryItem: true,
           deletedOffers: ['OFFER-1'],
           errors: [],
-          sku: 'Single-000001',
+          sku: 'BSKBL-Single-000001',
           skippedMissing: [],
           status: 'deleted',
         },
@@ -104,22 +107,22 @@ describe('cleanup ebay sandbox script', () => {
           deletedInventoryItem: true,
           deletedOffers: [],
           errors: [],
-          sku: 'Single-000002',
+          sku: 'BSKBL-Single-000002',
           skippedMissing: [],
           status: 'deleted',
         },
       ],
       offersBySku: {
-        'Single-000001': [
+        'BSKBL-Single-000001': [
           {
             offerId: 'OFFER-1',
-            sku: 'Single-000001',
+            sku: 'BSKBL-Single-000001',
             status: 'PUBLISHED',
           },
         ],
-        'Single-000002': [],
+        'BSKBL-Single-000002': [],
       },
-      prefixes: ['Single-'],
+      prefixes: ['BSKBL-Single-'],
       skus: [],
       sourceMode: 'range',
       success: true,
@@ -129,7 +132,7 @@ describe('cleanup ebay sandbox script', () => {
 
     await runCleanupEbaySandboxCli([
       '--prefix',
-      'Single-',
+      'BSKBL-Single-',
       '--from',
       '1',
       '--to',
@@ -138,13 +141,13 @@ describe('cleanup ebay sandbox script', () => {
       '--confirm-sandbox-cleanup',
     ]);
 
-    expect(runSandboxCleanupMock).toHaveBeenCalledWith(
+    expect(runSandboxListingCleanupMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowLargeRange: false,
         confirmSandboxCleanup: true,
         delete: true,
         from: 1,
-        prefixes: ['Single-'],
+        prefixes: ['BSKBL-Single-'],
         skus: [],
         to: 2,
       })
@@ -154,21 +157,22 @@ describe('cleanup ebay sandbox script', () => {
       JSON.stringify(
         {
           candidateCount: 2,
-          candidateSkus: ['Single-000001', 'Single-000002'],
-          foundSkus: ['Single-000001', 'Single-000002'],
+          candidateSkus: ['BSKBL-Single-000001', 'BSKBL-Single-000002'],
+          foundSkus: ['BSKBL-Single-000001', 'BSKBL-Single-000002'],
           from: 1,
           missingSkus: [],
+          localOutcomes: [],
           offersBySku: {
-            'Single-000001': [
+            'BSKBL-Single-000001': [
               {
                 offerId: 'OFFER-1',
-                sku: 'Single-000001',
+                sku: 'BSKBL-Single-000001',
                 status: 'PUBLISHED',
               },
             ],
-            'Single-000002': [],
+            'BSKBL-Single-000002': [],
           },
-          prefixes: ['Single-'],
+          prefixes: ['BSKBL-Single-'],
           skus: [],
           sourceMode: 'range',
           to: 2,
@@ -183,12 +187,13 @@ describe('cleanup ebay sandbox script', () => {
         {
           candidateCount: 2,
           mode: 'delete',
+          localOutcomes: [],
           outcomes: [
             {
               deletedInventoryItem: true,
               deletedOffers: ['OFFER-1'],
               errors: [],
-              sku: 'Single-000001',
+              sku: 'BSKBL-Single-000001',
               skippedMissing: [],
               status: 'deleted',
             },
@@ -196,7 +201,7 @@ describe('cleanup ebay sandbox script', () => {
               deletedInventoryItem: true,
               deletedOffers: [],
               errors: [],
-              sku: 'Single-000002',
+              sku: 'BSKBL-Single-000002',
               skippedMissing: [],
               status: 'deleted',
             },
@@ -218,12 +223,18 @@ describe('cleanup ebay sandbox script', () => {
   it('rejects missing values', async () => {
     const { runCleanupEbaySandboxCli } = await import('@/scripts/cleanup-ebay-sandbox.js');
 
-    await expect(runCleanupEbaySandboxCli(['--sku'])).rejects.toThrow('--sku requires a non-empty value.');
+    await expect(runCleanupEbaySandboxCli(['--sku'])).rejects.toThrow(
+      '--sku requires a non-empty value.'
+    );
     await expect(runCleanupEbaySandboxCli(['--prefix'])).rejects.toThrow(
       '--prefix requires a non-empty value.'
     );
-    await expect(runCleanupEbaySandboxCli(['--from'])).rejects.toThrow('--from requires a non-empty value.');
-    await expect(runCleanupEbaySandboxCli(['--to'])).rejects.toThrow('--to requires a non-empty value.');
+    await expect(runCleanupEbaySandboxCli(['--from'])).rejects.toThrow(
+      '--from requires a non-empty value.'
+    );
+    await expect(runCleanupEbaySandboxCli(['--to'])).rejects.toThrow(
+      '--to requires a non-empty value.'
+    );
   });
 
   it('requires confirmation before destructive cleanup', async () => {

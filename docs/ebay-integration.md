@@ -28,6 +28,7 @@ pnpm ebay:diagnose-sandbox
 pnpm ebay:diagnose-sandbox-config
 pnpm ebay:setup-sandbox
 pnpm ebay:opt-in-selling-policies
+pnpm ebay:cleanup-sandbox -- --sku BSKBL-Single-000016
 pnpm ebay:reconcile-published-listing -- --listing-id <listingId>
 pnpm ebay:reconcile-published-listing -- --offer-id <offerId>
 ```
@@ -79,6 +80,8 @@ The same row currently also carries active/default top-level values for producti
 - `pnpm ebay:diagnose-sandbox` and `pnpm ebay:diagnose-sandbox-config` are read-only.
 - `pnpm ebay:setup-sandbox` bootstraps policies/location when sandbox account is eligible.
 - Some sandbox sellers are not eligible for Business Policy. In that case, manually seed canonical `public.app_settings` policy/location values and continue with mocked or injected IDs.
+- Sandbox cleanup targets the exact structured inventory SKU persisted in `listings.sku`, not local `listing_id`. The destructive CLI and `POST /api/listings/:listingId/delete-sandbox` share the permanent remote-plus-local deletion workflow documented in [operations.md](operations.md#sandbox-listing-cleanup).
+- Cleanup refuses production, sold/order-bearing/active-job/ambiguous/unsafe rows. Rerun the same structured-SKU destructive action after a prior remote-only cleanup to remove the remaining eligible local row and artifacts.
 
 ## Generated Reference
 

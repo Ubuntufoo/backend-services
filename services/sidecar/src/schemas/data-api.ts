@@ -1,4 +1,5 @@
 import { CAPTURE_MODES, PRICING_PROVIDER_MODES } from '@ebay-inventory/types';
+import { parseStructuredSku } from '@ebay-inventory/types';
 import { z } from 'zod';
 import { listingWorkflowStateSchema } from '@/workflow/listing-workflow.js';
 
@@ -49,6 +50,31 @@ export const listingIdParamsSchema = z.object({
 export const abandonListingRequestSchema = z
   .object({
     confirmed: z.literal(true),
+  })
+  .strict();
+
+export const deleteSandboxListingRequestSchema = z
+  .object({
+    confirmed: z.literal(true),
+    expectedSku: trimmedStringSchema('expectedSku').refine(
+      (value) => {
+        try {
+          return parseStructuredSku(value).structuredSku === value;
+        } catch {
+          return false;
+        }
+      },
+      {
+        message:
+          'expectedSku must be the exact canonical structured SKU, such as BSKBL-Single-000016.',
+      }
+    ),
+    expectedUpdatedAt: z
+      .string({
+        required_error: 'expectedUpdatedAt is required',
+        invalid_type_error: 'expectedUpdatedAt must be a string',
+      })
+      .datetime({ offset: true, message: 'expectedUpdatedAt must be an ISO 8601 timestamp' }),
   })
   .strict();
 
@@ -135,6 +161,7 @@ export const dismissPricingAnalysisWarningsRequestSchema = z
 
 export type EditableListingFieldsInput = z.infer<typeof editableListingFieldsSchema>;
 export type AbandonListingRequest = z.infer<typeof abandonListingRequestSchema>;
+export type DeleteSandboxListingRequest = z.infer<typeof deleteSandboxListingRequestSchema>;
 export type SellerEditableListingFieldsInput = z.infer<typeof sellerEditableListingFieldsSchema>;
 export type CreateListingRequest = z.infer<typeof createListingRequestSchema>;
 export type ListingIdParams = z.infer<typeof listingIdParamsSchema>;

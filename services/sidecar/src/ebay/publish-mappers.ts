@@ -149,9 +149,11 @@ export function mapListingToInventoryItemPayload(
   options: InventoryItemPayloadOptions = {}
 ): InventoryItem {
   const ignoredKeys = new Set(INTERNAL_ITEM_SPECIFIC_KEYS);
+  const hasConditionDescriptors =
+    Array.isArray(options.conditionDescriptors) && options.conditionDescriptors.length > 0;
   const effectiveItemSpecifics = getEffectiveItemSpecificsForCategoryValidation(listing);
 
-  if (options.conditionDescriptors && isTradingCardCategoryId(listing.category_id)) {
+  if (hasConditionDescriptors && isTradingCardCategoryId(listing.category_id)) {
     ignoredKeys.add(TRADING_CARD_CONDITION_ASPECT_KEY);
   }
 
@@ -164,7 +166,7 @@ export function mapListingToInventoryItemPayload(
       },
     },
     condition: mapListingConditionIdToInventoryCondition(listing.condition_id ?? undefined),
-    conditionDescription: listing.condition_notes ?? undefined,
+    conditionDescription: hasConditionDescriptors ? undefined : listing.condition_notes ?? undefined,
     conditionDescriptors: options.conditionDescriptors,
     packageWeightAndSize: buildPackageWeightAndSize(listing, appSettings),
     product: {
@@ -187,6 +189,7 @@ export function mapListingToOfferPayload(
     availableQuantity: 1,
     categoryId: listing.category_id ?? undefined,
     format: 'FIXED_PRICE',
+    listingDuration: 'GTC',
     listingDescription: listing.description ?? undefined,
     listingPolicies: {
       fulfillmentPolicyId: publishConfig.fulfillmentPolicyId,

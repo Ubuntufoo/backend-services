@@ -1,13 +1,13 @@
-import { rm } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
-
-import {
-  DEFAULT_APP_SETTINGS_ID,
-  deleteR2Objects,
-  type ListingRow,
-} from '@ebay-inventory/data';
+import { DEFAULT_APP_SETTINGS_ID, deleteR2Objects, type ListingRow } from '@ebay-inventory/data';
 
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import {
+  ListingCleanupConfigurationError,
+  normalizeExactR2ObjectKeys,
+  removeListingCleanupWatcherDirectory,
+  resolveListingCleanupProcessedRoot,
+  resolveListingCleanupWatcherDirectory,
+} from '@/listings/listing-cleanup-artifacts.js';
 import { createLogger, type ComponentLogger } from '@/utils/logger.js';
 
 const abandonmentLogger = createLogger('ListingAbandonment');
@@ -64,102 +64,45 @@ function hasEbayOrExportTrace(listing: ListingRow): boolean {
   );
 }
 
-function normalizeR2ObjectKeys(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return [
-    ...new Set(
-      value
-        .filter((key): key is string => typeof key === 'string')
-        .map((key) => key.trim())
-        .filter((key) => key.length > 0)
-    ),
-  ];
-}
-
-function readAbsoluteDirectory(value: string | null | undefined, source: string): string | null {
-  const trimmed = value?.trim();
-
-  if (!trimmed) {
-    return null;
-  }
-
-  if (!isAbsolute(trimmed)) {
-    throw new ListingAbandonmentError(
-      'listing_abandonment_configuration_error',
-      500,
-      `${source} must be an absolute path before listing abandonment can run.`
-    );
-  }
-
-  return resolve(trimmed);
-}
-
 export function resolveWatcherProcessedRoot(input: {
   appSettingsProcessedRoot: string | null | undefined;
   env: NodeJS.ProcessEnv;
 }): string {
-  const envRoot = readAbsoluteDirectory(
-    input.env.WATCHER_PROCESSED_DIR,
-    'WATCHER_PROCESSED_DIR'
-  );
-  const appSettingsRoot = readAbsoluteDirectory(
-    input.appSettingsProcessedRoot,
-    'app_settings.processed_folder_path'
-  );
-
-  if (envRoot && appSettingsRoot && envRoot !== appSettingsRoot) {
+  try {
+    return resolveListingCleanupProcessedRoot(input);
+  } catch (error) {
     throw new ListingAbandonmentError(
       'listing_abandonment_configuration_error',
       500,
-      'WATCHER_PROCESSED_DIR conflicts with app_settings.processed_folder_path.'
+      error instanceof ListingCleanupConfigurationError
+        ? `${error.message.replace(/\.$/, '')} before listing abandonment can run.`
+        : 'Listing abandonment configuration validation failed.',
+      { cause: error }
     );
   }
-
-  const processedRoot = envRoot ?? appSettingsRoot;
-
-  if (!processedRoot) {
-    throw new ListingAbandonmentError(
-      'listing_abandonment_configuration_error',
-      500,
-      'An absolute watcher processed directory is required before listing abandonment can run.'
-    );
-  }
-
-  return processedRoot;
 }
 
 export function resolveWatcherListingDirectory(processedRoot: string, listingId: string): string {
-  const resolvedRoot = resolve(processedRoot);
-  const target = resolve(resolvedRoot, listingId);
-  const relativeTarget = relative(resolvedRoot, target);
-
-  if (
-    relativeTarget.length === 0 ||
-    relativeTarget.startsWith('..') ||
-    isAbsolute(relativeTarget) ||
-    basename(target) !== listingId
-  ) {
+  try {
+    return resolveListingCleanupWatcherDirectory(processedRoot, listingId);
+  } catch (error) {
     throw new ListingAbandonmentError(
       'listing_abandonment_configuration_error',
       500,
-      `Watcher directory for listing "${listingId}" is not safely contained by the processed root.`
+      error instanceof ListingCleanupConfigurationError
+        ? error.message
+        : `Watcher directory for listing "${listingId}" is not safely contained by the processed root.`,
+      { cause: error }
     );
   }
-
-  return target;
 }
 
 export async function removeWatcherListingDirectory(
   processedRoot: string,
   listingId: string
 ): Promise<void> {
-  await rm(resolveWatcherListingDirectory(processedRoot, listingId), {
-    force: true,
-    recursive: true,
-  });
+  resolveWatcherListingDirectory(processedRoot, listingId);
+  await removeListingCleanupWatcherDirectory(processedRoot, listingId);
 }
 
 function cleanupFailure(
@@ -184,11 +127,7 @@ export async function abandonNeedsReviewListing(
   const listing = await dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
-    throw new ListingAbandonmentError(
-      'not_found',
-      404,
-      `Listing "${listingId}" was not found.`
-    );
+    throw new ListingAbandonmentError('not_found', 404, `Listing "${listingId}" was not found.`);
   }
 
   if (listing.status !== 'needs_review') {
@@ -244,7 +183,7 @@ export async function abandonNeedsReviewListing(
     throw error;
   }
 
-  const objectKeys = normalizeR2ObjectKeys(listing.r2_object_keys);
+  const objectKeys = normalizeExactR2ObjectKeys(listing.r2_object_keys);
 
   try {
     await (options.deleteObjects ?? deleteR2Objects)(objectKeys);

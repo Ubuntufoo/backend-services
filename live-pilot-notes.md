@@ -76,3 +76,5 @@ default_fulfillment_policy_id = '6227963000',
 default_return_policy_id = '6227964000',
 merchant_location_key = 'default-main-location'
 where id = 'default';
+
+Sandbox test-listing deletion uses the exact structured inventory SKU, not `listing_id`. Preview and permanent cleanup examples plus refusal rules are documented in [docs/operations.md](docs/operations.md#sandbox-listing-cleanup). The CLI and UI-backed API remain sandbox-only and refuse sold or order-bearing listings.

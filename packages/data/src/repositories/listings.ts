@@ -72,6 +72,12 @@ export interface DeleteNeedsReviewListingInput {
   listingId: string;
 }
 
+export interface DeleteSandboxCleanedListingInput {
+  expectedSku: string;
+  expectedUpdatedAt: string;
+  listingId: string;
+}
+
 export interface PublishedListingUpdate {
   ebayListingId?: ListingUpdate['ebay_listing_id'];
   ebayListingStatus?: ListingUpdate['ebay_listing_status'];
@@ -110,9 +116,9 @@ export async function approveListingForExport(
     .maybeSingle()) as SingleResult<ListingRow>;
 
   return requireOptionalResult(result) ?? (() => {
-    throw new ListingWorkflowTransitionConflictError(
-      `Listing "${listingId}" changed before approval for export could be saved. Refresh and retry.`
-    );
+      throw new ListingWorkflowTransitionConflictError(
+        `Listing "${listingId}" changed before approval for export could be saved. Refresh and retry.`
+      );
   })();
 }
 
@@ -263,6 +269,47 @@ export async function getListingByListingId(
     .from('listings')
     .select('*')
     .eq('listing_id', listingId)
+    .maybeSingle()) as SingleResult<ListingRow>;
+
+  return requireOptionalResult(result);
+}
+
+export async function getListingBySku(
+  client: SupabaseDataClient,
+  sku: string
+): Promise<ListingRow | null> {
+  const result = (await client
+    .from('listings')
+    .select('*')
+    .eq('sku', sku)
+    .limit(2)) as MultiResult<ListingRow>;
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  const rows = result.data ?? [];
+
+  if (rows.length > 1) {
+    throw new Error(`Multiple local listings found for sku "${sku}".`);
+  }
+
+  return rows[0] ?? null;
+}
+
+export async function deleteSandboxCleanedListing(
+  client: SupabaseDataClient,
+  input: DeleteSandboxCleanedListingInput
+): Promise<ListingRow | null> {
+  const result = (await client
+    .from('listings')
+    .delete()
+    .eq('listing_id', input.listingId)
+    .eq('sku', input.expectedSku)
+    .eq('updated_at', input.expectedUpdatedAt)
+    .in('status', ['exported', 'listed'])
+    .is('sold_at', null)
+    .select()
     .maybeSingle()) as SingleResult<ListingRow>;
 
   return requireOptionalResult(result);

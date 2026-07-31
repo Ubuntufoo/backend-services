@@ -23,6 +23,13 @@
 - Use `pnpm ebay:diagnose-live-readiness` or `pnpm ebay:list-live-publish-config` for config checks.
 - Use `pnpm ebay:reconcile-published-listing -- --listing-id <listingId>` or `--offer-id <offerId>` to repair local exported-state tracking.
 
+## Sandbox Listing Still Visible After Remote Cleanup
+
+- Use the exact structured `listings.sku`/eBay inventory SKU, for example `BSKBL-Single-000016`; `Single-000016` is a local listing ID and is rejected.
+- Preview with `pnpm ebay:cleanup-sandbox -- --sku BSKBL-Single-000016`.
+- With `EBAY_ENVIRONMENT=sandbox`, rerun `pnpm ebay:cleanup-sandbox -- --sku BSKBL-Single-000016 --delete --confirm-sandbox-cleanup`. Missing remote resources are idempotent success, allowing the eligible local Supabase/R2/watcher traces to be permanently purged after an earlier remote-only cleanup.
+- Sold, order-bearing, active-job, ambiguous, stale, trace-free, or unsafe rows are intentionally refused. Do not bypass the refusal by using a remote-only SKU.
+
 ## Pricing Expectations
 
 - Current runtime selection comes from `public.app_settings.pricing_provider_mode`.
