@@ -6,8 +6,6 @@ import type { SandboxCleanupInput } from '@/ebay/sandbox-cleanup.js';
 import { loadRootEnvironment } from '@/config/env-paths.js';
 import { runSandboxListingCleanup } from '@/listings/delete-sandbox-listing.js';
 
-loadRootEnvironment();
-
 type ParsedArgs = SandboxCleanupInput;
 
 function parsePositiveInteger(value: string, flagName: string): number {
@@ -113,6 +111,8 @@ export async function runCleanupEbaySandboxCli(
   argv: string[] = process.argv.slice(2)
 ): Promise<void> {
   const args = parseArgs(argv);
+
+  loadRootEnvironment();
 
   if (args.delete && !args.confirmSandboxCleanup) {
     throw new Error('Destructive sandbox cleanup requires --confirm-sandbox-cleanup.');
