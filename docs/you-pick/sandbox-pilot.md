@@ -124,8 +124,11 @@ All gates are fail-closed and must be recorded as pass/fail in the manifest.
    create, update, disable, or delete them. Refuse multiple plausible choices unless the fixture
    explicitly names the intended owned records.
 11. **Category/condition:** current Metadata/Taxonomy read-back must confirm variations support
-    for `261328`, available selector candidates, and the chosen ungraded condition contract.
-    Metadata reads are preflight only; stale recorded evidence cannot substitute for this gate.
+    for `261328` and the chosen ungraded condition contract. Record taxonomy-listed selector
+    candidates, but absence of bounded custom `Card` or `Card Selection` is unresolved evidence,
+    not acceptance or a dry-run failure; future unpublished group validation is authoritative.
+    Inventory condition `4000` is `USED_VERY_GOOD`, with numeric descriptor IDs such as
+    `40001=400012`. Metadata reads are preflight only; stale evidence cannot replace this gate.
 
 ## Future guarded harness contract
 
@@ -149,6 +152,29 @@ requires an existing manifest and resumes from remote read-back rather than trus
 status. A rerun with a manifest resumes the first incomplete checkpoint; a rerun without the
 manifest may only dry-run. There is no `--force`, arbitrary SKU prefix, skip-host-check, or
 production mode.
+
+### YP0.5 implemented dry-run surface
+
+The YP0.5 harness implements the default fixture dry-run plus manifest resume and cleanup-plan
+modes. It creates the versioned run manifest before resolving the credential-bearing read API,
+then emits sanitized structured JSON containing exact gate results, canonical Trading `UserID`,
+resolved `Content-Language`, selected resource IDs, metadata/collision summaries, stable request
+digests, the ordered future operation plan, and the separately authorized next-command shape.
+The repository includes a non-saleable offline example at
+`services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`.
+
+Every CLI argument list containing `--execute`, including `--cleanup --execute`, fails immediately
+with the stable YP0.6 authorization error before environment loading or API dependency resolution.
+YP0.5 contains no Inventory mutation dependency or call path. Cleanup mode strictly normalizes
+exact group children, child/group associations, offers, statuses, marketplace/SKU ownership, and
+listing identity before producing a reverse dependency plan. Publication history is distinct from
+current withdrawal need: `ACTIVE` and quantity-zero `OUT_OF_STOCK` require withdrawal;
+`ENDED`, `EBAY_ENDED`, and `NOT_LISTED` do not. `INACTIVE` is recorded but blocks cleanup planning
+as ambiguous. Manifest publication is reconciliation evidence only and cannot force withdrawal
+when exact remote state is definitively ended; disagreement is reported. Child evidence is
+reconciled by compatible lifecycle class, so mixed `ACTIVE`/`OUT_OF_STOCK` remains active and
+mixed `ENDED`/`EBAY_ENDED` remains ended. Every observed raw status is retained in sorted,
+deduplicated sanitized evidence; mixing lifecycle classes remains a hard stop.
 
 If no safe typed wrapper exists, YP0.5 must add only the narrow read-only Trading `GetUser`
 support needed to return and validate `User.UserID` from the harness's existing user OAuth

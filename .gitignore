@@ -113,3 +113,6 @@ bun.lock
 
 # Watcher runtime folders
 /services/watcher-service/watcher/
+
+# Manifest-driven You Pick sandbox pilot state
+/.local/you-pick-sandbox/

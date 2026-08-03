@@ -99,6 +99,30 @@ describe('TradingApiClient', () => {
     expect(sandboxClient.getTradingBaseUrl()).toBe('https://api.sandbox.ebay.com');
   });
 
+  it('sends sandbox GetUser with no target user', async () => {
+    const sandboxClient = new TradingApiClient(
+      createMockRestClient('sandbox') as unknown as EbayApiClient
+    );
+    const scope = nock('https://api.sandbox.ebay.com')
+      .post('/ws/api.dll', (body: string) => {
+        return body.includes('<GetUserRequest') && !body.includes('<UserID>');
+      })
+      .matchHeader('X-EBAY-API-CALL-NAME', 'GetUser')
+      .matchHeader('X-EBAY-API-IAF-TOKEN', 'mock_token')
+      .reply(
+        200,
+        `<?xml version="1.0" encoding="utf-8"?>
+        <GetUserResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+          <Ack>Success</Ack>
+          <User><UserID>sandbox-seller-123</UserID></User>
+        </GetUserResponse>`
+      );
+
+    const result = await sandboxClient.execute('GetUser', {});
+    expect(result.User).toEqual({ UserID: 'sandbox-seller-123' });
+    scope.done();
+  });
+
   it('should use production URL for production environment', () => {
     expect(client.getTradingBaseUrl()).toBe('https://api.ebay.com');
   });

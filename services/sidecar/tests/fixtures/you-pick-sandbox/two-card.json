@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "marketplaceId": "EBAY_US",
+  "categoryId": "261328",
+  "format": "FIXED_PRICE",
+  "contentLanguage": "en-US",
+  "policies": {
+    "fulfillmentPolicyId": "FULFILLMENT-PILOT",
+    "paymentPolicyId": "PAYMENT-PILOT",
+    "returnPolicyId": "RETURN-PILOT"
+  },
+  "merchantLocationKey": "you-pick-pilot-location",
+  "selector": {
+    "name": "Card",
+    "values": ["001 - Alpha Card", "002 - Beta Card"]
+  },
+  "group": {
+    "title": "Sandbox You Pick Sports Cards",
+    "description": "Non-saleable sandbox fixture for reversible You Pick validation.",
+    "sharedAspects": {
+      "Sport": ["Baseball"],
+      "Type": ["Sports Trading Card"]
+    },
+    "variantSkuSnapshot": ["C01", "C02"],
+    "variesBy": {
+      "specifications": [
+        {
+          "name": "Card",
+          "values": ["001 - Alpha Card", "002 - Beta Card"]
+        }
+      ],
+      "aspectsImageVariesBy": "Card"
+    }
+  },
+  "sharedCondition": {
+    "condition": "USED_VERY_GOOD",
+    "conditionId": "4000",
+    "conditionDescriptors": [
+      {
+        "name": "40001",
+        "values": ["400012"]
+      }
+    ]
+  },
+  "children": [
+    {
+      "slot": "C01",
+      "selector": {
+        "name": "Card",
+        "value": "001 - Alpha Card"
+      },
+      "productAspects": {
+        "Card": ["001 - Alpha Card"],
+        "Player/Athlete": ["Alpha Player"]
+      },
+      "itemQuantity": 1,
+      "offerQuantity": 1,
+      "price": {
+        "currency": "USD",
+        "value": "1.11"
+      },
+      "images": [
+        {
+          "role": "front",
+          "url": "https://images.example.invalid/alpha-front.jpg",
+          "fingerprint": "alpha-front-v1"
+        },
+        {
+          "role": "back",
+          "url": "https://images.example.invalid/alpha-back.jpg",
+          "fingerprint": "alpha-back-v1"
+        }
+      ],
+      "condition": {
+        "condition": "USED_VERY_GOOD",
+        "conditionId": "4000",
+        "conditionDescriptors": [
+          {
+            "name": "40001",
+            "values": ["400012"]
+          }
+        ]
+      }
+    },
+    {
+      "slot": "C02",
+      "selector": {
+        "name": "Card",
+        "value": "002 - Beta Card"
+      },
+      "productAspects": {
+        "Card": ["002 - Beta Card"],
+        "Player/Athlete": ["Beta Player"]
+      },
+      "itemQuantity": 2,
+      "offerQuantity": 2,
+      "price": {
+        "currency": "USD",
+        "value": "2.22"
+      },
+      "images": [
+        {
+          "role": "front",
+          "url": "https://images.example.invalid/beta-front.jpg",
+          "fingerprint": "beta-front-v1"
+        },
+        {
+          "role": "back",
+          "url": "https://images.example.invalid/beta-back.jpg",
+          "fingerprint": "beta-back-v1"
+        }
+      ],
+      "condition": {
+        "condition": "USED_VERY_GOOD",
+        "conditionId": "4000",
+        "conditionDescriptors": [
+          {
+            "name": "40001",
+            "values": ["400012"]
+          }
+        ]
+      }
+    }
+  ]
+}

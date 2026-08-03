@@ -11,6 +11,33 @@ describe('TradingApi', () => {
     api = new TradingApi(mockClient as unknown as TradingApiClient);
   });
 
+  describe('getCurrentUserIdentity', () => {
+    it('calls GetUser without a target and returns immutable UserID', async () => {
+      mockClient.execute.mockResolvedValue({
+        Ack: 'Success',
+        User: { UserID: 'sandbox-seller-123', UserName: 'pilot-seller' },
+      });
+
+      await expect(api.getCurrentUserIdentity()).resolves.toEqual({
+        userId: 'sandbox-seller-123',
+        username: 'pilot-seller',
+      });
+      expect(mockClient.execute).toHaveBeenCalledWith('GetUser', {});
+    });
+
+    it.each([
+      [{ Ack: 'Success' }],
+      [{ User: {} }],
+      [{ User: { UserID: 'mock' } }],
+      [{ User: { UserID: ['seller-a', 'seller-b'] } }],
+      [{ User: { UserID: 'seller-a', userid: 'seller-b' } }],
+    ])('rejects missing, placeholder, malformed, or ambiguous identity %#', async (result) => {
+      mockClient.execute.mockResolvedValue(result);
+
+      await expect(api.getCurrentUserIdentity()).rejects.toThrow(/Trading GetUser/);
+    });
+  });
+
   describe('getActiveListings', () => {
     it('should call GetMyeBaySelling and return normalized listings', async () => {
       mockClient.execute.mockResolvedValue({

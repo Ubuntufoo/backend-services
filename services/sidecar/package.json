@@ -23,6 +23,7 @@
     "pricing:smoke-apify": "tsx src/scripts/smoke-apify-pricing.ts",
     "pricing:smoke-soldcomps": "tsx src/scripts/smoke-soldcomps-pricing.ts",
     "ebay:cleanup-sandbox": "tsx src/scripts/cleanup-ebay-sandbox.ts",
+    "ebay:pilot-you-pick-sandbox": "tsx src/scripts/you-pick-sandbox-pilot.ts",
     "ebay:list-live-publish-config": "tsx src/scripts/list-live-publish-config.ts",
     "ebay:opt-in-selling-policies": "tsx src/scripts/opt-in-selling-policies.ts",
     "ebay:reconcile-published-listing": "tsx src/scripts/reconcile-published-listing.ts",

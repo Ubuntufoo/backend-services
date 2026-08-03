@@ -18,6 +18,15 @@ interface ActiveListingsResult {
   totalPages: number;
 }
 
+export interface CurrentUserIdentity {
+  userId: string;
+  username?: string;
+}
+
+const VALID_USER_ID = /^[A-Za-z0-9][A-Za-z0-9._@-]{1,127}$/;
+const PLACEHOLDER_USER_ID =
+  /^(?:mock|placeholder|example|sample|unknown)(?:[-_ ].*)?$|^(?:test|sandbox|user)(?:[-_ ]?\d*)?$/i;
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return isRecord(value) ? value : undefined;
 }
@@ -44,6 +53,34 @@ function stringValue(value: unknown): string {
  */
 export class TradingApi {
   constructor(private client: TradingApiClient) {}
+
+  /**
+   * Return the immutable current seller identity from Trading GetUser.
+   * No target user is supplied, so the identity is bound to the user OAuth token.
+   */
+  async getCurrentUserIdentity(): Promise<CurrentUserIdentity> {
+    const result = await this.client.execute('GetUser', {});
+    const rawUser = result.User;
+    if (!rawUser || typeof rawUser !== 'object' || Array.isArray(rawUser)) {
+      throw new Error('Trading GetUser response must contain one User object.');
+    }
+
+    const user = rawUser as Record<string, unknown>;
+    const matchingKeys = Object.keys(user).filter((key) => key.toLowerCase() === 'userid');
+    const userId = typeof user.UserID === 'string' ? user.UserID.trim() : '';
+    if (
+      matchingKeys.length !== 1 ||
+      !VALID_USER_ID.test(userId) ||
+      PLACEHOLDER_USER_ID.test(userId)
+    ) {
+      throw new Error(
+        'Trading GetUser returned a missing, malformed, placeholder, or ambiguous UserID.'
+      );
+    }
+
+    const username = typeof user.UserName === 'string' ? user.UserName.trim() : '';
+    return username ? { userId, username } : { userId };
+  }
 
   /**
    * Fetch active seller listings with Trading API pagination metadata.
