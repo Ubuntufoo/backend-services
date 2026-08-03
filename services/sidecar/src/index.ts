@@ -1,31 +1,29 @@
 #!/usr/bin/env node
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { isEbayEnabled, validateEnvironmentConfig } from '@/config/environment.js';
 import { createEbayMcpRuntime, type EbayMcpRuntime } from '@/mcp/runtime.js';
-import { runSetup } from '@/scripts/setup.js';
 import { serverLogger, getLogPaths } from '@/utils/logger.js';
 import { checkForUpdates } from '@/utils/version.js';
 
-checkForUpdates({ defer: true });
+type RunSetup = typeof import('@/scripts/setup.js').runSetup;
 
-const args = process.argv.slice(2);
-if (args.includes('setup')) {
-  try {
-    await runSetup();
-    /* eslint-disable-next-line n/no-process-exit -- CLI setup mode should terminate immediately */
-    process.exit(0);
-  } catch (error) {
-    console.error('Setup failed:', error instanceof Error ? error.message : error);
-    /* eslint-disable-next-line n/no-process-exit -- CLI setup mode should terminate immediately */
-    process.exit(1);
-  }
+export interface MainDependencies {
+  runSetup?: RunSetup;
+}
+
+export interface DirectEntrypointDependencies {
+  exit?: (code: number) => void;
+  logSetupError?: (message: string, error: unknown) => void;
+  runMain?: typeof main;
 }
 
 /**
  * eBay API MCP Server
  * Provides access to eBay APIs through Model Context Protocol
  */
-class EbayMcpServer {
+export class EbayMcpServer {
   private runtime: EbayMcpRuntime;
 
   constructor() {
@@ -98,13 +96,51 @@ class EbayMcpServer {
   }
 }
 
-// Start the server
-const server = new EbayMcpServer();
-server.run().catch((error) => {
-  serverLogger.error('Fatal error running server', {
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-  });
-  /* eslint-disable-next-line n/no-process-exit -- fatal startup failure should exit non-zero */
-  process.exit(1);
-});
+export async function main(
+  args: string[] = process.argv.slice(2),
+  dependencies: MainDependencies = {}
+): Promise<void> {
+  if (args.includes('setup')) {
+    const runSetup =
+      dependencies.runSetup ?? (await import('@/scripts/setup.js')).runSetup;
+    await runSetup();
+    return;
+  }
+
+  checkForUpdates({ defer: true });
+  const server = new EbayMcpServer();
+  await server.run();
+}
+
+export async function runDirectEntrypoint(
+  args: string[],
+  dependencies: DirectEntrypointDependencies = {}
+): Promise<void> {
+  const exit = dependencies.exit ?? ((code: number) => process.exit(code));
+  try {
+    await (dependencies.runMain ?? main)(args);
+    if (args.includes('setup')) exit(0);
+  } catch (error) {
+    if (args.includes('setup')) {
+      (dependencies.logSetupError ?? console.error)(
+        'Setup failed:',
+        error instanceof Error ? error.message : error
+      );
+      exit(1);
+      return;
+    }
+    serverLogger.error('Fatal error running server', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    exit(1);
+  }
+}
+
+const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
+const modulePath = resolve(fileURLToPath(import.meta.url));
+const entryArgs = process.argv.slice(2);
+
+if (entryPath && entryPath === modulePath) {
+  void runDirectEntrypoint(entryArgs);
+}

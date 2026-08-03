@@ -218,6 +218,7 @@ describe('cleanup ebay sandbox script', () => {
     const { runCleanupEbaySandboxCli } = await import('@/scripts/cleanup-ebay-sandbox.js');
 
     await expect(runCleanupEbaySandboxCli(['--bad'])).rejects.toThrow('Unknown argument: --bad');
+    expect(loadRootEnvironmentMock).not.toHaveBeenCalled();
   });
 
   it('rejects missing values', async () => {
