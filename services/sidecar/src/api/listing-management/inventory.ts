@@ -16,6 +16,17 @@ type GetInventoryItemsResponse = components['schemas']['InventoryItems'];
 type CreateOfferResponse = components['schemas']['OfferResponse'];
 type GetOffersResponse = components['schemas']['Offers'];
 type PublishResponse = components['schemas']['PublishResponse'];
+export type InventoryItemGroup = Omit<
+  components['schemas']['InventoryItemGroup'],
+  'aspects' | 'variantSKUs'
+> & {
+  aspects?: Record<string, string[]>;
+  variantSKUs: string[];
+};
+type InventoryItemGroupUpsertResponse = components['schemas']['BaseResponse'] | void;
+export type PublishByInventoryItemGroupRequest = Required<
+  components['schemas']['PublishByInventoryItemGroupRequest']
+>;
 
 /**
  * Inventory API - Manage listings and inventory
@@ -166,11 +177,13 @@ export class InventoryApi {
    * Endpoint: GET /inventory_item_group/{inventoryItemGroupKey}
    * @throws Error if required parameters are missing or invalid
    */
-  async getInventoryItemGroup(inventoryItemGroupKey: string): Promise<unknown> {
+  async getInventoryItemGroup(inventoryItemGroupKey: string): Promise<InventoryItemGroup> {
     requireString(inventoryItemGroupKey, 'inventoryItemGroupKey');
 
     return await this.request('Failed to get inventory item group', () =>
-      this.client.get(`${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`)
+      this.client.get<InventoryItemGroup>(
+        `${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`
+      )
     );
   }
 
@@ -181,13 +194,13 @@ export class InventoryApi {
    */
   async createOrReplaceInventoryItemGroup(
     inventoryItemGroupKey: string,
-    inventoryItemGroup: Record<string, unknown>
-  ): Promise<unknown> {
+    inventoryItemGroup: InventoryItemGroup
+  ): Promise<InventoryItemGroupUpsertResponse> {
     requireString(inventoryItemGroupKey, 'inventoryItemGroupKey');
     requireObject(inventoryItemGroup, 'inventoryItemGroup');
 
     return await this.request('Failed to create or replace inventory item group', () =>
-      this.client.put(
+      this.client.put<InventoryItemGroupUpsertResponse>(
         `${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`,
         inventoryItemGroup
       )
@@ -515,11 +528,16 @@ export class InventoryApi {
    * Endpoint: POST /offer/publish_by_inventory_item_group
    * @throws Error if required parameters are missing or invalid
    */
-  async publishOfferByInventoryItemGroup(request: Record<string, unknown>): Promise<unknown> {
+  async publishOfferByInventoryItemGroup(
+    request: PublishByInventoryItemGroupRequest
+  ): Promise<PublishResponse> {
     requireObject(request, 'request');
 
     return await this.request('Failed to publish offer by inventory item group', () =>
-      this.client.post(`${this.basePath}/offer/publish_by_inventory_item_group`, request)
+      this.client.post<PublishResponse>(
+        `${this.basePath}/offer/publish_by_inventory_item_group`,
+        request
+      )
     );
   }
 

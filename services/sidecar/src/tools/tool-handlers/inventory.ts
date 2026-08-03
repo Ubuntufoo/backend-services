@@ -1,3 +1,7 @@
+import type {
+  InventoryItemGroup,
+  PublishByInventoryItemGroupRequest,
+} from '@/api/listing-management/inventory.js';
 import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Inventory API item, offer, location, and bulk tools. */
@@ -58,7 +62,7 @@ export const inventoryHandlers: ToolHandlerMap = {
   ebay_create_or_replace_inventory_item_group: async (api, args) => {
     return await api.inventory.createOrReplaceInventoryItemGroup(
       args.inventoryItemGroupKey as string,
-      args.inventoryItemGroup as Record<string, unknown>
+      args.inventoryItemGroup as InventoryItemGroup
     );
   },
 
@@ -172,7 +176,7 @@ export const inventoryHandlers: ToolHandlerMap = {
 
   ebay_publish_offer_by_inventory_item_group: async (api, args) => {
     return await api.inventory.publishOfferByInventoryItemGroup(
-      args.request as Record<string, unknown>
+      args.request as PublishByInventoryItemGroupRequest
     );
   },
 

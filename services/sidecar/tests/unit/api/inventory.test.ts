@@ -731,7 +731,10 @@ describe('InventoryApi', () => {
 
   describe('getInventoryItemGroup', () => {
     it('should get inventory item group', async () => {
-      const mockGroup = { inventoryItemGroupKey: 'GROUP-123' };
+      const mockGroup = {
+        inventoryItemGroupKey: 'GROUP-123',
+        variantSKUs: ['SKU1', 'SKU2'],
+      };
       vi.mocked(client.get).mockResolvedValue(mockGroup);
 
       const result = await api.getInventoryItemGroup('GROUP-123');
@@ -749,7 +752,14 @@ describe('InventoryApi', () => {
 
   describe('createOrReplaceInventoryItemGroup', () => {
     it('should create or replace inventory item group', async () => {
-      const group = { title: 'Test Group', variantSKUs: ['SKU1', 'SKU2'] };
+      const group = {
+        title: 'Test Group',
+        variantSKUs: ['SKU1', 'SKU2'],
+        variesBy: {
+          aspectsImageVariesBy: ['Sticker #'],
+          specifications: [{ name: 'Sticker #', values: ['#10', '#11'] }],
+        },
+      };
       vi.mocked(client.put).mockResolvedValue(undefined);
 
       await api.createOrReplaceInventoryItemGroup('GROUP-123', group);
@@ -761,7 +771,9 @@ describe('InventoryApi', () => {
     });
 
     it('should throw error when group key is missing', async () => {
-      await expect(api.createOrReplaceInventoryItemGroup('', {})).rejects.toThrow(
+      await expect(
+        api.createOrReplaceInventoryItemGroup('', { variantSKUs: ['SKU1'] })
+      ).rejects.toThrow(
         'inventoryItemGroupKey is required'
       );
     });
@@ -967,12 +979,13 @@ describe('InventoryApi', () => {
       const mockResponse = { listingId: 'LISTING-123' };
       vi.mocked(client.post).mockResolvedValue(mockResponse);
 
-      await api.publishOfferByInventoryItemGroup(request);
+      const result = await api.publishOfferByInventoryItemGroup(request);
 
       expect(client.post).toHaveBeenCalledWith(
         '/sell/inventory/v1/offer/publish_by_inventory_item_group',
         request
       );
+      expect(result).toEqual(mockResponse);
     });
 
     it('should throw error when request is missing', async () => {
@@ -985,7 +998,10 @@ describe('InventoryApi', () => {
       vi.mocked(client.post).mockRejectedValue(new Error('Publish failed'));
 
       await expect(
-        api.publishOfferByInventoryItemGroup({ inventoryItemGroupKey: 'GROUP-123' })
+        api.publishOfferByInventoryItemGroup({
+          inventoryItemGroupKey: 'GROUP-123',
+          marketplaceId: 'EBAY_US',
+        })
       ).rejects.toThrow('Failed to publish offer by inventory item group: Publish failed');
     });
   });
