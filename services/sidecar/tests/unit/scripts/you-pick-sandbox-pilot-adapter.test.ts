@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  adaptYouPickPilotMutationApi,
   classifyYouPickExactRead,
   normalizeYouPickGroup,
   normalizeYouPickItem,
@@ -7,6 +8,7 @@ import {
   normalizeYouPickOffers,
   normalizeYouPickPolicies,
 } from '@/scripts/you-pick-sandbox-pilot.js';
+import type { InventoryApi } from '@/api/listing-management/inventory.js';
 
 function normalizeConditionDescriptors(conditionDescriptors: unknown) {
   return normalizeYouPickMetadata(
@@ -31,6 +33,40 @@ function normalizeConditionDescriptors(conditionDescriptors: unknown) {
 }
 
 describe('You Pick raw response normalization', () => {
+  it('maps every guarded mutation to the intended Inventory wrapper with en-US config', async () => {
+    const inventory = {
+      createOrReplaceInventoryItem: vi.fn(),
+      createOffer: vi.fn(),
+      createOrReplaceInventoryItemGroup: vi.fn(),
+      publishOfferByInventoryItemGroup: vi.fn(),
+      bulkUpdatePriceQuantity: vi.fn(),
+      withdrawOfferByInventoryItemGroup: vi.fn(),
+      deleteOffer: vi.fn(),
+      deleteInventoryItemGroup: vi.fn(),
+      deleteInventoryItem: vi.fn(),
+    } as unknown as InventoryApi;
+    const api = adaptYouPickPilotMutationApi(inventory);
+    const headers = { 'Content-Language': 'en-US' as const };
+    const config = { headers };
+    await api.createOrReplaceInventoryItem('SKU', {}, headers);
+    await api.createOffer({}, headers);
+    await api.createOrReplaceInventoryItemGroup('GROUP', {}, headers);
+    await api.publishInventoryItemGroup({}, headers);
+    await api.bulkUpdatePriceQuantity({}, headers);
+    await api.withdrawInventoryItemGroup({}, headers);
+    await api.deleteOffer('OFFER', headers);
+    await api.deleteInventoryItemGroup('GROUP', headers);
+    await api.deleteInventoryItem('SKU', headers);
+    expect(inventory.createOrReplaceInventoryItem).toHaveBeenCalledWith('SKU', {}, config);
+    expect(inventory.createOffer).toHaveBeenCalledWith({}, config);
+    expect(inventory.createOrReplaceInventoryItemGroup).toHaveBeenCalledWith('GROUP', {}, config);
+    expect(inventory.publishOfferByInventoryItemGroup).toHaveBeenCalledWith({}, config);
+    expect(inventory.bulkUpdatePriceQuantity).toHaveBeenCalledWith({}, config);
+    expect(inventory.withdrawOfferByInventoryItemGroup).toHaveBeenCalledWith({}, config);
+    expect(inventory.deleteOffer).toHaveBeenCalledWith('OFFER', config);
+    expect(inventory.deleteInventoryItemGroup).toHaveBeenCalledWith('GROUP', config);
+    expect(inventory.deleteInventoryItem).toHaveBeenCalledWith('SKU', config);
+  });
   it('normalizes representative account and metadata payloads without credentials', () => {
     expect(
       normalizeYouPickPolicies(

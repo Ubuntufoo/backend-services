@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from 'path';
+import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 import {
@@ -8,6 +9,7 @@ import {
   YOU_PICK_LISTING_STATUSES,
   YOU_PICK_SANDBOX_ORIGIN,
   classifyYouPickListingStatus,
+  digest,
   runYouPickSandboxPilot,
   sanitizeError,
   sanitizeReport,
@@ -22,6 +24,11 @@ import {
   type YouPickListingStatus,
   type YouPickPilotReadApi,
 } from '@/ebay/you-pick-sandbox-pilot.js';
+import type {
+  MutationExecutionReport,
+  YouPickPilotMutationApi,
+} from '@/ebay/you-pick-sandbox-pilot-mutation.js';
+import type { InventoryApi } from '@/api/listing-management/inventory.js';
 
 export interface YouPickPilotCliArgs {
   fixturePath?: string;
@@ -29,11 +36,13 @@ export interface YouPickPilotCliArgs {
   cleanup: boolean;
   execute: boolean;
   confirmSandboxSeller?: string;
+  attestationPath?: string;
 }
 
 interface CliOptions {
   repoRoot?: string;
   apiFactory?: () => Promise<YouPickPilotReadApi>;
+  mutationApiFactory?: () => Promise<YouPickPilotMutationApi>;
   runner?: typeof runYouPickSandboxPilot;
   print?: (output: string) => void;
 }
@@ -47,9 +56,12 @@ function requireValue(value: string | undefined, flag: string): string {
 
 export function parseYouPickPilotArgs(argv: string[]): YouPickPilotCliArgs {
   const parsed: YouPickPilotCliArgs = { cleanup: false, execute: false };
+  const seen = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--') continue;
+    if (seen.has(argument)) throw new Error(`${argument} may be supplied only once.`);
+    seen.add(argument);
     if (argument === '--fixture') {
       if (parsed.fixturePath) throw new Error('--fixture may be supplied only once.');
       parsed.fixturePath = requireValue(argv[index + 1], '--fixture');
@@ -69,6 +81,11 @@ export function parseYouPickPilotArgs(argv: string[]): YouPickPilotCliArgs {
       index += 1;
       continue;
     }
+    if (argument === '--attestation') {
+      parsed.attestationPath = requireValue(argv[index + 1], '--attestation');
+      index += 1;
+      continue;
+    }
     if (argument === '--cleanup') {
       parsed.cleanup = true;
       continue;
@@ -79,9 +96,14 @@ export function parseYouPickPilotArgs(argv: string[]): YouPickPilotCliArgs {
     }
     throw new Error(`Unknown argument: ${argument}`);
   }
+  if (parsed.execute && (!parsed.manifestPath || !parsed.confirmSandboxSeller))
+    throw new Error(YOU_PICK_EXECUTION_ERROR);
+  if (parsed.execute && parsed.fixturePath) throw new Error(YOU_PICK_EXECUTION_ERROR);
   if (Boolean(parsed.fixturePath) === Boolean(parsed.manifestPath))
     throw new Error('Supply exactly one of --fixture or --manifest.');
   if (parsed.cleanup && !parsed.manifestPath) throw new Error('--cleanup requires --manifest.');
+  if (parsed.attestationPath && !parsed.execute)
+    throw new Error('--attestation requires --execute.');
   return parsed;
 }
 
@@ -258,14 +280,10 @@ export function normalizeYouPickMetadata(
           return {
             id: stringField(descriptor, 'conditionDescriptorId'),
             name: stringField(descriptor, 'conditionDescriptorName'),
-            values: uniqueRecords(
-              valueRows,
-              'Condition descriptor value metadata',
-              (value) => {
-                const id = stringField(value, 'conditionDescriptorValueId');
-                return /^\d+$/.test(id) ? id : '';
-              }
-            ).map((value) => ({
+            values: uniqueRecords(valueRows, 'Condition descriptor value metadata', (value) => {
+              const id = stringField(value, 'conditionDescriptorValueId');
+              return /^\d+$/.test(id) ? id : '';
+            }).map((value) => ({
               id: stringField(value, 'conditionDescriptorValueId'),
               name: stringField(value, 'conditionDescriptorValueName'),
             })),
@@ -282,7 +300,10 @@ export function normalizeYouPickMetadata(
   };
 }
 
-export function normalizeYouPickGroup(raw: unknown): RemoteInventoryItemGroup {
+export function normalizeYouPickGroup(
+  raw: unknown,
+  inventoryItemGroupKey?: string
+): RemoteInventoryItemGroup {
   const record = asRecord(raw);
   if (!record || !Array.isArray(record.variantSKUs))
     throw new Error('Inventory item group response requires variantSKUs.');
@@ -291,7 +312,21 @@ export function normalizeYouPickGroup(raw: unknown): RemoteInventoryItemGroup {
   );
   if (variantSKUs.some((value) => !value) || new Set(variantSKUs).size !== variantSKUs.length)
     throw new Error('Inventory item group response has malformed or duplicate variantSKUs.');
-  return { variantSKUs };
+  const planned = {
+    inventoryItemGroupKey: inventoryItemGroupKey ?? stringField(record, 'inventoryItemGroupKey'),
+    title: stringField(record, 'title'),
+    description: stringField(record, 'description'),
+    aspects: record.aspects,
+    imageUrls: record.imageUrls,
+    variantSKUs,
+    variesBy: record.variesBy,
+  };
+  const snapshotDigest = Object.values(planned).every(
+    (value) => value !== undefined && value !== ''
+  )
+    ? digest(planned)
+    : undefined;
+  return snapshotDigest ? { variantSKUs, snapshotDigest } : { variantSKUs };
 }
 
 export function normalizeYouPickItem(raw: unknown): RemoteInventoryItem {
@@ -302,14 +337,33 @@ export function normalizeYouPickItem(raw: unknown): RemoteInventoryItem {
   const sources = ['groupIds', 'inventoryItemGroupKeys'].filter((key) => key in record);
   if (sources.length > 1)
     throw new Error('Inventory item response contains ambiguous group association fields.');
-  if (sources.length === 0) return { sku, groupKeys: null };
+  const availability = asRecord(record.availability);
+  const shipTo = availability ? asRecord(availability.shipToLocationAvailability) : undefined;
+  const quantity = shipTo?.quantity;
+  const itemPayload = {
+    sku,
+    availability: record.availability,
+    condition: record.condition,
+    conditionDescriptors: record.conditionDescriptors,
+    product: record.product,
+  };
+  const snapshotDigest =
+    itemPayload.availability && itemPayload.condition && itemPayload.product
+      ? digest(itemPayload)
+      : undefined;
+  const base = {
+    sku,
+    quantity: typeof quantity === 'number' && Number.isInteger(quantity) ? quantity : undefined,
+    snapshotDigest,
+  };
+  if (sources.length === 0) return { ...base, groupKeys: null };
   const rawKeys = record[sources[0]];
   if (!Array.isArray(rawKeys))
     throw new Error('Inventory item group association must be an array.');
   const groupKeys = rawKeys.map((value) => (typeof value === 'string' ? value.trim() : ''));
   if (groupKeys.some((value) => !value) || new Set(groupKeys).size !== groupKeys.length)
     throw new Error('Inventory item response has malformed or duplicate group associations.');
-  return { sku, groupKeys };
+  return { ...base, groupKeys };
 }
 
 export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } {
@@ -344,7 +398,23 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
         publicationObserved: status === 'PUBLISHED' || lifecycle.publicationObserved,
         listingCurrentlyActive: lifecycle.listingCurrentlyActive,
         withdrawRequired: lifecycle.withdrawRequired,
+        availableQuantity:
+          typeof offer.availableQuantity === 'number' && Number.isInteger(offer.availableQuantity)
+            ? offer.availableQuantity
+            : undefined,
       };
+      const offerPayload = {
+        sku: normalized.sku,
+        marketplaceId: normalized.marketplaceId,
+        format: offer.format,
+        categoryId: offer.categoryId,
+        merchantLocationKey: offer.merchantLocationKey,
+        availableQuantity: offer.availableQuantity,
+        pricingSummary: offer.pricingSummary,
+        listingPolicies: offer.listingPolicies,
+      };
+      if (Object.values(offerPayload).every((value) => value !== undefined && value !== ''))
+        normalized.snapshotDigest = digest(offerPayload);
       if (!normalized.sku || !normalized.marketplaceId || !normalized.status)
         throw new Error('Offer response requires sku, marketplaceId, and status.');
       if (
@@ -443,7 +513,7 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         api.inventory.getInventoryItemGroup(groupKey)
       );
       return read.status === 'found'
-        ? { status: 'found', value: normalizeYouPickGroup(read.value) }
+        ? { status: 'found', value: normalizeYouPickGroup(read.value, groupKey) }
         : read;
     },
     async getInventoryItem(sku) {
@@ -462,20 +532,66 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
   };
 }
 
+export async function createYouPickPilotMutationApi(): Promise<YouPickPilotMutationApi> {
+  const [{ EbaySellerApi }, environmentModule] = await Promise.all([
+    import('@/api/index.js'),
+    import('@/config/environment.js'),
+  ]);
+  const api = new EbaySellerApi(environmentModule.getEbayConfig());
+  await api.initialize();
+  return adaptYouPickPilotMutationApi(api.inventory);
+}
+
+type PilotInventoryAdapter = InventoryApi;
+
+export function adaptYouPickPilotMutationApi(
+  inventory: PilotInventoryAdapter
+): YouPickPilotMutationApi {
+  const config = (headers: { 'Content-Language': 'en-US' }) => ({ headers });
+  return {
+    createOrReplaceInventoryItem: (sku, payload, headers) =>
+      inventory.createOrReplaceInventoryItem(sku, payload, config(headers)),
+    createOffer: (payload, headers) => inventory.createOffer(payload, config(headers)),
+    createOrReplaceInventoryItemGroup: (groupKey, payload, headers) =>
+      inventory.createOrReplaceInventoryItemGroup(
+        groupKey,
+        payload as Parameters<typeof inventory.createOrReplaceInventoryItemGroup>[1],
+        config(headers)
+      ),
+    publishInventoryItemGroup: (payload, headers) =>
+      inventory.publishOfferByInventoryItemGroup(
+        payload as Parameters<typeof inventory.publishOfferByInventoryItemGroup>[0],
+        config(headers)
+      ),
+    bulkUpdatePriceQuantity: (payload, headers) =>
+      inventory.bulkUpdatePriceQuantity(payload, config(headers)),
+    withdrawInventoryItemGroup: (payload, headers) =>
+      inventory.withdrawOfferByInventoryItemGroup(payload, config(headers)),
+    deleteOffer: (offerId, headers) => inventory.deleteOffer(offerId, config(headers)),
+    deleteInventoryItemGroup: (groupKey, headers) =>
+      inventory.deleteInventoryItemGroup(groupKey, config(headers)),
+    deleteInventoryItem: (sku, headers) => inventory.deleteInventoryItem(sku, config(headers)),
+  };
+}
+
 export async function runYouPickSandboxPilotCli(
   argv: string[] = process.argv.slice(2),
   options: CliOptions = {}
-): Promise<PilotReport> {
-  if (argv.includes('--execute')) throw new Error(YOU_PICK_EXECUTION_ERROR);
+): Promise<PilotReport | MutationExecutionReport> {
   const args = parseYouPickPilotArgs(argv);
   const runner = options.runner ?? runYouPickSandboxPilot;
+  const attestation = args.attestationPath
+    ? (JSON.parse(await readFile(resolve(args.attestationPath), 'utf8')) as unknown)
+    : undefined;
   const report = await runner({
     apiFactory: options.apiFactory ?? createYouPickPilotReadApi,
     fixturePath: args.fixturePath,
     manifestPath: args.manifestPath,
     cleanup: args.cleanup,
-    execute: false,
+    mutationApiFactory: options.mutationApiFactory ?? createYouPickPilotMutationApi,
+    execute: args.execute,
     confirmSandboxSeller: args.confirmSandboxSeller,
+    attestation,
     repoRoot: options.repoRoot ?? resolve(fileURLToPath(new URL('../../../../', import.meta.url))),
   });
   (options.print ?? console.log)(JSON.stringify(sanitizeReport(report), null, 2));

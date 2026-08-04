@@ -16,6 +16,7 @@ type GetInventoryItemsResponse = components['schemas']['InventoryItems'];
 type CreateOfferResponse = components['schemas']['OfferResponse'];
 type GetOffersResponse = components['schemas']['Offers'];
 type PublishResponse = components['schemas']['PublishResponse'];
+export type InventoryRequestConfig = Parameters<EbayApiClient['post']>[2];
 export type InventoryItemGroup = Omit<
   components['schemas']['InventoryItemGroup'],
   'aspects' | 'variantSKUs'
@@ -69,12 +70,18 @@ export class InventoryApi {
    * Create or replace an inventory item
    * @throws Error if required parameters are missing or invalid
    */
-  async createOrReplaceInventoryItem(sku: string, inventoryItem: InventoryItem): Promise<void> {
+  async createOrReplaceInventoryItem(
+    sku: string,
+    inventoryItem: InventoryItem,
+    config?: InventoryRequestConfig
+  ): Promise<void> {
     requireString(sku, 'sku');
     requireObject(inventoryItem, 'inventoryItem');
 
     return await this.request('Failed to create or replace inventory item', () =>
-      this.client.put<void>(`${this.basePath}/inventory_item/${sku}`, inventoryItem)
+      config
+        ? this.client.put<void>(`${this.basePath}/inventory_item/${sku}`, inventoryItem, config)
+        : this.client.put<void>(`${this.basePath}/inventory_item/${sku}`, inventoryItem)
     );
   }
 
@@ -82,11 +89,13 @@ export class InventoryApi {
    * Delete an inventory item
    * @throws Error if required parameters are missing or invalid
    */
-  async deleteInventoryItem(sku: string): Promise<void> {
+  async deleteInventoryItem(sku: string, config?: InventoryRequestConfig): Promise<void> {
     requireString(sku, 'sku');
 
     return await this.request('Failed to delete inventory item', () =>
-      this.client.delete<void>(`${this.basePath}/inventory_item/${sku}`)
+      config
+        ? this.client.delete<void>(`${this.basePath}/inventory_item/${sku}`, config)
+        : this.client.delete<void>(`${this.basePath}/inventory_item/${sku}`)
     );
   }
 
@@ -121,11 +130,16 @@ export class InventoryApi {
    * Endpoint: POST /bulk_update_price_quantity
    * @throws Error if required parameters are missing or invalid
    */
-  async bulkUpdatePriceQuantity(requests: Record<string, unknown>): Promise<unknown> {
+  async bulkUpdatePriceQuantity(
+    requests: Record<string, unknown>,
+    config?: InventoryRequestConfig
+  ): Promise<unknown> {
     requireObject(requests, 'requests');
 
     return await this.request('Failed to bulk update price and quantity', () =>
-      this.client.post(`${this.basePath}/bulk_update_price_quantity`, requests)
+      config
+        ? this.client.post(`${this.basePath}/bulk_update_price_quantity`, requests, config)
+        : this.client.post(`${this.basePath}/bulk_update_price_quantity`, requests)
     );
   }
 
@@ -194,16 +208,23 @@ export class InventoryApi {
    */
   async createOrReplaceInventoryItemGroup(
     inventoryItemGroupKey: string,
-    inventoryItemGroup: InventoryItemGroup
+    inventoryItemGroup: InventoryItemGroup,
+    config?: InventoryRequestConfig
   ): Promise<InventoryItemGroupUpsertResponse> {
     requireString(inventoryItemGroupKey, 'inventoryItemGroupKey');
     requireObject(inventoryItemGroup, 'inventoryItemGroup');
 
     return await this.request('Failed to create or replace inventory item group', () =>
-      this.client.put<InventoryItemGroupUpsertResponse>(
-        `${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`,
-        inventoryItemGroup
-      )
+      config
+        ? this.client.put<InventoryItemGroupUpsertResponse>(
+            `${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`,
+            inventoryItemGroup,
+            config
+          )
+        : this.client.put<InventoryItemGroupUpsertResponse>(
+            `${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`,
+            inventoryItemGroup
+          )
     );
   }
 
@@ -212,11 +233,19 @@ export class InventoryApi {
    * Endpoint: DELETE /inventory_item_group/{inventoryItemGroupKey}
    * @throws Error if required parameters are missing or invalid
    */
-  async deleteInventoryItemGroup(inventoryItemGroupKey: string): Promise<void> {
+  async deleteInventoryItemGroup(
+    inventoryItemGroupKey: string,
+    config?: InventoryRequestConfig
+  ): Promise<void> {
     requireString(inventoryItemGroupKey, 'inventoryItemGroupKey');
 
     return await this.request('Failed to delete inventory item group', () =>
-      this.client.delete(`${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`)
+      config
+        ? this.client.delete(
+            `${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`,
+            config
+          )
+        : this.client.delete(`${this.basePath}/inventory_item_group/${inventoryItemGroupKey}`)
     );
   }
 
@@ -366,11 +395,16 @@ export class InventoryApi {
    * Create an offer
    * @throws Error if required parameters are missing or invalid
    */
-  async createOffer(offer: EbayOfferDetailsWithKeys): Promise<CreateOfferResponse> {
+  async createOffer(
+    offer: EbayOfferDetailsWithKeys,
+    config?: InventoryRequestConfig
+  ): Promise<CreateOfferResponse> {
     requireObject(offer, 'offer');
 
     return await this.request('Failed to create offer', () =>
-      this.client.post<CreateOfferResponse>(`${this.basePath}/offer`, offer)
+      config
+        ? this.client.post<CreateOfferResponse>(`${this.basePath}/offer`, offer, config)
+        : this.client.post<CreateOfferResponse>(`${this.basePath}/offer`, offer)
     );
   }
 
@@ -393,11 +427,13 @@ export class InventoryApi {
    * Endpoint: DELETE /offer/{offerId}
    * @throws Error if required parameters are missing or invalid
    */
-  async deleteOffer(offerId: string): Promise<void> {
+  async deleteOffer(offerId: string, config?: InventoryRequestConfig): Promise<void> {
     requireString(offerId, 'offerId');
 
     return await this.request('Failed to delete offer', () =>
-      this.client.delete(`${this.basePath}/offer/${offerId}`)
+      config
+        ? this.client.delete(`${this.basePath}/offer/${offerId}`, config)
+        : this.client.delete(`${this.basePath}/offer/${offerId}`)
     );
   }
 
@@ -529,15 +565,22 @@ export class InventoryApi {
    * @throws Error if required parameters are missing or invalid
    */
   async publishOfferByInventoryItemGroup(
-    request: PublishByInventoryItemGroupRequest
+    request: PublishByInventoryItemGroupRequest,
+    config?: InventoryRequestConfig
   ): Promise<PublishResponse> {
     requireObject(request, 'request');
 
     return await this.request('Failed to publish offer by inventory item group', () =>
-      this.client.post<PublishResponse>(
-        `${this.basePath}/offer/publish_by_inventory_item_group`,
-        request
-      )
+      config
+        ? this.client.post<PublishResponse>(
+            `${this.basePath}/offer/publish_by_inventory_item_group`,
+            request,
+            config
+          )
+        : this.client.post<PublishResponse>(
+            `${this.basePath}/offer/publish_by_inventory_item_group`,
+            request
+          )
     );
   }
 
@@ -546,11 +589,20 @@ export class InventoryApi {
    * Endpoint: POST /offer/withdraw_by_inventory_item_group
    * @throws Error if required parameters are missing or invalid
    */
-  async withdrawOfferByInventoryItemGroup(request: Record<string, unknown>): Promise<unknown> {
+  async withdrawOfferByInventoryItemGroup(
+    request: Record<string, unknown>,
+    config?: InventoryRequestConfig
+  ): Promise<unknown> {
     requireObject(request, 'request');
 
     return await this.request('Failed to withdraw offer by inventory item group', () =>
-      this.client.post(`${this.basePath}/offer/withdraw_by_inventory_item_group`, request)
+      config
+        ? this.client.post(
+            `${this.basePath}/offer/withdraw_by_inventory_item_group`,
+            request,
+            config
+          )
+        : this.client.post(`${this.basePath}/offer/withdraw_by_inventory_item_group`, request)
     );
   }
 }

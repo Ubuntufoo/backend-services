@@ -111,6 +111,29 @@ describe('You Pick sandbox pilot CLI', () => {
     expect(() => parseYouPickPilotArgs(['--fixture', 'a', '--cleanup'])).toThrow(
       /requires --manifest/
     );
+    expect(() => parseYouPickPilotArgs(['--manifest', 'a', '--manifest', 'b'])).toThrow(
+      /only once/
+    );
+    expect(() => parseYouPickPilotArgs(['--manifest', 'a', '--execute'])).toThrow(
+      YOU_PICK_EXECUTION_ERROR
+    );
+    expect(
+      parseYouPickPilotArgs([
+        '--manifest',
+        'manifest.json',
+        '--execute',
+        '--confirm-sandbox-seller',
+        'seller-1',
+        '--attestation',
+        'attestation.json',
+      ])
+    ).toEqual({
+      manifestPath: 'manifest.json',
+      cleanup: false,
+      execute: true,
+      confirmSandboxSeller: 'seller-1',
+      attestationPath: 'attestation.json',
+    });
   });
 
   it.each([

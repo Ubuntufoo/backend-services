@@ -2,10 +2,16 @@ import { createHash, randomBytes } from 'crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { z } from 'zod';
+import type {
+  GuardedMutationHeaders,
+  MutationExecutionReport,
+  YouPickPilotMutationApi,
+} from './you-pick-sandbox-pilot-mutation.js';
 
-export const YOU_PICK_MANIFEST_VERSION = 4 as const;
+export const YOU_PICK_MANIFEST_VERSION = 5 as const;
+export const YOU_PICK_LEGACY_MANIFEST_VERSION = 4 as const;
 export const YOU_PICK_EXECUTION_ERROR =
-  'YP0.6 write authorization and a reviewed mutation implementation are required; execution is unavailable in YP0.5.';
+  'Guarded execution requires --manifest, --execute, and an exact --confirm-sandbox-seller; fixture execution, legacy manifests, and incomplete checkpoints are not executable.';
 export const YOU_PICK_MARKETPLACE = 'EBAY_US' as const;
 export const YOU_PICK_CATEGORY = '261328' as const;
 export const YOU_PICK_CONTENT_LANGUAGE = 'en-US' as const;
@@ -172,6 +178,16 @@ export const youPickFixtureSchema = strictObject({
       ]);
     if (child.images[0].role !== 'front' || child.images[1].role !== 'back')
       issue('Images must be exactly front then back.', ['children', index, 'images']);
+    child.images.forEach((image, imageIndex) => {
+      if (/[?&](?:signature|sig|token|key|auth|x-amz-[^=]*)=/i.test(image.url))
+        issue('Signed or secret-bearing image URLs are forbidden.', [
+          'children',
+          index,
+          'images',
+          imageIndex,
+          'url',
+        ]);
+    });
     if (JSON.stringify(child.condition) !== conditionSnapshot)
       issue('Every child must use the complete shared condition contract.', [
         'children',
@@ -243,13 +259,27 @@ const cleanupRemoteSummarySchema = strictObject({
   warnings: z.array(nonEmpty),
 });
 
-export const youPickManifestSchema = strictObject({
-  version: z.literal(YOU_PICK_MANIFEST_VERSION),
+const manifestCommonShape = {
   run: runIdentitySchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   mode: z.literal('dry-run'),
-  checkpoint: z.enum(['created', 'preflight-complete', 'cleanup-plan-ready', 'cleanup-complete']),
+  checkpoint: z.enum([
+    'created',
+    'preflight-complete',
+    'creating-items',
+    'creating-offers',
+    'replacing-group',
+    'verifying-unpublished',
+    'publishing',
+    'awaiting-published-view-verification',
+    'setting-quantity-zero',
+    'awaiting-quantity-zero-verification',
+    'withdrawal-ready',
+    'cleanup-plan-ready',
+    'cleanup-in-progress',
+    'cleanup-complete',
+  ]),
   seller: strictObject({ userId: nonEmpty, username: nonEmpty.optional() }).nullable(),
   expected: strictObject({
     environment: z.literal('sandbox'),
@@ -295,7 +325,54 @@ export const youPickManifestSchema = strictObject({
     finalAbsenceVerified: z.boolean(),
   }),
   lastError: nonEmpty.nullable(),
-}).superRefine((manifest, ctx) => {
+} satisfies z.ZodRawShape;
+
+const operationLedgerEntrySchema = strictObject({
+  id: nonEmpty,
+  kind: nonEmpty,
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  state: z.enum(['planned', 'started', 'completed', 'unknown']),
+  attemptCount: z.number().int().nonnegative(),
+  startedAt: z.string().datetime().nullable(),
+  completedAt: z.string().datetime().nullable(),
+  result: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).nullable(),
+  error: nonEmpty.nullable(),
+  readBackDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+}).superRefine((entry, ctx) => {
+  if (entry.state === 'planned' && (entry.startedAt !== null || entry.completedAt !== null))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Planned operation has timestamps.' });
+  if (entry.state !== 'planned' && entry.startedAt === null)
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Attempted operation lacks startedAt.' });
+  if (entry.state === 'completed' && entry.completedAt === null)
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Completed operation lacks completedAt.',
+    });
+  if (entry.state !== 'completed' && entry.completedAt !== null)
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Incomplete operation has completedAt.' });
+});
+
+const executableStateSchema = strictObject({
+  eligible: z.literal(true),
+  fixture: youPickFixtureSchema,
+  ledger: z.array(operationLedgerEntrySchema).min(1),
+  publishedAttestationDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+  quantityZeroAttestationDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+});
+
+function refineManifest(
+  manifest: z.infer<z.ZodObject<typeof manifestCommonShape>>,
+  ctx: z.RefinementCtx
+): void {
   try {
     validateRunIdentity(manifest.run);
   } catch (error) {
@@ -324,9 +401,37 @@ export const youPickManifestSchema = strictObject({
       message: 'Predecessor run must be fully cleaned.',
       path: ['predecessorFullyCleaned'],
     });
+}
+
+export const legacyYouPickManifestSchema = strictObject({
+  version: z.literal(YOU_PICK_LEGACY_MANIFEST_VERSION),
+  ...manifestCommonShape,
+}).superRefine(refineManifest);
+
+export const executableYouPickManifestSchema = strictObject({
+  version: z.literal(YOU_PICK_MANIFEST_VERSION),
+  ...manifestCommonShape,
+  execution: executableStateSchema,
+}).superRefine((manifest, ctx) => {
+  refineManifest(manifest, ctx);
+  try {
+    assertExecutableManifestIntegrity(manifest);
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : 'Executable manifest integrity failed.',
+      path: ['execution'],
+    });
+  }
 });
 
+export const youPickManifestSchema = z.union([
+  legacyYouPickManifestSchema,
+  executableYouPickManifestSchema,
+]);
+
 export type YouPickManifest = z.infer<typeof youPickManifestSchema>;
+export type ExecutableYouPickManifest = z.infer<typeof executableYouPickManifestSchema>;
 
 export interface CurrentUserIdentity {
   userId: string;
@@ -390,10 +495,13 @@ export interface MetadataSnapshot {
 }
 export interface RemoteInventoryItemGroup {
   variantSKUs: string[];
+  snapshotDigest?: string;
 }
 export interface RemoteInventoryItem {
   sku: string;
   groupKeys: string[] | null;
+  quantity?: number;
+  snapshotDigest?: string;
 }
 export interface RemoteOffer {
   offerId: string;
@@ -406,6 +514,8 @@ export interface RemoteOffer {
   publicationObserved: boolean;
   listingCurrentlyActive: boolean | null;
   withdrawRequired: boolean | null;
+  availableQuantity?: number;
+  snapshotDigest?: string;
 }
 
 export function classifyYouPickListingStatus(status: YouPickListingStatus | null): {
@@ -553,11 +663,13 @@ const cleanupAbsenceSchema = strictObject({
 export interface PilotRunOptions {
   api?: YouPickPilotReadApi;
   apiFactory?: () => Promise<YouPickPilotReadApi>;
+  mutationApiFactory?: () => Promise<YouPickPilotMutationApi>;
   fixturePath?: string;
   manifestPath?: string;
   cleanup?: boolean;
   execute?: boolean;
   confirmSandboxSeller?: string;
+  attestation?: unknown;
   repoRoot: string;
   localRoot?: string;
   now?: () => Date;
@@ -565,7 +677,7 @@ export interface PilotRunOptions {
 }
 
 export interface PilotReport {
-  mode: 'dry-run' | 'cleanup-plan';
+  mode: 'dry-run' | 'cleanup-plan' | 'execute' | 'cleanup-execute';
   run: YouPickManifest['run'];
   manifestPath: string;
   seller: CurrentUserIdentity;
@@ -581,6 +693,10 @@ export interface PilotReport {
   operationPlan: Omit<PlannedOperation, 'payload'>[];
   requestDigests: string[];
   nextAuthorizedCommand: string;
+  checkpoint?: YouPickManifest['checkpoint'];
+  listingId?: string | null;
+  completedOperationIds?: string[];
+  safeResumeCommand?: string;
 }
 
 export function digest(value: unknown): string {
@@ -666,7 +782,7 @@ export function buildGuardedMutationHeaders(input: {
   expectedSellerUserId: string;
   marketplaceId: string;
   contentLanguage?: string;
-}): Record<string, string> {
+}): GuardedMutationHeaders {
   if (input.environment !== 'sandbox')
     throw new Error('Guarded mutation contract requires sandbox.');
   if (!input.sellerUserId || input.sellerUserId !== input.expectedSellerUserId)
@@ -817,6 +933,61 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
     arrangementId: `arrangement-v1-${digest(operations.map(({ id, digest: value }) => ({ id, digest: value }))).slice(0, 16)}`,
     operations,
   };
+}
+
+function requireExactIntegrity(label: string, actual: unknown, expected: unknown): void {
+  if (canonicalJson(actual) !== canonicalJson(expected))
+    throw new Error(`Executable manifest integrity mismatch: ${label}.`);
+}
+
+export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickManifest): void {
+  const fixture = youPickFixtureSchema.parse(manifest.execution.fixture);
+  const plan = buildFuturePlan(fixture, manifest.run);
+  const expectedOperations = plan.operations.map(({ id, kind, digest: operationDigest }) => ({
+    id,
+    kind,
+    digest: operationDigest,
+  }));
+  const expectedLedgerIdentity = expectedOperations.map(({ id, kind, digest: requestDigest }) => ({
+    id,
+    kind,
+    requestDigest,
+  }));
+  const actualLedgerIdentity = manifest.execution.ledger.map(({ id, kind, requestDigest }) => ({
+    id,
+    kind,
+    requestDigest,
+  }));
+  const expectedOwnership: ExecutableYouPickManifest['ownership'] = {
+    selectorName: fixture.selector.name,
+    selectorValues: fixture.selector.values,
+    imageFingerprints: fixture.children.flatMap((child) =>
+      child.images.map((image) => image.fingerprint)
+    ),
+    itemQuantities: fixture.children.map((child) => child.itemQuantity),
+    offerQuantities: fixture.children.map((child) => child.offerQuantity),
+    prices: fixture.children.map((child) => child.price.value),
+    condition: fixture.sharedCondition.condition,
+    conditionId: fixture.sharedCondition.conditionId,
+    conditionDescriptors: fixture.sharedCondition.conditionDescriptors,
+    conditionDigest: digest(fixture.sharedCondition),
+    ...fixture.policies,
+    merchantLocationKey: fixture.merchantLocationKey,
+  };
+  requireExactIntegrity('arrangementId', manifest.arrangementId, plan.arrangementId);
+  requireExactIntegrity('ordered operations', manifest.operations, expectedOperations);
+  requireExactIntegrity('ordered execution ledger', actualLedgerIdentity, expectedLedgerIdentity);
+  requireExactIntegrity('fixture-derived ownership', manifest.ownership, expectedOwnership);
+  requireExactIntegrity(
+    'ordered resource SKUs',
+    manifest.resources.map((resource) => resource.sku),
+    manifest.run.childSkus
+  );
+  requireExactIntegrity(
+    'fixture child count',
+    fixture.children.length,
+    manifest.run.childSkus.length
+  );
 }
 
 function manifestLocalRoot(repoRoot: string, override?: string): string {
@@ -982,6 +1153,24 @@ function initialManifest(
     metadataSummary: null,
     cleanupRemoteSummary: null,
     operations: plan.operations.map(({ id, kind, digest: value }) => ({ id, kind, digest: value })),
+    execution: {
+      eligible: true,
+      fixture,
+      ledger: plan.operations.map(({ id, kind, digest: requestDigest }) => ({
+        id,
+        kind,
+        requestDigest,
+        state: 'planned',
+        attemptCount: 0,
+        startedAt: null,
+        completedAt: null,
+        result: null,
+        error: null,
+        readBackDigest: null,
+      })),
+      publishedAttestationDigest: null,
+      quantityZeroAttestationDigest: null,
+    },
     cleanup: { attempts: 0, finalAbsenceVerified: false },
     lastError: null,
   });
@@ -1358,11 +1547,15 @@ export function buildCleanupPlan(
   return planned.map(({ id, kind, digest: value }) => ({ id, kind, digest: value }));
 }
 
-export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<PilotReport> {
-  if (options.execute) throw new Error(YOU_PICK_EXECUTION_ERROR);
+export async function runYouPickSandboxPilot(
+  options: PilotRunOptions
+): Promise<PilotReport | MutationExecutionReport> {
   if (Boolean(options.fixturePath) === Boolean(options.manifestPath))
     throw new Error('Supply exactly one of --fixture or --manifest.');
   if (options.cleanup && !options.manifestPath) throw new Error('--cleanup requires --manifest.');
+  if (options.execute && (!options.manifestPath || !options.confirmSandboxSeller?.trim()))
+    throw new Error(YOU_PICK_EXECUTION_ERROR);
+  if (options.execute && options.fixturePath) throw new Error(YOU_PICK_EXECUTION_ERROR);
   const now = options.now ?? (() => new Date());
   const localRoot = manifestLocalRoot(options.repoRoot, options.localRoot);
   let manifest: YouPickManifest;
@@ -1401,6 +1594,38 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
     planOperations = options.cleanup ? undefined : manifest.operations;
   }
 
+  if (options.execute) {
+    if (manifest.version !== YOU_PICK_MANIFEST_VERSION) throw new Error(YOU_PICK_EXECUTION_ERROR);
+    assertExecutableManifestIntegrity(manifest);
+    const allowed = options.cleanup
+      ? [
+          'preflight-complete',
+          'creating-items',
+          'creating-offers',
+          'replacing-group',
+          'verifying-unpublished',
+          'publishing',
+          'awaiting-published-view-verification',
+          'setting-quantity-zero',
+          'awaiting-quantity-zero-verification',
+          'withdrawal-ready',
+          'cleanup-in-progress',
+        ]
+      : [
+          'preflight-complete',
+          'creating-items',
+          'creating-offers',
+          'replacing-group',
+          'verifying-unpublished',
+          'publishing',
+          'awaiting-published-view-verification',
+          'setting-quantity-zero',
+          'awaiting-quantity-zero-verification',
+        ];
+    if (!allowed.includes(manifest.checkpoint)) throw new Error(YOU_PICK_EXECUTION_ERROR);
+    if (!options.mutationApiFactory) throw new Error(YOU_PICK_EXECUTION_ERROR);
+  }
+
   if (Boolean(options.api) === Boolean(options.apiFactory)) {
     throw new Error('Supply exactly one pilot read API or API factory.');
   }
@@ -1413,6 +1638,7 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
   let metadataSummary: NonNullable<YouPickManifest['metadataSummary']> | undefined;
   let collisionResults: YouPickManifest['collisions'] | undefined;
   let cleanupState: CleanupRemoteState | undefined;
+  let mutationHeaders: GuardedMutationHeaders | undefined;
   try {
     const runtime = await api.getRuntimeSnapshot();
     gates.push(...validateRuntime(runtime));
@@ -1424,7 +1650,7 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
     );
     gates.push(pass('seller-identity', 'immutable Trading UserID confirmed'));
     activeGate = 'future-mutation-header-contract';
-    buildGuardedMutationHeaders({
+    mutationHeaders = buildGuardedMutationHeaders({
       environment: runtime.environment,
       sellerUserId: identity.userId,
       expectedSellerUserId: identity.userId,
@@ -1450,8 +1676,23 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
         `current category and condition metadata confirmed; selector=${metadataSummary.selectorStatus}; sandbox group validation remains authoritative`
       )
     );
-    activeGate = options.cleanup ? 'cleanup-state' : 'collisions';
-    if (options.cleanup) {
+    activeGate = options.execute
+      ? 'execution-remote-state'
+      : options.cleanup
+        ? 'cleanup-state'
+        : 'collisions';
+    if (options.execute) {
+      collisionResults = manifest.collisions;
+      if (
+        manifest.checkpoint === 'preflight-complete' &&
+        (collisionResults.length !== manifest.run.childSkus.length * 2 + 1 ||
+          collisionResults.some((collision) => collision.status !== 'missing'))
+      )
+        throw new Error(
+          'execution-remote-state gate failed: preflight collision proof is incomplete.'
+        );
+      gates.push(pass(activeGate, 'manifest checkpoint and exact prior collision proof accepted'));
+    } else if (options.cleanup) {
       const cleanup = await cleanupReads(api, manifest);
       collisionResults = cleanup.collisions;
       cleanupState = cleanup.state;
@@ -1459,14 +1700,15 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
     } else {
       collisionResults = await collisions(api, manifest.run);
     }
-    gates.push(
-      pass(
-        activeGate,
-        options.cleanup
-          ? 'manifest-owned resource state reconstructed with exact reads'
-          : 'exact group, item, and offer absence confirmed'
-      )
-    );
+    if (!options.execute)
+      gates.push(
+        pass(
+          activeGate,
+          options.cleanup
+            ? 'manifest-owned resource state reconstructed with exact reads'
+            : 'exact group, item, and offer absence confirmed'
+        )
+      );
   } catch (error) {
     const detail = sanitizeError(error);
     const namedGate = /^([a-z-]+) gate failed:/i.exec(detail)?.[1] ?? activeGate;
@@ -1484,7 +1726,13 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
     await writeManifestAtomic(path, manifest, localRoot);
     throw new Error(detail);
   }
-  if (!identity || !metadata || !metadataSummary || !collisionResults || !planOperations) {
+  if (
+    !identity ||
+    !metadata ||
+    !metadataSummary ||
+    !collisionResults ||
+    (!options.execute && !planOperations)
+  ) {
     throw new Error('Pilot preflight ended without complete read-only evidence.');
   }
 
@@ -1507,10 +1755,56 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
           warnings: cleanupState.warnings,
         }
       : manifest.cleanupRemoteSummary,
-    checkpoint: options.cleanup ? 'cleanup-plan-ready' : 'preflight-complete',
+    checkpoint: options.execute
+      ? manifest.checkpoint
+      : options.cleanup
+        ? 'cleanup-plan-ready'
+        : 'preflight-complete',
     updatedAt: now().toISOString(),
   });
   await writeManifestAtomic(path, manifest, localRoot);
+
+  if (options.execute) {
+    if (manifest.version !== YOU_PICK_MANIFEST_VERSION || !mutationHeaders)
+      throw new Error(YOU_PICK_EXECUTION_ERROR);
+    const {
+      executeYouPickManifest,
+      validatePublishedViewAttestation,
+      validateQuantityZeroAttestation,
+    } = await import('./you-pick-sandbox-pilot-mutation.js');
+    if (manifest.checkpoint === 'awaiting-published-view-verification')
+      validatePublishedViewAttestation(options.attestation, manifest, now());
+    if (manifest.checkpoint === 'awaiting-quantity-zero-verification')
+      validateQuantityZeroAttestation(options.attestation, manifest, now());
+    assertExecutableManifestIntegrity(manifest);
+    try {
+      const mutationApi = await options.mutationApiFactory!();
+      return await executeYouPickManifest({
+        manifest,
+        manifestPath: path,
+        readApi: api,
+        mutationApi,
+        headers: mutationHeaders,
+        attestation: options.attestation,
+        cleanup: Boolean(options.cleanup),
+        now,
+        persist: async (next) => {
+          manifest = next;
+          await writeManifestAtomic(path, next, localRoot);
+        },
+      });
+    } catch (error) {
+      const detail = sanitizeError(error);
+      manifest = executableYouPickManifestSchema.parse({
+        ...manifest,
+        lastError: detail,
+        updatedAt: now().toISOString(),
+      });
+      await writeManifestAtomic(path, manifest, localRoot);
+      const resume = `pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest ${path} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${identity.userId}`;
+      throw new Error(`${detail} Safe resume command: ${resume}`);
+    }
+  }
 
   const selected = {
     policies: {
@@ -1534,8 +1828,8 @@ export async function runYouPickSandboxPilot(options: PilotRunOptions): Promise<
     cleanupRemoteSummary: manifest.cleanupRemoteSummary,
     collisions: collisionResults,
     arrangementId: manifest.arrangementId,
-    operationPlan: planOperations,
-    requestDigests: planOperations.map((item) => item.digest),
+    operationPlan: planOperations!,
+    requestDigests: planOperations!.map((item) => item.digest),
     nextAuthorizedCommand: `pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest ${path} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${identity.userId}`,
   });
 }

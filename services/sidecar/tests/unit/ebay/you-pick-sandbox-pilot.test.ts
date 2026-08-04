@@ -341,7 +341,8 @@ describe('You Pick manifest persistence and dry-run gates', () => {
     expect(report.gates.every((gate) => gate.status === 'pass')).toBe(true);
     expect(manifest.checkpoint).toBe('preflight-complete');
     expect(manifest.metadataSummary?.selectorStatus).toBe('taxonomy-listed');
-    expect(manifestText).not.toContain('images.example.invalid');
+    expect(manifestText).not.toContain('signature=');
+    expect(manifestText).not.toContain('token=');
     expect(manifestText).not.toContain('Bearer');
     expect(api.getRuntimeSnapshot).toHaveBeenCalledOnce();
     expect(report.operationPlan.every((item) => !('payload' in item))).toBe(true);
@@ -625,9 +626,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
               ...metadata,
               conditions: metadata.conditions.map((condition) => ({
                 ...condition,
-                conditionDescriptors: [
-                  { id: '27503', name: 'Certification Number', values: [] },
-                ],
+                conditionDescriptors: [{ id: '27503', name: 'Certification Number', values: [] }],
               })),
             };
           }),

@@ -49,8 +49,8 @@ Never accept a caller-supplied group key or child SKU outside the current run pr
 an identifier, listing row, or resource found during preflight.
 
 Persist a non-secret manifest at
-`<repo>/.local/you-pick-sandbox/<runId>/manifest.json`. The harness implementation must add this
-directory to local ignore rules before use. Create the file before the first remote read and
+`<repo>/.local/you-pick-sandbox/<runId>/manifest.json`; this is ignored operator-local state and
+must remain untracked. Create the file before the first remote read and
 replace it immediately after every mutation using a same-directory temporary file, file sync,
 and atomic rename; never rewrite the live JSON in place. It contains:
 
@@ -63,7 +63,7 @@ and atomic rename; never rewrite the live JSON in place. It contains:
   quantities, prices, shared condition, policy IDs, and merchant location key;
 - the complete payload-arrangement identifier, whether publication was ever reached, and any
   predecessor run ID whose declared fallback this fresh run is testing;
-- each offer ID, group/listing ID, buyer URL, attempted payload variant, mutation status, and
+- each offer ID, group/listing ID, attempted payload variant, mutation status, and
   last sanitized error; and
 - cleanup attempts, per-resource results, and final absence checks.
 
@@ -130,42 +130,64 @@ All gates are fail-closed and must be recorded as pass/fail in the manifest.
     Inventory condition `4000` is `USED_VERY_GOOD`, with numeric descriptor IDs such as
     `40001=400012`. Metadata reads are preflight only; stale evidence cannot replace this gate.
 
-## Future guarded harness contract
+## Implemented guarded harness contract
 
-Implement a dedicated CLI at
+The dedicated CLI lives at
 `services/sidecar/src/scripts/you-pick-sandbox-pilot.ts` with package command
 `ebay:pilot-you-pick-sandbox`. Do not extend the broad `test-endpoints.ts` flow and do not use
 ad hoc MCP mutations: both have wider authority and weaker run ownership than this pilot needs.
 
-Proposed commands:
+Command shapes:
 
 ```text
 pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --fixture <path>
-pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --fixture <path> --execute \
+pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --execute \
   --confirm-sandbox-seller <UserID>
+pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --execute \
+  --confirm-sandbox-seller <UserID> --attestation <published-view.json>
+pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --execute \
+  --confirm-sandbox-seller <UserID> --attestation <quantity-zero.json>
 pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --cleanup --execute \
   --confirm-sandbox-seller <UserID>
 ```
 
-No flag defaults to execution. `--execute` without the seller confirmation fails. `--cleanup`
+No flag defaults to execution. `--fixture --execute`, `--execute` without an exact manifest and
+seller confirmation, duplicate/unknown flags, and cleanup execution without a manifest fail before
+the mutation factory is resolved. `--cleanup`
 requires an existing manifest and resumes from remote read-back rather than trusting local
 status. A rerun with a manifest resumes the first incomplete checkpoint; a rerun without the
 manifest may only dry-run. There is no `--force`, arbitrary SKU prefix, skip-host-check, or
-production mode.
+production mode. Implementation and offline tests do not authorize a live Sandbox write; that
+requires a separate explicit user authorization.
 
-### YP0.5 implemented dry-run surface
+### Versioned manifest and operation ledger
 
-The YP0.5 harness implements the default fixture dry-run plus manifest resume and cleanup-plan
-modes. It creates the versioned run manifest before resolving the credential-bearing read API,
+The harness preserves default fixture dry-run, manifest resume, and cleanup-plan modes. It creates
+the versioned run manifest before resolving the credential-bearing read API,
 then emits sanitized structured JSON containing exact gate results, canonical Trading `UserID`,
 resolved `Content-Language`, selected resource IDs, metadata/collision summaries, stable request
 digests, the ordered future operation plan, and the separately authorized next-command shape.
 The repository includes a non-saleable offline example at
 `services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`.
 
-Every CLI argument list containing `--execute`, including `--cleanup --execute`, fails immediately
-with the stable YP0.6 authorization error before environment loading or API dependency resolution.
-YP0.5 contains no Inventory mutation dependency or call path. Cleanup mode strictly normalizes
+Version 5 is the only executable manifest version. It stores the immutable validated arrangement,
+the ordered operation digests, and one ledger row per operation: `planned`, `started`, `completed`,
+or `unknown`; attempt count; started/completed timestamps; sanitized result/error evidence; and a
+read-back digest. Atomic persistence occurs immediately before each attempted mutation and after
+reconciliation. Version 4 remains readable for historical read-only inspection but is never
+silently upgraded or accepted for execution; create and review a fresh version-5 preflight run.
+Credentials, authorization headers, raw responses, signed URLs, and buyer personal data are never
+stored. Public fixture image sources remain immutable local pilot inputs and are redacted from
+console reports.
+
+Before either mutation API dependency is resolved, and again immediately before execution, one
+authoritative integrity gate rebuilds the complete future plan from the embedded fixture and run.
+It requires exact ordered agreement with arrangement, operations, ledger request digests,
+resource SKUs, selector values, image fingerprints, quantities, prices, condition evidence,
+policies, and merchant location. Checkpoint persistence cannot turn a divergent manifest into an
+executable one.
+
+Cleanup-plan mode strictly normalizes
 exact group children, child/group associations, offers, statuses, marketplace/SKU ownership, and
 listing identity before producing a reverse dependency plan. Publication history is distinct from
 current withdrawal need: `ACTIVE` and quantity-zero `OUT_OF_STOCK` require withdrawal;
@@ -176,26 +198,64 @@ reconciled by compatible lifecycle class, so mixed `ACTIVE`/`OUT_OF_STOCK` remai
 mixed `ENDED`/`EBAY_ENDED` remains ended. Every observed raw status is retained in sorted,
 deduplicated sanitized evidence; mixing lifecycle classes remains a hard stop.
 
-If no safe typed wrapper exists, YP0.5 must add only the narrow read-only Trading `GetUser`
-support needed to return and validate `User.UserID` from the harness's existing user OAuth
-authorization. It does not authorize Trading API listing creation, revision, ending, relisting,
-or management of any Inventory API resource.
+The harness uses only the narrow read-only Trading `GetUser` wrapper needed to return and validate
+`User.UserID` from the same user OAuth authorization. It does not authorize Trading API listing
+creation, revision, ending, relisting, or management of any Inventory API resource.
 
-YP0.5 focused tests must prove dry-run reports the resolved `Content-Language`, execution rejects
+Focused tests prove dry-run reports the resolved `Content-Language`, execution rejects
 missing, empty, unknown/inherited, and non-`en-US` values, and the guarded Inventory request path
 actually supplies `Content-Language: en-US`. Configuration defaults alone do not satisfy this
 contract. Identity tests must also reject Commerce Identity mock/placeholder data, missing or
 changed Trading `UserID`, confirmation mismatch, and token-account mismatch across resume and
-cleanup.
+cleanup. The mutation adapter is a separate `YouPickPilotMutationApi`; read-only commands neither
+construct nor receive it. Every adapter mutation passes an explicit validated
+`Content-Language: en-US` request configuration.
+
+### Manual attestation checkpoints
+
+The first execute invocation performs exact read-before-write recovery through child items,
+offers, the complete group snapshot, verification, and publication, then stops at
+`awaiting-published-view-verification`. The published-view JSON must exactly bind run ID,
+arrangement ID, listing ID, timestamp, ordered child SKUs/selector values/prices/front-back
+fingerprints, and successful selector, price, image-order, shared-condition, title, and description
+checks. The next invocation sets only the first child's recorded inventory and offer quantities to
+zero, verifies both exact reads, and stops at `awaiting-quantity-zero-verification`. The
+quantity-zero JSON binds the same identities and attests that the target is unavailable while the
+ordered `remainingChildren` array contains every non-target SKU with literal
+`purchasable: true`; two- and three-child runs require exact coverage with no omission, duplicate,
+extra, or reorder. Each attestation timestamp must be strictly later than its corresponding
+completed `publish-group` or `quantity-zero` ledger timestamp. Evidence at the same timestamp,
+older than 24 hours, future-dated, mismatched, incomplete, or containing a failed check is rejected
+before mutation construction. The following invocation records `withdrawal-ready`; cleanup
+remains a separate explicit command.
+
+Quantity-zero reconciles the complete group, every item, and every offer before and after the
+write. Before-state digests and positive quantities must match the immutable plan. Afterward only
+the target item/offer may match the explicitly derived zero-state digest; group membership and all
+non-target digests, quantities, offer IDs, and the common active listing identity must remain
+unchanged.
 
 `--cleanup` is also the abort path from every partial lifecycle checkpoint. It reconstructs
 remote state with exact reads, then walks only manifest-owned dependencies in reverse: withdraw
 an active group, delete recorded offers, delete the group, delete children, and verify exact
 absence. It may resume after its own interruption and must stop before deleting a resource whose
 ownership or dependency state is ambiguous.
+The executable path uses one complete publication-state reconciler before publish adoption,
+quantity-zero, and destructive cleanup. Every child must have one exact offer, compatible status,
+one listing ID and lifecycle, and complete normalized flags. `INACTIVE`, missing lifecycle fields,
+mixed publication or lifecycle classes, conflicting IDs, duplicate offers, and null withdrawal
+evidence stop before deletion. Raw statuses may differ only inside one compatible class:
+`ACTIVE`/`OUT_OF_STOCK`, `ENDED`/`EBAY_ENDED`, or only `NOT_LISTED`. Active groups are withdrawn
+and fully re-read before any resource delete; compatible ended/not-listed groups may proceed
+without withdrawal.
 
-Before implementation, add strict fixture and manifest schemas plus exact typed request/response
-validation at the harness boundary. The fixture must require:
+Recovery from a `started` or `unknown` ledger entry has three explicit outcomes: exact after-state
+proven, exact original pre-state proven, or unresolved. Proven after-state completes without a
+write. Only proven pre-state permits one bounded retry. Read errors, unknown reads, malformed or
+mismatched snapshots, and ambiguous ownership persist `unknown` and stop without calling the
+mutation API.
+
+Strict fixture, manifest, attestation, and mutation-result schemas at the harness boundary require:
 
 - exactly two or three ordered children and a complete, non-empty `variantSKUs` snapshot;
 - unique non-empty SKUs and unique non-empty selector values, with exact selector name/value

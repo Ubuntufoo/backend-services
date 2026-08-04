@@ -118,6 +118,19 @@ isolated. Then use 2-3 unsold cards and prove, in order:
 Any failure stops the pilot and preserves diagnostics. No production write follows from a
 sandbox success without a separate gate.
 
+The review-ready pilot implementation uses a version-5, atomically persisted operation ledger and
+separate read/mutation API boundaries. Version-4 preflight evidence remains read-only. One execute
+invocation may reach publication only, then requires an exact published-view attestation; the next
+may set the first child quantity to zero only, then requires an exact quantity-zero attestation.
+Withdrawal and reverse-dependency cleanup require a separate cleanup execute command. Every
+mutation carries explicit `Content-Language: en-US`, and exact read-before-write reconciliation
+blocks blind replay. Executable manifests are rebuilt and integrity-checked from their embedded
+fixture/run before dependency construction and mutation. Publication, quantity-zero, and cleanup
+reconcile every child offer to one unambiguous listing lifecycle; quantity-zero also proves the
+complete group/item/offer snapshot before and after the write. Both manual attestations must occur
+strictly after their corresponding completed ledger operation, and quantity-zero evidence covers
+every ordered non-target child. This implementation is not live Sandbox write authorization.
+
 ## Unresolved before persistence or orchestration
 
 - Exact selector aspect accepted for `261328` by the intended account.
