@@ -231,26 +231,46 @@ export function normalizeYouPickMetadata(
       } catch {
         /* Only mappings established by the existing publish contract are authoritative. */
       }
+      const rawDescriptors = condition.conditionDescriptors;
+      if (rawDescriptors !== undefined && !Array.isArray(rawDescriptors))
+        throw new Error('conditionDescriptors must be an array when present.');
+      const descriptorRows = rawDescriptors === undefined ? [] : records(rawDescriptors);
+      if (rawDescriptors !== undefined && descriptorRows.length !== rawDescriptors.length)
+        throw new Error('conditionDescriptors contains a malformed row.');
       return {
         conditionId,
         conditionDescription: stringField(condition, 'conditionDescription'),
         inventoryCondition,
         conditionDescriptors: uniqueRecords(
-          requiredArray(condition, 'conditionDescriptors'),
+          descriptorRows,
           'Condition descriptor metadata',
-          (descriptor) => stringField(descriptor, 'conditionDescriptorId')
-        ).map((descriptor) => ({
-          id: stringField(descriptor, 'conditionDescriptorId'),
-          name: stringField(descriptor, 'conditionDescriptorName'),
-          values: uniqueRecords(
-            requiredArray(descriptor, 'conditionDescriptorValues'),
-            'Condition descriptor value metadata',
-            (value) => stringField(value, 'conditionDescriptorValueId')
-          ).map((value) => ({
-            id: stringField(value, 'conditionDescriptorValueId'),
-            name: stringField(value, 'conditionDescriptorValueName'),
-          })),
-        })),
+          (descriptor) => {
+            const id = stringField(descriptor, 'conditionDescriptorId');
+            return /^\d+$/.test(id) ? id : '';
+          }
+        ).map((descriptor) => {
+          const rawValues = descriptor.conditionDescriptorValues;
+          if (rawValues !== undefined && !Array.isArray(rawValues))
+            throw new Error('conditionDescriptorValues must be an array when present.');
+          const valueRows = rawValues === undefined ? [] : records(rawValues);
+          if (rawValues !== undefined && valueRows.length !== rawValues.length)
+            throw new Error('conditionDescriptorValues contains a malformed row.');
+          return {
+            id: stringField(descriptor, 'conditionDescriptorId'),
+            name: stringField(descriptor, 'conditionDescriptorName'),
+            values: uniqueRecords(
+              valueRows,
+              'Condition descriptor value metadata',
+              (value) => {
+                const id = stringField(value, 'conditionDescriptorValueId');
+                return /^\d+$/.test(id) ? id : '';
+              }
+            ).map((value) => ({
+              id: stringField(value, 'conditionDescriptorValueId'),
+              name: stringField(value, 'conditionDescriptorValueName'),
+            })),
+          };
+        }),
       };
     })
     .filter((condition) => condition.conditionId && /^\d+$/.test(condition.conditionId));

@@ -8,6 +8,28 @@ import {
   normalizeYouPickPolicies,
 } from '@/scripts/you-pick-sandbox-pilot.js';
 
+function normalizeConditionDescriptors(conditionDescriptors: unknown) {
+  return normalizeYouPickMetadata(
+    '261328',
+    { listingStructurePolicies: [{ categoryId: '261328', variationsSupported: true }] },
+    {
+      itemConditionPolicies: [
+        {
+          categoryId: '261328',
+          itemConditions: [
+            {
+              conditionId: '4000',
+              conditionDescription: 'Ungraded',
+              conditionDescriptors,
+            },
+          ],
+        },
+      ],
+    },
+    { aspects: [] }
+  ).conditions[0].conditionDescriptors;
+}
+
 describe('You Pick raw response normalization', () => {
   it('normalizes representative account and metadata payloads without credentials', () => {
     expect(
@@ -34,6 +56,25 @@ describe('You Pick raw response normalization', () => {
             {
               categoryId: '261328',
               itemConditions: [
+                {
+                  conditionId: '1000',
+                  conditionDescription: 'New',
+                },
+                {
+                  conditionId: '2000',
+                  conditionDescription: 'Certified',
+                  conditionDescriptors: [],
+                },
+                {
+                  conditionId: '2750',
+                  conditionDescription: 'Graded',
+                  conditionDescriptors: [
+                    {
+                      conditionDescriptorId: '27503',
+                      conditionDescriptorName: 'Certification Number',
+                    },
+                  ],
+                },
                 {
                   conditionId: '4000',
                   conditionDescription: 'Very Good',
@@ -70,6 +111,24 @@ describe('You Pick raw response normalization', () => {
         selectorCandidates: ['Set'],
         conditions: [
           expect.objectContaining({
+            conditionId: '1000',
+            conditionDescriptors: [],
+          }),
+          expect.objectContaining({
+            conditionId: '2000',
+            conditionDescriptors: [],
+          }),
+          expect.objectContaining({
+            conditionId: '2750',
+            conditionDescriptors: [
+              {
+                id: '27503',
+                name: 'Certification Number',
+                values: [],
+              },
+            ],
+          }),
+          expect.objectContaining({
             conditionId: '4000',
             inventoryCondition: 'USED_VERY_GOOD',
             conditionDescriptors: [
@@ -82,6 +141,80 @@ describe('You Pick raw response normalization', () => {
         ],
       })
     );
+  });
+
+  it('normalizes explicitly empty condition descriptor values as valueless', () => {
+    expect(
+      normalizeConditionDescriptors([
+        {
+          conditionDescriptorId: '27503',
+          conditionDescriptorName: 'Certification Number',
+          conditionDescriptorValues: [],
+        },
+      ])
+    ).toEqual([{ id: '27503', name: 'Certification Number', values: [] }]);
+  });
+
+  it('rejects malformed condition descriptor arrays and rows', () => {
+    expect(() => normalizeConditionDescriptors(null)).toThrow(
+      'conditionDescriptors must be an array when present.'
+    );
+    expect(() => normalizeConditionDescriptors({})).toThrow(
+      'conditionDescriptors must be an array when present.'
+    );
+    expect(() => normalizeConditionDescriptors([null])).toThrow(
+      'conditionDescriptors contains a malformed row.'
+    );
+  });
+
+  it('rejects malformed condition descriptor values and identifiers', () => {
+    expect(() =>
+      normalizeConditionDescriptors([
+        { conditionDescriptorId: '27503', conditionDescriptorValues: {} },
+      ])
+    ).toThrow('conditionDescriptorValues must be an array when present.');
+    expect(() =>
+      normalizeConditionDescriptors([
+        { conditionDescriptorId: '27503', conditionDescriptorValues: [null] },
+      ])
+    ).toThrow('conditionDescriptorValues contains a malformed row.');
+    expect(() =>
+      normalizeConditionDescriptors([
+        {
+          conditionDescriptorId: '40001',
+          conditionDescriptorValues: [{}],
+        },
+      ])
+    ).toThrow(/missing or duplicate identifiers/);
+    expect(() =>
+      normalizeConditionDescriptors([
+        {
+          conditionDescriptorId: '40001',
+          conditionDescriptorValues: [{ conditionDescriptorValueId: 'value-name' }],
+        },
+      ])
+    ).toThrow(/missing or duplicate identifiers/);
+    expect(() => normalizeConditionDescriptors([{}])).toThrow(/missing or duplicate identifiers/);
+    expect(() =>
+      normalizeConditionDescriptors([{ conditionDescriptorId: 'descriptor-name' }])
+    ).toThrow(/missing or duplicate identifiers/);
+    expect(() =>
+      normalizeConditionDescriptors([
+        { conditionDescriptorId: '27503' },
+        { conditionDescriptorId: '27503' },
+      ])
+    ).toThrow(/missing or duplicate identifiers/);
+    expect(() =>
+      normalizeConditionDescriptors([
+        {
+          conditionDescriptorId: '40001',
+          conditionDescriptorValues: [
+            { conditionDescriptorValueId: '400012' },
+            { conditionDescriptorValueId: '400012' },
+          ],
+        },
+      ])
+    ).toThrow(/missing or duplicate identifiers/);
   });
 
   it('normalizes exact group, child, offer, listing, status, and 404 state', async () => {

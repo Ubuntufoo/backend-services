@@ -572,6 +572,68 @@ describe('You Pick manifest persistence and dry-run gates', () => {
         })
       )
     ).rejects.toThrow(/descriptor values/);
+
+    const thirdRoot = await tempRepo();
+    await expect(
+      runFresh(
+        thirdRoot,
+        createApi({
+          getMetadataSnapshot: vi.fn(async () => {
+            const metadata = await createApi().getMetadataSnapshot('261328');
+            return {
+              ...metadata,
+              conditions: metadata.conditions.map((condition) => ({
+                ...condition,
+                conditionDescriptors: condition.conditionDescriptors.map((descriptor) => ({
+                  ...descriptor,
+                  values: [],
+                })),
+              })),
+            };
+          }),
+        })
+      )
+    ).rejects.toThrow(/descriptor values/);
+
+    const fourthRoot = await tempRepo();
+    await expect(
+      runFresh(
+        fourthRoot,
+        createApi({
+          getMetadataSnapshot: vi.fn(async () => {
+            const metadata = await createApi().getMetadataSnapshot('261328');
+            return {
+              ...metadata,
+              conditions: metadata.conditions.map((condition) => ({
+                ...condition,
+                conditionDescriptors: [],
+              })),
+            };
+          }),
+        })
+      )
+    ).rejects.toThrow(/missing or ambiguous descriptor ID/);
+
+    const fifthRoot = await tempRepo();
+    await expect(
+      runFresh(
+        fifthRoot,
+        createApi({
+          getMetadataSnapshot: vi.fn(async () => {
+            const metadata = await createApi().getMetadataSnapshot('261328');
+            return {
+              ...metadata,
+              conditions: metadata.conditions.map((condition) => ({
+                ...condition,
+                conditionDescriptors: [
+                  { id: '27503', name: 'Certification Number', values: [] },
+                ],
+              })),
+            };
+          }),
+        })
+      )
+    ).rejects.toThrow(/missing or ambiguous descriptor ID/);
   });
 });
 
