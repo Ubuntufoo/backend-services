@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { resolve } from 'path';
-import { readFile } from 'fs/promises';
+import { relative, resolve, sep } from 'path';
+import { readFile, realpath } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 import {
@@ -45,6 +45,25 @@ interface CliOptions {
   mutationApiFactory?: () => Promise<YouPickPilotMutationApi>;
   runner?: typeof runYouPickSandboxPilot;
   print?: (output: string) => void;
+}
+
+function resolveRepositoryFile(path: string, repoRoot: string, label: string): string {
+  const root = resolve(repoRoot);
+  const absolute = resolve(root, path);
+  const rel = relative(root, absolute);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`${label} path must be contained in the repository root.`);
+  }
+  return absolute;
+}
+
+async function readRepositoryJson(path: string, repoRoot: string, label: string): Promise<unknown> {
+  const [rootReal, fileReal] = await Promise.all([realpath(repoRoot), realpath(path)]);
+  const rel = relative(rootReal, fileReal);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`${label} path must resolve within the repository root.`);
+  }
+  return JSON.parse(await readFile(fileReal, 'utf8')) as unknown;
 }
 
 function requireValue(value: string | undefined, flag: string): string {
@@ -579,20 +598,31 @@ export async function runYouPickSandboxPilotCli(
   options: CliOptions = {}
 ): Promise<PilotReport | MutationExecutionReport> {
   const args = parseYouPickPilotArgs(argv);
+  const repoRoot =
+    options.repoRoot ?? resolve(fileURLToPath(new URL('../../../../', import.meta.url)));
+  const fixturePath = args.fixturePath
+    ? resolveRepositoryFile(args.fixturePath, repoRoot, 'Fixture')
+    : undefined;
+  const manifestPath = args.manifestPath
+    ? resolveRepositoryFile(args.manifestPath, repoRoot, 'Manifest')
+    : undefined;
+  const attestationPath = args.attestationPath
+    ? resolveRepositoryFile(args.attestationPath, repoRoot, 'Attestation')
+    : undefined;
   const runner = options.runner ?? runYouPickSandboxPilot;
-  const attestation = args.attestationPath
-    ? (JSON.parse(await readFile(resolve(args.attestationPath), 'utf8')) as unknown)
+  const attestation = attestationPath
+    ? await readRepositoryJson(attestationPath, repoRoot, 'Attestation')
     : undefined;
   const report = await runner({
     apiFactory: options.apiFactory ?? createYouPickPilotReadApi,
-    fixturePath: args.fixturePath,
-    manifestPath: args.manifestPath,
+    fixturePath,
+    manifestPath,
     cleanup: args.cleanup,
     mutationApiFactory: options.mutationApiFactory ?? createYouPickPilotMutationApi,
     execute: args.execute,
     confirmSandboxSeller: args.confirmSandboxSeller,
     attestation,
-    repoRoot: options.repoRoot ?? resolve(fileURLToPath(new URL('../../../../', import.meta.url))),
+    repoRoot,
   });
   (options.print ?? console.log)(JSON.stringify(sanitizeReport(report), null, 2));
   return report;

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
@@ -166,7 +166,7 @@ describe('You Pick sandbox pilot CLI', () => {
     expect(runner).toHaveBeenCalledWith(
       expect.objectContaining({
         apiFactory,
-        fixturePath: 'fixture.json',
+        fixturePath: '/repo/fixture.json',
         execute: false,
         repoRoot: '/repo',
       })
@@ -178,9 +178,117 @@ describe('You Pick sandbox pilot CLI', () => {
     expect(output).not.toContain('imageUrls');
   });
 
+  it('resolves fixture, manifest, and attestation paths from repo root under package cwd', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-paths-'));
+    tempRoots.push(repoRoot);
+    const packageCwd = join(repoRoot, 'services', 'sidecar');
+    const runId = '20260803T151700Z-a1b2c3';
+    const attestationPath = join(
+      repoRoot,
+      '.local',
+      'you-pick-sandbox',
+      runId,
+      'published-view.json'
+    );
+    await mkdir(packageCwd, { recursive: true });
+    await mkdir(join(repoRoot, '.local', 'you-pick-sandbox', runId), { recursive: true });
+    await writeFile(attestationPath, JSON.stringify({ kind: 'published-view' }), 'utf8');
+    const runner = vi.fn(async () => report);
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(packageCwd);
+
+    try {
+      await runYouPickSandboxPilotCli(['--fixture', 'fixtures/two-card.json'], {
+        repoRoot,
+        runner,
+        print: vi.fn(),
+      });
+      await runYouPickSandboxPilotCli(
+        [
+          '--manifest',
+          `.local/you-pick-sandbox/${runId}/manifest.json`,
+          '--execute',
+          '--confirm-sandbox-seller',
+          'sandbox-seller-123',
+          '--attestation',
+          `.local/you-pick-sandbox/${runId}/published-view.json`,
+        ],
+        { repoRoot, runner, print: vi.fn() }
+      );
+    } finally {
+      cwd.mockRestore();
+    }
+
+    expect(runner).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        fixturePath: join(repoRoot, 'fixtures', 'two-card.json'),
+        repoRoot,
+      })
+    );
+    expect(runner).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        manifestPath: join(
+          repoRoot,
+          '.local',
+          'you-pick-sandbox',
+          runId,
+          'manifest.json'
+        ),
+        attestation: { kind: 'published-view' },
+        repoRoot,
+      })
+    );
+  });
+
+  it('rejects outside and symlinked attestation paths before dependency resolution', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-safe-'));
+    const outsideRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-outside-'));
+    tempRoots.push(repoRoot, outsideRoot);
+    const runId = '20260803T151700Z-a1b2c3';
+    const localRun = join(repoRoot, '.local', 'you-pick-sandbox', runId);
+    const outsideAttestation = join(outsideRoot, 'published-view.json');
+    const linkedAttestation = join(localRun, 'published-view.json');
+    await mkdir(localRun, { recursive: true });
+    await writeFile(outsideAttestation, '{}', 'utf8');
+    await symlink(outsideAttestation, linkedAttestation);
+    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+    const mutationApiFactory = vi.fn();
+    const runner = vi.fn(async () => report);
+
+    await expect(
+      runYouPickSandboxPilotCli(['--fixture', '../outside.json'], {
+        apiFactory,
+        mutationApiFactory,
+        repoRoot,
+        runner,
+      })
+    ).rejects.toThrow(/contained in the repository root/);
+    await expect(
+      runYouPickSandboxPilotCli(
+        [
+          '--manifest',
+          `.local/you-pick-sandbox/${runId}/manifest.json`,
+          '--execute',
+          '--confirm-sandbox-seller',
+          'sandbox-seller-123',
+          '--attestation',
+          `.local/you-pick-sandbox/${runId}/published-view.json`,
+        ],
+        { apiFactory, mutationApiFactory, repoRoot, runner }
+      )
+    ).rejects.toThrow(/resolve within the repository root/);
+    expect(runner).not.toHaveBeenCalled();
+    expect(apiFactory).not.toHaveBeenCalled();
+    expect(mutationApiFactory).not.toHaveBeenCalled();
+  });
+
   it('runs the CLI dry-run through raw-response normalization without loading credentials', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-'));
     tempRoots.push(repoRoot);
+    const relativeFixturePath = join('fixtures', 'two-card.json');
+    await mkdir(join(repoRoot, 'fixtures'), { recursive: true });
+    await copyFile(fixturePath, join(repoRoot, relativeFixturePath));
     const apiFactory = vi.fn(
       async (): Promise<YouPickPilotReadApi> => ({
         getRuntimeSnapshot: async () => ({
@@ -266,7 +374,7 @@ describe('You Pick sandbox pilot CLI', () => {
     );
     const print = vi.fn();
 
-    const result = await runYouPickSandboxPilotCli(['--fixture', fixturePath], {
+    const result = await runYouPickSandboxPilotCli(['--fixture', relativeFixturePath], {
       apiFactory,
       print,
       repoRoot,

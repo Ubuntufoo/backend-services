@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -399,6 +399,31 @@ describe('You Pick manifest persistence and dry-run gates', () => {
       'utf8'
     );
     await expect(readManifest(fresh.manifestPath, secondLocalRoot)).rejects.toThrow(/owned/);
+  });
+
+  it('rejects a symlinked manifest run directory before API factories resolve', async () => {
+    const root = await tempRepo();
+    const foreignRoot = await tempRepo();
+    const foreign = await runFresh(foreignRoot);
+    const localRoot = join(root, '.local', 'you-pick-sandbox');
+    const linkedManifest = join(localRoot, foreign.run.runId, 'manifest.json');
+    await mkdir(localRoot, { recursive: true });
+    await symlink(dirname(foreign.manifestPath), dirname(linkedManifest), 'dir');
+    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+    const mutationApiFactory = vi.fn();
+
+    await expect(
+      runYouPickSandboxPilot({
+        apiFactory,
+        manifestPath: linkedManifest,
+        repoRoot: root,
+        execute: true,
+        confirmSandboxSeller: 'sandbox-seller-123',
+        mutationApiFactory,
+      })
+    ).rejects.toThrow(/resolves outside|symbolic link/);
+    expect(apiFactory).not.toHaveBeenCalled();
+    expect(mutationApiFactory).not.toHaveBeenCalled();
   });
 
   it.each([
