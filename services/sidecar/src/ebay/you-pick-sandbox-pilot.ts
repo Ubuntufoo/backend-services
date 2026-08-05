@@ -512,6 +512,23 @@ export const inventoryItemSemanticSnapshotSchema = strictObject({
   product: strictObject({ aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)) }),
 });
 export type InventoryItemSemanticSnapshot = z.infer<typeof inventoryItemSemanticSnapshotSchema>;
+export const offerSemanticSnapshotSchema = strictObject({
+  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  marketplaceId: nonEmpty,
+  format: nonEmpty,
+  categoryId: nonEmpty,
+  merchantLocationKey: nonEmpty,
+  availableQuantity: z.number().int().nonnegative(),
+  pricingSummary: strictObject({
+    price: strictObject({ currency: nonEmpty, value: z.string().regex(/^\d+\.\d{2}$/) }),
+  }),
+  listingPolicies: strictObject({
+    fulfillmentPolicyId: nonEmpty,
+    paymentPolicyId: nonEmpty,
+    returnPolicyId: nonEmpty,
+  }),
+});
+export type OfferSemanticSnapshot = z.infer<typeof offerSemanticSnapshotSchema>;
 export interface RemoteInventoryItem {
   sku: string;
   groupKeys: string[] | null;
@@ -530,7 +547,7 @@ export interface RemoteOffer {
   listingCurrentlyActive: boolean | null;
   withdrawRequired: boolean | null;
   availableQuantity?: number;
-  snapshotDigest?: string;
+  semanticSnapshot?: OfferSemanticSnapshot;
 }
 
 export function classifyYouPickListingStatus(status: YouPickListingStatus | null): {
@@ -837,6 +854,99 @@ export function assertInventoryItemSemanticMatch(
   const mismatch = inventoryItemSemanticMismatch(actual, expectedInput);
   if (mismatch)
     throw new Error(`${label} semantic ${mismatch} does not match the immutable planned item.`);
+}
+
+export function projectOfferSemanticSnapshot(value: unknown): OfferSemanticSnapshot {
+  const offer = semanticRecord(value, 'offer');
+  if (!Number.isInteger(offer.availableQuantity) || (offer.availableQuantity as number) < 0)
+    throw new Error('Offer semantic available quantity is missing or invalid.');
+  const pricingSummary = semanticRecord(offer.pricingSummary, 'offer pricing summary');
+  const price = semanticRecord(pricingSummary.price, 'offer price');
+  const listingPolicies = semanticRecord(offer.listingPolicies, 'offer listing policies');
+  return offerSemanticSnapshotSchema.parse({
+    sku: semanticString(offer.sku, 'offer SKU'),
+    marketplaceId: semanticString(offer.marketplaceId, 'offer marketplace ID'),
+    format: semanticString(offer.format, 'offer format'),
+    categoryId: semanticString(offer.categoryId, 'offer category ID'),
+    merchantLocationKey: semanticString(
+      offer.merchantLocationKey,
+      'offer merchant location key'
+    ),
+    availableQuantity: offer.availableQuantity,
+    pricingSummary: {
+      price: {
+        currency: semanticString(price.currency, 'offer price currency'),
+        value: semanticString(price.value, 'offer price value'),
+      },
+    },
+    listingPolicies: {
+      fulfillmentPolicyId: semanticString(
+        listingPolicies.fulfillmentPolicyId,
+        'offer fulfillment policy ID'
+      ),
+      paymentPolicyId: semanticString(
+        listingPolicies.paymentPolicyId,
+        'offer payment policy ID'
+      ),
+      returnPolicyId: semanticString(
+        listingPolicies.returnPolicyId,
+        'offer return policy ID'
+      ),
+    },
+  });
+}
+
+export type OfferSemanticField =
+  | 'snapshot'
+  | 'SKU'
+  | 'marketplace ID'
+  | 'format'
+  | 'category ID'
+  | 'merchant location key'
+  | 'available quantity'
+  | 'price currency'
+  | 'price value'
+  | 'fulfillment policy ID'
+  | 'payment policy ID'
+  | 'return policy ID';
+
+export function offerSemanticMismatch(
+  actual: OfferSemanticSnapshot | undefined,
+  expectedInput: unknown
+): OfferSemanticField | null {
+  if (!actual) return 'snapshot';
+  const expected = projectOfferSemanticSnapshot(expectedInput);
+  if (actual.sku !== expected.sku) return 'SKU';
+  if (actual.marketplaceId !== expected.marketplaceId) return 'marketplace ID';
+  if (actual.format !== expected.format) return 'format';
+  if (actual.categoryId !== expected.categoryId) return 'category ID';
+  if (actual.merchantLocationKey !== expected.merchantLocationKey)
+    return 'merchant location key';
+  if (actual.availableQuantity !== expected.availableQuantity) return 'available quantity';
+  if (actual.pricingSummary.price.currency !== expected.pricingSummary.price.currency)
+    return 'price currency';
+  if (actual.pricingSummary.price.value !== expected.pricingSummary.price.value)
+    return 'price value';
+  if (
+    actual.listingPolicies.fulfillmentPolicyId !==
+    expected.listingPolicies.fulfillmentPolicyId
+  )
+    return 'fulfillment policy ID';
+  if (actual.listingPolicies.paymentPolicyId !== expected.listingPolicies.paymentPolicyId)
+    return 'payment policy ID';
+  if (actual.listingPolicies.returnPolicyId !== expected.listingPolicies.returnPolicyId)
+    return 'return policy ID';
+  return null;
+}
+
+export function assertOfferSemanticMatch(
+  actual: OfferSemanticSnapshot | undefined,
+  expectedInput: unknown,
+  label: string
+): void {
+  const mismatch = offerSemanticMismatch(actual, expectedInput);
+  if (mismatch)
+    throw new Error(`${label} semantic ${mismatch} does not match the immutable planned offer.`);
 }
 
 export function generateRunIdentity(

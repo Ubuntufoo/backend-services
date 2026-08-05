@@ -14,6 +14,7 @@ import {
   generateRunIdentity,
   parseCurrentUserIdentity,
   projectInventoryItemSemanticSnapshot,
+  projectOfferSemanticSnapshot,
   readManifest,
   runYouPickSandboxPilot,
   sanitizeReport,
@@ -46,6 +47,7 @@ function remoteOffer(input: {
   status?: RemoteOffer['status'];
   listingId?: string | null;
   listingStatus?: YouPickListingStatus | null;
+  semanticPayload?: unknown;
 }): RemoteOffer {
   const status = input.status ?? 'PUBLISHED';
   const listingStatus = input.listingStatus === undefined ? 'ACTIVE' : input.listingStatus;
@@ -62,6 +64,10 @@ function remoteOffer(input: {
     publicationObserved: status === 'PUBLISHED' || lifecycle.publicationObserved,
     listingCurrentlyActive: lifecycle.listingCurrentlyActive,
     withdrawRequired: lifecycle.withdrawRequired,
+    semanticSnapshot:
+      input.semanticPayload === undefined
+        ? undefined
+        : projectOfferSemanticSnapshot(input.semanticPayload),
   };
 }
 
@@ -820,6 +826,17 @@ describe('You Pick C01 semantic recovery', () => {
                 error: null,
                 readBackDigest: 'a'.repeat(64),
               }
+            : entry.id === 'offer-C01'
+              ? {
+                  ...entry,
+                  state: 'unknown',
+                  attemptCount: 1,
+                  startedAt: timestamp,
+                  completedAt: null,
+                  result: null,
+                  error: 'Interrupted before exact offer reconciliation.',
+                  readBackDigest: null,
+                }
             : entry
         ),
       },
@@ -845,6 +862,27 @@ describe('You Pick C01 semantic recovery', () => {
     }));
     const mutationApi = createMutationApi();
     let persisted = manifest;
+    const offerRequest = plan.operations.find(({ id }) => id === 'offer-C01')?.payload;
+    const offerId = 'OFFER-C01-EXISTING';
+    const getOffers = vi.fn(async (sku: string) =>
+      sku.endsWith('C01')
+        ? {
+            status: 'found' as const,
+            value: {
+              offers: [
+                remoteOffer({
+                  sku,
+                  offerId,
+                  status: 'UNPUBLISHED',
+                  listingId: null,
+                  listingStatus: null,
+                  semanticPayload: offerRequest,
+                }),
+              ],
+            },
+          }
+        : ({ status: 'unknown' as const, reason: 'read-only stop' } as const)
+    );
 
     await expect(
       executeYouPickManifest({
@@ -852,7 +890,7 @@ describe('You Pick C01 semantic recovery', () => {
         manifestPath: fresh.manifestPath,
         readApi: createApi({
           getInventoryItem,
-          getOffers: vi.fn(async () => ({ status: 'unknown', reason: 'read-only stop' })),
+          getOffers,
         }),
         mutationApi,
         headers: { 'Content-Language': 'en-US' },
@@ -862,13 +900,122 @@ describe('You Pick C01 semantic recovery', () => {
           persisted = next;
         },
       })
-    ).rejects.toThrow('offer-C01 exact read is unknown');
+    ).rejects.toThrow('offer-C02 exact read is unknown');
 
     expect(getInventoryItem).toHaveBeenCalledTimes(2);
+    expect(getOffers).toHaveBeenNthCalledWith(1, manifest.run.childSkus[0], 'EBAY_US');
+    expect(getOffers).toHaveBeenNthCalledWith(2, manifest.run.childSkus[1], 'EBAY_US');
     expect(persisted.execution.ledger.slice(0, 2)).toEqual([
       expect.objectContaining({ id: 'item-C01', state: 'completed', attemptCount: 1 }),
       expect.objectContaining({ id: 'item-C02', state: 'completed', attemptCount: 1 }),
     ]);
+    expect(persisted.execution.ledger[2]).toEqual(
+      expect.objectContaining({ id: 'offer-C01', state: 'completed', attemptCount: 1 })
+    );
+    expect(persisted.resources[0]).toEqual(
+      expect.objectContaining({ offerId, offerStatus: 'UNPUBLISHED' })
+    );
+    for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses same-manifest offer recovery when an owned semantic field differs', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const localRoot = join(root, '.local', 'you-pick-sandbox');
+    const initial = await readManifest(fresh.manifestPath, localRoot);
+    if (!('execution' in initial)) throw new Error('Expected an executable manifest.');
+    const timestamp = '2026-08-05T13:20:56.855Z';
+    const manifest = executableYouPickManifestSchema.parse({
+      ...initial,
+      checkpoint: 'creating-offers',
+      execution: {
+        ...initial.execution,
+        ledger: initial.execution.ledger.map((entry) =>
+          entry.id === 'item-C01' || entry.id === 'item-C02'
+            ? {
+                ...entry,
+                state: 'completed',
+                attemptCount: 1,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                result: {},
+                error: null,
+                readBackDigest: 'a'.repeat(64),
+              }
+            : entry.id === 'offer-C01'
+              ? {
+                  ...entry,
+                  state: 'unknown',
+                  attemptCount: 1,
+                  startedAt: timestamp,
+                  completedAt: null,
+                  result: null,
+                  error: 'Interrupted before exact offer reconciliation.',
+                  readBackDigest: null,
+                }
+              : entry
+        ),
+      },
+    });
+    const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+    const itemRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'item-C01' || id === 'item-C02')
+        .map(({ payload }) => {
+          const request = payload as { sku: string };
+          return [request.sku, payload] as const;
+        })
+    );
+    const offerRequest = plan.operations.find(({ id }) => id === 'offer-C01')?.payload as {
+      pricingSummary: { price: { currency: string; value: string } };
+    };
+    const mismatchedOffer = {
+      ...offerRequest,
+      pricingSummary: {
+        ...offerRequest.pricingSummary,
+        price: { ...offerRequest.pricingSummary.price, value: '9.99' },
+      },
+    };
+    const mutationApi = createMutationApi();
+
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        readApi: createApi({
+          getInventoryItem: vi.fn(async (sku) => ({
+            status: 'found',
+            value: {
+              sku,
+              groupKeys: null,
+              quantity: manifest.execution.fixture.children.find((child) => sku.endsWith(child.slot))!
+                .itemQuantity,
+              semanticSnapshot: projectInventoryItemSemanticSnapshot(itemRequests.get(sku)),
+            },
+          })),
+          getOffers: vi.fn(async (sku) => ({
+            status: 'found',
+            value: {
+              offers: [
+                remoteOffer({
+                  sku,
+                  status: 'UNPUBLISHED',
+                  listingId: null,
+                  listingStatus: null,
+                  semanticPayload: mismatchedOffer,
+                }),
+              ],
+            },
+          })),
+        }),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => new Date('2026-08-05T13:30:00.000Z'),
+        persist: async () => undefined,
+      })
+    ).rejects.toThrow(
+      'offer-C01 semantic price value does not match the immutable planned offer.'
+    );
     for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
   });
 });

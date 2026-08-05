@@ -4,10 +4,12 @@ import {
   YOU_PICK_CONTENT_LANGUAGE,
   YOU_PICK_MARKETPLACE,
   assertInventoryItemSemanticMatch,
+  assertOfferSemanticMatch,
   assertExecutableManifestIntegrity,
   buildFuturePlan,
   executableYouPickManifestSchema,
   inventoryItemSemanticMismatch,
+  offerSemanticMismatch,
   sanitizeError,
   type ExecutableYouPickManifest,
   type ExactRead,
@@ -204,6 +206,50 @@ function requireOneInventoryItemSemanticMatch(
   throw new Error(`${label} does not match an owned original/zero semantic item snapshot.`);
 }
 
+function requireOfferSemanticMatch(
+  offer: RemoteOffer,
+  expected: unknown,
+  label: string
+): void {
+  if (offer.semanticSnapshot && offer.sku !== offer.semanticSnapshot.sku)
+    throw new Error(`${label} semantic SKU conflicts with normalized ownership SKU.`);
+  if (offer.semanticSnapshot && offer.marketplaceId !== offer.semanticSnapshot.marketplaceId)
+    throw new Error(`${label} semantic marketplace conflicts with normalized ownership.`);
+  assertOfferSemanticMatch(offer.semanticSnapshot, expected, label);
+}
+
+function requireOneOfferSemanticMatch(
+  offer: RemoteOffer,
+  expected: unknown[],
+  label: string
+): void {
+  if (offer.semanticSnapshot && offer.sku !== offer.semanticSnapshot.sku)
+    throw new Error(`${label} semantic SKU conflicts with normalized ownership SKU.`);
+  if (offer.semanticSnapshot && offer.marketplaceId !== offer.semanticSnapshot.marketplaceId)
+    throw new Error(`${label} semantic marketplace conflicts with normalized ownership.`);
+  if (
+    offer.semanticSnapshot &&
+    expected.some((candidate) => offerSemanticMismatch(offer.semanticSnapshot, candidate) === null)
+  )
+    return;
+  throw new Error(`${label} does not match an owned original/zero semantic offer snapshot.`);
+}
+
+function requireExactUnpublishedOffer(offer: RemoteOffer, sku: string, label: string): void {
+  if (!offer.offerId || offer.sku !== sku || offer.marketplaceId !== YOU_PICK_MARKETPLACE)
+    throw new Error(`${label} has conflicting offer identity or ownership.`);
+  if (
+    offer.status !== 'UNPUBLISHED' ||
+    offer.listingId !== null ||
+    offer.listingStatus !== null ||
+    offer.lifecycleClass !== null ||
+    offer.publicationObserved ||
+    offer.listingCurrentlyActive !== false ||
+    offer.withdrawRequired !== false
+  )
+    throw new Error(`${label} is not one exact unpublished offer.`);
+}
+
 function completedOperationTime(manifest: ExecutableYouPickManifest, operationId: string): Date {
   const entry = manifest.execution.ledger.find((candidate) => candidate.id === operationId);
   if (entry?.state !== 'completed' || !entry.completedAt)
@@ -393,14 +439,14 @@ function expectedItemPayload(
   return item;
 }
 
-function expectedOfferDigest(
+function expectedOfferPayload(
   plan: ReturnType<typeof buildFuturePlan>,
   index: number,
   zeroTarget: boolean
-): string {
+): Record<string, unknown> {
   const offer = structuredClone(payload(plan, `offer-C0${index + 1}`));
   if (zeroTarget && index === 0) offer.availableQuantity = 0;
-  return digest(offer);
+  return offer;
 }
 
 async function validateCompleteQuantitySnapshot(
@@ -447,9 +493,9 @@ async function validateCompleteQuantitySnapshot(
       zeroTarget && index === 0 ? 0 : options.manifest.ownership.offerQuantities[index];
     if (offer.availableQuantity !== expectedQuantity)
       throw new Error(`${state} quantity offer ${offer.sku} has unexpected quantity.`);
-    requireSnapshotDigest(
+    requireOfferSemanticMatch(
       offer,
-      expectedOfferDigest(plan, index, zeroTarget),
+      expectedOfferPayload(plan, index, zeroTarget),
       `${state} offer ${offer.sku}`
     );
   });
@@ -640,7 +686,8 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
     ).offers;
     if (offers.length > 1) throw new Error(`${operationId} has duplicate offers.`);
     if (offers[0]) {
-      requireSnapshotDigest(offers[0], digest(request), operationId);
+      requireExactUnpublishedOffer(offers[0], sku, operationId);
+      requireOfferSemanticMatch(offers[0], request, operationId);
       await updateLedger(options, operationId, 'completed', { readBack: offers[0] });
     }
     let offer: RemoteOffer;
@@ -662,11 +709,10 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
             operationId
           ).offers;
           if (reads.length !== 1) throw new Error(`${operationId} did not reconcile to one offer.`);
-          if (reads[0].sku !== sku || reads[0].marketplaceId !== YOU_PICK_MARKETPLACE)
-            throw new Error(`${operationId} after-state ownership is ambiguous.`);
+          requireExactUnpublishedOffer(reads[0], sku, operationId);
           if (returnedOfferId && reads[0].offerId !== returnedOfferId)
             throw new Error(`${operationId} returned offer ID does not match exact read-back.`);
-          requireSnapshotDigest(reads[0], digest(request), operationId);
+          requireOfferSemanticMatch(reads[0], request, operationId);
           return reads[0];
         },
         async () => {
@@ -748,7 +794,8 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
     ).offers;
     if (offers.length !== 1 || offers[0].offerId !== options.manifest.resources[index].offerId)
       throw new Error(`Group offer ${sku} is missing, ambiguous, or changed.`);
-    requireSnapshotDigest(offers[0], digest(payload(plan, `offer-C0${index + 1}`)), `offer ${sku}`);
+    requireExactUnpublishedOffer(offers[0], sku, `offer ${sku}`);
+    requireOfferSemanticMatch(offers[0], payload(plan, `offer-C0${index + 1}`), `offer ${sku}`);
   }
   const verifiedGroup = exactFound(
     await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey),
@@ -978,14 +1025,13 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
     if (offer.sku !== resource.sku || offer.marketplaceId !== YOU_PICK_MARKETPLACE)
       throw new Error('Cleanup found a foreign offer owner or marketplace.');
     const originalOffer = payload(plan, `offer-C0${index + 1}`);
-    const allowedOfferDigests = [digest(originalOffer)];
+    const allowedOffers = [originalOffer];
     if (index === 0) {
       const zeroOffer = structuredClone(originalOffer);
       zeroOffer.availableQuantity = 0;
-      allowedOfferDigests.push(digest(zeroOffer));
+      allowedOffers.push(zeroOffer);
     }
-    if (!offer.snapshotDigest || !allowedOfferDigests.includes(offer.snapshotDigest))
-      throw new Error('Cleanup offer does not match an owned original/zero snapshot.');
+    requireOneOfferSemanticMatch(offer, allowedOffers, `Cleanup offer ${resource.sku}`);
     if (resource.offerId && resource.offerId !== offer.offerId)
       throw new Error('Cleanup found an offer ID conflicting with the manifest.');
     if (!resource.offerId) {

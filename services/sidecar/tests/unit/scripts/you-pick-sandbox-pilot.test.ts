@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   YOU_PICK_EXECUTION_ERROR,
   assertInventoryItemSemanticMatch,
+  assertOfferSemanticMatch,
   projectInventoryItemSemanticSnapshot,
+  projectOfferSemanticSnapshot,
   type PilotReport,
   type YouPickPilotReadApi,
 } from '@/ebay/you-pick-sandbox-pilot.js';
@@ -15,6 +17,7 @@ import {
   classifyYouPickExactRead,
   classifyYouPickOfferListRead,
   normalizeYouPickItem,
+  normalizeYouPickOffers,
   parseYouPickPilotArgs,
   normalizeYouPickMetadata,
   normalizeYouPickPolicies,
@@ -107,6 +110,21 @@ const plannedItem = {
       'Player/Athlete': ['Player B', 'Player A'],
       Card: ['C01'],
     },
+  },
+};
+
+const plannedOffer = {
+  sku: plannedItem.sku,
+  marketplaceId: 'EBAY_US',
+  format: 'FIXED_PRICE',
+  categoryId: '261328',
+  merchantLocationKey: 'default-main-location',
+  availableQuantity: 1,
+  pricingSummary: { price: { currency: 'USD', value: '1.11' } },
+  listingPolicies: {
+    fulfillmentPolicyId: '6227963000',
+    paymentPolicyId: '6227962000',
+    returnPolicyId: '6227964000',
   },
 };
 
@@ -438,9 +456,8 @@ describe('You Pick inventory item adapter contract', () => {
 
 describe('You Pick offer-list read adapter contract', () => {
   const offer = {
+    ...plannedOffer,
     offerId: 'OFFER-1',
-    sku: plannedItem.sku,
-    marketplaceId: 'EBAY_US',
     status: 'UNPUBLISHED',
   };
 
@@ -469,6 +486,7 @@ describe('You Pick offer-list read adapter contract', () => {
             sku: plannedItem.sku,
             marketplaceId: 'EBAY_US',
             status: 'UNPUBLISHED',
+            semanticSnapshot: projectOfferSemanticSnapshot(plannedOffer),
           }),
         ],
       },
@@ -492,6 +510,111 @@ describe('You Pick offer-list read adapter contract', () => {
         throw unavailable;
       })
     ).resolves.toEqual({ status: 'unknown', reason: 'transport unavailable' });
+  });
+
+  it('ignores the demonstrated server-managed offer fields', () => {
+    const normalized = normalizeYouPickOffers({
+      offers: [
+        {
+          ...offer,
+          hideBuyerDetails: false,
+          includeCatalogProductDetails: true,
+          listingDuration: 'GTC',
+          tax: { applyTax: false },
+          listingPolicies: { ...offer.listingPolicies, eBayPlusIfEligible: false },
+        },
+      ],
+    }).offers[0];
+
+    expect(normalized.semanticSnapshot).toEqual(projectOfferSemanticSnapshot(plannedOffer));
+    expect(() =>
+      assertOfferSemanticMatch(normalized.semanticSnapshot, plannedOffer, 'offer-C01')
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['SKU', { ...plannedOffer, sku: `${plannedOffer.sku}-foreign` }],
+    ['marketplace ID', { ...plannedOffer, marketplaceId: 'EBAY_GB' }],
+    ['format', { ...plannedOffer, format: 'AUCTION' }],
+    ['category ID', { ...plannedOffer, categoryId: '999999' }],
+    ['merchant location key', { ...plannedOffer, merchantLocationKey: 'foreign-location' }],
+    ['available quantity', { ...plannedOffer, availableQuantity: 2 }],
+    [
+      'price currency',
+      {
+        ...plannedOffer,
+        pricingSummary: { price: { ...plannedOffer.pricingSummary.price, currency: 'CAD' } },
+      },
+    ],
+    [
+      'price value',
+      {
+        ...plannedOffer,
+        pricingSummary: { price: { ...plannedOffer.pricingSummary.price, value: '9.99' } },
+      },
+    ],
+    [
+      'fulfillment policy ID',
+      {
+        ...plannedOffer,
+        listingPolicies: {
+          ...plannedOffer.listingPolicies,
+          fulfillmentPolicyId: 'foreign-fulfillment',
+        },
+      },
+    ],
+    [
+      'payment policy ID',
+      {
+        ...plannedOffer,
+        listingPolicies: { ...plannedOffer.listingPolicies, paymentPolicyId: 'foreign-payment' },
+      },
+    ],
+    [
+      'return policy ID',
+      {
+        ...plannedOffer,
+        listingPolicies: { ...plannedOffer.listingPolicies, returnPolicyId: 'foreign-return' },
+      },
+    ],
+  ])('reports a field-specific %s mismatch', (field, changed) => {
+    const actual = projectOfferSemanticSnapshot(plannedOffer);
+    expect(() => assertOfferSemanticMatch(actual, changed, 'offer-C01')).toThrow(
+      `offer-C01 semantic ${field} does not match the immutable planned offer.`
+    );
+  });
+
+  it.each([
+    ['missing pricing summary', { ...offer, pricingSummary: undefined }],
+    [
+      'missing policy',
+      {
+        ...offer,
+        listingPolicies: { ...offer.listingPolicies, paymentPolicyId: undefined },
+      },
+    ],
+    ['malformed quantity', { ...offer, availableQuantity: '1' }],
+    [
+      'malformed price',
+      { ...offer, pricingSummary: { price: { currency: 'USD', value: 1.11 } } },
+    ],
+  ])('fails closed on %s', (_label, malformed) => {
+    expect(() => normalizeYouPickOffers({ offers: [malformed] })).toThrow();
+  });
+
+  it.each([
+    ['published without listing identity', { ...offer, status: 'PUBLISHED' }],
+    [
+      'unpublished with listing identity',
+      {
+        ...offer,
+        listing: { listingId: 'LISTING-1', listingStatus: 'ACTIVE' },
+      },
+    ],
+  ])('rejects %s', (_label, ambiguous) => {
+    expect(() => normalizeYouPickOffers({ offers: [ambiguous] })).toThrow(
+      'Offer response has ambiguous publication and listing identity.'
+    );
   });
 });
 

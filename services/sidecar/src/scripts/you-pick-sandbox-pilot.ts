@@ -11,6 +11,7 @@ import {
   classifyYouPickListingStatus,
   digest,
   projectInventoryItemSemanticSnapshot,
+  projectOfferSemanticSnapshot,
   runYouPickSandboxPilot,
   sanitizeError,
   sanitizeReport,
@@ -377,6 +378,7 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
   const offerRows = requiredArray(raw, 'offers');
   const offers = uniqueRecords(offerRows, 'Offer', (offer) => stringField(offer, 'offerId')).map(
     (offer): RemoteOffer => {
+      const semanticSnapshot = projectOfferSemanticSnapshot(offer);
       const listing = offer.listing === undefined ? undefined : asRecord(offer.listing);
       if (offer.listing !== undefined && !listing)
         throw new Error('Offer listing must be an object.');
@@ -396,8 +398,8 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
       const lifecycle = classifyYouPickListingStatus(listingStatus);
       const normalized: RemoteOffer = {
         offerId: stringField(offer, 'offerId'),
-        sku: stringField(offer, 'sku'),
-        marketplaceId: stringField(offer, 'marketplaceId'),
+        sku: semanticSnapshot.sku,
+        marketplaceId: semanticSnapshot.marketplaceId,
         status: status as RemoteOffer['status'],
         listingId: listing ? stringField(listing, 'listingId') || null : null,
         listingStatus,
@@ -405,23 +407,9 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
         publicationObserved: status === 'PUBLISHED' || lifecycle.publicationObserved,
         listingCurrentlyActive: lifecycle.listingCurrentlyActive,
         withdrawRequired: lifecycle.withdrawRequired,
-        availableQuantity:
-          typeof offer.availableQuantity === 'number' && Number.isInteger(offer.availableQuantity)
-            ? offer.availableQuantity
-            : undefined,
+        availableQuantity: semanticSnapshot.availableQuantity,
+        semanticSnapshot,
       };
-      const offerPayload = {
-        sku: normalized.sku,
-        marketplaceId: normalized.marketplaceId,
-        format: offer.format,
-        categoryId: offer.categoryId,
-        merchantLocationKey: offer.merchantLocationKey,
-        availableQuantity: offer.availableQuantity,
-        pricingSummary: offer.pricingSummary,
-        listingPolicies: offer.listingPolicies,
-      };
-      if (Object.values(offerPayload).every((value) => value !== undefined && value !== ''))
-        normalized.snapshotDigest = digest(offerPayload);
       if (!normalized.sku || !normalized.marketplaceId || !normalized.status)
         throw new Error('Offer response requires sku, marketplaceId, and status.');
       if (
