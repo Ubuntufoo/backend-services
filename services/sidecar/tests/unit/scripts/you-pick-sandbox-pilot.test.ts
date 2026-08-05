@@ -12,6 +12,8 @@ import {
 } from '@/ebay/you-pick-sandbox-pilot.js';
 import {
   adaptYouPickPilotMutationApi,
+  classifyYouPickExactRead,
+  classifyYouPickOfferListRead,
   normalizeYouPickItem,
   parseYouPickPilotArgs,
   normalizeYouPickMetadata,
@@ -431,6 +433,65 @@ describe('You Pick inventory item adapter contract', () => {
         'Content-Language': 'en-US',
       })
     ).rejects.toBe(transportError);
+  });
+});
+
+describe('You Pick offer-list read adapter contract', () => {
+  const offer = {
+    offerId: 'OFFER-1',
+    sku: plannedItem.sku,
+    marketplaceId: 'EBAY_US',
+    status: 'UNPUBLISHED',
+  };
+
+  it('maps only an offer-list 404 to an exact empty collection', async () => {
+    const notFound = Object.assign(new Error('not found'), { response: { status: 404 } });
+
+    await expect(
+      classifyYouPickOfferListRead(async () => {
+        throw notFound;
+      })
+    ).resolves.toEqual({ status: 'found', value: { offers: [] } });
+    await expect(
+      classifyYouPickExactRead(async () => {
+        throw notFound;
+      })
+    ).resolves.toEqual({ status: 'missing' });
+  });
+
+  it('normalizes an existing offer collection', async () => {
+    await expect(classifyYouPickOfferListRead(async () => ({ offers: [offer] }))).resolves.toEqual({
+      status: 'found',
+      value: {
+        offers: [
+          expect.objectContaining({
+            offerId: 'OFFER-1',
+            sku: plannedItem.sku,
+            marketplaceId: 'EBAY_US',
+            status: 'UNPUBLISHED',
+          }),
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ['malformed', { offers: ['not-an-offer'] }],
+    ['duplicate', { offers: [offer, { ...offer }] }],
+  ])('rejects a %s offer collection', async (_label, response) => {
+    await expect(classifyYouPickOfferListRead(async () => response)).rejects.toThrow();
+  });
+
+  it('preserves a non-404 transport failure as unknown', async () => {
+    const unavailable = Object.assign(new Error('transport unavailable'), {
+      response: { status: 503 },
+    });
+
+    await expect(
+      classifyYouPickOfferListRead(async () => {
+        throw unavailable;
+      })
+    ).resolves.toEqual({ status: 'unknown', reason: 'transport unavailable' });
   });
 });
 

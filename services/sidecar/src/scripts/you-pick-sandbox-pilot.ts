@@ -437,6 +437,15 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
   return { offers };
 }
 
+export async function classifyYouPickOfferListRead(
+  operation: () => Promise<unknown>
+): Promise<ExactRead<{ offers: RemoteOffer[] }>> {
+  const read = await classifyYouPickExactRead(operation);
+  if (read.status === 'missing') return { status: 'found', value: { offers: [] } };
+  if (read.status === 'unknown') return read;
+  return { status: 'found', value: normalizeYouPickOffers(read.value) };
+}
+
 export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> {
   const [{ EbaySellerApi }, environmentModule] = await Promise.all([
     import('@/api/index.js'),
@@ -530,11 +539,7 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         : read;
     },
     async getOffers(sku, marketplaceId) {
-      const read = await classifyYouPickExactRead(() =>
-        api.inventory.getOffers(sku, marketplaceId)
-      );
-      if (read.status !== 'found') return read;
-      return { status: 'found', value: normalizeYouPickOffers(read.value) };
+      return classifyYouPickOfferListRead(() => api.inventory.getOffers(sku, marketplaceId));
     },
   };
 }

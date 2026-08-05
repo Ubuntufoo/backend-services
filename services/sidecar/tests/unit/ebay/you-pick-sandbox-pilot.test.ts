@@ -795,6 +795,82 @@ describe('You Pick C01 semantic recovery', () => {
     ).rejects.toThrow('item-C01 has an unexpected group association.');
     for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
   });
+
+  it('resumes the current creating-offers state without rewriting C01 or C02', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const localRoot = join(root, '.local', 'you-pick-sandbox');
+    const initial = await readManifest(fresh.manifestPath, localRoot);
+    if (!('execution' in initial)) throw new Error('Expected an executable manifest.');
+    const timestamp = '2026-08-05T13:20:56.855Z';
+    const manifest = executableYouPickManifestSchema.parse({
+      ...initial,
+      checkpoint: 'creating-offers',
+      execution: {
+        ...initial.execution,
+        ledger: initial.execution.ledger.map((entry) =>
+          entry.id === 'item-C01' || entry.id === 'item-C02'
+            ? {
+                ...entry,
+                state: 'completed',
+                attemptCount: 1,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                result: {},
+                error: null,
+                readBackDigest: 'a'.repeat(64),
+              }
+            : entry
+        ),
+      },
+    });
+    const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+    const itemRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'item-C01' || id === 'item-C02')
+        .map(({ payload }) => {
+          const request = payload as { sku: string };
+          return [request.sku, payload] as const;
+        })
+    );
+    const getInventoryItem = vi.fn(async (sku: string) => ({
+      status: 'found' as const,
+      value: {
+        sku,
+        groupKeys: null,
+        quantity: manifest.execution.fixture.children.find((child) => sku.endsWith(child.slot))!
+          .itemQuantity,
+        semanticSnapshot: projectInventoryItemSemanticSnapshot(itemRequests.get(sku)),
+      },
+    }));
+    const mutationApi = createMutationApi();
+    let persisted = manifest;
+
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        manifestPath: fresh.manifestPath,
+        readApi: createApi({
+          getInventoryItem,
+          getOffers: vi.fn(async () => ({ status: 'unknown', reason: 'read-only stop' })),
+        }),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => new Date('2026-08-05T13:30:00.000Z'),
+        persist: async (next) => {
+          persisted = next;
+        },
+      })
+    ).rejects.toThrow('offer-C01 exact read is unknown');
+
+    expect(getInventoryItem).toHaveBeenCalledTimes(2);
+    expect(persisted.execution.ledger.slice(0, 2)).toEqual([
+      expect.objectContaining({ id: 'item-C01', state: 'completed', attemptCount: 1 }),
+      expect.objectContaining({ id: 'item-C02', state: 'completed', attemptCount: 1 }),
+    ]);
+    for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
+  });
 });
 
 describe('You Pick cleanup planning and redaction', () => {
