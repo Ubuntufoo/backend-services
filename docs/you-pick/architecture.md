@@ -35,10 +35,10 @@ settle the unresolved API placements below before persistence or orchestration i
 - One variant: one immutable child SKU, unique immutable selector value, front/back image
   pair, available quantity, and price.
 - Format: fixed price. Quantity and price remain child-owned even when initially uniform.
-- Images: each child owns its front/back source identity. Inventory API placement remains
-  unresolved: child `product.imageUrls`, group `imageUrls`, or a derived combination. The
-  sandbox pilot must prove the accepted payload and buyer-facing pairing/order; the reference
-  listing alone cannot prove its API mapping.
+- Images: each child inventory item owns its exact ordered `[front, back]`
+  `product.imageUrls`. The complete group owns exactly one pivot image per selector value: each
+  child's front image in the same order as selector values and `variantSKUs`. The failed
+  group-only v1 arrangement remains historical-manifest compatible but is not used for new runs.
 - Title and description: the group owns buyer-facing content. The sandbox pilot must determine
   whether child inventory-item product payloads omit these fields or repeat group-compatible
   values; the foundation contract does not choose either submission shape.
@@ -62,7 +62,7 @@ settle the unresolved API placements below before persistence or orchestration i
 | Condition tier and descriptors | Group-owned invariant | Repeated identically on child inventory items |
 | Child SKU | Variant | Inventory item identity and offer `sku` |
 | Selector value | Variant | Child `product.aspects[selectorName]` |
-| Front/back images | Variant source identity | Unresolved: child, group, or derived API placement pending sandbox proof |
+| Front/back images | Variant | Exact ordered `[front, back]` in child `product.imageUrls`; child's front also supplies its ordered group pivot image |
 | Quantity | Variant | Inventory availability and offer allocation |
 | Price | Variant | Child offer pricing summary |
 | Offer ID | Variant remote state | Offer response/read-back |
@@ -97,6 +97,11 @@ sandbox `UserID` returned by a narrow Trading `GetUser` call; Commerce Identity 
 is not ownership proof. It must also require `Content-Language: en-US` on the guarded Inventory
 write path. One run may publish only one material payload arrangement: a buyer-facing failure
 requires withdrawal, full cleanup, verified absence, and a fresh run for any declared fallback.
+Run `20260804T173924Z-967292` proved that the v1 group-only flattened image arrangement fails the
+buyer view. Its version-1 fixture, arrangement ID, operation digests, and cleanup identities remain
+immutable so listing `110590142987` can be cleaned from that manifest. New runs use fixture version
+2 and may begin only after the failed listing is fully cleaned through a separately authorized
+operation.
 
 Do not run until worktree-local credentials, ports, storage, and background workers are
 isolated. Then use 2-3 unsold cards and prove, in order:
@@ -105,8 +110,8 @@ isolated. Then use 2-3 unsold cards and prove, in order:
 2. Selector values round-trip exactly and display in the intended order.
 3. Child title/description fields can be omitted or must repeat group-compatible values while
    the group remains the buyer-facing owner.
-4. Child source images map through child fields, group fields, or a derived combination so each
-   selection displays the correct front and back images in the intended order.
+4. Each child read preserves its exact ordered front/back `product.imageUrls`, while the complete
+   group read preserves one ordered front/pivot image per selector value.
 5. Different child prices render correctly.
 6. The valid group first publishes with every child quantity positive.
 7. A post-publish revision sets one child quantity to zero and proves that its selector value is
@@ -136,8 +141,6 @@ every ordered non-target child. This implementation is not live Sandbox write au
 - Exact selector aspect accepted for `261328` by the intended account.
 - Buyer display/order rules for the proposed selector convention.
 - Whether child product payloads omit title/description or repeat group-compatible values.
-- Whether selected-card images belong on child items, the group, or a derived combination, plus
-  the exact payload that yields two images in the intended front/back order.
 - Effective category/account limits beyond documented and observed evidence.
 - Mutation rules after sales, revision caps, operational group-size cap, and recovery UX.
 - Dedicated persistence, job subjects, operation ledger, order lines, and deletion policy.

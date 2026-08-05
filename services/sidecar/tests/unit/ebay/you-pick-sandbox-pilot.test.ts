@@ -1,3 +1,4 @@
+import { existsSync } from 'fs';
 import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -5,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   YOU_PICK_EXECUTION_ERROR,
+  assertExecutableManifestIntegrity,
   assertSafeManifestPath,
   buildCleanupPlan,
   buildFuturePlan,
@@ -36,6 +38,18 @@ import { normalizeYouPickGroup, normalizeYouPickItem } from '@/scripts/you-pick-
 
 const fixturePath = fileURLToPath(
   new URL('../../fixtures/you-pick-sandbox/two-card.json', import.meta.url)
+);
+const legacyFixturePath = fileURLToPath(
+  new URL('../../fixtures/you-pick-sandbox/two-card-legacy-v1.json', import.meta.url)
+);
+const currentManifestPath = fileURLToPath(
+  new URL(
+    '../../../../../.local/you-pick-sandbox/20260804T173924Z-967292/manifest.json',
+    import.meta.url
+  )
+);
+const currentManifestRoot = fileURLToPath(
+  new URL('../../../../../.local/you-pick-sandbox', import.meta.url)
 );
 const fixedDate = new Date('2026-08-03T15:17:00.000Z');
 const fixedRandom = () => Buffer.from('a1b2c3', 'hex');
@@ -250,6 +264,10 @@ async function loadFixture(): Promise<unknown> {
   return JSON.parse(await readFile(fixturePath, 'utf8')) as unknown;
 }
 
+async function loadLegacyFixture(): Promise<unknown> {
+  return JSON.parse(await readFile(legacyFixturePath, 'utf8')) as unknown;
+}
+
 async function runFresh(root: string, api = createApi()) {
   return await runYouPickSandboxPilot({
     api,
@@ -306,6 +324,7 @@ afterEach(async () => {
 describe('You Pick sandbox pilot fixture and plan', () => {
   it('strictly validates the complete ordered fixture', async () => {
     const fixture = youPickFixtureSchema.parse(await loadFixture());
+    expect(fixture.version).toBe(2);
     expect(fixture.children.map((child) => child.slot)).toEqual(['C01', 'C02']);
 
     expect(() => youPickFixtureSchema.parse({ ...fixture, unexpected: true })).toThrow();
@@ -330,6 +349,43 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       youPickFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
+          index === 0 ? { ...child, images: [child.images[0]] } : child
+        ),
+      })
+    ).toThrow();
+    expect(() =>
+      youPickFixtureSchema.parse({
+        ...fixture,
+        children: fixture.children.map((child, index) =>
+          index === 0
+            ? {
+                ...child,
+                images: [child.images[0], { ...child.images[1], url: child.images[0].url }],
+              }
+            : child
+        ),
+      })
+    ).toThrow(/source URLs/);
+    expect(() =>
+      youPickFixtureSchema.parse({
+        ...fixture,
+        children: fixture.children.map((child, index) =>
+          index === 0
+            ? {
+                ...child,
+                images: [
+                  { ...child.images[0], url: child.images[0].url.replace('https:', 'http:') },
+                  child.images[1],
+                ],
+              }
+            : child
+        ),
+      })
+    ).toThrow(/public HTTPS/);
+    expect(() =>
+      youPickFixtureSchema.parse({
+        ...fixture,
+        children: fixture.children.map((child, index) =>
           index === 0
             ? {
                 ...child,
@@ -342,6 +398,38 @@ describe('You Pick sandbox pilot fixture and plan', () => {
         ),
       })
     ).toThrow(/without credentials, query, or fragment/);
+    expect(() =>
+      youPickFixtureSchema.parse({
+        ...fixture,
+        children: fixture.children.map((child, index) =>
+          index === 0
+            ? {
+                ...child,
+                images: [
+                  { ...child.images[0], fingerprint: 'token-secret-value' },
+                  child.images[1],
+                ],
+              }
+            : child
+        ),
+      })
+    ).toThrow(/non-secret/);
+    expect(() =>
+      youPickFixtureSchema.parse({
+        ...fixture,
+        children: fixture.children.map((child, index) =>
+          index === 1
+            ? {
+                ...child,
+                images: [
+                  { ...child.images[0], url: fixture.children[0].images[0].url },
+                  child.images[1],
+                ],
+              }
+            : child
+        ),
+      })
+    ).toThrow(/distinct across children/);
     expect(() =>
       youPickFixtureSchema.parse({
         ...fixture,
@@ -375,7 +463,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
   });
 
   it('builds a complete deterministic ordered and digested future plan without offer descriptions', async () => {
-    const fixture = await loadFixture();
+    const fixture = youPickFixtureSchema.parse(await loadFixture());
     const run = generateRunIdentity(2, fixedDate, fixedRandom());
     const first = buildFuturePlan(fixture, run);
     const second = buildFuturePlan(fixture, run);
@@ -399,6 +487,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       'verify-exact-run-resource-absence',
     ]);
     expect(first.operations.every((item) => /^[a-f0-9]{64}$/.test(item.digest))).toBe(true);
+    expect(first.arrangementId).toMatch(/^arrangement-v2-/);
     expect(JSON.stringify(first)).not.toContain('listingDescription');
     expect(first.operations[0]?.payload).toEqual(
       expect.objectContaining({
@@ -406,6 +495,117 @@ describe('You Pick sandbox pilot fixture and plan', () => {
         conditionDescriptors: [{ name: '40001', values: ['400012'] }],
       })
     );
+    const itemRequests = first.operations
+      .filter(({ kind }) => kind === 'create-or-replace-child-item')
+      .map(({ payload }) => payload as { sku: string; product: { imageUrls: string[] } });
+    const groupRequest = first.operations.find(({ id }) => id === 'group-complete')?.payload as {
+      imageUrls: string[];
+      variantSKUs: string[];
+      variesBy: {
+        specifications: { name: string; values: string[] }[];
+        aspectsImageVariesBy: string[];
+      };
+    };
+    expect(itemRequests.map(({ sku }) => sku)).toEqual(run.childSkus);
+    expect(itemRequests.map(({ product }) => product.imageUrls)).toEqual(
+      fixture.children.map((child) => child.images.map(({ url }) => url))
+    );
+    expect(groupRequest.imageUrls).toEqual(fixture.children.map((child) => child.images[0].url));
+    expect(groupRequest.variantSKUs).toEqual(run.childSkus);
+    expect(groupRequest.variesBy.specifications).toEqual([
+      { name: fixture.selector.name, values: fixture.selector.values },
+    ]);
+    expect(groupRequest.variesBy.aspectsImageVariesBy).toEqual([fixture.selector.name]);
+    expect(normalizeYouPickGroup(groupRequest, run.groupKey).snapshotDigest).toBe(
+      first.operations.find(({ id }) => id === 'group-complete')?.digest
+    );
+    expect(
+      normalizeYouPickGroup(
+        { ...groupRequest, imageUrls: [...groupRequest.imageUrls].reverse() },
+        run.groupKey
+      ).snapshotDigest
+    ).not.toBe(first.operations.find(({ id }) => id === 'group-complete')?.digest);
+  });
+
+  it('preserves the exact version-1 arrangement and operation digests', async () => {
+    const run = generateRunIdentity(2, fixedDate, fixedRandom());
+    const legacy = buildFuturePlan(await loadLegacyFixture(), run);
+    const current = buildFuturePlan(await loadFixture(), run);
+
+    expect(legacy.arrangementId).toBe('arrangement-v1-9b99f3413d106515');
+    expect(legacy.operations.map(({ id, digest }) => ({ id, digest }))).toEqual([
+      {
+        id: 'item-C01',
+        digest: 'bd5e528399a6788db24bd14b6cc8ddbc657979d6746e7def1d9bffcecfc72949',
+      },
+      {
+        id: 'item-C02',
+        digest: 'a4610503640234211cdd3de9ca46afed315368a33e582cf163c75851aa103ddc',
+      },
+      {
+        id: 'offer-C01',
+        digest: 'f3b9003bd31a3cbcee94fd0487a57c72a5a919f539c7fce75b9d5bc7901806e2',
+      },
+      {
+        id: 'offer-C02',
+        digest: 'e8fe4e7b0036d8cf6ffb8c15e80bc4a1fc005eddd09fdc45207cdfc6583dfca3',
+      },
+      {
+        id: 'group-complete',
+        digest: 'b8b91ccbbc8116b2b9f5a6a11505294178e2fd878afed521453da9cbfc2267f7',
+      },
+      {
+        id: 'publish-group',
+        digest: '8b78bfb289fac339a4601371d5c6d49143806c6ded9608ffdcdd5e46f279d7cf',
+      },
+      {
+        id: 'quantity-zero',
+        digest: 'f02e339423e62f7207ed5c6be2fe6f500f10eb6810272eb5ebc2fe9e02fc29af',
+      },
+      {
+        id: 'quantity-restore-optional',
+        digest: '9ae00a6db658fd9d0ba7d2e8eef13bb4f3943602745c8f8d3c72d23ccfe771cb',
+      },
+      {
+        id: 'withdraw-group',
+        digest: '8b78bfb289fac339a4601371d5c6d49143806c6ded9608ffdcdd5e46f279d7cf',
+      },
+      {
+        id: 'cleanup-offer-C02',
+        digest: '5904e31450eddc4e55be8fe8d6feb61b9f4d317c7d44f40902b8962402db144d',
+      },
+      {
+        id: 'cleanup-offer-C01',
+        digest: '9c8d1509af3d3bbb6152c30ef4fe9da8a6f096acc6148b6ff8a65c29682a3d87',
+      },
+      {
+        id: 'cleanup-group',
+        digest: '038234d4e26313ef8a2ee9c12e1d41e3c6ad40fb7ad4a6735c93f6f57b24dfec',
+      },
+      {
+        id: 'cleanup-child-2',
+        digest: 'd6920160a97c3dad69bdec4e8be3d67c600dbc565677944e06730e9deb68b86c',
+      },
+      {
+        id: 'cleanup-child-1',
+        digest: '2ec63cdb83247675a7ba7cacddb9a91b960ac83b60b172369d0774356641497f',
+      },
+      {
+        id: 'verify-absence',
+        digest: 'e21b119a028c8a28e3f6157b391077521a318a2d30180f025c742bbb6bfc3235',
+      },
+    ]);
+    expect(current.arrangementId).not.toBe(legacy.arrangementId);
+    expect(
+      (legacy.operations[0]?.payload as { product: Record<string, unknown> }).product
+    ).not.toHaveProperty('imageUrls');
+    expect(
+      (
+        legacy.operations.find(({ id }) => id === 'group-complete')?.payload as {
+          imageUrls: string[];
+        }
+      ).imageUrls
+    ).toHaveLength(4);
   });
 
   it('requires a different fully cleaned predecessor for a fresh-run fallback', async () => {
@@ -421,6 +621,22 @@ describe('You Pick sandbox pilot fixture and plan', () => {
 });
 
 describe('You Pick manifest persistence and dry-run gates', () => {
+  it('rejects version-1 fixtures for new pilot runs before resolving reads', async () => {
+    const root = await tempRepo();
+    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+
+    await expect(
+      runYouPickSandboxPilot({
+        apiFactory,
+        fixturePath: legacyFixturePath,
+        repoRoot: root,
+        now: () => fixedDate,
+        randomBytesImpl: fixedRandom,
+      })
+    ).rejects.toThrow();
+    expect(apiFactory).not.toHaveBeenCalled();
+  });
+
   it('creates the manifest before reads, persists sanitized preflight, and reports no payloads or URLs', async () => {
     const root = await tempRepo();
     const api = createApi();
@@ -493,6 +709,58 @@ describe('You Pick manifest persistence and dry-run gates', () => {
     );
     await expect(readManifest(fresh.manifestPath, secondLocalRoot)).rejects.toThrow(/owned/);
   });
+
+  it.skipIf(!existsSync(currentManifestPath))(
+    'keeps the published version-1 manifest integrity-valid and cleanup-plannable',
+    async () => {
+      const before = await readFile(currentManifestPath, 'utf8');
+      const manifest = await readManifest(currentManifestPath, currentManifestRoot);
+      if (manifest.version !== 5) throw new Error('Current manifest is not executable version 5.');
+
+      expect(() => assertExecutableManifestIntegrity(manifest)).not.toThrow();
+      expect(manifest.execution.fixture.version).toBe(1);
+      expect(manifest.arrangementId).toBe('arrangement-v1-ab936d5f171492b8');
+      expect(
+        buildCleanupPlan(manifest, {
+          group: 'found',
+          items: manifest.run.childSkus.map((sku) => ({
+            sku,
+            status: 'found',
+            groupKeys: [manifest.run.groupKey],
+          })),
+          offers: manifest.resources.map((resource) => ({
+            sku: resource.sku,
+            status: 'found',
+            offer: null,
+          })),
+          publicationObserved: true,
+          listingCurrentlyActive: true,
+          withdrawRequired: true,
+          listingId: manifest.groupListingId,
+          lifecycleClass: 'active',
+          listingStatuses: ['ACTIVE'],
+          warnings: [],
+        }).map(({ kind }) => kind)
+      ).toEqual([
+        'withdraw-active-group-if-needed',
+        'delete-recorded-offer',
+        'delete-recorded-offer',
+        'delete-group',
+        'delete-child',
+        'delete-child',
+        'verify-exact-absence',
+      ]);
+      expect(manifest.cleanup).toEqual({ attempts: 0, finalAbsenceVerified: false });
+      expect(
+        manifest.execution.ledger
+          .filter(({ id }) =>
+            ['quantity-zero', 'withdraw-group', 'cleanup-group', 'verify-absence'].includes(id)
+          )
+          .every(({ state, attemptCount }) => state === 'planned' && attemptCount === 0)
+      ).toBe(true);
+      expect(await readFile(currentManifestPath, 'utf8')).toBe(before);
+    }
+  );
 
   it('rejects a symlinked manifest run directory before API factories resolve', async () => {
     const root = await tempRepo();
@@ -875,7 +1143,7 @@ describe('You Pick C01 semantic recovery', () => {
                   error: 'Interrupted before exact offer reconciliation.',
                   readBackDigest: null,
                 }
-            : entry
+              : entry
         ),
       },
     });
@@ -1025,8 +1293,9 @@ describe('You Pick C01 semantic recovery', () => {
             value: {
               sku,
               groupKeys: null,
-              quantity: manifest.execution.fixture.children.find((child) => sku.endsWith(child.slot))!
-                .itemQuantity,
+              quantity: manifest.execution.fixture.children.find((child) =>
+                sku.endsWith(child.slot)
+              )!.itemQuantity,
               semanticSnapshot: projectInventoryItemSemanticSnapshot(itemRequests.get(sku)),
             },
           })),
@@ -1051,9 +1320,7 @@ describe('You Pick C01 semantic recovery', () => {
         now: () => new Date('2026-08-05T13:30:00.000Z'),
         persist: async () => undefined,
       })
-    ).rejects.toThrow(
-      'offer-C01 semantic price value does not match the immutable planned offer.'
-    );
+    ).rejects.toThrow('offer-C01 semantic price value does not match the immutable planned offer.');
     for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
   });
 });

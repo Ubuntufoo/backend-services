@@ -168,7 +168,10 @@ then emits sanitized structured JSON containing exact gate results, canonical Tr
 resolved `Content-Language`, selected resource IDs, metadata/collision summaries, stable request
 digests, the ordered future operation plan, and the separately authorized next-command shape.
 The repository includes a non-saleable offline example at
-`services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`.
+`services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`. That active fixture is payload
+arrangement version 2. The exact historical version-1 input remains at
+`services/sidecar/tests/fixtures/you-pick-sandbox/two-card-legacy-v1.json` for compatibility proof;
+it is rejected as the input to a new run.
 
 Version 5 is the only executable manifest version. It stores the immutable validated arrangement,
 the ordered operation digests, and one ledger row per operation: `planned`, `started`, `completed`,
@@ -176,6 +179,11 @@ or `unknown`; attempt count; started/completed timestamps; sanitized result/erro
 read-back digest. Atomic persistence occurs immediately before each attempted mutation and after
 reconciliation. Version 4 remains readable for historical read-only inspection but is never
 silently upgraded or accepted for execution; create and review a fresh version-5 preflight run.
+Payload-arrangement versions are separate from manifest versions. Existing version-5 manifests
+may embed fixture version 1 and rebuild the exact historical child/group requests, arrangement ID,
+operation digests, and ledger identities. New version-5 manifests require fixture version 2. The
+published run `20260804T173924Z-967292` therefore remains integrity-valid and cleanup-compatible;
+it must never be rewritten to version 2.
 Credentials, authorization headers, raw responses, signed URLs, and buyer personal data are never
 stored. Public fixture image sources remain immutable local pilot inputs and are redacted from
 console reports.
@@ -186,6 +194,10 @@ It requires exact ordered agreement with arrangement, operations, ledger request
 resource SKUs, selector values, image fingerprints, quantities, prices, condition evidence,
 policies, and merchant location. Checkpoint persistence cannot turn a divergent manifest into an
 executable one.
+For fixture version 2, that rebuilt contract also includes exact ordered child
+`product.imageUrls` pairs and the complete group's ordered one-front-per-selector pivot list.
+Fixture version 1 deliberately retains its historical group-only requests and ignores child image
+fields during semantic recovery.
 
 Cleanup-plan mode strictly normalizes
 exact group children, child/group associations, offers, statuses, marketplace/SKU ownership, and
@@ -265,6 +277,8 @@ Strict fixture, manifest, attestation, and mutation-result schemas at the harnes
   marketplace, location, and business-policy IDs;
 - exactly two valid HTTPS image sources per child with distinct source fingerprints and explicit
   `front`, then `back`, roles;
+- for fixture version 2, distinct source URLs across the whole group, exact child
+  `product.imageUrls: [front, back]`, and exactly one group front/pivot per selector value;
 - one group title/description, allowed shared aspects, and the exact publish request fields
   `inventoryItemGroupKey` plus `marketplaceId: EBAY_US`;
 - one compatible shared condition and identical condition/descriptor fields on every child; and
@@ -289,7 +303,7 @@ fixture. Never use saleable production inventory.
 | Selector label | useful custom `Card` | useful custom `Card Selection` | accepted/read back exactly and clearly labels card choice |
 | Child product title/description | omit; group owns buyer content | repeat group title/description exactly | API read-back plus correct buyer title/description |
 | Offer description | omit `listingDescription` | none | group description remains buyer-facing |
-| Images | group-only derived front/back sequence | group primary fronts plus child front/back pairs | selected child shows only its pair, front then back |
+| Images | historical v1 group-only front/back sequence failed buyer verification | v2 group primary fronts plus child front/back pairs; fresh run only | selected child shows only its pair, front then back |
 | Price | distinct offer price per child | none | every selection shows its mapped price |
 | Condition | identical ungraded tier on every child | none | compatible read-back and one shared buyer condition |
 
@@ -341,18 +355,24 @@ guide requires child values to match when supplied. Therefore:
 Any child-specific title/description, offer description override, or differing repeated value is
 invalid. Record which total payload was accepted and which fields the API returns after publish.
 
-### Image experiment
+### Resolved image arrangement
 
-Keep each child's two source fingerprints constant across attempts.
+Run `20260804T173924Z-967292`, listing `110590142987`, published fixture version 1: group
+`imageUrls` flattened C01 front/back then C02 front/back, while child inventory items omitted
+`product.imageUrls`. Buyer verification found four non-renderable placeholders and selector
+changes did not update the image pair. That arrangement is closed for new runs.
 
-1. First set `aspectsImageVariesBy` to the selector and put a derived group `imageUrls` sequence
-   in selector order: C01 front, C01 back, C02 front, C02 back, then C03 front/back. Omit child
-   `product.imageUrls`.
-2. If pre-publication validation rejects that arrangement, retry once in the same run: group
-   `imageUrls` contains the primary front for each child in selector order, while each child
-   `product.imageUrls` contains exactly `[front, back]`.
-3. If the first arrangement publishes but buyer pairing/order fails, withdraw, fully clean,
-   verify absence, and attempt the second arrangement only in a fresh run.
+Fixture version 2 keeps `aspectsImageVariesBy` as the single selector aspect array and submits:
+
+1. each child's `product.imageUrls` as its exact ordered `[front, back]` pair; and
+2. complete group `imageUrls` as exactly one front/pivot per selector value, in the same order as
+   `selector.values`, `variantSKUs`, and `variesBy.specifications[0].values`.
+
+No SKU sorting, adjacency inference, second pivot aspect, URL rewrite, proxy, or fallback placeholder
+may alter that mapping. The failed live listing must first be withdrawn, fully cleaned, and proven
+absent through its unchanged version-1 manifest under separate authorization. Only then may a fresh
+version-2 preflight/run use new run, group, child, manifest, and collision identities. Never revise
+listing `110590142987` in place to the version-2 payload.
 
 Each group/child GET must preserve the expected URL identity and order. Buyer verification is an
 explicit manual operator gate: in a browser, select each value independently and capture the

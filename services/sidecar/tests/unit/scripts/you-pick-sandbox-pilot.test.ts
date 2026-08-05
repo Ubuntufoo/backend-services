@@ -113,6 +113,17 @@ const plannedItem = {
   },
 };
 
+const plannedVersion2Item = {
+  ...plannedItem,
+  product: {
+    ...plannedItem.product,
+    imageUrls: [
+      'https://images.example.invalid/alpha-front.jpg',
+      'https://images.example.invalid/alpha-back.jpg',
+    ],
+  },
+};
+
 const plannedOffer = {
   sku: plannedItem.sku,
   marketplaceId: 'EBAY_US',
@@ -594,10 +605,7 @@ describe('You Pick offer-list read adapter contract', () => {
       },
     ],
     ['malformed quantity', { ...offer, availableQuantity: '1' }],
-    [
-      'malformed price',
-      { ...offer, pricingSummary: { price: { currency: 'USD', value: 1.11 } } },
-    ],
+    ['malformed price', { ...offer, pricingSummary: { price: { currency: 'USD', value: 1.11 } } }],
   ])('fails closed on %s', (_label, malformed) => {
     expect(() => normalizeYouPickOffers({ offers: [malformed] })).toThrow();
   });
@@ -719,6 +727,72 @@ describe('You Pick inventory item semantic snapshots', () => {
       quantity: 1,
       semanticSnapshot: projectInventoryItemSemanticSnapshot(plannedItem),
     });
+  });
+
+  it('keeps version-1 semantic recovery independent of child image fields', () => {
+    const actual = normalizeYouPickItem({
+      ...plannedItem,
+      product: {
+        ...plannedItem.product,
+        imageUrls: ['foreign', 'legacy-shape-is-ignored'],
+      },
+    }).semanticSnapshot;
+
+    expect(() => assertInventoryItemSemanticMatch(actual, plannedItem, 'item-C01')).not.toThrow();
+  });
+
+  it('accepts the exact ordered version-2 child image pair', () => {
+    const actual = normalizeYouPickItem(plannedVersion2Item).semanticSnapshot;
+
+    expect(() =>
+      assertInventoryItemSemanticMatch(actual, plannedVersion2Item, 'item-C01')
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['missing', plannedItem],
+    [
+      'reordered',
+      {
+        ...plannedVersion2Item,
+        product: {
+          ...plannedVersion2Item.product,
+          imageUrls: [...plannedVersion2Item.product.imageUrls].reverse(),
+        },
+      },
+    ],
+    [
+      'foreign',
+      {
+        ...plannedVersion2Item,
+        product: {
+          ...plannedVersion2Item.product,
+          imageUrls: [
+            plannedVersion2Item.product.imageUrls[0],
+            'https://images.example.invalid/foreign-back.jpg',
+          ],
+        },
+      },
+    ],
+    [
+      'cross-child',
+      {
+        ...plannedVersion2Item,
+        product: {
+          ...plannedVersion2Item.product,
+          imageUrls: [
+            'https://images.example.invalid/beta-front.jpg',
+            'https://images.example.invalid/beta-back.jpg',
+          ],
+        },
+      },
+    ],
+  ])('rejects %s version-2 child image ownership', (_label, raw) => {
+    const actual = normalizeYouPickItem(raw).semanticSnapshot;
+
+    expect(() => assertInventoryItemSemanticMatch(actual, plannedVersion2Item, 'item-C01')).toThrow(
+      'item-C01 semantic product images does not match the immutable planned item.'
+    );
   });
 
   it.each([

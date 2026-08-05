@@ -83,8 +83,7 @@ const childFixtureSchema = strictObject({
   condition: sharedConditionSchema,
 });
 
-export const youPickFixtureSchema = strictObject({
-  version: z.literal(1),
+const youPickFixtureCommonShape = {
   marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
   categoryId: z.literal(YOU_PICK_CATEGORY),
   format: z.literal('FIXED_PRICE'),
@@ -115,12 +114,27 @@ export const youPickFixtureSchema = strictObject({
   children: z.array(childFixtureSchema).min(2).max(3),
   predecessorRunId: z.string().regex(RUN_ID_PATTERN).optional(),
   predecessorFullyCleaned: z.boolean().optional(),
-}).superRefine((fixture, ctx) => {
+} satisfies z.ZodRawShape;
+
+const youPickFixtureVersion1BaseSchema = strictObject({
+  version: z.literal(1),
+  ...youPickFixtureCommonShape,
+});
+const youPickFixtureVersion2BaseSchema = strictObject({
+  version: z.literal(2),
+  ...youPickFixtureCommonShape,
+});
+type YouPickFixtureRefinementInput =
+  | z.infer<typeof youPickFixtureVersion1BaseSchema>
+  | z.infer<typeof youPickFixtureVersion2BaseSchema>;
+
+function refineYouPickFixture(fixture: YouPickFixtureRefinementInput, ctx: z.RefinementCtx): void {
   const childCount = fixture.children.length;
   const slots = fixture.children.map((child) => child.slot);
   const expectedSlots = Array.from({ length: childCount }, (_, index) => `C0${index + 1}`);
   const values = fixture.children.map((child) => child.selector.value);
   const prices = fixture.children.map((child) => child.price.value);
+  const imageUrls = fixture.children.flatMap((child) => child.images.map((image) => image.url));
   const fingerprints = fixture.children.flatMap((child) =>
     child.images.map((image) => image.fingerprint)
   );
@@ -147,6 +161,8 @@ export const youPickFixtureSchema = strictObject({
     issue('Prices must be distinct and positive.', ['children']);
   if (new Set(fingerprints).size !== fingerprints.length)
     issue('Image fingerprints must be distinct.', ['children']);
+  if (fixture.version === 2 && new Set(imageUrls).size !== imageUrls.length)
+    issue('Version-2 image source URLs must be distinct across children.', ['children']);
   if (fixture.group.variesBy.aspectsImageVariesBy !== fixture.selector.name)
     issue('aspectsImageVariesBy must equal selector name.', ['group', 'variesBy']);
   const specification = fixture.group.variesBy.specifications[0];
@@ -202,7 +218,16 @@ export const youPickFixtureSchema = strictObject({
     ]);
   if (!fixture.predecessorRunId && fixture.predecessorFullyCleaned !== undefined)
     issue('predecessorFullyCleaned requires predecessorRunId.', ['predecessorFullyCleaned']);
-});
+}
+
+export const youPickFixtureVersion1Schema =
+  youPickFixtureVersion1BaseSchema.superRefine(refineYouPickFixture);
+export const youPickFixtureVersion2Schema =
+  youPickFixtureVersion2BaseSchema.superRefine(refineYouPickFixture);
+export const youPickFixtureSchema = z.union([
+  youPickFixtureVersion1Schema,
+  youPickFixtureVersion2Schema,
+]);
 
 export type YouPickFixture = z.infer<typeof youPickFixtureSchema>;
 
@@ -509,7 +534,10 @@ export const inventoryItemSemanticSnapshotSchema = strictObject({
       values: z.array(nonEmpty).min(1),
     })
   ),
-  product: strictObject({ aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)) }),
+  product: strictObject({
+    aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)),
+    imageUrls: z.unknown().optional(),
+  }),
 });
 export type InventoryItemSemanticSnapshot = z.infer<typeof inventoryItemSemanticSnapshotSchema>;
 export const offerSemanticSnapshotSchema = strictObject({
@@ -614,14 +642,24 @@ const plannedConditionDescriptorSchema = strictObject({
   name: numericId,
   values: z.array(numericId).min(1),
 });
-const plannedItemSchema = strictObject({
+const plannedItemCommonShape = {
   sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
   availability: strictObject({
     shipToLocationAvailability: strictObject({ quantity: z.number().int().positive() }),
   }),
   condition: z.literal('USED_VERY_GOOD'),
   conditionDescriptors: z.array(plannedConditionDescriptorSchema),
+} satisfies z.ZodRawShape;
+const plannedItemVersion1Schema = strictObject({
+  ...plannedItemCommonShape,
   product: strictObject({ aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)) }),
+});
+const plannedItemVersion2Schema = strictObject({
+  ...plannedItemCommonShape,
+  product: strictObject({
+    aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)),
+    imageUrls: z.tuple([imageSchema.shape.url, imageSchema.shape.url]),
+  }),
 });
 const plannedOfferSchema = strictObject({
   sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
@@ -639,12 +677,11 @@ const plannedOfferSchema = strictObject({
     returnPolicyId: nonEmpty,
   }),
 });
-const plannedGroupSchema = strictObject({
+const plannedGroupCommonShape = {
   inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
   title: nonEmpty,
   description: nonEmpty,
   aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)),
-  imageUrls: z.array(imageSchema.shape.url).min(4).max(6),
   variantSKUs: z.array(nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH)).min(2).max(3),
   variesBy: strictObject({
     specifications: z.tuple([
@@ -652,6 +689,14 @@ const plannedGroupSchema = strictObject({
     ]),
     aspectsImageVariesBy: z.tuple([nonEmpty]),
   }),
+} satisfies z.ZodRawShape;
+const plannedGroupVersion1Schema = strictObject({
+  ...plannedGroupCommonShape,
+  imageUrls: z.array(imageSchema.shape.url).min(4).max(6),
+});
+const plannedGroupVersion2Schema = strictObject({
+  ...plannedGroupCommonShape,
+  imageUrls: z.array(imageSchema.shape.url).min(2).max(3),
 });
 const plannedGroupRequestSchema = strictObject({
   inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
@@ -807,6 +852,8 @@ export function projectInventoryItemSemanticSnapshot(
         canonicalSemanticValues(rawValues, `product aspect ${name} values`),
       ])
   );
+  const semanticProduct =
+    'imageUrls' in product ? { aspects, imageUrls: product.imageUrls } : { aspects };
   return inventoryItemSemanticSnapshotSchema.parse({
     sku: semanticString(item.sku, 'SKU'),
     availability: {
@@ -814,9 +861,13 @@ export function projectInventoryItemSemanticSnapshot(
     },
     condition: semanticString(item.condition, 'condition'),
     conditionDescriptors,
-    product: { aspects },
+    product: semanticProduct,
   });
 }
+
+const semanticImageUrlsSchema = z
+  .tuple([imageSchema.shape.url, imageSchema.shape.url])
+  .refine(([front, back]) => front !== back, 'Inventory item semantic image URLs are duplicated.');
 
 export type InventoryItemSemanticField =
   | 'snapshot'
@@ -824,7 +875,8 @@ export type InventoryItemSemanticField =
   | 'quantity'
   | 'condition'
   | 'condition descriptors'
-  | 'product aspects';
+  | 'product aspects'
+  | 'product images';
 
 export function inventoryItemSemanticMismatch(
   actual: InventoryItemSemanticSnapshot | undefined,
@@ -843,6 +895,12 @@ export function inventoryItemSemanticMismatch(
     return 'condition descriptors';
   if (canonicalJson(actual.product.aspects) !== canonicalJson(expected.product.aspects))
     return 'product aspects';
+  if (expected.product.imageUrls !== undefined) {
+    const expectedImages = semanticImageUrlsSchema.parse(expected.product.imageUrls);
+    const actualImages = semanticImageUrlsSchema.safeParse(actual.product.imageUrls);
+    if (!actualImages.success || canonicalJson(actualImages.data) !== canonicalJson(expectedImages))
+      return 'product images';
+  }
   return null;
 }
 
@@ -1045,19 +1103,33 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
   if (fixture.children.length !== run.childSkus.length)
     throw new Error('Fixture child count does not match run identity.');
   const selectorName = fixture.selector.name;
-  const groupImages = fixture.children.flatMap((child) => child.images.map((image) => image.url));
+  const groupImages =
+    fixture.version === 1
+      ? fixture.children.flatMap((child) => child.images.map((image) => image.url))
+      : fixture.children.map((child) => child.images[0].url);
   const operations: PlannedOperation[] = [];
 
   fixture.children.forEach((child, index) => {
     const sku = run.childSkus[index];
     operations.push(
-      operation(`item-${child.slot}`, 'create-or-replace-child-item', plannedItemSchema, {
-        sku,
-        availability: { shipToLocationAvailability: { quantity: child.itemQuantity } },
-        condition: child.condition.condition,
-        conditionDescriptors: child.condition.conditionDescriptors,
-        product: { aspects: child.productAspects },
-      })
+      operation(
+        `item-${child.slot}`,
+        'create-or-replace-child-item',
+        fixture.version === 1 ? plannedItemVersion1Schema : plannedItemVersion2Schema,
+        {
+          sku,
+          availability: { shipToLocationAvailability: { quantity: child.itemQuantity } },
+          condition: child.condition.condition,
+          conditionDescriptors: child.condition.conditionDescriptors,
+          product:
+            fixture.version === 1
+              ? { aspects: child.productAspects }
+              : {
+                  aspects: child.productAspects,
+                  imageUrls: child.images.map((image) => image.url),
+                },
+        }
+      )
     );
   });
   fixture.children.forEach((child, index) => {
@@ -1075,18 +1147,23 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
     );
   });
   operations.push(
-    operation('group-complete', 'replace-complete-inventory-item-group', plannedGroupSchema, {
-      inventoryItemGroupKey: run.groupKey,
-      title: fixture.group.title,
-      description: fixture.group.description,
-      aspects: fixture.group.sharedAspects,
-      imageUrls: groupImages,
-      variantSKUs: run.childSkus,
-      variesBy: {
-        specifications: [{ name: selectorName, values: fixture.selector.values }],
-        aspectsImageVariesBy: [selectorName],
-      },
-    })
+    operation(
+      'group-complete',
+      'replace-complete-inventory-item-group',
+      fixture.version === 1 ? plannedGroupVersion1Schema : plannedGroupVersion2Schema,
+      {
+        inventoryItemGroupKey: run.groupKey,
+        title: fixture.group.title,
+        description: fixture.group.description,
+        aspects: fixture.group.sharedAspects,
+        imageUrls: groupImages,
+        variantSKUs: run.childSkus,
+        variesBy: {
+          specifications: [{ name: selectorName, values: fixture.selector.values }],
+          aspectsImageVariesBy: [selectorName],
+        },
+      }
+    )
   );
   operations.push(
     operation('publish-group', 'publish-inventory-item-group', plannedGroupRequestSchema, {
@@ -1165,7 +1242,7 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
     })
   );
   return {
-    arrangementId: `arrangement-v1-${digest(operations.map(({ id, digest: value }) => ({ id, digest: value }))).slice(0, 16)}`,
+    arrangementId: `arrangement-v${fixture.version}-${digest(operations.map(({ id, digest: value }) => ({ id, digest: value }))).slice(0, 16)}`,
     operations,
   };
 }
@@ -1798,7 +1875,7 @@ export async function runYouPickSandboxPilot(
   let planOperations: Omit<PlannedOperation, 'payload'>[] | undefined;
 
   if (options.fixturePath) {
-    const fixture = youPickFixtureSchema.parse(
+    const fixture = youPickFixtureVersion2Schema.parse(
       JSON.parse(await readFile(resolve(options.fixturePath), 'utf8')) as unknown
     );
     const run = generateRunIdentity(
