@@ -10,6 +10,7 @@ import {
   YOU_PICK_SANDBOX_ORIGIN,
   classifyYouPickListingStatus,
   digest,
+  projectInventoryItemSemanticSnapshot,
   runYouPickSandboxPilot,
   sanitizeError,
   sanitizeReport,
@@ -351,29 +352,16 @@ export function normalizeYouPickGroup(
 export function normalizeYouPickItem(raw: unknown): RemoteInventoryItem {
   const record = asRecord(raw);
   if (!record) throw new Error('Inventory item response must be an object.');
-  const sku = stringField(record, 'sku');
-  if (!sku) throw new Error('Inventory item response requires sku.');
+  const semanticSnapshot = projectInventoryItemSemanticSnapshot(record);
+  const sku = semanticSnapshot.sku;
   const sources = ['groupIds', 'inventoryItemGroupKeys'].filter((key) => key in record);
   if (sources.length > 1)
     throw new Error('Inventory item response contains ambiguous group association fields.');
-  const availability = asRecord(record.availability);
-  const shipTo = availability ? asRecord(availability.shipToLocationAvailability) : undefined;
-  const quantity = shipTo?.quantity;
-  const itemPayload = {
-    sku,
-    availability: record.availability,
-    condition: record.condition,
-    conditionDescriptors: record.conditionDescriptors,
-    product: record.product,
-  };
-  const snapshotDigest =
-    itemPayload.availability && itemPayload.condition && itemPayload.product
-      ? digest(itemPayload)
-      : undefined;
+  const quantity = semanticSnapshot.availability.shipToLocationAvailability.quantity;
   const base = {
     sku,
-    quantity: typeof quantity === 'number' && Number.isInteger(quantity) ? quantity : undefined,
-    snapshotDigest,
+    quantity,
+    semanticSnapshot,
   };
   if (sources.length === 0) return { ...base, groupKeys: null };
   const rawKeys = record[sources[0]];
@@ -568,8 +556,10 @@ export function adaptYouPickPilotMutationApi(
 ): YouPickPilotMutationApi {
   const config = (headers: { 'Content-Language': 'en-US' }) => ({ headers });
   return {
-    createOrReplaceInventoryItem: (sku, payload, headers) =>
-      inventory.createOrReplaceInventoryItem(sku, payload, config(headers)),
+    createOrReplaceInventoryItem: async (sku, payload, headers) => {
+      await inventory.createOrReplaceInventoryItem(sku, payload, config(headers));
+      return undefined;
+    },
     createOffer: (payload, headers) => inventory.createOffer(payload, config(headers)),
     createOrReplaceInventoryItemGroup: (groupKey, payload, headers) =>
       inventory.createOrReplaceInventoryItemGroup(

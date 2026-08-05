@@ -5,15 +5,20 @@ import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   YOU_PICK_EXECUTION_ERROR,
+  assertInventoryItemSemanticMatch,
+  projectInventoryItemSemanticSnapshot,
   type PilotReport,
   type YouPickPilotReadApi,
 } from '@/ebay/you-pick-sandbox-pilot.js';
 import {
+  adaptYouPickPilotMutationApi,
+  normalizeYouPickItem,
   parseYouPickPilotArgs,
   normalizeYouPickMetadata,
   normalizeYouPickPolicies,
   runYouPickSandboxPilotCli,
 } from '@/scripts/you-pick-sandbox-pilot.js';
+import type { InventoryApi } from '@/api/listing-management/inventory.js';
 
 const tempRoots: string[] = [];
 const fixturePath = fileURLToPath(
@@ -85,6 +90,22 @@ const report: PilotReport = {
   requestDigests: ['a'.repeat(64)],
   nextAuthorizedCommand:
     'pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest /repo/manifest.json --execute --confirm-sandbox-seller sandbox-seller-123',
+};
+
+const plannedItem = {
+  sku: 'YPSBX-20260804T173924Z-967292-C01',
+  availability: { shipToLocationAvailability: { quantity: 1 } },
+  condition: 'USED_VERY_GOOD',
+  conditionDescriptors: [
+    { name: '40002', values: ['400022', '400021'] },
+    { name: '40001', values: ['400012'] },
+  ],
+  product: {
+    aspects: {
+      'Player/Athlete': ['Player B', 'Player A'],
+      Card: ['C01'],
+    },
+  },
 };
 
 describe('You Pick sandbox pilot CLI', () => {
@@ -228,13 +249,7 @@ describe('You Pick sandbox pilot CLI', () => {
     expect(runner).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        manifestPath: join(
-          repoRoot,
-          '.local',
-          'you-pick-sandbox',
-          runId,
-          'manifest.json'
-        ),
+        manifestPath: join(repoRoot, '.local', 'you-pick-sandbox', runId, 'manifest.json'),
         attestation: { kind: 'published-view' },
         repoRoot,
       })
@@ -383,5 +398,138 @@ describe('You Pick sandbox pilot CLI', () => {
     expect(apiFactory).toHaveBeenCalledOnce();
     expect(result.metadataSummary.selectorStatus).toBe('custom-unlisted');
     expect(JSON.parse(print.mock.calls[0]?.[0] as string)).toEqual(result);
+  });
+});
+
+describe('You Pick inventory item adapter contract', () => {
+  it('canonicalizes a successful empty-string transport result to void', async () => {
+    const createOrReplaceInventoryItem = vi.fn(async () => '' as never);
+    const api = adaptYouPickPilotMutationApi({
+      createOrReplaceInventoryItem,
+    } as unknown as InventoryApi);
+
+    await expect(
+      api.createOrReplaceInventoryItem(plannedItem.sku, plannedItem, {
+        'Content-Language': 'en-US',
+      })
+    ).resolves.toBeUndefined();
+    expect(createOrReplaceInventoryItem).toHaveBeenCalledWith(plannedItem.sku, plannedItem, {
+      headers: { 'Content-Language': 'en-US' },
+    });
+  });
+
+  it('preserves real inventory item transport errors', async () => {
+    const transportError = new Error('transport failed');
+    const api = adaptYouPickPilotMutationApi({
+      createOrReplaceInventoryItem: vi.fn(async () => {
+        throw transportError;
+      }),
+    } as unknown as InventoryApi);
+
+    await expect(
+      api.createOrReplaceInventoryItem(plannedItem.sku, plannedItem, {
+        'Content-Language': 'en-US',
+      })
+    ).rejects.toBe(transportError);
+  });
+});
+
+describe('You Pick inventory item semantic snapshots', () => {
+  it('ignores demonstrated server-managed fields and canonicalizes unordered API collections', () => {
+    const raw = {
+      ...plannedItem,
+      locale: 'en_US',
+      availability: {
+        shipToLocationAvailability: {
+          allocationByFormat: { FIXED_PRICE: 1 },
+          quantity: 1,
+        },
+      },
+      conditionDescriptors: [...plannedItem.conditionDescriptors]
+        .reverse()
+        .map((descriptor) => ({ ...descriptor, values: [...descriptor.values].reverse() })),
+      product: {
+        aspects: {
+          Card: ['C01'],
+          'Player/Athlete': ['Player A', 'Player B'],
+        },
+      },
+    };
+
+    expect(normalizeYouPickItem(raw)).toEqual({
+      sku: plannedItem.sku,
+      groupKeys: null,
+      quantity: 1,
+      semanticSnapshot: projectInventoryItemSemanticSnapshot(plannedItem),
+    });
+  });
+
+  it.each([
+    ['SKU', { ...plannedItem, sku: `${plannedItem.sku}-foreign` }],
+    [
+      'quantity',
+      {
+        ...plannedItem,
+        availability: { shipToLocationAvailability: { quantity: 2 } },
+      },
+    ],
+    ['condition', { ...plannedItem, condition: 'USED_GOOD' }],
+    [
+      'condition descriptors',
+      {
+        ...plannedItem,
+        conditionDescriptors: [{ name: '40001', values: ['400099'] }],
+      },
+    ],
+    [
+      'product aspects',
+      {
+        ...plannedItem,
+        product: { aspects: { Card: ['C02'], 'Player/Athlete': ['Player A', 'Player B'] } },
+      },
+    ],
+  ])('reports a field-specific %s mismatch', (field, changed) => {
+    const actual = normalizeYouPickItem(plannedItem).semanticSnapshot;
+    expect(() => assertInventoryItemSemanticMatch(actual, changed, 'item-C01')).toThrow(
+      `item-C01 semantic ${field} does not match the immutable planned item.`
+    );
+  });
+
+  it.each([
+    [
+      'missing descriptors',
+      { ...plannedItem, conditionDescriptors: undefined },
+      /condition descriptors are missing/,
+    ],
+    [
+      'duplicate descriptor names',
+      {
+        ...plannedItem,
+        conditionDescriptors: [
+          { name: '40001', values: ['400012'] },
+          { name: '40001', values: ['400013'] },
+        ],
+      },
+      /duplicate names/,
+    ],
+    [
+      'duplicate descriptor values',
+      {
+        ...plannedItem,
+        conditionDescriptors: [{ name: '40001', values: ['400012', '400012'] }],
+      },
+      /duplicate values/,
+    ],
+    [
+      'duplicate aspect values',
+      {
+        ...plannedItem,
+        product: { aspects: { Card: ['C01', 'C01'] } },
+      },
+      /duplicate values/,
+    ],
+    ['missing aspects', { ...plannedItem, product: {} }, /product aspects is missing/],
+  ])('fails closed on %s', (_label, raw, error) => {
+    expect(() => normalizeYouPickItem(raw)).toThrow(error);
   });
 });

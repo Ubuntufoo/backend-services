@@ -10,8 +10,10 @@ import {
   buildFuturePlan,
   buildGuardedMutationHeaders,
   classifyYouPickListingStatus,
+  executableYouPickManifestSchema,
   generateRunIdentity,
   parseCurrentUserIdentity,
+  projectInventoryItemSemanticSnapshot,
   readManifest,
   runYouPickSandboxPilot,
   sanitizeReport,
@@ -19,11 +21,16 @@ import {
   writeManifestAtomic,
   youPickFixtureSchema,
   type RuntimeSnapshot,
+  type ExecutableYouPickManifest,
   type RemoteOffer,
   type YouPickListingStatus,
   type YouPickManifest,
   type YouPickPilotReadApi,
 } from '@/ebay/you-pick-sandbox-pilot.js';
+import {
+  executeYouPickManifest,
+  type YouPickPilotMutationApi,
+} from '@/ebay/you-pick-sandbox-pilot-mutation.js';
 
 const fixturePath = fileURLToPath(
   new URL('../../fixtures/you-pick-sandbox/two-card.json', import.meta.url)
@@ -151,6 +158,48 @@ function createApi(overrides: Partial<YouPickPilotReadApi> = {}): YouPickPilotRe
     getOffers: vi.fn(async () => ({ status: 'found' as const, value: { offers: [] } })),
     ...overrides,
   };
+}
+
+function createMutationApi(): YouPickPilotMutationApi {
+  return {
+    createOrReplaceInventoryItem: vi.fn(async () => undefined),
+    createOffer: vi.fn(async () => undefined),
+    createOrReplaceInventoryItemGroup: vi.fn(async () => undefined),
+    publishInventoryItemGroup: vi.fn(async () => undefined),
+    bulkUpdatePriceQuantity: vi.fn(async () => undefined),
+    withdrawInventoryItemGroup: vi.fn(async () => undefined),
+    deleteOffer: vi.fn(async () => undefined),
+    deleteInventoryItemGroup: vi.fn(async () => undefined),
+    deleteInventoryItem: vi.fn(async () => undefined),
+  };
+}
+
+function unknownC01Manifest(manifest: YouPickManifest): ExecutableYouPickManifest {
+  const attemptedAt = '2026-08-04T21:00:00.000Z';
+  return executableYouPickManifestSchema.parse({
+    ...manifest,
+    checkpoint: 'creating-items',
+    execution: {
+      ...('execution' in manifest ? manifest.execution : {}),
+      ledger:
+        'execution' in manifest
+          ? manifest.execution.ledger.map((entry) =>
+              entry.id === 'item-C01'
+                ? {
+                    ...entry,
+                    state: 'unknown',
+                    attemptCount: 1,
+                    startedAt: attemptedAt,
+                    completedAt: null,
+                    result: null,
+                    error: 'prior response and reconciliation outcome unknown',
+                    readBackDigest: null,
+                  }
+                : entry
+            )
+          : [],
+    },
+  });
 }
 
 async function loadFixture(): Promise<unknown> {
@@ -658,6 +707,93 @@ describe('You Pick manifest persistence and dry-run gates', () => {
         })
       )
     ).rejects.toThrow(/missing or ambiguous descriptor ID/);
+  });
+});
+
+describe('You Pick C01 semantic recovery', () => {
+  it('adopts matching unknown C01 without any later mutation', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const localRoot = join(root, '.local', 'you-pick-sandbox');
+    const manifest = unknownC01Manifest(await readManifest(fresh.manifestPath, localRoot));
+    const itemRequest = buildFuturePlan(manifest.execution.fixture, manifest.run).operations.find(
+      ({ id }) => id === 'item-C01'
+    )?.payload;
+    expect(itemRequest).toBeDefined();
+    const getInventoryItem = vi.fn(async (sku: string) =>
+      sku === manifest.run.childSkus[0]
+        ? {
+            status: 'found' as const,
+            value: {
+              sku,
+              groupKeys: null,
+              quantity: 1,
+              semanticSnapshot: projectInventoryItemSemanticSnapshot(itemRequest),
+            },
+          }
+        : { status: 'unknown' as const, reason: 'stop before C02 mutation' }
+    );
+    const mutationApi = createMutationApi();
+    let persisted = manifest;
+
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        manifestPath: fresh.manifestPath,
+        readApi: createApi({ getInventoryItem }),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => new Date('2026-08-04T21:30:00.000Z'),
+        persist: async (next) => {
+          persisted = next;
+        },
+      })
+    ).rejects.toThrow('item-C02 pre-state is unknown.');
+
+    expect(persisted.execution.ledger.find(({ id }) => id === 'item-C01')).toEqual(
+      expect.objectContaining({ state: 'completed', attemptCount: 1 })
+    );
+    expect(persisted.execution.ledger.find(({ id }) => id === 'item-C02')).toEqual(
+      expect.objectContaining({ state: 'planned', attemptCount: 0 })
+    );
+    expect(getInventoryItem).toHaveBeenCalledWith(manifest.run.childSkus[0]);
+    expect(getInventoryItem).toHaveBeenCalledWith(manifest.run.childSkus[1]);
+    for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a semantically matching item with foreign group ownership', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const localRoot = join(root, '.local', 'you-pick-sandbox');
+    const manifest = unknownC01Manifest(await readManifest(fresh.manifestPath, localRoot));
+    const itemRequest = buildFuturePlan(manifest.execution.fixture, manifest.run).operations.find(
+      ({ id }) => id === 'item-C01'
+    )?.payload;
+    const mutationApi = createMutationApi();
+
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        readApi: createApi({
+          getInventoryItem: vi.fn(async (sku) => ({
+            status: 'found',
+            value: {
+              sku,
+              groupKeys: ['foreign-group'],
+              quantity: 1,
+              semanticSnapshot: projectInventoryItemSemanticSnapshot(itemRequest),
+            },
+          })),
+        }),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => new Date('2026-08-04T21:30:00.000Z'),
+        persist: async () => undefined,
+      })
+    ).rejects.toThrow('item-C01 has an unexpected group association.');
+    for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
   });
 });
 

@@ -3,12 +3,15 @@ import { z } from 'zod';
 import {
   YOU_PICK_CONTENT_LANGUAGE,
   YOU_PICK_MARKETPLACE,
+  assertInventoryItemSemanticMatch,
   assertExecutableManifestIntegrity,
   buildFuturePlan,
   executableYouPickManifestSchema,
+  inventoryItemSemanticMismatch,
   sanitizeError,
   type ExecutableYouPickManifest,
   type ExactRead,
+  type RemoteInventoryItem,
   type RemoteOffer,
   type YouPickPilotReadApi,
 } from './you-pick-sandbox-pilot.js';
@@ -172,6 +175,33 @@ function requireSnapshotDigest(
 ) {
   if (!value.snapshotDigest || value.snapshotDigest !== expected)
     throw new Error(`${label} exact snapshot does not match the immutable planned payload digest.`);
+}
+
+function requireInventoryItemSemanticMatch(
+  item: RemoteInventoryItem,
+  expected: unknown,
+  label: string
+): void {
+  if (item.semanticSnapshot && item.sku !== item.semanticSnapshot.sku)
+    throw new Error(`${label} semantic SKU conflicts with normalized ownership SKU.`);
+  assertInventoryItemSemanticMatch(item.semanticSnapshot, expected, label);
+}
+
+function requireOneInventoryItemSemanticMatch(
+  item: RemoteInventoryItem,
+  expected: unknown[],
+  label: string
+): void {
+  if (item.semanticSnapshot && item.sku !== item.semanticSnapshot.sku)
+    throw new Error(`${label} semantic SKU conflicts with normalized ownership SKU.`);
+  if (
+    item.semanticSnapshot &&
+    expected.some(
+      (candidate) => inventoryItemSemanticMismatch(item.semanticSnapshot, candidate) === null
+    )
+  )
+    return;
+  throw new Error(`${label} does not match an owned original/zero semantic item snapshot.`);
 }
 
 function completedOperationTime(manifest: ExecutableYouPickManifest, operationId: string): Date {
@@ -347,11 +377,11 @@ export async function reconcileCompletePublicationState(
   };
 }
 
-function expectedItemDigest(
+function expectedItemPayload(
   plan: ReturnType<typeof buildFuturePlan>,
   index: number,
   zeroTarget: boolean
-): string {
+): Record<string, unknown> {
   const item = structuredClone(payload(plan, `item-C0${index + 1}`));
   if (zeroTarget && index === 0)
     (
@@ -360,7 +390,7 @@ function expectedItemDigest(
         unknown
       >
     ).quantity = 0;
-  return digest(item);
+  return item;
 }
 
 function expectedOfferDigest(
@@ -401,9 +431,9 @@ async function validateCompleteQuantitySnapshot(
       zeroTarget && index === 0 ? 0 : options.manifest.ownership.itemQuantities[index];
     if (item.quantity !== expectedQuantity)
       throw new Error(`${state} quantity item ${sku} has unexpected quantity.`);
-    requireSnapshotDigest(
+    requireInventoryItemSemanticMatch(
       item,
-      expectedItemDigest(plan, index, zeroTarget),
+      expectedItemPayload(plan, index, zeroTarget),
       `${state} item ${sku}`
     );
   }
@@ -567,7 +597,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
         JSON.stringify(existing.value.groupKeys) !== JSON.stringify([options.manifest.run.groupKey])
       )
         throw new Error(`${operationId} has an unexpected group association.`);
-      requireSnapshotDigest(existing.value, digest(request), operationId);
+      requireInventoryItemSemanticMatch(existing.value, request, operationId);
       await updateLedger(options, operationId, 'completed', { readBack: existing.value });
     } else if (existing.status !== 'missing')
       throw new Error(`${operationId} pre-state is unknown.`);
@@ -588,7 +618,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
               JSON.stringify(item.groupKeys) !== JSON.stringify([options.manifest.run.groupKey]))
           )
             throw new Error(`${operationId} after-state ownership is ambiguous.`);
-          requireSnapshotDigest(item, digest(request), operationId);
+          requireInventoryItemSemanticMatch(item, request, operationId);
           return item;
         },
         async () => {
@@ -711,7 +741,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
     );
     if (JSON.stringify(item.groupKeys) !== JSON.stringify([options.manifest.run.groupKey]))
       throw new Error(`Unpublished item ${sku} is not associated with the exact group.`);
-    requireSnapshotDigest(item, digest(payload(plan, `item-C0${index + 1}`)), `item ${sku}`);
+    requireInventoryItemSemanticMatch(item, payload(plan, `item-C0${index + 1}`), `item ${sku}`);
     const offers = exactFound(
       await options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE),
       `unpublished verification offer ${sku}`
@@ -917,7 +947,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
       )
         throw new Error(`Cleanup item ${sku} ownership or group association is ambiguous.`);
       const originalItem = payload(plan, `item-C0${index + 1}`);
-      const allowedItemDigests = [digest(originalItem)];
+      const allowedItems = [originalItem];
       if (index === 0) {
         const zeroItem = structuredClone(originalItem);
         (
@@ -926,10 +956,9 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
             unknown
           >
         ).quantity = 0;
-        allowedItemDigests.push(digest(zeroItem));
+        allowedItems.push(zeroItem);
       }
-      if (!item.value.snapshotDigest || !allowedItemDigests.includes(item.value.snapshotDigest))
-        throw new Error(`Cleanup item ${sku} does not match an owned original/zero snapshot.`);
+      requireOneInventoryItemSemanticMatch(item.value, allowedItems, `Cleanup item ${sku}`);
     }
   }
   const offerReads = await Promise.all(
@@ -1117,21 +1146,18 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
             `${operationId} pre-state`
           );
           const originalItem = payload(plan, `item-C0${index + 1}`);
-          const allowedDigests = [digest(originalItem)];
+          const allowedItems = [originalItem];
           if (index === 0) {
             const zeroItem = structuredClone(originalItem);
             (
               (zeroItem.availability as Record<string, unknown>)
                 .shipToLocationAvailability as Record<string, unknown>
             ).quantity = 0;
-            allowedDigests.push(digest(zeroItem));
+            allowedItems.push(zeroItem);
           }
-          if (
-            before.sku !== sku ||
-            !before.snapshotDigest ||
-            !allowedDigests.includes(before.snapshotDigest)
-          )
+          if (before.sku !== sku)
             throw new Error(`${operationId} exact owned pre-state is not proven.`);
+          requireOneInventoryItemSemanticMatch(before, allowedItems, operationId);
           return before;
         }
       );

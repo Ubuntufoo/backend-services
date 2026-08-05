@@ -497,11 +497,26 @@ export interface RemoteInventoryItemGroup {
   variantSKUs: string[];
   snapshotDigest?: string;
 }
+export const inventoryItemSemanticSnapshotSchema = strictObject({
+  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  availability: strictObject({
+    shipToLocationAvailability: strictObject({ quantity: z.number().int().nonnegative() }),
+  }),
+  condition: nonEmpty,
+  conditionDescriptors: z.array(
+    strictObject({
+      name: nonEmpty,
+      values: z.array(nonEmpty).min(1),
+    })
+  ),
+  product: strictObject({ aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)) }),
+});
+export type InventoryItemSemanticSnapshot = z.infer<typeof inventoryItemSemanticSnapshotSchema>;
 export interface RemoteInventoryItem {
   sku: string;
   groupKeys: string[] | null;
   quantity?: number;
-  snapshotDigest?: string;
+  semanticSnapshot?: InventoryItemSemanticSnapshot;
 }
 export interface RemoteOffer {
   offerId: string;
@@ -712,6 +727,116 @@ function canonicalJson(value: unknown): string {
       .join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function semanticRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error(`Inventory item semantic ${field} is missing or invalid.`);
+  return value as Record<string, unknown>;
+}
+
+function semanticString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw new Error(`Inventory item semantic ${field} is missing or invalid.`);
+  return value.trim();
+}
+
+function canonicalSemanticValues(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error(`Inventory item semantic ${field} is missing or invalid.`);
+  const values = value.map((entry) => semanticString(entry, field));
+  if (new Set(values).size !== values.length)
+    throw new Error(`Inventory item semantic ${field} contains duplicate values.`);
+  return values.sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Projects both planned PUT bodies and GET responses into the same owned semantic contract.
+ * eBay treats descriptor rows, descriptor values, aspect keys, and aspect values as unordered;
+ * canonical sorting therefore ignores only collection order, never missing or duplicate content.
+ */
+export function projectInventoryItemSemanticSnapshot(
+  value: unknown
+): InventoryItemSemanticSnapshot {
+  const item = semanticRecord(value, 'item');
+  const availability = semanticRecord(item.availability, 'availability');
+  const shipTo = semanticRecord(
+    availability.shipToLocationAvailability,
+    'ship-to-location availability'
+  );
+  if (!Number.isInteger(shipTo.quantity) || (shipTo.quantity as number) < 0)
+    throw new Error('Inventory item semantic quantity is missing or invalid.');
+  if (!Array.isArray(item.conditionDescriptors))
+    throw new Error('Inventory item semantic condition descriptors are missing or invalid.');
+  const conditionDescriptors = item.conditionDescriptors
+    .map((entry) => {
+      const descriptor = semanticRecord(entry, 'condition descriptor');
+      const name = semanticString(descriptor.name, 'condition descriptor name');
+      return {
+        name,
+        values: canonicalSemanticValues(descriptor.values, `condition descriptor ${name} values`),
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+  if (new Set(conditionDescriptors.map(({ name }) => name)).size !== conditionDescriptors.length)
+    throw new Error('Inventory item semantic condition descriptors contain duplicate names.');
+  const product = semanticRecord(item.product, 'product');
+  const rawAspects = semanticRecord(product.aspects, 'product aspects');
+  const aspects = Object.fromEntries(
+    Object.entries(rawAspects)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, rawValues]) => [
+        semanticString(name, 'product aspect name'),
+        canonicalSemanticValues(rawValues, `product aspect ${name} values`),
+      ])
+  );
+  return inventoryItemSemanticSnapshotSchema.parse({
+    sku: semanticString(item.sku, 'SKU'),
+    availability: {
+      shipToLocationAvailability: { quantity: shipTo.quantity },
+    },
+    condition: semanticString(item.condition, 'condition'),
+    conditionDescriptors,
+    product: { aspects },
+  });
+}
+
+export type InventoryItemSemanticField =
+  | 'snapshot'
+  | 'SKU'
+  | 'quantity'
+  | 'condition'
+  | 'condition descriptors'
+  | 'product aspects';
+
+export function inventoryItemSemanticMismatch(
+  actual: InventoryItemSemanticSnapshot | undefined,
+  expectedInput: unknown
+): InventoryItemSemanticField | null {
+  if (!actual) return 'snapshot';
+  const expected = projectInventoryItemSemanticSnapshot(expectedInput);
+  if (actual.sku !== expected.sku) return 'SKU';
+  if (
+    actual.availability.shipToLocationAvailability.quantity !==
+    expected.availability.shipToLocationAvailability.quantity
+  )
+    return 'quantity';
+  if (actual.condition !== expected.condition) return 'condition';
+  if (canonicalJson(actual.conditionDescriptors) !== canonicalJson(expected.conditionDescriptors))
+    return 'condition descriptors';
+  if (canonicalJson(actual.product.aspects) !== canonicalJson(expected.product.aspects))
+    return 'product aspects';
+  return null;
+}
+
+export function assertInventoryItemSemanticMatch(
+  actual: InventoryItemSemanticSnapshot | undefined,
+  expectedInput: unknown,
+  label: string
+): void {
+  const mismatch = inventoryItemSemanticMismatch(actual, expectedInput);
+  if (mismatch)
+    throw new Error(`${label} semantic ${mismatch} does not match the immutable planned item.`);
 }
 
 export function generateRunIdentity(
