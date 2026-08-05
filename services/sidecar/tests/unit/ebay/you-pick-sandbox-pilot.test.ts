@@ -32,6 +32,7 @@ import {
   executeYouPickManifest,
   type YouPickPilotMutationApi,
 } from '@/ebay/you-pick-sandbox-pilot-mutation.js';
+import { normalizeYouPickGroup, normalizeYouPickItem } from '@/scripts/you-pick-sandbox-pilot.js';
 
 const fixturePath = fileURLToPath(
   new URL('../../fixtures/you-pick-sandbox/two-card.json', import.meta.url)
@@ -204,6 +205,43 @@ function unknownC01Manifest(manifest: YouPickManifest): ExecutableYouPickManifes
                 : entry
             )
           : [],
+    },
+  });
+}
+
+function verifyingUnpublishedManifest(manifest: YouPickManifest): ExecutableYouPickManifest {
+  if (!('execution' in manifest)) throw new Error('Expected an executable manifest.');
+  const completedAt = '2026-08-05T14:32:58.598Z';
+  const completed = new Set(['item-C01', 'item-C02', 'offer-C01', 'offer-C02', 'group-complete']);
+  const offerIds = ['11409899010', '11409959010'];
+  return executableYouPickManifestSchema.parse({
+    ...manifest,
+    checkpoint: 'verifying-unpublished',
+    published: false,
+    groupListingId: null,
+    resources: manifest.resources.map((resource, index) => ({
+      ...resource,
+      offerId: offerIds[index],
+      offerStatus: 'UNPUBLISHED',
+    })),
+    execution: {
+      ...manifest.execution,
+      ledger: manifest.execution.ledger.map((entry) =>
+        completed.has(entry.id)
+          ? {
+              ...entry,
+              state: 'completed',
+              attemptCount: 1,
+              startedAt: completedAt,
+              completedAt,
+              result: entry.id.startsWith('offer-')
+                ? { offerId: offerIds[entry.id === 'offer-C01' ? 0 : 1] }
+                : null,
+              error: null,
+              readBackDigest: 'a'.repeat(64),
+            }
+          : entry
+      ),
     },
   });
 }
@@ -1016,6 +1054,193 @@ describe('You Pick C01 semantic recovery', () => {
     ).rejects.toThrow(
       'offer-C01 semantic price value does not match the immutable planned offer.'
     );
+    for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
+  });
+});
+
+describe('You Pick verifying-unpublished recovery', () => {
+  it('verifies the current arrangement with equivalent aliases and replays no mutation', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const manifest = verifyingUnpublishedManifest(
+      await readManifest(fresh.manifestPath, join(root, '.local', 'you-pick-sandbox'))
+    );
+    const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+    const itemRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'item-C01' || id === 'item-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const offerRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'offer-C01' || id === 'offer-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const groupRequest = plan.operations.find(({ id }) => id === 'group-complete')?.payload;
+    const getInventoryItem = vi.fn(async (sku: string) => ({
+      status: 'found' as const,
+      value: normalizeYouPickItem({
+        ...(itemRequests.get(sku) as Record<string, unknown>),
+        groupIds: [manifest.run.groupKey],
+        inventoryItemGroupKeys: [manifest.run.groupKey],
+      }),
+    }));
+    let offerReadCount = 0;
+    const getOffers = vi.fn(async (sku: string) => {
+      offerReadCount += 1;
+      if (offerReadCount > 4)
+        return { status: 'unknown' as const, reason: 'intentional pre-publish stop' };
+      const index = manifest.run.childSkus.indexOf(sku);
+      return {
+        status: 'found' as const,
+        value: {
+          offers: [
+            remoteOffer({
+              sku,
+              offerId: manifest.resources[index].offerId ?? undefined,
+              status: 'UNPUBLISHED',
+              listingId: null,
+              listingStatus: null,
+              semanticPayload: offerRequests.get(sku),
+            }),
+          ],
+        },
+      };
+    });
+    const getInventoryItemGroup = vi.fn(async () => ({
+      status: 'found' as const,
+      value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+    }));
+    const mutationApi = createMutationApi();
+    let persisted = manifest;
+
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        manifestPath: fresh.manifestPath,
+        readApi: createApi({ getInventoryItem, getOffers, getInventoryItemGroup }),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => new Date('2026-08-05T15:30:00.000Z'),
+        persist: async (next) => {
+          persisted = next;
+        },
+      })
+    ).rejects.toThrow(`Publication state for ${manifest.run.childSkus[0]} is unknown.`);
+
+    expect(getInventoryItem).toHaveBeenCalledTimes(4);
+    expect(getOffers).toHaveBeenCalledTimes(6);
+    expect(getInventoryItemGroup).toHaveBeenCalledTimes(2);
+    expect(persisted.checkpoint).toBe('verifying-unpublished');
+    expect(
+      persisted.execution.ledger.slice(0, 5).map(({ id, state, attemptCount }) => ({
+        id,
+        state,
+        attemptCount,
+      }))
+    ).toEqual([
+      { id: 'item-C01', state: 'completed', attemptCount: 1 },
+      { id: 'item-C02', state: 'completed', attemptCount: 1 },
+      { id: 'offer-C01', state: 'completed', attemptCount: 1 },
+      { id: 'offer-C02', state: 'completed', attemptCount: 1 },
+      { id: 'group-complete', state: 'completed', attemptCount: 1 },
+    ]);
+    expect(persisted.execution.ledger[5]).toEqual(
+      expect.objectContaining({ id: 'publish-group', state: 'planned', attemptCount: 0 })
+    );
+    expect(persisted.resources).toEqual([
+      expect.objectContaining({ offerId: '11409899010', offerStatus: 'UNPUBLISHED' }),
+      expect.objectContaining({ offerId: '11409959010', offerStatus: 'UNPUBLISHED' }),
+    ]);
+    for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'conflicting aliases',
+      (groupKey: string) => ({
+        groupIds: [groupKey],
+        inventoryItemGroupKeys: ['FOREIGN-GROUP'],
+      }),
+      /association aliases conflict/,
+    ],
+    [
+      'a foreign association',
+      () => ({ groupIds: ['FOREIGN-GROUP'], inventoryItemGroupKeys: ['FOREIGN-GROUP'] }),
+      /unexpected group association/,
+    ],
+    [
+      'multiple associations',
+      (groupKey: string) => ({
+        groupIds: [groupKey, 'FOREIGN-GROUP'],
+        inventoryItemGroupKeys: ['FOREIGN-GROUP', groupKey],
+      }),
+      /unexpected group association/,
+    ],
+    ['a missing expected group', () => ({}), /not associated with the exact group/],
+  ])('blocks %s before publication without mutation', async (_label, associations, error) => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const manifest = verifyingUnpublishedManifest(
+      await readManifest(fresh.manifestPath, join(root, '.local', 'you-pick-sandbox'))
+    );
+    const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+    const itemRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'item-C01' || id === 'item-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const offerRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'offer-C01' || id === 'offer-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const groupRequest = plan.operations.find(({ id }) => id === 'group-complete')?.payload;
+    const mutationApi = createMutationApi();
+
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        readApi: createApi({
+          getInventoryItem: vi.fn(async (sku) => ({
+            status: 'found',
+            value: normalizeYouPickItem({
+              ...(itemRequests.get(sku) as Record<string, unknown>),
+              ...associations(manifest.run.groupKey),
+            }),
+          })),
+          getOffers: vi.fn(async (sku) => {
+            const index = manifest.run.childSkus.indexOf(sku);
+            return {
+              status: 'found',
+              value: {
+                offers: [
+                  remoteOffer({
+                    sku,
+                    offerId: manifest.resources[index].offerId ?? undefined,
+                    status: 'UNPUBLISHED',
+                    listingId: null,
+                    listingStatus: null,
+                    semanticPayload: offerRequests.get(sku),
+                  }),
+                ],
+              },
+            };
+          }),
+          getInventoryItemGroup: vi.fn(async () => ({
+            status: 'found',
+            value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+          })),
+        }),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => new Date('2026-08-05T15:30:00.000Z'),
+        persist: async () => undefined,
+      })
+    ).rejects.toThrow(error);
+    expect(mutationApi.publishInventoryItemGroup).not.toHaveBeenCalled();
     for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
   });
 });

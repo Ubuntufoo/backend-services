@@ -355,22 +355,27 @@ export function normalizeYouPickItem(raw: unknown): RemoteInventoryItem {
   if (!record) throw new Error('Inventory item response must be an object.');
   const semanticSnapshot = projectInventoryItemSemanticSnapshot(record);
   const sku = semanticSnapshot.sku;
-  const sources = ['groupIds', 'inventoryItemGroupKeys'].filter((key) => key in record);
-  if (sources.length > 1)
-    throw new Error('Inventory item response contains ambiguous group association fields.');
   const quantity = semanticSnapshot.availability.shipToLocationAvailability.quantity;
   const base = {
     sku,
     quantity,
     semanticSnapshot,
   };
-  if (sources.length === 0) return { ...base, groupKeys: null };
-  const rawKeys = record[sources[0]];
-  if (!Array.isArray(rawKeys))
-    throw new Error('Inventory item group association must be an array.');
-  const groupKeys = rawKeys.map((value) => (typeof value === 'string' ? value.trim() : ''));
-  if (groupKeys.some((value) => !value) || new Set(groupKeys).size !== groupKeys.length)
-    throw new Error('Inventory item response has malformed or duplicate group associations.');
+  const aliases = (['groupIds', 'inventoryItemGroupKeys'] as const)
+    .filter((field) => field in record)
+    .map((field) => {
+      const rawKeys = record[field];
+      if (!Array.isArray(rawKeys))
+        throw new Error(`Inventory item ${field} association must be an array.`);
+      const values = rawKeys.map((value) => (typeof value === 'string' ? value.trim() : ''));
+      if (values.some((value) => !value) || new Set(values).size !== values.length)
+        throw new Error(`Inventory item ${field} has malformed or duplicate associations.`);
+      return values.sort();
+    });
+  if (aliases.length === 0) return { ...base, groupKeys: null };
+  const [groupKeys, ...otherAliases] = aliases;
+  if (otherAliases.some((values) => JSON.stringify(values) !== JSON.stringify(groupKeys)))
+    throw new Error('Inventory item group association aliases conflict.');
   return { ...base, groupKeys };
 }
 

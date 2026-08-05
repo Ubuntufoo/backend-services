@@ -619,6 +619,79 @@ describe('You Pick offer-list read adapter contract', () => {
 });
 
 describe('You Pick inventory item semantic snapshots', () => {
+  it.each([
+    ['groupIds', { groupIds: ['G1'] }],
+    ['inventoryItemGroupKeys', { inventoryItemGroupKeys: ['G1'] }],
+  ])('normalizes the %s association alias', (_label, associations) => {
+    expect(normalizeYouPickItem({ ...plannedItem, ...associations }).groupKeys).toEqual(['G1']);
+  });
+
+  it('accepts equivalent association aliases and returns one deterministic list', () => {
+    expect(
+      normalizeYouPickItem({
+        ...plannedItem,
+        groupIds: ['G1'],
+        inventoryItemGroupKeys: ['G1'],
+      }).groupKeys
+    ).toEqual(['G1']);
+    expect(
+      normalizeYouPickItem({
+        ...plannedItem,
+        groupIds: ['G2', 'G1'],
+        inventoryItemGroupKeys: ['G1', 'G2'],
+      }).groupKeys
+    ).toEqual(['G1', 'G2']);
+  });
+
+  it('distinguishes absent aliases from agreed empty association aliases', () => {
+    expect(normalizeYouPickItem(plannedItem).groupKeys).toBeNull();
+    expect(
+      normalizeYouPickItem({
+        ...plannedItem,
+        groupIds: [],
+        inventoryItemGroupKeys: [],
+      }).groupKeys
+    ).toEqual([]);
+  });
+
+  it.each([
+    ['empty and non-empty', [], ['G1']],
+    ['conflicting sets', ['G1'], ['G2']],
+    ['missing value in one alias', ['G1', 'G2'], ['G1']],
+  ])('rejects %s association aliases', (_label, groupIds, inventoryItemGroupKeys) => {
+    expect(() =>
+      normalizeYouPickItem({ ...plannedItem, groupIds, inventoryItemGroupKeys })
+    ).toThrow('Inventory item group association aliases conflict.');
+  });
+
+  it.each([
+    ['groupIds', { key: 'groupIds', value: 'G1' }],
+    ['inventoryItemGroupKeys', { key: 'inventoryItemGroupKeys', value: {} }],
+  ])('rejects non-array %s', (_label, malformed) => {
+    expect(() =>
+      normalizeYouPickItem({ ...plannedItem, [malformed.key]: malformed.value })
+    ).toThrow(/association must be an array/);
+  });
+
+  it.each([
+    ['non-string', { groupIds: ['G1', 1] }],
+    ['blank', { inventoryItemGroupKeys: [' '] }],
+    ['duplicate', { groupIds: ['G1', ' G1 '] }],
+  ])('rejects %s association values', (_label, associations) => {
+    expect(() => normalizeYouPickItem({ ...plannedItem, ...associations })).toThrow(
+      /malformed or duplicate associations/
+    );
+  });
+
+  it('preserves multiple case-sensitive associations while canonicalizing only order', () => {
+    expect(
+      normalizeYouPickItem({
+        ...plannedItem,
+        groupIds: ['group-2', 'Group 1'],
+      }).groupKeys
+    ).toEqual(['Group 1', 'group-2']);
+  });
+
   it('ignores demonstrated server-managed fields and canonicalizes unordered API collections', () => {
     const raw = {
       ...plannedItem,
