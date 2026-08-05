@@ -177,13 +177,18 @@ Version 5 is the only executable manifest version. It stores the immutable valid
 the ordered operation digests, and one ledger row per operation: `planned`, `started`, `completed`,
 or `unknown`; attempt count; started/completed timestamps; sanitized result/error evidence; and a
 read-back digest. Atomic persistence occurs immediately before each attempted mutation and after
-reconciliation. Version 4 remains readable for historical read-only inspection but is never
-silently upgraded or accepted for execution; create and review a fresh version-5 preflight run.
+reconciliation. `attemptCount` counts remote mutation attempts, not read-only verification passes.
+The terminal `verify-exact-run-resource-absence` operation therefore completes with exact read-back
+evidence, timestamps, and `attemptCount: 0`; its success criterion is proven absence, not an
+artificial completed/1 count. A successful terminal cleanup clears stale `lastError` only after
+that proof is persisted. Failed or unknown cleanup retains the current sanitized error and never
+claims `cleanup-complete`. Version 4 remains readable for historical read-only inspection but is
+never silently upgraded or accepted for execution; create and review a fresh version-5 preflight run.
 Payload-arrangement versions are separate from manifest versions. Existing version-5 manifests
 may embed fixture version 1 and rebuild the exact historical child/group requests, arrangement ID,
-operation digests, and ledger identities. New version-5 manifests require fixture version 2. The
-published run `20260804T173924Z-967292` therefore remains integrity-valid and cleanup-compatible;
-it must never be rewritten to version 2.
+operation digests, and ledger identities. New version-5 manifests require fixture version 2. Run
+`20260804T173924Z-967292` was cleaned through its integrity-valid version-1 arrangement and is
+preserved byte-for-byte as historical evidence; it must never be rewritten to version 2.
 Credentials, authorization headers, raw responses, signed URLs, and buyer personal data are never
 stored. Public fixture image sources remain immutable local pilot inputs and are redacted from
 console reports.

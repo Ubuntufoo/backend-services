@@ -1229,6 +1229,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
     ...options.manifest,
     checkpoint: 'cleanup-complete',
     cleanup: { ...options.manifest.cleanup, finalAbsenceVerified: true },
+    lastError: null,
   });
   await options.persist(options.manifest);
 }

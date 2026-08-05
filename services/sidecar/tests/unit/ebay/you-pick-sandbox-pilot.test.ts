@@ -375,6 +375,82 @@ function cleanupApi(
   });
 }
 
+function cleanupExecutionHarness(
+  manifest: ExecutableYouPickManifest,
+  failFinalGroupAbsence = false
+) {
+  const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+  const planned = new Map(plan.operations.map(({ id, payload }) => [id, payload]));
+  let groupPresent = true;
+  let listingStatus: YouPickListingStatus = 'ACTIVE';
+  let missingGroupReads = 0;
+  const items = new Set(manifest.run.childSkus);
+  const offers = new Set(manifest.run.childSkus);
+  const readApi = createApi({
+    getInventoryItemGroup: vi.fn(async () => {
+      if (groupPresent)
+        return {
+          status: 'found' as const,
+          value: normalizeYouPickGroup(planned.get('group-complete'), manifest.run.groupKey),
+        };
+      missingGroupReads += 1;
+      return failFinalGroupAbsence && missingGroupReads > 1
+        ? { status: 'unknown' as const, reason: 'final group state unavailable' }
+        : { status: 'missing' as const };
+    }),
+    getInventoryItem: vi.fn(async (sku) =>
+      items.has(sku)
+        ? {
+            status: 'found' as const,
+            value: normalizeYouPickItem({
+              ...(planned.get(`item-${sku.endsWith('C01') ? 'C01' : 'C02'}`) as Record<
+                string,
+                unknown
+              >),
+              inventoryItemGroupKeys: [manifest.run.groupKey],
+            }),
+          }
+        : { status: 'missing' as const }
+    ),
+    getOffers: vi.fn(async (sku) => {
+      if (!offers.has(sku))
+        return { status: 'found' as const, value: { offers: [] } };
+      const index = manifest.run.childSkus.indexOf(sku);
+      return {
+        status: 'found' as const,
+        value: {
+          offers: [
+            remoteOffer({
+              sku,
+              offerId: manifest.resources[index].offerId ?? undefined,
+              listingId: manifest.groupListingId,
+              listingStatus,
+              semanticPayload: planned.get(`offer-C0${index + 1}`),
+            }),
+          ],
+        },
+      };
+    }),
+  });
+  const mutationApi: YouPickPilotMutationApi = {
+    ...createMutationApi(),
+    withdrawInventoryItemGroup: vi.fn(async () => {
+      listingStatus = 'ENDED';
+    }),
+    deleteOffer: vi.fn(async (offerId) => {
+      const resource = manifest.resources.find((candidate) => candidate.offerId === offerId);
+      if (resource) offers.delete(resource.sku);
+    }),
+    deleteInventoryItemGroup: vi.fn(async () => {
+      groupPresent = false;
+    }),
+    deleteInventoryItem: vi.fn(async (sku) => {
+      items.delete(sku);
+    }),
+  };
+  return { readApi, mutationApi };
+}
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   vi.restoreAllMocks();
@@ -770,7 +846,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
   });
 
   it.skipIf(!existsSync(currentManifestPath))(
-    'keeps the published version-1 manifest integrity-valid and cleanup-plannable',
+    'keeps the cleaned version-1 manifest integrity-valid and byte-identical',
     async () => {
       const before = await readFile(currentManifestPath, 'utf8');
       const manifest = await readManifest(currentManifestPath, currentManifestRoot);
@@ -779,44 +855,38 @@ describe('You Pick manifest persistence and dry-run gates', () => {
       expect(() => assertExecutableManifestIntegrity(manifest)).not.toThrow();
       expect(manifest.execution.fixture.version).toBe(1);
       expect(manifest.arrangementId).toBe('arrangement-v1-ab936d5f171492b8');
-      expect(
-        buildCleanupPlan(manifest, {
-          group: 'found',
-          items: manifest.run.childSkus.map((sku) => ({
-            sku,
-            status: 'found',
-            groupKeys: [manifest.run.groupKey],
-          })),
-          offers: manifest.resources.map((resource) => ({
-            sku: resource.sku,
-            status: 'found',
-            offer: null,
-          })),
-          publicationObserved: true,
-          listingCurrentlyActive: true,
-          withdrawRequired: true,
-          listingId: manifest.groupListingId,
-          lifecycleClass: 'active',
-          listingStatuses: ['ACTIVE'],
-          warnings: [],
-        }).map(({ kind }) => kind)
-      ).toEqual([
-        'withdraw-active-group-if-needed',
-        'delete-recorded-offer',
-        'delete-recorded-offer',
-        'delete-group',
-        'delete-child',
-        'delete-child',
-        'verify-exact-absence',
-      ]);
-      expect(manifest.cleanup).toEqual({ attempts: 0, finalAbsenceVerified: false });
+      expect(manifest.checkpoint).toBe('cleanup-complete');
+      expect(manifest.cleanup).toEqual({ attempts: 1, finalAbsenceVerified: true });
       expect(
         manifest.execution.ledger
-          .filter(({ id }) =>
-            ['quantity-zero', 'withdraw-group', 'cleanup-group', 'verify-absence'].includes(id)
-          )
-          .every(({ state, attemptCount }) => state === 'planned' && attemptCount === 0)
-      ).toBe(true);
+          .filter(({ id }) => id === 'withdraw-group' || id.startsWith('cleanup-'))
+          .map(({ id, state, attemptCount }) => ({ id, state, attemptCount }))
+      ).toEqual([
+        { id: 'withdraw-group', state: 'completed', attemptCount: 1 },
+        { id: 'cleanup-offer-C02', state: 'completed', attemptCount: 1 },
+        { id: 'cleanup-offer-C01', state: 'completed', attemptCount: 1 },
+        { id: 'cleanup-group', state: 'completed', attemptCount: 1 },
+        { id: 'cleanup-child-2', state: 'completed', attemptCount: 1 },
+        { id: 'cleanup-child-1', state: 'completed', attemptCount: 1 },
+      ]);
+      expect(manifest.execution.ledger.find(({ id }) => id === 'verify-absence')).toEqual(
+        expect.objectContaining({
+          state: 'completed',
+          attemptCount: 0,
+          startedAt: expect.any(String),
+          completedAt: expect.any(String),
+          readBackDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        })
+      );
+      expect(manifest.execution.ledger.find(({ id }) => id === 'quantity-zero')).toEqual(
+        expect.objectContaining({ state: 'planned', attemptCount: 0 })
+      );
+      expect(
+        manifest.execution.ledger.find(({ id }) => id === 'quantity-restore-optional')
+      ).toEqual(expect.objectContaining({ state: 'planned', attemptCount: 0 }));
+      expect(manifest.lastError).toBe(
+        'Inventory item response contains ambiguous group association fields.'
+      );
       expect(await readFile(currentManifestPath, 'utf8')).toBe(before);
     }
   );
@@ -1655,6 +1725,112 @@ describe('You Pick execution attestation gates', () => {
       expect(persisted.updatedAt).toBe(failedAt);
     }
   );
+});
+
+describe('You Pick cleanup completion accounting', () => {
+  it('clears stale errors only after exact absence and records read-only verification completed/0', async () => {
+    const root = await tempRepo();
+    const prepared = await prepareExecutionCheckpoint(
+      root,
+      'awaiting-published-view-verification'
+    );
+    const manifest = executableYouPickManifestSchema.parse({
+      ...prepared.manifest,
+      lastError: 'stale historical error',
+    });
+    await writeManifestAtomic(prepared.manifestPath, manifest, prepared.localRoot);
+    const harness = cleanupExecutionHarness(manifest);
+    let tick = 0;
+
+    await runYouPickSandboxPilot({
+      api: harness.readApi,
+      manifestPath: prepared.manifestPath,
+      cleanup: true,
+      execute: true,
+      confirmSandboxSeller: 'sandbox-seller-123',
+      mutationApiFactory: vi.fn(async () => harness.mutationApi),
+      repoRoot: root,
+      now: () => new Date(Date.parse('2026-08-05T16:00:00.000Z') + tick++ * 1_000),
+    });
+
+    const persisted = await readManifest(prepared.manifestPath, prepared.localRoot);
+    if (!('execution' in persisted)) throw new Error('Expected an executable manifest.');
+    expect(persisted).toEqual(
+      expect.objectContaining({
+        checkpoint: 'cleanup-complete',
+        lastError: null,
+        cleanup: { attempts: 1, finalAbsenceVerified: true },
+      })
+    );
+    expect(
+      persisted.execution.ledger
+        .filter(({ id }) => id === 'withdraw-group' || id.startsWith('cleanup-'))
+        .map(({ id, state, attemptCount }) => ({ id, state, attemptCount }))
+    ).toEqual([
+      { id: 'withdraw-group', state: 'completed', attemptCount: 1 },
+      { id: 'cleanup-offer-C02', state: 'completed', attemptCount: 1 },
+      { id: 'cleanup-offer-C01', state: 'completed', attemptCount: 1 },
+      { id: 'cleanup-group', state: 'completed', attemptCount: 1 },
+      { id: 'cleanup-child-2', state: 'completed', attemptCount: 1 },
+      { id: 'cleanup-child-1', state: 'completed', attemptCount: 1 },
+    ]);
+    expect(persisted.execution.ledger.find(({ id }) => id === 'verify-absence')).toEqual(
+      expect.objectContaining({
+        state: 'completed',
+        attemptCount: 0,
+        startedAt: expect.any(String),
+        completedAt: expect.any(String),
+        readBackDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      })
+    );
+    expect(harness.mutationApi.withdrawInventoryItemGroup).toHaveBeenCalledOnce();
+    expect(harness.mutationApi.deleteOffer).toHaveBeenCalledTimes(2);
+    expect(harness.mutationApi.deleteInventoryItemGroup).toHaveBeenCalledOnce();
+    expect(harness.mutationApi.deleteInventoryItem).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists a current final-absence error and does not clear stale state early', async () => {
+    const root = await tempRepo();
+    const prepared = await prepareExecutionCheckpoint(
+      root,
+      'awaiting-published-view-verification'
+    );
+    const manifest = executableYouPickManifestSchema.parse({
+      ...prepared.manifest,
+      lastError: 'stale historical error',
+    });
+    await writeManifestAtomic(prepared.manifestPath, manifest, prepared.localRoot);
+    const harness = cleanupExecutionHarness(manifest, true);
+    let tick = 0;
+
+    await expect(
+      runYouPickSandboxPilot({
+        api: harness.readApi,
+        manifestPath: prepared.manifestPath,
+        cleanup: true,
+        execute: true,
+        confirmSandboxSeller: 'sandbox-seller-123',
+        mutationApiFactory: vi.fn(async () => harness.mutationApi),
+        repoRoot: root,
+        now: () => new Date(Date.parse('2026-08-05T16:00:00.000Z') + tick++ * 1_000),
+      })
+    ).rejects.toThrow('group final absence is unknown.');
+
+    const persisted = await readManifest(prepared.manifestPath, prepared.localRoot);
+    if (!('execution' in persisted)) throw new Error('Expected an executable manifest.');
+    expect(persisted.checkpoint).toBe('cleanup-in-progress');
+    expect(persisted.cleanup).toEqual({ attempts: 1, finalAbsenceVerified: false });
+    expect(persisted.lastError).toBe('group final absence is unknown.');
+    expect(persisted.execution.ledger.find(({ id }) => id === 'verify-absence')).toEqual(
+      expect.objectContaining({
+        state: 'planned',
+        attemptCount: 0,
+        startedAt: null,
+        completedAt: null,
+        readBackDigest: null,
+      })
+    );
+  });
 });
 
 describe('You Pick cleanup planning and redaction', () => {

@@ -99,9 +99,10 @@ write path. One run may publish only one material payload arrangement: a buyer-f
 requires withdrawal, full cleanup, verified absence, and a fresh run for any declared fallback.
 Run `20260804T173924Z-967292` proved that the v1 group-only flattened image arrangement fails the
 buyer view. Its version-1 fixture, arrangement ID, operation digests, and cleanup identities remain
-immutable so listing `110590142987` can be cleaned from that manifest. New runs use fixture version
-2 and may begin only after the failed listing is fully cleaned through a separately authorized
-operation.
+immutable. Listing `110590142987`, both offers, the group, and both children were fully cleaned and
+independently verified absent; the historical manifest remains byte-identical at SHA-256
+`c924af76e96d691a4560f8aad02d015ce111bb2cede0a0335e241a3f1d4f8926`. New runs use fixture version
+2 with entirely new identities.
 
 Do not run until worktree-local credentials, ports, storage, and background workers are
 isolated. Then use 2-3 unsold cards and prove, in order:
@@ -134,7 +135,10 @@ fixture/run before dependency construction and mutation. Publication, quantity-z
 reconcile every child offer to one unambiguous listing lifecycle; quantity-zero also proves the
 complete group/item/offer snapshot before and after the write. Both manual attestations must occur
 strictly after their corresponding completed ledger operation, and quantity-zero evidence covers
-every ordered non-target child. This implementation is not live Sandbox write authorization.
+every ordered non-target child. Ledger `attemptCount` tracks remote mutation attempts only, so the
+read-only terminal absence check completes/0 with timestamps and a read-back digest. Exact absence,
+not an artificial attempt count, closes cleanup. This implementation is not live Sandbox write
+authorization.
 
 ## Unresolved before persistence or orchestration
 
