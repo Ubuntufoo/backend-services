@@ -251,7 +251,10 @@ unchanged.
 remote state with exact reads, then walks only manifest-owned dependencies in reverse: withdraw
 an active group, delete recorded offers, delete the group, delete children, and verify exact
 absence. It may resume after its own interruption and must stop before deleting a resource whose
-ownership or dependency state is ambiguous.
+ownership or dependency state is ambiguous. Cleanup execution never requires published-view or
+quantity-zero attestations; those attestations guard only the non-cleanup quantity experiment.
+Pre-mutation execution validation failures are sanitized and persisted to `lastError` before the
+CLI returns the recovery command.
 The executable path uses one complete publication-state reconciler before publish adoption,
 quantity-zero, and destructive cleanup. Every child must have one exact offer, compatible status,
 one listing ID and lifecycle, and complete normalized flags. `INACTIVE`, missing lifecycle fields,

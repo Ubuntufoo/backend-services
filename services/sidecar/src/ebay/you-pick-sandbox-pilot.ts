@@ -2077,19 +2077,19 @@ export async function runYouPickSandboxPilot(
   await writeManifestAtomic(path, manifest, localRoot);
 
   if (options.execute) {
-    if (manifest.version !== YOU_PICK_MANIFEST_VERSION || !mutationHeaders)
-      throw new Error(YOU_PICK_EXECUTION_ERROR);
-    const {
-      executeYouPickManifest,
-      validatePublishedViewAttestation,
-      validateQuantityZeroAttestation,
-    } = await import('./you-pick-sandbox-pilot-mutation.js');
-    if (manifest.checkpoint === 'awaiting-published-view-verification')
-      validatePublishedViewAttestation(options.attestation, manifest, now());
-    if (manifest.checkpoint === 'awaiting-quantity-zero-verification')
-      validateQuantityZeroAttestation(options.attestation, manifest, now());
-    assertExecutableManifestIntegrity(manifest);
     try {
+      if (manifest.version !== YOU_PICK_MANIFEST_VERSION || !mutationHeaders)
+        throw new Error(YOU_PICK_EXECUTION_ERROR);
+      const {
+        executeYouPickManifest,
+        validatePublishedViewAttestation,
+        validateQuantityZeroAttestation,
+      } = await import('./you-pick-sandbox-pilot-mutation.js');
+      if (!options.cleanup && manifest.checkpoint === 'awaiting-published-view-verification')
+        validatePublishedViewAttestation(options.attestation, manifest, now());
+      if (!options.cleanup && manifest.checkpoint === 'awaiting-quantity-zero-verification')
+        validateQuantityZeroAttestation(options.attestation, manifest, now());
+      assertExecutableManifestIntegrity(manifest);
       const mutationApi = await options.mutationApiFactory!();
       return await executeYouPickManifest({
         manifest,

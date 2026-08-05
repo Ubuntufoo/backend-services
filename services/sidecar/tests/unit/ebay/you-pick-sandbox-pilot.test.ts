@@ -34,6 +34,7 @@ import {
   executeYouPickManifest,
   type YouPickPilotMutationApi,
 } from '@/ebay/you-pick-sandbox-pilot-mutation.js';
+import * as youPickMutation from '@/ebay/you-pick-sandbox-pilot-mutation.js';
 import { normalizeYouPickGroup, normalizeYouPickItem } from '@/scripts/you-pick-sandbox-pilot.js';
 
 const fixturePath = fileURLToPath(
@@ -258,6 +259,64 @@ function verifyingUnpublishedManifest(manifest: YouPickManifest): ExecutableYouP
       ),
     },
   });
+}
+
+async function prepareExecutionCheckpoint(
+  root: string,
+  checkpoint: 'awaiting-published-view-verification' | 'awaiting-quantity-zero-verification'
+) {
+  const fresh = await runFresh(root);
+  const localRoot = join(root, '.local', 'you-pick-sandbox');
+  const manifest = await readManifest(fresh.manifestPath, localRoot);
+  if (!('execution' in manifest)) throw new Error('Expected an executable manifest.');
+  const completedAt = '2026-08-05T14:32:58.598Z';
+  const completed = new Set([
+    'item-C01',
+    'item-C02',
+    'offer-C01',
+    'offer-C02',
+    'group-complete',
+    'publish-group',
+    ...(checkpoint === 'awaiting-quantity-zero-verification' ? ['quantity-zero'] : []),
+  ]);
+  const offerIds = ['11409899010', '11409959010'];
+  const executable = executableYouPickManifestSchema.parse({
+    ...manifest,
+    checkpoint,
+    published: true,
+    groupListingId: '110590142987',
+    resources: manifest.resources.map((resource, index) => ({
+      ...resource,
+      offerId: offerIds[index],
+      offerStatus: 'PUBLISHED',
+    })),
+    execution: {
+      ...manifest.execution,
+      publishedAttestationDigest:
+        checkpoint === 'awaiting-quantity-zero-verification' ? 'b'.repeat(64) : null,
+      ledger: manifest.execution.ledger.map((entry) =>
+        completed.has(entry.id)
+          ? {
+              ...entry,
+              state: 'completed',
+              attemptCount: 1,
+              startedAt: completedAt,
+              completedAt,
+              result:
+                entry.id === 'publish-group'
+                  ? { listingId: '110590142987' }
+                  : entry.id.startsWith('offer-')
+                    ? { offerId: offerIds[entry.id === 'offer-C01' ? 0 : 1] }
+                    : null,
+              error: null,
+              readBackDigest: 'a'.repeat(64),
+            }
+          : entry
+      ),
+    },
+  });
+  await writeManifestAtomic(fresh.manifestPath, executable, localRoot);
+  return { manifestPath: fresh.manifestPath, localRoot, manifest: executable };
 }
 
 async function loadFixture(): Promise<unknown> {
@@ -1510,6 +1569,92 @@ describe('You Pick verifying-unpublished recovery', () => {
     expect(mutationApi.publishInventoryItemGroup).not.toHaveBeenCalled();
     for (const mutation of Object.values(mutationApi)) expect(mutation).not.toHaveBeenCalled();
   });
+});
+
+describe('You Pick execution attestation gates', () => {
+  it.each(['awaiting-published-view-verification', 'awaiting-quantity-zero-verification'] as const)(
+    'bypasses quantity-experiment attestations for cleanup from %s',
+    async (checkpoint) => {
+      const root = await tempRepo();
+      const prepared = await prepareExecutionCheckpoint(root, checkpoint);
+      const publishedValidator = vi
+        .spyOn(youPickMutation, 'validatePublishedViewAttestation')
+        .mockImplementation(() => {
+          throw new Error('Published-view validator must not run during cleanup.');
+        });
+      const quantityValidator = vi
+        .spyOn(youPickMutation, 'validateQuantityZeroAttestation')
+        .mockImplementation(() => {
+          throw new Error('Quantity-zero validator must not run during cleanup.');
+        });
+      const executionReport = {
+        mode: 'cleanup-execute',
+        checkpoint,
+        run: prepared.manifest.run,
+        listingId: prepared.manifest.groupListingId,
+        completedOperationIds: [],
+        safeResumeCommand: 'manifest-owned cleanup resume',
+      } as const;
+      const execute = vi
+        .spyOn(youPickMutation, 'executeYouPickManifest')
+        .mockResolvedValue(executionReport);
+      const mutationApiFactory = vi.fn(async () => createMutationApi());
+
+      await expect(
+        runYouPickSandboxPilot({
+          api: createApi(),
+          manifestPath: prepared.manifestPath,
+          cleanup: true,
+          execute: true,
+          confirmSandboxSeller: 'sandbox-seller-123',
+          mutationApiFactory,
+          repoRoot: root,
+          now: () => new Date('2026-08-05T16:00:00.000Z'),
+        })
+      ).resolves.toEqual(executionReport);
+
+      expect(publishedValidator).not.toHaveBeenCalled();
+      expect(quantityValidator).not.toHaveBeenCalled();
+      expect(mutationApiFactory).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledWith(expect.objectContaining({ cleanup: true }));
+    }
+  );
+
+  it.each([
+    [
+      'awaiting-published-view-verification',
+      'Published-view attestation is required for quantity-zero execution.',
+    ],
+    [
+      'awaiting-quantity-zero-verification',
+      'Quantity-zero attestation is required before withdrawal and cleanup.',
+    ],
+  ] as const)(
+    'persists the required non-cleanup attestation failure from %s before mutation construction',
+    async (checkpoint, expectedError) => {
+      const root = await tempRepo();
+      const prepared = await prepareExecutionCheckpoint(root, checkpoint);
+      const mutationApiFactory = vi.fn(async () => createMutationApi());
+      const failedAt = '2026-08-05T16:00:00.000Z';
+
+      await expect(
+        runYouPickSandboxPilot({
+          api: createApi(),
+          manifestPath: prepared.manifestPath,
+          execute: true,
+          confirmSandboxSeller: 'sandbox-seller-123',
+          mutationApiFactory,
+          repoRoot: root,
+          now: () => new Date(failedAt),
+        })
+      ).rejects.toThrow(expectedError);
+
+      expect(mutationApiFactory).not.toHaveBeenCalled();
+      const persisted = await readManifest(prepared.manifestPath, prepared.localRoot);
+      expect(persisted.lastError).toBe(expectedError);
+      expect(persisted.updatedAt).toBe(failedAt);
+    }
+  );
 });
 
 describe('You Pick cleanup planning and redaction', () => {
