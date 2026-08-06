@@ -413,8 +413,7 @@ function cleanupExecutionHarness(
         : { status: 'missing' as const }
     ),
     getOffers: vi.fn(async (sku) => {
-      if (!offers.has(sku))
-        return { status: 'found' as const, value: { offers: [] } };
+      if (!offers.has(sku)) return { status: 'found' as const, value: { offers: [] } };
       const index = manifest.run.childSkus.indexOf(sku);
       return {
         status: 'found' as const,
@@ -1907,10 +1906,7 @@ describe('You Pick execution attestation gates', () => {
 describe('You Pick cleanup completion accounting', () => {
   it('clears stale errors only after exact absence and records read-only verification completed/0', async () => {
     const root = await tempRepo();
-    const prepared = await prepareExecutionCheckpoint(
-      root,
-      'awaiting-published-view-verification'
-    );
+    const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');
     const manifest = executableYouPickManifestSchema.parse({
       ...prepared.manifest,
       lastError: 'stale historical error',
@@ -1968,10 +1964,7 @@ describe('You Pick cleanup completion accounting', () => {
 
   it('persists a current final-absence error and does not clear stale state early', async () => {
     const root = await tempRepo();
-    const prepared = await prepareExecutionCheckpoint(
-      root,
-      'awaiting-published-view-verification'
-    );
+    const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');
     const manifest = executableYouPickManifestSchema.parse({
       ...prepared.manifest,
       lastError: 'stale historical error',

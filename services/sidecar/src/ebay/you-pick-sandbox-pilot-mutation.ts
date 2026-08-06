@@ -206,11 +206,7 @@ function requireOneInventoryItemSemanticMatch(
   throw new Error(`${label} does not match an owned original/zero semantic item snapshot.`);
 }
 
-function requireOfferSemanticMatch(
-  offer: RemoteOffer,
-  expected: unknown,
-  label: string
-): void {
+function requireOfferSemanticMatch(offer: RemoteOffer, expected: unknown, label: string): void {
   if (offer.semanticSnapshot && offer.sku !== offer.semanticSnapshot.sku)
     throw new Error(`${label} semantic SKU conflicts with normalized ownership SKU.`);
   if (offer.semanticSnapshot && offer.marketplaceId !== offer.semanticSnapshot.marketplaceId)
