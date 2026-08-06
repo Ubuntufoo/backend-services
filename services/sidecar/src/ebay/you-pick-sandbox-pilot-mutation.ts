@@ -423,6 +423,17 @@ export async function reconcileCompletePublicationState(
   };
 }
 
+function resolveResourcesFromPublication(
+  manifest: ExecutableYouPickManifest,
+  publication: ReconciledPublicationState
+): ExecutableYouPickManifest['resources'] {
+  return manifest.resources.map((resource, index) => ({
+    ...resource,
+    offerId: publication.offers[index].offerId,
+    offerStatus: publication.offers[index].status,
+  }));
+}
+
 function expectedItemPayload(
   plan: ReturnType<typeof buildFuturePlan>,
   index: number,
@@ -812,6 +823,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
       ...options.manifest,
       published: true,
       groupListingId: publication.listingId,
+      resources: resolveResourcesFromPublication(options.manifest, publication),
     });
     await updateLedger(options, 'publish-group', 'completed', {
       result: { listingId: publication.listingId },
@@ -848,6 +860,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
           ...options.manifest,
           published: true,
           groupListingId: reconciled.listingId,
+          resources: resolveResourcesFromPublication(options.manifest, reconciled),
         });
         return { listingId: reconciled.listingId };
       },

@@ -1641,6 +1641,183 @@ describe('You Pick verifying-unpublished recovery', () => {
   });
 });
 
+describe('You Pick publication resource persistence', () => {
+  it('persists PUBLISHED on all resources after successful first publication', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const manifest = verifyingUnpublishedManifest(
+      await readManifest(fresh.manifestPath, join(root, '.local', 'you-pick-sandbox'))
+    );
+    const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+    const itemRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'item-C01' || id === 'item-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const offerRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'offer-C01' || id === 'offer-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const groupRequest = plan.operations.find(({ id }) => id === 'group-complete')?.payload;
+    const listingId = '110590199999';
+    const getInventoryItem = vi.fn(async (sku: string) => ({
+      status: 'found' as const,
+      value: normalizeYouPickItem({
+        ...(itemRequests.get(sku) as Record<string, unknown>),
+        groupIds: [manifest.run.groupKey],
+        inventoryItemGroupKeys: [manifest.run.groupKey],
+      }),
+    }));
+    let offerCall = 0;
+    const getOffers = vi.fn(async (sku: string) => {
+      offerCall++;
+      const index = manifest.run.childSkus.indexOf(sku);
+      // Call 1-6: UNPUBLISHED (creating-offers, verifying-unpublished, pre-publish reconciliation)
+      // Call 7-8: PUBLISHED (post-publish reconciliation)
+      const published = offerCall > 6;
+      return {
+        status: 'found' as const,
+        value: {
+          offers: [
+            remoteOffer({
+              sku,
+              offerId: manifest.resources[index].offerId ?? undefined,
+              status: published ? 'PUBLISHED' : 'UNPUBLISHED',
+              listingId: published ? listingId : null,
+              listingStatus: published ? 'ACTIVE' : null,
+              semanticPayload: offerRequests.get(sku),
+            }),
+          ],
+        },
+      };
+    });
+    const getInventoryItemGroup = vi.fn(async () => ({
+      status: 'found' as const,
+      value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+    }));
+    const mutationApi = createMutationApi();
+    mutationApi.publishInventoryItemGroup = vi.fn(async () => ({ listingId }));
+    let persisted = manifest;
+
+    const report = await executeYouPickManifest({
+      manifest,
+      manifestPath: fresh.manifestPath,
+      readApi: createApi({ getInventoryItem, getOffers, getInventoryItemGroup }),
+      mutationApi,
+      headers: { 'Content-Language': 'en-US' },
+      cleanup: false,
+      now: () => new Date('2026-08-06T16:30:00.000Z'),
+      persist: async (next) => {
+        persisted = next;
+      },
+    });
+
+    expect(report.checkpoint).toBe('awaiting-published-view-verification');
+    expect(report.listingId).toBe(listingId);
+    expect(persisted.published).toBe(true);
+    expect(persisted.groupListingId).toBe(listingId);
+    expect(persisted.resources).toEqual([
+      expect.objectContaining({ offerId: '11409899010', offerStatus: 'PUBLISHED' }),
+      expect.objectContaining({ offerId: '11409959010', offerStatus: 'PUBLISHED' }),
+    ]);
+    expect(mutationApi.publishInventoryItemGroup).toHaveBeenCalledOnce();
+    // later operations untouched
+    expect(persisted.execution.ledger[6].state).toBe('planned');
+    expect(persisted.execution.ledger[6].attemptCount).toBe(0);
+    expect(persisted.execution.ledger[7].state).toBe('planned');
+    expect(persisted.execution.ledger[7].attemptCount).toBe(0);
+    expect(persisted.cleanup.attempts).toBe(0);
+  });
+
+  it('adopts already-active published group and persists PUBLISHED on resources', async () => {
+    const root = await tempRepo();
+    const fresh = await runFresh(root);
+    const manifest = verifyingUnpublishedManifest(
+      await readManifest(fresh.manifestPath, join(root, '.local', 'you-pick-sandbox'))
+    );
+    const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+    const itemRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'item-C01' || id === 'item-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const offerRequests = new Map(
+      plan.operations
+        .filter(({ id }) => id === 'offer-C01' || id === 'offer-C02')
+        .map(({ payload }) => [(payload as { sku: string }).sku, payload] as const)
+    );
+    const groupRequest = plan.operations.find(({ id }) => id === 'group-complete')?.payload;
+    const listingId = '110590199998';
+    const getInventoryItem = vi.fn(async (sku: string) => ({
+      status: 'found' as const,
+      value: normalizeYouPickItem({
+        ...(itemRequests.get(sku) as Record<string, unknown>),
+        groupIds: [manifest.run.groupKey],
+        inventoryItemGroupKeys: [manifest.run.groupKey],
+      }),
+    }));
+    let offerCall = 0;
+    const getOffers = vi.fn(async (sku: string) => {
+      offerCall++;
+      const index = manifest.run.childSkus.indexOf(sku);
+      // Call 1-4: UNPUBLISHED (creating-offers, verifying-unpublished)
+      // Call 5-6: PUBLISHED (reconcileCompletePublicationState finds already active)
+      const published = offerCall > 4;
+      return {
+        status: 'found' as const,
+        value: {
+          offers: [
+            remoteOffer({
+              sku,
+              offerId: manifest.resources[index].offerId ?? undefined,
+              status: published ? 'PUBLISHED' : 'UNPUBLISHED',
+              listingId: published ? listingId : null,
+              listingStatus: published ? 'ACTIVE' : null,
+              semanticPayload: offerRequests.get(sku),
+            }),
+          ],
+        },
+      };
+    });
+    const getInventoryItemGroup = vi.fn(async () => ({
+      status: 'found' as const,
+      value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+    }));
+    const mutationApi = createMutationApi();
+    let persisted = manifest;
+
+    const report = await executeYouPickManifest({
+      manifest,
+      manifestPath: fresh.manifestPath,
+      readApi: createApi({ getInventoryItem, getOffers, getInventoryItemGroup }),
+      mutationApi,
+      headers: { 'Content-Language': 'en-US' },
+      cleanup: false,
+      now: () => new Date('2026-08-06T16:30:00.000Z'),
+      persist: async (next) => {
+        persisted = next;
+      },
+    });
+
+    expect(report.checkpoint).toBe('awaiting-published-view-verification');
+    expect(report.listingId).toBe(listingId);
+    expect(persisted.published).toBe(true);
+    expect(persisted.groupListingId).toBe(listingId);
+    expect(persisted.resources).toEqual([
+      expect.objectContaining({ offerId: '11409899010', offerStatus: 'PUBLISHED' }),
+      expect.objectContaining({ offerId: '11409959010', offerStatus: 'PUBLISHED' }),
+    ]);
+    expect(mutationApi.publishInventoryItemGroup).not.toHaveBeenCalled();
+    // later operations untouched
+    expect(persisted.execution.ledger[6].state).toBe('planned');
+    expect(persisted.execution.ledger[6].attemptCount).toBe(0);
+    expect(persisted.execution.ledger[7].state).toBe('planned');
+    expect(persisted.execution.ledger[7].attemptCount).toBe(0);
+    expect(persisted.cleanup.attempts).toBe(0);
+  });
+});
+
 describe('You Pick execution attestation gates', () => {
   it.each(['awaiting-published-view-verification', 'awaiting-quantity-zero-verification'] as const)(
     'bypasses quantity-experiment attestations for cleanup from %s',
