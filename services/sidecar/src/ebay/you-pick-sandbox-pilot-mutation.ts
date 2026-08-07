@@ -17,6 +17,10 @@ import {
   type RemoteOffer,
   type YouPickPilotReadApi,
 } from './you-pick-sandbox-pilot.js';
+import {
+  reconcileCompletePublicationState,
+  type ReconciledPublicationState,
+} from './you-pick-sandbox-verification.js';
 
 export interface GuardedMutationHeaders {
   'Content-Language': typeof YOU_PICK_CONTENT_LANGUAGE;
@@ -322,101 +326,6 @@ export function validateQuantityZeroAttestation(
   )
     throw new Error('Quantity-zero attestation does not match the exact run-owned children.');
   return value;
-}
-
-export interface ReconciledPublicationState {
-  state: 'unpublished' | 'active' | 'ended' | 'not-listed';
-  offers: RemoteOffer[];
-  listingId: string | null;
-  withdrawRequired: boolean;
-}
-
-export async function reconcileCompletePublicationState(
-  readApi: YouPickPilotReadApi,
-  manifest: ExecutableYouPickManifest,
-  allowAbsent = false
-): Promise<ReconciledPublicationState> {
-  const reads = await Promise.all(
-    manifest.run.childSkus.map((sku) => readApi.getOffers(sku, YOU_PICK_MARKETPLACE))
-  );
-  const offers: RemoteOffer[] = [];
-  let absentCount = 0;
-  reads.forEach((read, index) => {
-    const sku = manifest.run.childSkus[index];
-    if (read.status === 'unknown') throw new Error(`Publication state for ${sku} is unknown.`);
-    if (read.status === 'missing' || read.value.offers.length === 0) {
-      absentCount += 1;
-      return;
-    }
-    if (read.value.offers.length !== 1)
-      throw new Error(`Publication state for ${sku} requires exactly one offer.`);
-    const offer = read.value.offers[0];
-    const recordedOfferId = manifest.resources[index].offerId;
-    if (
-      offer.sku !== sku ||
-      offer.marketplaceId !== YOU_PICK_MARKETPLACE ||
-      (recordedOfferId !== null && offer.offerId !== recordedOfferId)
-    )
-      throw new Error(`Publication state for ${sku} has conflicting ownership.`);
-    offers.push(offer);
-  });
-
-  if (!allowAbsent && absentCount > 0)
-    throw new Error('Complete publication state is missing one or more child offers.');
-  if (offers.length === 0)
-    return { state: 'unpublished', offers, listingId: null, withdrawRequired: false };
-  const statuses = new Set(offers.map((offer) => offer.status));
-  if (statuses.size !== 1)
-    throw new Error('Publication state mixes PUBLISHED and UNPUBLISHED child offers.');
-  const status = offers[0].status;
-  if (status === 'UNPUBLISHED') {
-    if (
-      offers.some(
-        (offer) =>
-          offer.listingId !== null ||
-          offer.listingStatus !== null ||
-          offer.lifecycleClass !== null ||
-          offer.publicationObserved ||
-          offer.listingCurrentlyActive !== false ||
-          offer.withdrawRequired !== false
-      )
-    )
-      throw new Error('Unpublished child offers contain ambiguous lifecycle evidence.');
-    return { state: 'unpublished', offers, listingId: null, withdrawRequired: false };
-  }
-  if (absentCount > 0) throw new Error('Published group is missing one or more child offers.');
-  const listingIds = [...new Set(offers.map((offer) => offer.listingId))];
-  if (listingIds.length !== 1 || !listingIds[0])
-    throw new Error('Published group has conflicting or missing listing IDs.');
-  if (manifest.groupListingId && manifest.groupListingId !== listingIds[0])
-    throw new Error('Published group listing ID conflicts with the manifest.');
-  const lifecycleClasses = new Set(offers.map((offer) => offer.lifecycleClass));
-  if (
-    lifecycleClasses.size !== 1 ||
-    lifecycleClasses.has(null) ||
-    lifecycleClasses.has('ambiguous')
-  )
-    throw new Error('Published group has mixed, missing, or ambiguous lifecycle classes.');
-  const lifecycleClass = offers[0].lifecycleClass;
-  if (lifecycleClass !== 'active' && lifecycleClass !== 'ended' && lifecycleClass !== 'not-listed')
-    throw new Error('Published group lifecycle is not safely classified.');
-  const withdrawRequired = lifecycleClass === 'active';
-  if (
-    offers.some(
-      (offer) =>
-        !offer.publicationObserved ||
-        offer.listingCurrentlyActive !== withdrawRequired ||
-        offer.withdrawRequired !== withdrawRequired ||
-        offer.listingStatus === null
-    )
-  )
-    throw new Error('Published group has incomplete or conflicting normalized lifecycle details.');
-  return {
-    state: lifecycleClass,
-    offers,
-    listingId: listingIds[0],
-    withdrawRequired,
-  };
 }
 
 function resolveResourcesFromPublication(

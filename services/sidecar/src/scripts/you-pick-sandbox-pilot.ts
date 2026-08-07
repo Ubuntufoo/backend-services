@@ -448,6 +448,20 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
   const api = new EbaySellerApi(config);
   let currentUserId: string | undefined;
   let initialized = false;
+  let initPromise: Promise<void> | undefined;
+
+  async function ensureInitialized(): Promise<void> {
+    if (initialized) return;
+    if (initPromise) {
+      await initPromise;
+      return;
+    }
+    initPromise = (async () => {
+      await api.initialize();
+      initialized = true;
+    })();
+    await initPromise;
+  }
 
   return {
     getRuntimeSnapshot(): Promise<RuntimeSnapshot> {
@@ -484,15 +498,13 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
       });
     },
     async getCurrentUserIdentity() {
-      if (!initialized) {
-        await api.initialize();
-        initialized = true;
-      }
+      await ensureInitialized();
       const identity = await api.trading.getCurrentUserIdentity();
       currentUserId = identity.userId;
       return identity;
     },
     async getPolicyLocationSnapshot() {
+      await ensureInitialized();
       if (!currentUserId)
         throw new Error('Trading identity must be resolved before seller resources.');
       const marketplace = config.marketplaceId ?? '';
@@ -505,6 +517,7 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
       return normalizeYouPickPolicies(fulfillment, payment, returns, locations, currentUserId);
     },
     async getMetadataSnapshot(categoryId) {
+      await ensureInitialized();
       const marketplace = config.marketplaceId ?? '';
       const tree = asRecord(await api.taxonomy.getDefaultCategoryTreeId(marketplace));
       const treeId = tree ? stringField(tree, 'categoryTreeId') : '';
@@ -518,6 +531,7 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
       return normalizeYouPickMetadata(categoryId, listingStructure, conditions, taxonomy);
     },
     async getInventoryItemGroup(groupKey) {
+      await ensureInitialized();
       const read = await classifyYouPickExactRead(() =>
         api.inventory.getInventoryItemGroup(groupKey)
       );
@@ -526,12 +540,14 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         : read;
     },
     async getInventoryItem(sku) {
+      await ensureInitialized();
       const read = await classifyYouPickExactRead(() => api.inventory.getInventoryItem(sku));
       return read.status === 'found'
         ? { status: 'found', value: normalizeYouPickItem(read.value) }
         : read;
     },
     async getOffers(sku, marketplaceId) {
+      await ensureInitialized();
       return classifyYouPickOfferListRead(() => api.inventory.getOffers(sku, marketplaceId));
     },
   };
