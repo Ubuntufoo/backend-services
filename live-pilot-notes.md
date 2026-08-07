@@ -13,6 +13,8 @@ Minimal notes for safely testing first real eBay listings while fulfillment/admi
 ## Before First Live Publish
 
 - Confirm `EBAY_ENVIRONMENT=production`.
+- Keep `SIDECAR_JOB_RUNNER_ENABLED=false` until the controlled publish window.
+- Keep `EBAY_PUBLISH_ENABLED=false` until all readiness checks pass; false or missing blocks publish execution before eBay API initialization.
 - Confirm production OAuth is valid.
 - Confirm production policy/location config is correct in `public.app_settings`.
 - Current env-specific values live under `public.app_settings.ebay_publish_config.production`.
@@ -55,26 +57,27 @@ Stop live publishing if:
 - item specifics are materially wrong
 - app status does not match eBay state
 
-## Config 
+## Candidate Publish Config
 
-For Prod:
-update public.app_settings
-set
-ebay_marketplace_id = 'EBAY_US',
-default_payment_policy_id = '260524452013',
-default_fulfillment_policy_id = '260524990013',
-default_return_policy_id = '260524680013',
-merchant_location_key = 'mfh-main-location'
-where id = 'default';
+Verify these candidate values against the production account, then store the confirmed object at `public.app_settings.ebay_publish_config.production`:
 
-For Sandbox:
+```sql
 update public.app_settings
-set
-ebay_marketplace_id = 'EBAY_US',
-default_payment_policy_id = '6227962000',
-default_fulfillment_policy_id = '6227963000',
-default_return_policy_id = '6227964000',
-merchant_location_key = 'default-main-location'
+set ebay_publish_config = jsonb_set(
+  coalesce(ebay_publish_config, '{}'::jsonb),
+  '{production}',
+  '{
+    "marketplaceId": "EBAY_US",
+    "paymentPolicyId": "260524452013",
+    "fulfillmentPolicyId": "260524990013",
+    "returnPolicyId": "260524680013",
+    "merchantLocationKey": "mfh-main-location"
+  }'::jsonb,
+  true
+)
 where id = 'default';
+```
+
+Production publish never falls back to the legacy flat policy/location columns. Do not run this SQL blindly; the operator must first verify the policy IDs and merchant location through the production read-only discovery command.
 
 Sandbox test-listing deletion uses the exact structured inventory SKU, not `listing_id`. Preview and permanent cleanup examples plus refusal rules are documented in [docs/operations.md](docs/operations.md#sandbox-listing-cleanup). The CLI and UI-backed API remain sandbox-only and refuse sold or order-bearing listings.

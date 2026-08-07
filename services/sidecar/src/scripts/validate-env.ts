@@ -30,7 +30,7 @@ try {
     return typeof value === 'string' && value.trim() !== '';
   });
 
-  console.log(`Validated ${ROOT_ENV_PATH} with overrides from ${ROOT_ENV_LOCAL_PATH}`);
+  console.log(`Validated ${ROOT_ENV_PATH} with additional values from ${ROOT_ENV_LOCAL_PATH}`);
   console.log(`Supabase project ref: ${supabaseConfig.projectRef}`);
   console.log(`Supabase URL: ${supabaseConfig.url}`);
   console.log(`eBay enabled: ${env.EBAY_ENABLED}`);

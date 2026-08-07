@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -10,6 +10,7 @@ import type { EbayConfig } from '@/types/ebay.js';
 
 const STRUCTURED_SINGLE_SKU = 'BSKBL-Single-000001';
 const STRUCTURED_LOT_SKU = 'BSBL-Lot-000002';
+const originalPublishEnabled = process.env.EBAY_PUBLISH_ENABLED;
 
 function createTradingCardConditionPoliciesResponse(
   values: { id: string; name: string }[],
@@ -452,6 +453,45 @@ function createDependencies({
 }
 
 describe('publishListing', () => {
+  beforeEach(() => {
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    if (originalPublishEnabled === undefined) {
+      delete process.env.EBAY_PUBLISH_ENABLED;
+      return;
+    }
+
+    process.env.EBAY_PUBLISH_ENABLED = originalPublishEnabled;
+  });
+
+  it.each([undefined, 'false'])(
+    'blocks publish before dependencies or eBay APIs when EBAY_PUBLISH_ENABLED=%s',
+    async (publishEnabled) => {
+      const dependencies = createDependencies();
+
+      if (publishEnabled === undefined) {
+        delete process.env.EBAY_PUBLISH_ENABLED;
+      } else {
+        process.env.EBAY_PUBLISH_ENABLED = publishEnabled;
+      }
+
+      await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+        code: 'PUBLISH_DISABLED',
+        context: {
+          listingId: 'LIST-001',
+          stage: 'validate',
+        },
+      } satisfies Partial<PublishListingError>);
+      expect(dependencies.dataAccess.listings.getByListingId).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    }
+  );
+
   it('runs happy path orchestration and persists exported state', async () => {
     const dependencies = createDependencies();
 

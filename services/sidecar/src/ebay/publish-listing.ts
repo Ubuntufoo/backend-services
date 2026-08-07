@@ -87,6 +87,19 @@ export interface PublishListingResult {
   status: 'exported';
 }
 
+function assertPublishEnabled(listingId: string, env: NodeJS.ProcessEnv = process.env): void {
+  if (env.EBAY_PUBLISH_ENABLED !== 'true') {
+    throw new PublishListingError(
+      'PUBLISH_DISABLED',
+      'eBay publishing is disabled. Set EBAY_PUBLISH_ENABLED=true only for an authorized publish window.',
+      {
+        listingId,
+        stage: 'validate',
+      }
+    );
+  }
+}
+
 async function createDefaultDependencies(): Promise<PublishListingDependencies> {
   const runtimeConfig = getEbayConfig();
   const api = new EbaySellerApi(runtimeConfig);
@@ -564,6 +577,8 @@ export async function publishListing(
   listingId: string,
   dependencies: Partial<PublishListingDependencies> = {}
 ): Promise<PublishListingResult> {
+  assertPublishEnabled(listingId);
+
   const resolvedDependencies = await resolveDependencies(dependencies);
   const listing = await loadPublishListing(listingId, resolvedDependencies.dataAccess);
   const appSettings = await loadPublishAppSettings(listingId, resolvedDependencies.dataAccess);

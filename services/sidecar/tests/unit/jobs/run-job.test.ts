@@ -3268,6 +3268,45 @@ describe('runSidecarJob', () => {
     });
   });
 
+  it('fails publish jobs terminally when the execution guard is disabled', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingError(
+        'PUBLISH_DISABLED',
+        'eBay publishing is disabled. Set EBAY_PUBLISH_ENABLED=true only for an authorized publish window.',
+        {
+          listingId: 'LIST-001',
+          stage: 'validate',
+        }
+      );
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_disabled');
+    expect(result.job.next_run_at).toBeNull();
+    expect(result.listing).toMatchObject({
+      last_error_code: 'publish_disabled',
+      last_error_context: expect.objectContaining({
+        category: 'terminal',
+        publish_error_code: 'PUBLISH_DISABLED',
+      }),
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+  });
+
   it('returns local listing-data publish validation errors to needs_review/review_pending', async () => {
     const dataAccess = createDataAccess({
       job: queuedPublishJob,

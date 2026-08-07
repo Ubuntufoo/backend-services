@@ -22,6 +22,7 @@ export const JOB_ERROR_CODES = {
   DUPLICATE_ACTIVE_JOB: 'duplicate_active_job',
   LISTING_NOT_FOUND: 'listing_not_found',
   PUBLISH_APP_SETTINGS_NOT_FOUND: 'publish_app_settings_not_found',
+  PUBLISH_DISABLED: 'publish_disabled',
   PUBLISH_EXPORT_STATE_PERSIST_FAILED: 'publish_export_state_persist_failed',
   PUBLISH_INVENTORY_ITEM_UPSERT_FAILED: 'publish_inventory_item_upsert_failed',
   PUBLISH_LISTING_NOT_FOUND: 'publish_listing_not_found',
@@ -160,6 +161,7 @@ function getDefaultStoredErrorCategory(code: JobErrorCode): StoredJobErrorCatego
     case JOB_ERROR_CODES.JOB_NOT_RUNNABLE:
     case JOB_ERROR_CODES.MANUAL_RETRY_NOT_ALLOWED:
     case JOB_ERROR_CODES.PUBLISH_EXPORT_STATE_PERSIST_FAILED:
+    case JOB_ERROR_CODES.PUBLISH_DISABLED:
     case JOB_ERROR_CODES.PUBLISH_INVENTORY_ITEM_UPSERT_FAILED:
     case JOB_ERROR_CODES.PUBLISH_LISTING_NOT_FOUND:
     case JOB_ERROR_CODES.PUBLISH_MISSING_LISTING_ID:
@@ -222,6 +224,8 @@ function getPublishJobErrorCode(
       return JOB_ERROR_CODES.PUBLISH_OFFER_CREATE_FAILED;
     case 'OFFER_PUBLISH_FAILED':
       return JOB_ERROR_CODES.PUBLISH_OFFER_PUBLISH_FAILED;
+    case 'PUBLISH_DISABLED':
+      return JOB_ERROR_CODES.PUBLISH_DISABLED;
   }
 }
 
@@ -332,7 +336,9 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
       const validationScope = getPublishValidationScope(error);
       const userFixableInventoryErrors = getUserFixableInventoryValidationErrors(error);
       const category: JobErrorCategory =
-        error.code === 'EXPORT_STATE_PERSIST_FAILED' || error.code === 'LISTING_NOT_FOUND'
+        error.code === 'EXPORT_STATE_PERSIST_FAILED' ||
+        error.code === 'LISTING_NOT_FOUND' ||
+        error.code === 'PUBLISH_DISABLED'
           ? 'terminal'
           : error.code === 'LISTING_NOT_READY' ||
               error.code === 'APP_SETTINGS_NOT_FOUND' ||

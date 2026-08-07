@@ -12,7 +12,7 @@
 ## Environment Rules
 
 - Configure eBay credentials in repo-root `.env`
-- Keep tokens and machine-local overrides in repo-root `.env.local`
+- Keep machine-local values in repo-root `.env.local` only when the same key is absent from `.env`; root env loading preserves the first loaded value
 - Preferred refresh token var: `EBAY_REFRESH_TOKEN`
 - Compatibility fallback: `EBAY_USER_REFRESH_TOKEN`
 - Quote refresh tokens in env files because eBay values contain `#`
@@ -67,13 +67,15 @@ Current live project keeps environment-specific publish defaults in `public.app_
 }
 ```
 
-The same row currently also carries active/default top-level values for production:
+The same row may also carry top-level values:
 
 - `ebay_marketplace_id`
 - `default_payment_policy_id`
 - `default_fulfillment_policy_id`
 - `default_return_policy_id`
 - `merchant_location_key`
+
+Those legacy flat fields are not a production fallback. Production publish requires a complete `ebay_publish_config.production` object.
 
 ## Sandbox Notes
 
