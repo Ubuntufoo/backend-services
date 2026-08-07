@@ -868,13 +868,26 @@ describe('You Pick inventory item semantic snapshots', () => {
 // Module-level mock state for createYouPickPilotReadApi tests
 var readApiMockState = {
   initFn: vi.fn(async () => {}),
-  getInventoryItemFn: vi.fn(async () => ({ sku: "sku-1", availability: { shipToLocationAvailability: { quantity: 1 } }, condition: "USED_VERY_GOOD", conditionDescriptors: [{ name: "40001", values: ["400012"] }], product: { aspects: { Card: ["a"] } } })),
+  getInventoryItemFn: vi.fn(async () => ({
+    sku: 'sku-1',
+    availability: { shipToLocationAvailability: { quantity: 1 } },
+    condition: 'USED_VERY_GOOD',
+    conditionDescriptors: [{ name: '40001', values: ['400012'] }],
+    product: { aspects: { Card: ['a'] } },
+  })),
   getOffersFn: vi.fn(async () => ({ offers: [] })),
-  getInventoryItemGroupFn: vi.fn(async () => ({ variantSKUs: ["sku-1", "sku-2"], title: "T", description: "D", aspects: {}, imageUrls: ["https://example.com/1.jpg"], variesBy: { specifications: [{ name: "Card", values: ["a", "b"] }] } })),
-  getCurrentUserIdentityFn: vi.fn(async () => ({ userId: "u", username: "u" })),
+  getInventoryItemGroupFn: vi.fn(async () => ({
+    variantSKUs: ['sku-1', 'sku-2'],
+    title: 'T',
+    description: 'D',
+    aspects: {},
+    imageUrls: ['https://example.com/1.jpg'],
+    variesBy: { specifications: [{ name: 'Card', values: ['a', 'b'] }] },
+  })),
+  getCurrentUserIdentityFn: vi.fn(async () => ({ userId: 'u', username: 'u' })),
 };
 
-vi.mock("@/api/index.js", () => {
+vi.mock('@/api/index.js', () => {
   class MockEbaySellerApi {
     inventory = {
       getInventoryItem: readApiMockState.getInventoryItemFn,
@@ -893,22 +906,26 @@ vi.mock("@/api/index.js", () => {
   return { EbaySellerApi: MockEbaySellerApi };
 });
 
-vi.mock("@/config/environment.js", () => ({
-  getEbayConfig: () => ({ environment: "sandbox", marketplaceId: "EBAY_US", refreshToken: "token" }),
-  getBaseUrl: () => "https://api.sandbox.ebay.com",
-  getAuthUrl: () => "https://api.sandbox.ebay.com/oauth",
+vi.mock('@/config/environment.js', () => ({
+  getEbayConfig: () => ({
+    environment: 'sandbox',
+    marketplaceId: 'EBAY_US',
+    refreshToken: 'token',
+  }),
+  getBaseUrl: () => 'https://api.sandbox.ebay.com',
+  getAuthUrl: () => 'https://api.sandbox.ebay.com/oauth',
 }));
 
-describe("createYouPickPilotReadApi ensureInitialized", () => {
+describe('createYouPickPilotReadApi ensureInitialized', () => {
   beforeEach(() => {
-    vi.stubEnv("EBAY_ENVIRONMENT", "sandbox");
-    vi.stubEnv("EBAY_MARKETPLACE_ID", "EBAY_US");
-    vi.stubEnv("EBAY_CONTENT_LANGUAGE", "en-US");
-    vi.stubEnv("SIDECAR_JOB_RUNNER_ENABLED", "false");
-    vi.stubEnv("APIFY_ENABLED", "false");
-    vi.stubEnv("SOLDCOMPS_ENABLED", "false");
-    vi.stubEnv("EBAY_PUBLISH_ENABLED", "false");
-    vi.stubEnv("WATCHER_ENABLED", "false");
+    vi.stubEnv('EBAY_ENVIRONMENT', 'sandbox');
+    vi.stubEnv('EBAY_MARKETPLACE_ID', 'EBAY_US');
+    vi.stubEnv('EBAY_CONTENT_LANGUAGE', 'en-US');
+    vi.stubEnv('SIDECAR_JOB_RUNNER_ENABLED', 'false');
+    vi.stubEnv('APIFY_ENABLED', 'false');
+    vi.stubEnv('SOLDCOMPS_ENABLED', 'false');
+    vi.stubEnv('EBAY_PUBLISH_ENABLED', 'false');
+    vi.stubEnv('WATCHER_ENABLED', 'false');
     vi.clearAllMocks();
     readApiMockState.initFn.mockResolvedValue(undefined);
   });
@@ -918,15 +935,17 @@ describe("createYouPickPilotReadApi ensureInitialized", () => {
   });
 
   async function getApi() {
-    const mod = await import("@/scripts/you-pick-sandbox-pilot.js");
+    const mod = await import('@/scripts/you-pick-sandbox-pilot.js');
     return mod.createYouPickPilotReadApi();
   }
 
-  it("getInventoryItem initializes before the inventory call", async () => {
+  it('getInventoryItem initializes before the inventory call', async () => {
     let initDone = false;
-    readApiMockState.initFn.mockImplementation(async () => { initDone = true; });
+    readApiMockState.initFn.mockImplementation(async () => {
+      initDone = true;
+    });
     const api = await getApi();
-    await api.getInventoryItem("sku-1");
+    await api.getInventoryItem('sku-1');
     const initOrder = readApiMockState.initFn.mock.invocationCallOrder[0];
     const invOrder = readApiMockState.getInventoryItemFn.mock.invocationCallOrder[0];
     expect(initOrder).toBeLessThan(invOrder);
@@ -934,37 +953,44 @@ describe("createYouPickPilotReadApi ensureInitialized", () => {
     expect(initDone).toBe(true);
   });
 
-  it("getOffers initializes before the inventory call", async () => {
+  it('getOffers initializes before the inventory call', async () => {
     const api = await getApi();
-    await api.getOffers("sku-1", "EBAY_US");
-    expect(readApiMockState.initFn.mock.invocationCallOrder[0]).toBeLessThan(readApiMockState.getOffersFn.mock.invocationCallOrder[0]);
+    await api.getOffers('sku-1', 'EBAY_US');
+    expect(readApiMockState.initFn.mock.invocationCallOrder[0]).toBeLessThan(
+      readApiMockState.getOffersFn.mock.invocationCallOrder[0]
+    );
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
   });
 
-  it("getInventoryItemGroup initializes before the inventory call", async () => {
+  it('getInventoryItemGroup initializes before the inventory call', async () => {
     const api = await getApi();
-    await api.getInventoryItemGroup("group-1");
-    expect(readApiMockState.initFn.mock.invocationCallOrder[0]).toBeLessThan(readApiMockState.getInventoryItemGroupFn.mock.invocationCallOrder[0]);
+    await api.getInventoryItemGroup('group-1');
+    expect(readApiMockState.initFn.mock.invocationCallOrder[0]).toBeLessThan(
+      readApiMockState.getInventoryItemGroupFn.mock.invocationCallOrder[0]
+    );
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
   });
 
-  it("getCurrentUserIdentity followed by Inventory reads initializes exactly once", async () => {
+  it('getCurrentUserIdentity followed by Inventory reads initializes exactly once', async () => {
     const api = await getApi();
     await api.getCurrentUserIdentity();
-    await api.getInventoryItem("sku-1");
+    await api.getInventoryItem('sku-1');
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
   });
 
-  it("concurrent first reads share one initialization", async () => {
+  it('concurrent first reads share one initialization', async () => {
     let resolveInit: () => void = () => {};
     const initStarted = vi.fn();
-    readApiMockState.initFn.mockImplementation(() => new Promise<void>((r) => {
-      initStarted();
-      resolveInit = r;
-    }));
+    readApiMockState.initFn.mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          initStarted();
+          resolveInit = r;
+        })
+    );
     const api = await getApi();
-    const p1 = api.getInventoryItem("sku-1");
-    const p2 = api.getOffers("sku-2", "EBAY_US");
+    const p1 = api.getInventoryItem('sku-1');
+    const p2 = api.getOffers('sku-2', 'EBAY_US');
     await vi.waitFor(() => expect(initStarted).toHaveBeenCalled());
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
     resolveInit();
@@ -972,22 +998,21 @@ describe("createYouPickPilotReadApi ensureInitialized", () => {
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
   });
 
-  it("initialization rejection prevents downstream call", async () => {
-    readApiMockState.initFn.mockRejectedValue(new Error("auth failed"));
+  it('initialization rejection prevents downstream call', async () => {
+    readApiMockState.initFn.mockRejectedValue(new Error('auth failed'));
     const api = await getApi();
-    await expect(api.getInventoryItem("sku-1")).rejects.toThrow("auth failed");
+    await expect(api.getInventoryItem('sku-1')).rejects.toThrow('auth failed');
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
     expect(readApiMockState.getInventoryItemFn).not.toHaveBeenCalled();
   });
 
-  it("after initialization rejection, subsequent reads remain fail-closed", async () => {
-    readApiMockState.initFn.mockRejectedValue(new Error("auth failed"));
+  it('after initialization rejection, subsequent reads remain fail-closed', async () => {
+    readApiMockState.initFn.mockRejectedValue(new Error('auth failed'));
     const api = await getApi();
-    await expect(api.getInventoryItem("sku-1")).rejects.toThrow("auth failed");
-    await expect(api.getOffers("sku-2", "EBAY_US")).rejects.toThrow("auth failed");
+    await expect(api.getInventoryItem('sku-1')).rejects.toThrow('auth failed');
+    await expect(api.getOffers('sku-2', 'EBAY_US')).rejects.toThrow('auth failed');
     expect(readApiMockState.initFn).toHaveBeenCalledOnce();
     expect(readApiMockState.getInventoryItemFn).not.toHaveBeenCalled();
     expect(readApiMockState.getOffersFn).not.toHaveBeenCalled();
   });
 });
-
