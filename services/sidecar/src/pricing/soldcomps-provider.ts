@@ -40,7 +40,7 @@ const numericValueSchema = z.union([
 const soldCompsItemSchema = z.object({
   condition: z.string().trim().min(1).nullable(),
   conditionId: z.number().int().nullable(),
-  categoryId: z.string().trim().min(1),
+  categoryId: z.string().trim().min(1).nullable(),
   endedAt: z
     .string()
     .trim()

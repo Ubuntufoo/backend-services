@@ -372,6 +372,19 @@ describe('SoldComps pricing provider', () => {
     });
   });
 
+  it('accepts a null categoryId without changing the internal sold comp', () => {
+    const withCategoryId = parseSoldCompsResponse({
+      ...soldCompsFixture,
+      items: [soldCompsFixture.items[0]],
+    });
+    const withNullCategoryId = parseSoldCompsResponse({
+      ...soldCompsFixture,
+      items: [{ ...soldCompsFixture.items[0], categoryId: null }],
+    });
+
+    expect(withNullCategoryId.soldComps).toEqual(withCategoryId.soldComps);
+  });
+
   it.each(['2026-07-28', '2026-07-27', '2026-07-26'])(
     'accepts live date-only endedAt value %s and normalizes it to UTC',
     (endedAt) => {
