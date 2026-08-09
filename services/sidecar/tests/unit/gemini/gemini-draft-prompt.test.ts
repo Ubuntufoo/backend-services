@@ -150,6 +150,28 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/return yearEvidence: null/i);
   });
 
+  it('requires validated canonical year inclusion exactly once in the title', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/include that exact canonical year in the title exactly once/i);
+    expect(prompt).toMatch(/never return valid yearEvidence while omitting its year from the title/i);
+    expect(prompt).toMatch(/between the player name and manufacturer or set name/i);
+  });
+
+  it('does not instruct Gemini to emit backend-owned NM+ title suffixes', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).not.toMatch(/NM\+/);
+    expect(prompt).not.toMatch(/reserve space.*condition suffix/i);
+  });
+
+  it('limits Gemini titles to 76 characters before backend additions', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/Listing title must be <= 76 characters/);
+    expect(prompt).not.toMatch(/Listing title must be < 80 characters/);
+  });
+
   it('forbids Year and Season item specifics from the model', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 

@@ -477,7 +477,7 @@ describe('priceListingNow', () => {
       now: () => new Date('2026-06-12T10:00:00.000Z'),
     });
 
-    expect(result.suggestedPrice).toBe(111.75);
+    expect(result.suggestedPrice).toBe(111.7);
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         median_sold_price: 117.63,
@@ -506,14 +506,14 @@ describe('priceListingNow', () => {
             recentAcceptedCompCount: 8,
             salesVelocityTier: 'high',
             salesVelocityDiscountPercent: 0,
-            finalPrice: 111.75,
+            finalPrice: 111.7,
           },
         }),
-        suggested_price: 111.75,
+        suggested_price: 111.7,
       })
     );
-    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 111.75 });
-    expect(result.listing.price).toBe(111.75);
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 111.7 });
+    expect(result.listing.price).toBe(111.7);
   });
 
   it('does not update listing price when markSucceeded rejects and throws safely', async () => {

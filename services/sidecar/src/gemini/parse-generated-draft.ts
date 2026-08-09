@@ -18,6 +18,7 @@ type YearEvidenceSourceType = (typeof GENERATED_YEAR_EVIDENCE_SOURCE_TYPES)[numb
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const CONFIDENCE_KEYS: ConfidenceKey[] = ['title', 'category', 'price', 'aspects'];
+const MAX_GENERATED_TITLE_LENGTH = 80;
 const TITLE_CARD_NUMBER_PATTERNS = [
   /(?:^|[\s([{])#\s*([A-Za-z0-9-]+)\b/i,
   /\bNo\.?\s*#?\s*([A-Za-z0-9-]+)\b/i,
@@ -118,6 +119,33 @@ function normalizeCardConditionToken(
 
   warnings.push('Gemini response field "cardConditionToken" was invalid and was reset to null.');
   return null;
+}
+
+function normalizeNearMintTitleSuffix(
+  title: string,
+  cardConditionToken: GeneratedListingDraft['cardConditionToken']
+): string {
+  const trimmedTitle = title.trim();
+  if (cardConditionToken !== 'NEAR_MINT_OR_BETTER') {
+    return trimmedTitle;
+  }
+
+  if (/^NM\+$/iu.test(trimmedTitle)) {
+    return 'NM+';
+  }
+
+  const withoutSuffix = trimmedTitle.replace(/(?:\s+NM\+)+$/iu, '').trimEnd();
+  return `${withoutSuffix} NM+`.trim();
+}
+
+function assertGeneratedTitleLength(title: string): string {
+  if (title.length > MAX_GENERATED_TITLE_LENGTH) {
+    throw new GeminiDraftServiceError(
+      'Generated listing title exceeds 80 characters after backend normalization.'
+    );
+  }
+
+  return title;
 }
 
 function normalizeAspects(value: unknown, warnings: string[]): Record<string, string | string[]> {
@@ -397,9 +425,14 @@ export function parseGeneratedDraft(
     },
     options
   );
+  const normalizedTitle = normalizeNearMintTitleSuffix(
+    normalizedDraft.title,
+    cardConditionToken
+  );
+  const finalTitle = assertGeneratedTitleLength(normalizedTitle);
 
   return generatedListingDraftSchema.parse({
-    title: normalizedDraft.title,
+    title: finalTitle,
     description,
     categorySuggestion,
     cardConditionNote,

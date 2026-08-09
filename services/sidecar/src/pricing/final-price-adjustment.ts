@@ -43,7 +43,7 @@ export function computeFinalPriceAdjustment(input: {
   const velocityAdjustment = getVelocityAdjustment(recentAcceptedCompCount);
   const competitivelyAdjustedPrice =
     input.basePrice * (1 - COMPETITIVE_DISCOUNT_PERCENT / 100);
-  const finalPrice = roundCurrency(
+  const finalPrice = roundFinalListingPrice(
     competitivelyAdjustedPrice * (1 - velocityAdjustment.discountPercent / 100)
   );
 
@@ -78,6 +78,13 @@ function getVelocityAdjustment(recentAcceptedCompCount: number): {
   return { discountPercent: 5, tier: 'low' };
 }
 
-function roundCurrency(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
+function roundFinalListingPrice(value: number): number {
+  const roundedDownToNickel = Math.floor((value + 1e-9) * 20) / 20;
+  let roundedCents = Math.round(roundedDownToNickel * 100);
+
+  if (roundedCents >= 100 && roundedCents % 100 <= 10) {
+    roundedCents = Math.floor(roundedCents / 100) * 100 - 5;
+  }
+
+  return roundedCents / 100;
 }

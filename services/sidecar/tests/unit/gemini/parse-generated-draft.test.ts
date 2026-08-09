@@ -198,6 +198,217 @@ describe('parseGeneratedDraft', () => {
     });
   });
 
+  it('inserts validated year evidence before the manufacturer when Gemini omits it', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Ryne Sandberg Fleer Team Leaders #6 of 10',
+        description: 'Single card.',
+        cardConditionToken: null,
+        aspects: {
+          Player: 'Ryne Sandberg',
+          Manufacturer: 'Fleer',
+          'Card Number': '6 of 10',
+        },
+        yearEvidence: {
+          year: '1993',
+          sourceType: 'copyright_line',
+          visibleText: '© 1993 FLEER CORP.',
+          imageIndex: 1,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-sandberg-year' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe('Ryne Sandberg 1993 Fleer Team Leaders #6 of 10');
+  });
+
+  it.each([
+    [
+      'after the player when manufacturer is unavailable',
+      'Ryne Sandberg Team Leaders #6 of 10',
+      { Player: 'Ryne Sandberg' },
+      'Ryne Sandberg 1993 Team Leaders #6 of 10',
+    ],
+    [
+      'at the start when player and manufacturer are unavailable',
+      'Team Leaders #6 of 10',
+      {},
+      '1993 Team Leaders #6 of 10',
+    ],
+  ])('inserts validated year evidence %s', (_case, title, aspects, expectedTitle) => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title,
+        description: 'Single card.',
+        cardConditionToken: null,
+        aspects,
+        yearEvidence: {
+          year: '1993',
+          sourceType: 'copyright_line',
+          visibleText: '© 1993 FLEER CORP.',
+          imageIndex: 1,
+        },
+        warnings: [],
+      }),
+      { id: `raw-response-year-placement-${_case}` },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe(expectedTitle);
+  });
+
+  it('combines canonical year insertion with one NM+ suffix for near-mint-or-better cards', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Ryne Sandberg Fleer Team Leaders #6 of 10 NM+ NM+',
+        description: 'Single card.',
+        cardConditionToken: 'NEAR_MINT_OR_BETTER',
+        aspects: {
+          Player: 'Ryne Sandberg',
+          Manufacturer: 'Fleer',
+          'Card Number': '6 of 10',
+        },
+        yearEvidence: {
+          year: '1993',
+          sourceType: 'copyright_line',
+          visibleText: '© 1993 FLEER CORP.',
+          imageIndex: 1,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-sandberg-nm' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe('Ryne Sandberg 1993 Fleer Team Leaders #6 of 10 NM+');
+  });
+
+  it('fails closed instead of compacting semantic title content over 80 characters', () => {
+    const title =
+      'Ryne Sandberg Fleer Team Leaders Limited Edition Premium Collector Parallel Insert #6';
+
+    expect(() =>
+      parseGeneratedDraft(
+        JSON.stringify({
+          title,
+          description: 'Single card.',
+          cardConditionToken: 'NEAR_MINT_OR_BETTER',
+          aspects: {
+            Player: 'Ryne Sandberg',
+            Manufacturer: 'Fleer',
+            'Card Number': '6',
+          },
+          yearEvidence: {
+            year: '1993',
+            sourceType: 'copyright_line',
+            visibleText: '© 1993 FLEER CORP.',
+            imageIndex: 1,
+          },
+          warnings: [],
+        }),
+        { id: 'raw-response-overlong-semantic-title' },
+        { imageCount: 2 }
+      )
+    ).toThrow('Generated listing title exceeds 80 characters after backend normalization.');
+  });
+
+  it('returns an exactly 80-character normalized title unchanged', () => {
+    const title = `Ryne Sandberg ${'A'.repeat(66)}`;
+    expect(title).toHaveLength(80);
+
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title,
+        description: 'Single card.',
+        cardConditionToken: null,
+        aspects: { Player: 'Ryne Sandberg' },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-exact-title-limit' }
+    );
+
+    expect(draft.title).toBe(title);
+  });
+
+  it('fails closed when normalized title content cannot fit within 80 characters', () => {
+    const player = 'A'.repeat(72);
+
+    expect(() =>
+      parseGeneratedDraft(
+        JSON.stringify({
+          title: `${player} Fleer #1951`,
+          description: 'Single card.',
+          cardConditionToken: 'NEAR_MINT_OR_BETTER',
+          aspects: {
+            Player: player,
+            Manufacturer: 'Fleer',
+            'Card Number': '1951',
+          },
+          yearEvidence: {
+            year: '1993',
+            sourceType: 'copyright_line',
+            visibleText: '© 1993 FLEER CORP.',
+            imageIndex: 0,
+          },
+          warnings: [],
+        }),
+        { id: 'raw-response-required-title-too-long' },
+        { imageCount: 1 }
+      )
+    ).toThrow('Generated listing title exceeds 80 characters after backend normalization.');
+  });
+
+  it.each(['EXCELLENT', 'VERY_GOOD', 'POOR', null])(
+    'does not add NM+ for %s condition token',
+    (cardConditionToken) => {
+      const draft = parseGeneratedDraft(
+        JSON.stringify({
+          title: 'Ryne Sandberg Fleer Team Leaders #6 of 10',
+          description: 'Single card.',
+          cardConditionToken,
+          aspects: {
+            Player: 'Ryne Sandberg',
+            Manufacturer: 'Fleer',
+          },
+          yearEvidence: null,
+          warnings: [],
+        }),
+        { id: `raw-response-condition-${cardConditionToken ?? 'null'}` },
+        { imageCount: 2 }
+      );
+
+      expect(draft.title).toBe('Ryne Sandberg Fleer Team Leaders #6 of 10');
+    }
+  );
+
+  it('does not duplicate an existing canonical title year or protected four-digit card number', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Phil Rizzuto 1951 Topps #1951 1951',
+        description: 'Single card.',
+        cardConditionToken: null,
+        aspects: {
+          Player: 'Phil Rizzuto',
+          Manufacturer: 'Topps',
+        },
+        yearEvidence: {
+          year: '1951',
+          sourceType: 'copyright_line',
+          visibleText: '© 1951 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-deduped-year' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('Phil Rizzuto 1951 Topps #1951');
+  });
+
   it('sanitizes array-valued Set entries individually', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({

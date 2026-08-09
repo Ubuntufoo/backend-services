@@ -32,6 +32,8 @@ const TITLE_CARD_NUMBER_PATTERNS = [
   new RegExp(`\\bCard\\s+No\\.?\\s*#?\\s*${CARD_NUMBER_TOKEN_PATTERN}\\b`, 'giu'),
   new RegExp(`\\bCard\\s+Number\\s+${CARD_NUMBER_TOKEN_PATTERN}\\b`, 'giu'),
 ] as const;
+const MANUFACTURER_ASPECT_KEYS = ['Manufacturer', 'Card Manufacturer'] as const;
+const PLAYER_ASPECT_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
 
 function trimToNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -118,6 +120,111 @@ function isProtectedTitleSpan(
   return protectedSpans.some(([protectedStart, protectedEnd]) => {
     return start < protectedEnd && end > protectedStart;
   });
+}
+
+function isWordCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[\p{L}\p{N}]/u.test(value);
+}
+
+function findTitlePhrase(
+  title: string,
+  phrase: string
+): { end: number; start: number } | null {
+  const normalizedPhrase = trimToNull(phrase);
+  if (!normalizedPhrase) {
+    return null;
+  }
+
+  const lowerTitle = title.toLocaleLowerCase();
+  const lowerPhrase = normalizedPhrase.toLocaleLowerCase();
+  let start = lowerTitle.indexOf(lowerPhrase);
+
+  while (start >= 0) {
+    const end = start + normalizedPhrase.length;
+    if (!isWordCharacter(title[start - 1]) && !isWordCharacter(title[end])) {
+      return { end, start };
+    }
+
+    start = lowerTitle.indexOf(lowerPhrase, start + 1);
+  }
+
+  return null;
+}
+
+function findAspectTitlePhrase(
+  title: string,
+  aspects: AspectRecord,
+  aspectKeys: readonly string[]
+): { end: number; start: number } | null {
+  let earliestMatch: { end: number; start: number } | null = null;
+
+  for (const key of aspectKeys) {
+    for (const value of getAspectStringValues(aspects[key])) {
+      const match = findTitlePhrase(title, value);
+      if (match && (!earliestMatch || match.start < earliestMatch.start)) {
+        earliestMatch = match;
+      }
+    }
+  }
+
+  return earliestMatch;
+}
+
+function ensureCanonicalTitleYear(title: string, canonicalYear: string, aspects: AspectRecord): string {
+  const protectedSpans = getProtectedTitleSpans(title);
+  let foundCanonicalYear = false;
+  let changed = false;
+  let result = '';
+  let lastIndex = 0;
+
+  YEAR_CLAIM_PATTERN.lastIndex = 0;
+
+  for (const match of title.matchAll(YEAR_CLAIM_PATTERN)) {
+    const start = match.index ?? -1;
+    if (start < 0 || match[1] !== canonicalYear) {
+      continue;
+    }
+
+    const end = start + match[0].length;
+    if (isProtectedTitleSpan(start, end, protectedSpans)) {
+      continue;
+    }
+
+    if (!foundCanonicalYear) {
+      foundCanonicalYear = true;
+      continue;
+    }
+
+    result += title.slice(lastIndex, start);
+    result += ' ';
+    lastIndex = end;
+    changed = true;
+  }
+
+  if (foundCanonicalYear) {
+    if (!changed) {
+      return title;
+    }
+
+    result += title.slice(lastIndex);
+    return normalizeWhitespace(result);
+  }
+
+  const manufacturerMatch = findAspectTitlePhrase(title, aspects, MANUFACTURER_ASPECT_KEYS);
+  if (manufacturerMatch) {
+    return normalizeWhitespace(
+      `${title.slice(0, manufacturerMatch.start)}${canonicalYear} ${title.slice(manufacturerMatch.start)}`
+    );
+  }
+
+  const playerMatch = findAspectTitlePhrase(title, aspects, PLAYER_ASPECT_KEYS);
+  if (playerMatch) {
+    return normalizeWhitespace(
+      `${title.slice(0, playerMatch.end)} ${canonicalYear}${title.slice(playerMatch.end)}`
+    );
+  }
+
+  return normalizeWhitespace(`${canonicalYear} ${title}`);
 }
 
 function hasUnprotectedTitleYear(title: string): boolean {
@@ -278,6 +385,7 @@ export function normalizeGeneratedDraftYearFields(
     const canonicalYear = yearEvidence.year;
 
     title = sanitizeTitleYearClaims(title, { allowedYear: canonicalYear });
+    title = ensureCanonicalTitleYear(title, canonicalYear, aspects);
 
     if (originalYearValues.some((value) => value !== canonicalYear)) {
       warnings.push(
