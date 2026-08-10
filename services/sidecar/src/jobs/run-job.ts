@@ -16,6 +16,7 @@ import {
   generateListingDraft,
   generateListingDraftWithFallback,
   GeminiDraftServiceError,
+  GeminiDraftValidationError,
   GeminiFallbackExecutionError,
   prepareGenerateListingDraft,
   resolveTradingCardListingIds,
@@ -27,6 +28,7 @@ import {
   type PreparedGenerateListingDraftExecutionResult,
 } from '@/gemini/index.js';
 import {
+  parseExplicitSellerYearDirectives,
   sanitizeSetAspectValue,
   sanitizeTitleYearClaims,
 } from '@/gemini/year-normalization.js';
@@ -188,6 +190,18 @@ function getListingNotesHint(listing: ListingRow): string | undefined {
 }
 
 function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHints'] | undefined {
+  const explicitYears = parseExplicitSellerYearDirectives(listing.seller_hints);
+  if (explicitYears.length > 1) {
+    throw new GeminiDraftValidationError([
+      {
+        code: 'custom',
+        message: `Conflicting seller year directives: ${explicitYears.join(', ')}.`,
+        path: ['seller_hints'],
+      },
+    ]);
+  }
+
+  const explicitYear = explicitYears[0];
   const title = (() => {
     const value = asNonEmptyString(listing.title);
     if (!value) {
@@ -200,21 +214,23 @@ function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHin
   const notes = getListingNotesHint(listing);
   const aspects = getListingAspectHints(listing);
 
-  if (!title && !notes && !aspects) {
+  if (!explicitYear && !title && !notes && !aspects) {
     return undefined;
   }
 
   return {
     aspects,
+    ...(explicitYear ? { explicitYear } : {}),
     notes,
     title,
   };
 }
 
 function buildGeneratedListingAspects(
-  draft: Awaited<ReturnType<typeof generateListingDraft>>
+  draft: Awaited<ReturnType<typeof generateListingDraft>>,
+  authorizedYear?: string
 ): NonNullable<ListingUpdate['item_specifics']> {
-  const draftMetadata = buildGeneratedDraftMetadata(draft.yearEvidence);
+  const draftMetadata = buildGeneratedDraftMetadata(draft.yearEvidence, authorizedYear);
 
   const itemSpecifics: Record<string, unknown> = {
     ...draft.aspects,
@@ -252,7 +268,8 @@ function appendGeneratedDescriptionNotice(description: string): string {
 
 function buildGeneratedListingReviewUpdate(
   listing: ListingRow,
-  draft: Awaited<ReturnType<typeof generateListingDraft>>
+  draft: Awaited<ReturnType<typeof generateListingDraft>>,
+  authorizedYear?: string
 ): ListingUpdate {
   const resolvedIds = resolveTradingCardListingIds(listing, draft);
 
@@ -261,7 +278,7 @@ function buildGeneratedListingReviewUpdate(
     condition_id: resolvedIds.condition_id,
     condition_notes: draft.cardConditionNote ?? null,
     description: appendGeneratedDescriptionNotice(draft.description),
-    item_specifics: buildGeneratedListingAspects(draft),
+    item_specifics: buildGeneratedListingAspects(draft, authorizedYear),
     last_error_at: null,
     last_error_code: null,
     last_error_context: {},
@@ -766,11 +783,12 @@ async function runGenerateAiJob(
       throw createListingDraftRouteNotFoundError();
     }
 
+    const userHints = buildUserHints(listing);
     const prepareDraftStartedAt = nowMs();
     const preparedDraft = await options.prepareListingDraft({
       imageUrls,
       listingId,
-      userHints: buildUserHints(listing),
+      userHints,
     });
     const prepareDraftMs =
       preparedDraft.diagnostics.latency.prepareDraftMs || elapsedMs(prepareDraftStartedAt);
@@ -978,7 +996,11 @@ async function runGenerateAiJob(
     const listingUpdateStartedAt = nowMs();
     const reviewListing = await options.dataAccess.listings.update(
       listingId,
-      buildGeneratedListingReviewUpdate(listing, routerResult.draft.draft)
+      buildGeneratedListingReviewUpdate(
+        listing,
+        routerResult.draft.draft,
+        userHints?.explicitYear
+      )
     );
     const listingUpdateMs = elapsedMs(listingUpdateStartedAt);
     const enqueueResearchPriceStartedAt = nowMs();

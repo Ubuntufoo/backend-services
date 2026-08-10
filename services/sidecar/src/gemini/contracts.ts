@@ -46,6 +46,7 @@ const normalizedGeneratedListingAspectKeySchema = z.union([
 const rawCardConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
 
 export const userHintsSchema = z.object({
+  explicitYear: z.string().regex(/^(?:19\d{2}|20\d{2})$/u).optional(),
   title: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
   category: z.string().nullable().optional(),

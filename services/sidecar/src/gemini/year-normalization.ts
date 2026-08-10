@@ -11,6 +11,7 @@ type AspectRecord = Record<string, string | string[]>;
 type AspectValue = string | string[] | null | undefined;
 
 export interface NormalizeGeneratedDraftYearFieldsOptions {
+  authorizedYear?: string;
   imageCount?: number;
 }
 
@@ -260,6 +261,19 @@ export function isSupportedCardYear(value: unknown): value is string {
   return typeof value === 'string' && SUPPORTED_YEAR_PATTERN.test(value.trim());
 }
 
+export function parseExplicitSellerYearDirectives(value: unknown): string[] {
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  const years = value.split(/\r?\n/u).flatMap((line) => {
+    const match = /^\s*year\s*:\s*((?:19|20)\d{2})\s*$/iu.exec(line);
+    return match?.[1] ? [match[1]] : [];
+  });
+
+  return [...new Set(years)];
+}
+
 export function containsStandaloneYear(text: string, year: string): boolean {
   return new RegExp(`\\b${year}\\b`, 'u').test(text);
 }
@@ -359,8 +373,11 @@ export function normalizeGeneratedDraftYearFields(
     hasYearLikeSetValue(originalSetValue);
 
   let invalidReason: string | null = null;
+  const authorizedYear = isSupportedCardYear(options.authorizedYear)
+    ? options.authorizedYear
+    : null;
 
-  if (yearEvidence) {
+  if (yearEvidence && !authorizedYear) {
     const { year, sourceType, visibleText, imageIndex } = yearEvidence;
 
     if (!isSupportedCardYear(year)) {
@@ -381,15 +398,19 @@ export function normalizeGeneratedDraftYearFields(
     yearEvidence = null;
   }
 
-  if (yearEvidence) {
-    const canonicalYear = yearEvidence.year;
+  if (authorizedYear || yearEvidence) {
+    const canonicalYear = authorizedYear ?? yearEvidence!.year;
+
+    if (authorizedYear) {
+      yearEvidence = null;
+    }
 
     title = sanitizeTitleYearClaims(title, { allowedYear: canonicalYear });
     title = ensureCanonicalTitleYear(title, canonicalYear, aspects);
 
     if (originalYearValues.some((value) => value !== canonicalYear)) {
       warnings.push(
-        `Gemini aspect "Year" conflicted with validated year evidence "${canonicalYear}"; normalized it.`
+        `Gemini aspect "Year" conflicted with the authorized year "${canonicalYear}"; normalized it.`
       );
     }
 

@@ -153,6 +153,7 @@ export function prepareGenerateListingDraft(
 
           try {
             const draft = parseGeneratedDraft(rawDraft.text, rawDraft.rawResponse, {
+              authorizedYear: validatedInput.userHints?.explicitYear,
               imageCount: validatedInput.imageUrls.length,
             });
 

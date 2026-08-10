@@ -1669,6 +1669,87 @@ describe('runSidecarJob', () => {
     expect(result.listing?.title).toBe('Ed Stanky Topps #191');
   });
 
+  it.each(['year:1974', 'year: 1974', 'Year:1974', 'year:1974\nyear:1974'])(
+    'persists seller year hint authorization for %s',
+    async (sellerHints) => {
+      const dataAccess = createDataAccess({
+        job: {
+          ...queuedGenerateAiJob,
+          listing_id: 'LIST-SELLER-YEAR',
+        },
+        listing: createListingRow({
+          listing_id: 'LIST-SELLER-YEAR',
+          seller_hints: sellerHints,
+          sku: 'LIST-SELLER-YEAR',
+        }),
+      });
+      const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+        createGeneratedListingDraft({
+          aspects: {
+            'Card Number': '100',
+            Manufacturer: 'Topps',
+            Player: 'Willie Stargell',
+            Year: '1974',
+          },
+          description: 'Single card.',
+          title: 'Willie Stargell 1974 Topps #100',
+          yearEvidence: null,
+        })
+      );
+
+      await runSidecarJob('job-generate-ai', {
+        dataAccess,
+        generateListingDraft: generateListingDraftMock,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      });
+
+      expect(generateListingDraftMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userHints: expect.objectContaining({ explicitYear: '1974' }),
+        }),
+        expect.any(Object)
+      );
+      expect(dataAccess.listings.update).toHaveBeenCalledWith(
+        'LIST-SELLER-YEAR',
+        expect.objectContaining({
+          item_specifics: expect.objectContaining({
+            Year: '1974',
+            __draft_metadata: {
+              year: {
+                image_index: null,
+                source_type: 'seller_hint',
+                visible_text: null,
+                year: '1974',
+              },
+            },
+          }),
+          title: 'Willie Stargell 1974 Topps #100',
+        })
+      );
+    }
+  );
+
+  it('fails closed on conflicting seller year hints before a Gemini provider call', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        seller_hints: 'year:1974\nyear:1975',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>();
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error).toContain('Conflicting seller year directives: 1974, 1975.');
+    expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
+  });
+
   it('persists BSBL skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
     const dataAccess = createDataAccess({
       job: {
@@ -5999,6 +6080,35 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userHints: undefined,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('does not authorize an unlabeled seller year hint', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        seller_hints: 'Possibly from 1974 based on the design.',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Willie Stargell Topps #100',
+      description: 'Test description.',
+      aspects: {},
+      warnings: [],
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userHints: expect.not.objectContaining({
+          explicitYear: expect.anything(),
+        }),
       }),
       expect.anything()
     );

@@ -107,6 +107,39 @@ describe('buildPricingProviderInput', () => {
     expect(buildPricingSearchQuery(input)).toContain('Ed Stanky 1955 Topps 191');
   });
 
+  it('preserves a seller-authorized year in canonical pricing input', () => {
+    const listing = createListingRow({
+      item_specifics: {
+        'Card Number': '100',
+        Manufacturer: 'Topps',
+        Player: 'Willie Stargell',
+        Set: 'Topps',
+        Year: '1974',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '1974',
+          },
+        },
+      },
+      title: 'Willie Stargell 1974 Topps #100',
+    });
+
+    const input = buildPricingProviderInput(listing, listing.listing_id);
+
+    expect(input.title).toBe('Willie Stargell 1974 Topps #100');
+    expect(input.itemSpecifics).toEqual({
+      'Card Number': '100',
+      Manufacturer: 'Topps',
+      Player: 'Willie Stargell',
+      Set: 'Topps',
+      Year: '1974',
+    });
+    expect(buildPricingSearchQuery(input)).toContain('Willie Stargell 1974 Topps 100');
+  });
+
   it('sanitizes array-valued Set and removes array-valued Year and Season without valid metadata', () => {
     const listing = createListingRow({
       item_specifics: {

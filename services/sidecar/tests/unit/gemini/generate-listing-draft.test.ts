@@ -288,6 +288,35 @@ describe('generateListingDraft', () => {
     });
   });
 
+  it('deterministically applies an explicit seller year when Gemini omits it', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Willie Stargell Topps #100',
+        description: 'The description may mention 1974.',
+        aspects: {
+          Player: 'Willie Stargell',
+          Manufacturer: 'Topps',
+          'Card Number': '100',
+        },
+        yearEvidence: null,
+        warnings: [],
+      })
+    );
+
+    const draft = await generateListingDraft({
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+      listingId: 'LIST-SELLER-YEAR',
+      userHints: {
+        explicitYear: '1974',
+        notes: 'year:1974',
+      },
+    });
+
+    expect(draft.title).toBe('Willie Stargell 1974 Topps #100');
+    expect(draft.aspects.Year).toBe('1974');
+    expect(draft.yearEvidence).toBeNull();
+  });
+
   it('produces compact prompt and image diagnostics without exposing raw prompt or image data', async () => {
     const preparedDraft = await prepareGenerateListingDraft({
       listingId: 'LIST-001',

@@ -126,7 +126,7 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/MPN, UPC, or generic Graded item specifics/);
   });
 
-  it('requires visible-image year evidence and forbids hint-based year inference', () => {
+  it('requires visible-image year evidence and forbids unstructured hint-based year inference', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(/Never infer or guess the card year\./);
@@ -134,10 +134,21 @@ describe('buildGenerateListingDraftPrompt', () => {
       /Return yearEvidence only when visible card text explicitly states the production or release year/
     );
     expect(prompt).toMatch(/Statistics, biography dates, career dates, card numbers/i);
-    expect(prompt).toMatch(/user hints, and general model knowledge are not year evidence/i);
+    expect(prompt).toMatch(/unstructured user hints, and general model knowledge are not year evidence/i);
     expect(prompt).toMatch(/"yearEvidence"/);
     expect(prompt).not.toMatch(/"warningCode"/);
     expect(prompt).not.toMatch(/likelyYear/);
+  });
+
+  it('treats structured explicitYear as canonical operator proof without fabricating image evidence', () => {
+    const prompt = buildGenerateListingDraftPrompt(
+      createInput({ userHints: { explicitYear: '1974', notes: 'year:1974' } })
+    );
+
+    expect(prompt).toMatch(/explicitYear.*canonical operator-provided proof/i);
+    expect(prompt).toMatch(/explicitYear takes precedence/i);
+    expect(prompt).toMatch(/Do not create yearEvidence for explicitYear/i);
+    expect(prompt).toMatch(/"explicitYear": "1974"/);
   });
 
   it('uses the simplified yearEvidence contract and production_line source type', () => {
@@ -186,7 +197,7 @@ describe('buildGenerateListingDraftPrompt', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(
-      /Do not generate Year or Season item specifics\. The backend derives canonical Year from validated yearEvidence\./
+      /Do not generate Year or Season item specifics\. The backend derives canonical Year from structured explicitYear or validated yearEvidence\./
     );
   });
 
@@ -206,7 +217,7 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/"Year": "2020"/);
     expect(prompt).toMatch(/"title": "A card title"/);
     expect(prompt).toMatch(/"notes": "Some notes"/);
-    expect(prompt).toMatch(/existing item specifics, user hints, and general model knowledge are not year evidence/i);
+    expect(prompt).toMatch(/existing item specifics, unstructured user hints, and general model knowledge are not year evidence/i);
   });
 
   it('strips price from userHints in listing context when explicitly present', () => {

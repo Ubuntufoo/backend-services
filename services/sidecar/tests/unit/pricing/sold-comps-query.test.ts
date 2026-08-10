@@ -43,6 +43,26 @@ describe('buildSoldCompsQuery', () => {
     ).toBe('Johnny Riddle 1955 Topps 98');
   });
 
+  it('includes an authorized seller year in canonical order', () => {
+    expect(
+      buildSoldCompsQuery({
+        categoryId: '261328',
+        conditionId: '4000',
+        itemSpecifics: {
+          'Card Number': '100',
+          Manufacturer: 'Topps',
+          Player: 'Willie Stargell',
+          Set: 'Topps',
+          Year: '1974',
+        },
+        listingId: 'LIST-SELLER-YEAR',
+        listingType: 'single',
+        requestedCompCount: 20,
+        title: 'Willie Stargell 1974 Topps #100',
+      })
+    ).toBe('Willie Stargell 1974 Topps 100');
+  });
+
   it('strips noisy sport terms from set values', () => {
     expect(
       buildSoldCompsQuery({

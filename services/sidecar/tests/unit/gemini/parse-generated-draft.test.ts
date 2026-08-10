@@ -98,6 +98,39 @@ describe('parseGeneratedDraft', () => {
     });
   });
 
+  it('uses an authorized seller year over conflicting model year claims without image evidence', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Willie Stargell 1975 Topps #100',
+        description: 'The model described this as a 1975 card.',
+        aspects: {
+          Player: 'Willie Stargell',
+          Manufacturer: 'Topps',
+          'Card Number': '100',
+          Year: '1975',
+        },
+        yearEvidence: {
+          year: '1975',
+          sourceType: 'copyright_line',
+          visibleText: '© 1975 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'seller-year-raw-response' },
+      { authorizedYear: '1974', imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('Willie Stargell 1974 Topps #100');
+    expect(draft.aspects).toMatchObject({
+      'Card Number': '100',
+      Manufacturer: 'Topps',
+      Player: 'Willie Stargell',
+      Year: '1974',
+    });
+    expect(draft.yearEvidence).toBeNull();
+  });
+
   it('removes unsupported title and set years when evidence is absent and preserves card-number years', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
