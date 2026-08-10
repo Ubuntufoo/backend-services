@@ -11,45 +11,6 @@ Follow the "Ponytail" development principle: write only what is needed, maximize
 
 ## Agent Context & Token Management
 
-Use tools as a pipeline:
-- RTK/Headroom narrow or compress broad evidence -> DeepSeek delegates analyze bounded exact evidence -> main thread verifies, edits, tests, and finalizes
-
-- Do not treat RTK, Headroom, and delegates as interchangeable. RTK/Headroom help locate or shrink evidence; delegates reason over bounded evidence; the main thread remains responsible for decisions and verification.
-
-### DeepSeek Delegate Workers
-
-Source of truth:
-
-* Routine instructions: `/Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/AGENTS.md`
-* Full reference, consult selectively only when needed: `/Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/README.md`
-
-Do not ingest the full README by default. Use `AGENTS.md` for normal delegate workflow instructions, and targeted README searches or bounded line reads only when a specific command, contract, or historical detail is missing.
-
-Bootstrap:
-
-```sh
-source /Users/timothymurphy/Developer/Personal/TOOLS/codex-delegates/env.zsh
-```
-
-Use delegates for non-trivial bounded repo analysis, multi-file review, critique, synthesis, summarization, or packed-artifact verification when offloading reduces main-thread context.
-
-Delegates are read-only and advisory. The main thread must verify claims, decide what to do, edit files, run tests, and produce final conclusions.
-
-Preferred delegate paths:
-
-* normal review: `ds-delegate-review --mode review <file[:start[:count]]> ...`
-* manual artifact path: `ds pack --temp <repo-path[:start[:count]]> ...` -> `ds run analyze --mode <mode> @"$artifact"`
-* evidence audit: `ds run analyze --mode artifact-audit @"$artifact"`
-* run bundles: `ds run init`, inspect with `ds show`
-
-Prefer exact file-backed evidence for delegates. Use RTK or Headroom to narrow bulky/noisy output before choosing exact ranges. Do not pass summaries to delegates when source ranges can be packed.
-
-Keep artifacts narrow and split broad tasks into focused delegate calls.
-
-Compatibility shims remain supported and must stay quiet at runtime so stdout/JSON contracts do not change. Prefer v2 `ds` commands for migrated behavior; use existing entrypoints for scan/config/workspace/patch/model-worker commands until migrated.
-
-Do not delegate trivial checks, obvious edits, final response generation, direct file mutation, destructive actions, live/runtime state, DB inspection, environment drift, secrets, `.env*`, credentials, DB dumps, SQLite state, dependency folders, lockfiles, generated files, oversized raw logs, or arbitrary repo paths.
-
 ### RTK Routing
 
 See @/Users/timothymurphy/.codex/RTK.md.
@@ -82,39 +43,31 @@ rtk "pnpm typecheck"
 
 Use raw commands when output must be exact, small, machine-readable, formatting-sensitive, forensic, SQL-like, or when no RTK analogue exists. Common raw cases: git status --short, tiny file reads, exact SQL output, compact status checks, and final source-of-truth snippets used for implementation or review claims.
 
-Inside delegate workflows, use RTK or rtk view to narrow candidate seams before ds pack or ds-delegate-review. Do not pass RTK summaries to delegates when exact file-backed evidence is needed; pack the raw source ranges instead.
-
 ### Headroom Routing
 
-Use Headroom for bulky already-captured artifacts: long test logs, large diffs, delegate scans, repetitive JSON blobs, or other large/noisy outputs.
+Use Headroom for bulky already-captured artifacts: long test logs, large diffs, repetitive JSON blobs, or other large/noisy outputs.
 
 Skip Headroom for compact lists, concise tables, and small exact outputs unless they are repetitive.
 
 Workflow:
 compress raw artifact -> reason from compressed output -> retrieve exact slices only when needed
 
-Inside delegate workflows, use Headroom to shrink bulky local evidence before deciding what exact ranges to pack. Do not hand delegates compressed summaries when underlying file slices or artifact ranges can be packed instead.
-
 Examples:
 large failing test log -> headroom_compress -> reason from compressed output -> retrieve exact failure slice if needed
 large JSON API response -> headroom_compress -> identify relevant keys/errors -> retrieve exact slice if needed
 large diff already captured in chat/output -> headroom_compress -> identify changed areas -> inspect exact files/ranges
-verbose delegate scan output -> headroom_compress -> identify candidate seams -> pack exact source ranges for delegate review
 
 Skip Headroom for compact lists, concise tables, and small exact outputs unless they are repetitive.
 
 ### Combined Routing Rule
 
-For broad or noisy tasks:
-RTK/Headroom or `rtk view` narrow evidence -> exact files/ranges -> ds-delegate-review or ds pack -> ds run analyze -> main-thread verification
-
 For bulky artifacts:
-rtk view first -> identify exact file/line/range/row/hunk/error group -> raw read or ds pack exact evidence -> main-thread verification
+rtk view first -> identify exact file/line/range/row/hunk/error group -> raw read -> main-thread verification
 
 For small exact checks:
 raw command or raw read -> main-thread reasoning
 
-No delegate, RTK, Headroom, or rtk view is required when the evidence is already small and exact. Use compact RTK views for orientation only; use raw source ranges for final evidence, implementation decisions, and delegate packs.
+No RTK, Headroom, or rtk view is required when the evidence is already small and exact. Use compact RTK views for orientation only; use raw source ranges for final evidence and implementation decisions.
 
 ### Concise Response Protocol
 
