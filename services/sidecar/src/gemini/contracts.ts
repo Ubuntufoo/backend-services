@@ -20,6 +20,29 @@ const imageUrlSchema = z
   .min(1, 'imageUrls entries must be non-empty strings');
 
 export const aspectValueSchema = z.union([z.string(), z.array(z.string())]);
+export const GENERATED_LISTING_ASPECT_KEYS = [
+  'Player',
+  'Sport',
+  'Franchise',
+  'Character',
+  'Card Name',
+  'Game',
+  'Rarity',
+  'Language',
+  'Card Type',
+  'Finish',
+  'Manufacturer',
+  'Set',
+  'Card Number',
+  'Parallel/Variety',
+  'Insert Set',
+  'Features',
+] as const;
+const generatedListingAspectKeySchema = z.enum(GENERATED_LISTING_ASPECT_KEYS);
+const normalizedGeneratedListingAspectKeySchema = z.union([
+  generatedListingAspectKeySchema,
+  z.literal('Year'),
+]);
 const rawCardConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
 
 export const userHintsSchema = z.object({
@@ -66,7 +89,7 @@ export const generatedListingDraftSchema = z.object({
   cardConditionToken: rawCardConditionTokenSchema.nullable().optional(),
   conditionSuggestion: z.string().nullable().optional(),
   skuCategoryCode: skuCategoryCodeSchema.optional(),
-  aspects: z.record(aspectValueSchema),
+  aspects: z.record(normalizedGeneratedListingAspectKeySchema, aspectValueSchema),
   yearEvidence: generatedDraftYearEvidenceSchema.nullable().optional(),
   priceSuggestion: z.number().finite().nullable().optional(),
   confidence: confidenceSchema.optional(),

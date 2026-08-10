@@ -2,6 +2,63 @@ import { describe, expect, it } from 'vitest';
 import { parseGeneratedDraft } from '@/gemini/index.js';
 
 describe('parseGeneratedDraft', () => {
+  it('preserves expanded category-specific candidates while rejecting direct Year and Season', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Charizard Pokémon #4 Holo',
+        description: 'Single card.',
+        aspects: {
+          Game: 'Pokémon TCG',
+          'Card Name': 'Charizard',
+          Character: 'Charizard',
+          Rarity: 'Rare Holo',
+          Language: 'English',
+          'Card Type': 'Pokémon',
+          Finish: 'Holo',
+          Manufacturer: 'Wizards of the Coast',
+          Set: 'Base Set',
+          'Card Number': '4',
+          Features: ['Holo', 'Rare'],
+          League: 'Pokémon League',
+          Autographed: 'No',
+          Vintage: 'Yes',
+          Type: 'Collectible Card Game',
+          'Arbitrary Key': ['syntactically', 'valid'],
+          Year: '1999',
+          Season: '1999',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-expanded-ccg' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.aspects).toMatchObject({
+      Game: 'Pokémon TCG',
+      'Card Name': 'Charizard',
+      Character: 'Charizard',
+      Rarity: 'Rare Holo',
+      Language: 'English',
+      'Card Type': 'Pokémon',
+      Finish: 'Holo',
+      Manufacturer: 'Wizards of the Coast',
+      Set: 'Base Set',
+      'Card Number': '4',
+      Features: ['Holo', 'Rare'],
+    });
+    expect(draft.aspects).not.toHaveProperty('Year');
+    expect(draft.aspects).not.toHaveProperty('Season');
+    expect(draft.aspects).not.toHaveProperty('League');
+    expect(draft.aspects).not.toHaveProperty('Autographed');
+    expect(draft.aspects).not.toHaveProperty('Vintage');
+    expect(draft.aspects).not.toHaveProperty('Type');
+    expect(draft.aspects).not.toHaveProperty('Arbitrary Key');
+    expect(draft.warnings).toContain(
+      'Gemini response aspects discarded unexpected keys: "League", "Autographed", "Vintage", "Type", "Arbitrary Key".'
+    );
+  });
+
   it('derives Year from validated year evidence and removes duplicate aliases and Season', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
@@ -27,7 +84,6 @@ describe('parseGeneratedDraft', () => {
 
     expect(draft.title).toBe('1955 Topps Johnny Riddle #98');
     expect(draft.aspects).toEqual({
-      Athlete: 'Johnny Riddle',
       Player: 'Johnny Riddle',
       Manufacturer: 'Topps',
       Set: 'Topps',

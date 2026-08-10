@@ -49,7 +49,10 @@ import {
 } from '@/ebay/publish-config.js';
 import {
   getCategoryTreeIdFromTaxonomyResponse,
-  getRequiredAspectNamesFromTaxonomyResponse,
+  getRequiredAspectNames,
+  getTaxonomyAspectMetadata,
+  normalizeSingleCardOutboundItemSpecifics,
+  type TaxonomyAspectMetadata,
   validateRequiredItemSpecificsForCategory,
 } from '@/ebay/required-item-specifics-validation.js';
 
@@ -315,11 +318,11 @@ async function resolveTradingCardConditionDescriptors(
   ];
 }
 
-async function getRequiredCategoryAspectNames(
+async function getCategoryAspectMetadata(
   listing: ListingRow,
   marketplaceId: string,
   taxonomyApi: PublishTaxonomyApi
-): Promise<string[]> {
+): Promise<TaxonomyAspectMetadata[]> {
   const listingLabel = getListingLabel(listing);
   const categoryId = listing.category_id!.trim();
 
@@ -327,7 +330,7 @@ async function getRequiredCategoryAspectNames(
     const categoryTreeResponse = await taxonomyApi.getDefaultCategoryTreeId(marketplaceId);
     const categoryTreeId = getCategoryTreeIdFromTaxonomyResponse(categoryTreeResponse);
     const aspectsResponse = await taxonomyApi.getItemAspectsForCategory(categoryTreeId, categoryId);
-    return getRequiredAspectNamesFromTaxonomyResponse(aspectsResponse);
+    return getTaxonomyAspectMetadata(aspectsResponse);
   } catch (error) {
     throw wrapPublishStageError(
       'INVENTORY_ITEM_UPSERT_FAILED',
@@ -670,21 +673,30 @@ export async function publishListing(
     publishConfig.marketplaceId,
     resolvedDependencies.metadataApi
   );
-  const requiredAspectNames = await getRequiredCategoryAspectNames(
+  const taxonomyAspects = await getCategoryAspectMetadata(
     listing,
     publishConfig.marketplaceId,
     resolvedDependencies.taxonomyApi
   );
+  const conditionDescriptorsPresent = Boolean(
+    conditionDescriptors && conditionDescriptors.length > 0
+  );
+  const outboundItemSpecifics = normalizeSingleCardOutboundItemSpecifics({
+    conditionDescriptorsPresent,
+    listing,
+    taxonomyAspects,
+  });
   validateRequiredItemSpecificsForCategory({
     listing,
-    requiredAspectNames,
-    satisfiedAspectNames:
-      conditionDescriptors && conditionDescriptors.length > 0
-        ? [TRADING_CARD_CONDITION_ASPECT_KEY]
-        : [],
+    outboundItemSpecifics: outboundItemSpecifics ?? undefined,
+    requiredAspectNames: getRequiredAspectNames(taxonomyAspects),
+    satisfiedAspectNames: conditionDescriptorsPresent
+      ? [TRADING_CARD_CONDITION_ASPECT_KEY]
+      : [],
   });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
+    outboundItemSpecifics: outboundItemSpecifics ?? undefined,
   });
   const offerPayload = mapListingToOfferPayload(listing, publishConfig, sku);
   const marketplaceId = publishConfig.marketplaceId;

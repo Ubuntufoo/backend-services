@@ -107,13 +107,23 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/Card Number/);
   });
 
-  it('preserves canonical aspect generation instructions', () => {
+  it('provides category-specific single-card candidate fields without speculative filling', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
-    expect(prompt).toMatch(
-      /Player, Manufacturer, Set, Card Number, Parallel\/Variety, Insert Set/
-    );
+    expect(prompt).toMatch(/For sports singles, candidate fields are: Player, Sport/);
+    expect(prompt).toMatch(/For non-sport singles, candidate fields are: Franchise, Character, Card Name/);
+    expect(prompt).toMatch(/For CCG singles, candidate fields are: Game, Card Name, Character, Rarity/);
+    expect(prompt).toMatch(/omit any candidate that is not positively identified/i);
+    expect(prompt).toMatch(/Never invent Base Set or absence-based feature values/);
     expect(prompt).not.toMatch(/strongly inferable: Player, verified Year/i);
+  });
+
+  it('does not request deferred or speculative item specifics', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/Do not generate Season, League, Autographed/);
+    expect(prompt).toMatch(/Original\/Licensed Reprint, Vintage, Illustrator/);
+    expect(prompt).toMatch(/MPN, UPC, or generic Graded item specifics/);
   });
 
   it('requires visible-image year evidence and forbids hint-based year inference', () => {

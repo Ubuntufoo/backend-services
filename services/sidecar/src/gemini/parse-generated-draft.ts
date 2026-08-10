@@ -1,4 +1,5 @@
 import {
+  GENERATED_LISTING_ASPECT_KEYS,
   GeminiDraftServiceError,
   type GeneratedListingDraft,
   generatedListingDraftSchema,
@@ -18,6 +19,14 @@ type YearEvidenceSourceType = (typeof GENERATED_YEAR_EVIDENCE_SOURCE_TYPES)[numb
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const CONFIDENCE_KEYS: ConfidenceKey[] = ['title', 'category', 'price', 'aspects'];
+const GENERATED_LISTING_ASPECT_KEY_SET = new Set<string>(GENERATED_LISTING_ASPECT_KEYS);
+const TRANSIENT_GENERATED_LISTING_ASPECT_KEYS = new Set([
+  'Athlete',
+  'Card Manufacturer',
+  'Player/Athlete',
+  'Season',
+  'Year',
+]);
 const MAX_GENERATED_TITLE_LENGTH = 80;
 const TITLE_CARD_NUMBER_PATTERNS = [
   /(?:^|[\s([{])#\s*([A-Za-z0-9-]+)\b/i,
@@ -154,8 +163,17 @@ function normalizeAspects(value: unknown, warnings: string[]): Record<string, st
   }
 
   const aspects: Record<string, string | string[]> = {};
+  const unexpectedKeys: string[] = [];
 
   for (const [key, rawAspectValue] of Object.entries(value)) {
+    if (
+      !GENERATED_LISTING_ASPECT_KEY_SET.has(key) &&
+      !TRANSIENT_GENERATED_LISTING_ASPECT_KEYS.has(key)
+    ) {
+      unexpectedKeys.push(key);
+      continue;
+    }
+
     if (typeof rawAspectValue === 'string') {
       aspects[key] = rawAspectValue;
       continue;
@@ -177,6 +195,14 @@ function normalizeAspects(value: unknown, warnings: string[]): Record<string, st
     }
 
     warnings.push(`Gemini response aspect "${key}" was invalid and was discarded.`);
+  }
+
+  if (unexpectedKeys.length > 0) {
+    warnings.push(
+      `Gemini response aspects discarded unexpected keys: ${unexpectedKeys
+        .map((key) => JSON.stringify(key))
+        .join(', ')}.`
+    );
   }
 
   return aspects;
@@ -231,10 +257,8 @@ export function normalizeGeneratedDraft(
   const cardManufacturer = trimToNull(getAspectString(aspects, 'Card Manufacturer'));
   if (!manufacturer && cardManufacturer) {
     aspects.Manufacturer = cardManufacturer;
-    delete aspects['Card Manufacturer'];
-  } else if (manufacturer && cardManufacturer?.toLowerCase() === manufacturer.toLowerCase()) {
-    delete aspects['Card Manufacturer'];
   }
+  delete aspects['Card Manufacturer'];
 
   const player = getAspectString(aspects, 'Player');
   const playerAthlete = getAspectString(aspects, 'Player/Athlete');
@@ -245,6 +269,8 @@ export function normalizeGeneratedDraft(
   } else if (!player && athlete) {
     aspects.Player = athlete;
   }
+  delete aspects['Player/Athlete'];
+  delete aspects.Athlete;
 
   const cardNumber = getAspectString(aspects, 'Card Number');
   if (cardNumber) {

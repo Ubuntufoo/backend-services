@@ -44,14 +44,25 @@ function createTradingCardConditionPoliciesResponse(
   };
 }
 
-function createTaxonomyAspectsResponse(requiredAspectNames: string[]) {
+function createTaxonomyAspectsResponse(
+  requiredAspectNames: string[],
+  optionalAspectNames: string[] = []
+) {
   return {
-    aspects: requiredAspectNames.map((localizedAspectName) => ({
-      localizedAspectName,
-      aspectConstraint: {
-        aspectRequired: true,
-      },
-    })),
+    aspects: [
+      ...requiredAspectNames.map((localizedAspectName) => ({
+        localizedAspectName,
+        aspectConstraint: {
+          aspectRequired: true,
+        },
+      })),
+      ...optionalAspectNames.map((localizedAspectName) => ({
+        localizedAspectName,
+        aspectConstraint: {
+          aspectRequired: false,
+        },
+      })),
+    ],
   };
 }
 
@@ -577,7 +588,6 @@ describe('publishListing', () => {
         sku: STRUCTURED_SINGLE_SKU,
       }),
     });
-
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
@@ -787,6 +797,9 @@ describe('publishListing', () => {
         },
       }),
     });
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse([], ['Player'])
+    );
 
     await publishListing('LIST-001', dependencies);
 
@@ -909,6 +922,9 @@ describe('publishListing', () => {
           categoryId: '183050',
         }
       )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse([], ['Manufacturer', 'Player'])
     );
 
     await publishListing('LIST-001', dependencies);
@@ -1062,9 +1078,27 @@ describe('publishListing', () => {
         categoryId: '183050',
       })
     );
-    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
-      createTaxonomyAspectsResponse(['Card Condition', 'Franchise'])
-    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => {
+      const response = createTaxonomyAspectsResponse(
+        ['Card Condition', 'Franchise'],
+        ['Manufacturer', 'Player']
+      );
+
+      return {
+        aspects: [
+          ...response.aspects,
+          {
+            localizedAspectName: 'Type',
+            aspectConstraint: {
+              aspectMode: 'SELECTION_ONLY',
+              aspectRequired: false,
+              itemToAspectCardinality: 'SINGLE',
+            },
+            aspectValues: [{ localizedValue: 'Non-Sport Trading Card' }],
+          },
+        ],
+      };
+    });
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
@@ -1075,6 +1109,7 @@ describe('publishListing', () => {
             Franchise: ['Utah Jazz'],
             Manufacturer: ['Upper Deck'],
             Player: ['Karl Malone'],
+            Type: ['Non-Sport Trading Card'],
           },
         }),
       })
@@ -1086,6 +1121,156 @@ describe('publishListing', () => {
       dependencies.taxonomyApi.getItemAspectsForCategory.mock.invocationCallOrder[0]
     ).toBeLessThan(
       dependencies.inventoryApi.createOrReplaceInventoryItem.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('publishes canonical sports aliases, authorized year, and deterministic Type only', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          Franchise: 'Chicago Bulls',
+          Player: 'Michael Jordan',
+          Unsupported: 'must not leak',
+          Year: '1991',
+          __draft_metadata: {
+            year: {
+              image_index: 1,
+              source_type: 'copyright_line',
+              visible_text: '© 1991 UPPER DECK COMPANY',
+              year: '1991',
+            },
+          },
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([
+        { id: '400010', name: 'Near mint or better' },
+      ])
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Team',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Sports Trading Card' }],
+        },
+        {
+          localizedAspectName: 'Card Condition',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        conditionDescriptors: [{ name: '40001', values: ['400010'] }],
+        product: expect.objectContaining({
+          aspects: {
+            'Player/Athlete': ['Michael Jordan'],
+            Team: ['Chicago Bulls'],
+            Type: ['Sports Trading Card'],
+            'Year Manufactured': ['1991'],
+          },
+        }),
+      })
+    );
+  });
+
+  it('publishes supported CCG candidates without synthesizing Type, Season, or year', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183454',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          Game: 'pokémon tcg',
+          'Card Name': 'Charizard',
+          Rarity: 'Rare Holo',
+          Unsupported: 'must not leak',
+          Year: '1999',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse(
+        [{ id: '400010', name: 'Near mint or better' }],
+        { categoryId: '183454' }
+      )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Game',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Pokémon TCG' }],
+        },
+        {
+          localizedAspectName: 'Card Name',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Rarity',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Card Condition',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        product: expect.objectContaining({
+          aspects: {
+            'Card Name': ['Charizard'],
+            Game: ['Pokémon TCG'],
+            Rarity: ['Rare Holo'],
+          },
+        }),
+      })
     );
   });
 
@@ -1330,9 +1515,7 @@ describe('publishListing', () => {
       STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
-          aspects: {
-            FRANCHISE: ['Star Wars'],
-          },
+          aspects: { Franchise: ['Star Wars'] },
         }),
       })
     );

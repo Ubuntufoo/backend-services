@@ -4,7 +4,9 @@ import {
   getCategoryTreeIdFromTaxonomyResponse,
   getEffectiveItemSpecificsForCategoryValidation,
   getRequiredAspectNamesFromTaxonomyResponse,
+  getTaxonomyAspectMetadata,
   hasRequiredAspectValue,
+  normalizeSingleCardOutboundItemSpecifics,
   validateRequiredItemSpecificsForCategory,
 } from '@/ebay/required-item-specifics-validation.js';
 
@@ -85,6 +87,179 @@ describe('required item specifics validation', () => {
         ],
       })
     ).toEqual(['Franchise']);
+  });
+
+  it('retains canonical names, constraints, usage, allowed values, and cardinality', () => {
+    expect(
+      getTaxonomyAspectMetadata({
+        aspects: [
+          {
+            localizedAspectName: ' Type ',
+            aspectConstraint: {
+              aspectDataType: 'STRING',
+              aspectMode: 'SELECTION_ONLY',
+              aspectRequired: true,
+              aspectUsage: 'RECOMMENDED',
+              itemToAspectCardinality: 'SINGLE',
+            },
+            aspectValues: [
+              { localizedValue: 'Sports Trading Card' },
+              { localizedValue: 'Non-Sport Trading Card' },
+            ],
+          },
+        ],
+      })
+    ).toEqual([
+      {
+        allowedValues: ['Sports Trading Card', 'Non-Sport Trading Card'],
+        cardinality: 'SINGLE',
+        dataType: 'STRING',
+        inputMode: 'SELECTION_ONLY',
+        localizedName: 'Type',
+        required: true,
+        usage: 'RECOMMENDED',
+      },
+    ]);
+  });
+
+  it('normalizes sports aliases, authorized year, and deterministic Type to taxonomy names', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        'Card Condition': 'NEAR_MINT_OR_BETTER',
+        Franchise: 'Chicago Bulls',
+        Player: 'Michael Jordan',
+        Unsupported: 'must not leak',
+        Year: '1991',
+        __draft_metadata: {
+          year: {
+            image_index: 1,
+            source_type: 'copyright_line',
+            visible_text: '© 1991 UPPER DECK COMPANY',
+            year: '1991',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Team',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Sports Trading Card' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: true,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({
+      'Player/Athlete': ['Michael Jordan'],
+      Team: ['Chicago Bulls'],
+      'Year Manufactured': ['1991'],
+      Type: ['Sports Trading Card'],
+    });
+  });
+
+  it('preserves manual taxonomy-supported Season and Type while omitting unsafe values', () => {
+    const listing = createListing({
+      category_id: '183454',
+      item_specifics: {
+        Game: 'pokemon',
+        Rarity: ['Rare Holo', 'Common'],
+        Season: '1999',
+        Type: 'Collectible Card Game',
+        Year: '1999',
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Game',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Pokémon TCG' }],
+        },
+        {
+          localizedAspectName: 'Rarity',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({
+      Season: ['1999'],
+      Type: ['Collectible Card Game'],
+    });
+  });
+
+  it('canonicalizes exact case-insensitive closed-set matches', () => {
+    const listing = createListing({
+      category_id: '183454',
+      item_specifics: { Game: 'pokémon tcg' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Game',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Pokémon TCG' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({ Game: ['Pokémon TCG'] });
   });
 
   it.each([

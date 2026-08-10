@@ -2,7 +2,10 @@ import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { parseStructuredSku } from '@ebay-inventory/types';
 import { Condition } from '@/types/ebay-enums.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
-import { getEffectiveItemSpecificsForCategoryValidation } from '@/ebay/required-item-specifics-validation.js';
+import {
+  getEffectiveItemSpecificsForCategoryValidation,
+  type NormalizedOutboundItemSpecifics,
+} from '@/ebay/required-item-specifics-validation.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 import {
   getRawCardConditionDisplayLabel,
@@ -38,6 +41,7 @@ const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];
+  outboundItemSpecifics?: NormalizedOutboundItemSpecifics;
 }
 
 function normalizeAspectValue(value: Json): string[] | null {
@@ -151,7 +155,8 @@ export function mapListingToInventoryItemPayload(
   const ignoredKeys = new Set(INTERNAL_ITEM_SPECIFIC_KEYS);
   const hasConditionDescriptors =
     Array.isArray(options.conditionDescriptors) && options.conditionDescriptors.length > 0;
-  const effectiveItemSpecifics = getEffectiveItemSpecificsForCategoryValidation(listing);
+  const effectiveItemSpecifics =
+    options.outboundItemSpecifics ?? getEffectiveItemSpecificsForCategoryValidation(listing);
 
   if (hasConditionDescriptors && isTradingCardCategoryId(listing.category_id)) {
     ignoredKeys.add(TRADING_CARD_CONDITION_ASPECT_KEY);
