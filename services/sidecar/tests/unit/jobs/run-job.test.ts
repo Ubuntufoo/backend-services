@@ -72,6 +72,8 @@ import {
 } from '@/pricing/index.js';
 
 const GENERATED_DESCRIPTION_NOTICE =
+  'Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\n\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
+const LEGACY_GENERATED_DESCRIPTION_NOTICE =
   'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 
 type GenerateListingDraftMock = NonNullable<RunSidecarJobOptions['generateListingDraft']>;
@@ -1503,6 +1505,11 @@ describe('runSidecarJob', () => {
     [
       'already-noticed',
       `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
+    [
+      'legacy-noticed',
+      `Original description.\n\n${LEGACY_GENERATED_DESCRIPTION_NOTICE}`,
       `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
     ],
   ])(

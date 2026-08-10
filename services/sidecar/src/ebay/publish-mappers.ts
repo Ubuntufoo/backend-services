@@ -38,10 +38,31 @@ const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'pricingModifierOptions',
   'skuCategoryCode',
 ]);
+const DESCRIPTION_LABELS = ['Condition & Photography:', 'Combined Shipping:'] as const;
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];
   outboundItemSpecifics?: NormalizedOutboundItemSpecifics;
+}
+
+export function formatEbayListingDescription(description: string): string {
+  const escaped = description
+    .replace(/\r\n?/g, '\n')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  const withBoldLabels = DESCRIPTION_LABELS.reduce(
+    (formatted, label) =>
+      formatted.replaceAll(
+        label.replace('&', '&amp;'),
+        `<strong>${label.replace('&', '&amp;')}</strong>`
+      ),
+    escaped
+  );
+
+  return withBoldLabels.replace(/\n[\t ]*\n+/g, '<br><br>').replace(/\n/g, '<br>');
 }
 
 function normalizeAspectValue(value: Json): string[] | null {
@@ -176,7 +197,10 @@ export function mapListingToInventoryItemPayload(
     packageWeightAndSize: buildPackageWeightAndSize(listing, appSettings),
     product: {
       aspects: aspects as unknown as components['schemas']['Product']['aspects'],
-      description: listing.description ?? undefined,
+      description:
+        listing.description === null
+          ? undefined
+          : formatEbayListingDescription(listing.description),
       imageUrls: listing.image_urls,
       title: listing.title ?? undefined,
     },
@@ -195,7 +219,8 @@ export function mapListingToOfferPayload(
     categoryId: listing.category_id ?? undefined,
     format: 'FIXED_PRICE',
     listingDuration: 'GTC',
-    listingDescription: listing.description ?? undefined,
+    listingDescription:
+      listing.description === null ? undefined : formatEbayListingDescription(listing.description),
     listingPolicies: {
       fulfillmentPolicyId: publishConfig.fulfillmentPolicyId,
       paymentPolicyId: publishConfig.paymentPolicyId,

@@ -3,6 +3,7 @@ import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 import {
   buildPublishSku,
+  formatEbayListingDescription,
   mapListingConditionIdToInventoryCondition,
   mapListingToInventoryItemPayload,
   mapListingToOfferPayload,
@@ -99,6 +100,22 @@ function createResolvedPublishConfig(
 }
 
 describe('publish mappers', () => {
+  it('formats plain text as safe basic HTML with bold notice labels', () => {
+    expect(
+      formatEbayListingDescription(
+        `First & <second> "quoted" 'value'.\r\nSingle line.\r\n\r\nCondition & Photography: A & B < C.\n\nCombined Shipping: message us.`
+      )
+    ).toBe(
+      'First &amp; &lt;second&gt; &quot;quoted&quot; &#39;value&#39;.<br>Single line.<br><br><strong>Condition &amp; Photography:</strong> A &amp; B &lt; C.<br><br><strong>Combined Shipping:</strong> message us.'
+    );
+  });
+
+  it('escapes model-provided HTML instead of rendering it', () => {
+    expect(formatEbayListingDescription('<script>alert("x")</script>')).toBe(
+      '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;'
+    );
+  });
+
   it('builds a stable publish sku from stored structured sku only', () => {
     expect(buildPublishSku(createListing({ sku: STRUCTURED_SKU }))).toBe(STRUCTURED_SKU);
     expect(buildPublishSku(createListing({ sku: ` ${STRUCTURED_SKU} ` }))).toBe(STRUCTURED_SKU);
@@ -280,5 +297,35 @@ describe('publish mappers', () => {
       },
       sku: 'BSBL-Lot-000002',
     });
+  });
+
+  it('uses the same formatted description for inventory item and offer payloads', () => {
+    const description =
+      'First paragraph.\n\nCondition & Photography: A & B < C.\n\nCombined Shipping: message us.';
+    const listing = createListing({ description });
+    const expected = formatEbayListingDescription(description);
+
+    expect(mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description).toBe(
+      expected
+    );
+    expect(
+      mapListingToOfferPayload(listing, createResolvedPublishConfig(), STRUCTURED_SKU)
+        .listingDescription
+    ).toBe(expected);
+  });
+
+  it.each([
+    ['null', null, undefined],
+    ['empty', '', ''],
+  ])('preserves %s description behavior', (_case, description, expected) => {
+    const listing = createListing({ description });
+
+    expect(mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description).toBe(
+      expected
+    );
+    expect(
+      mapListingToOfferPayload(listing, createResolvedPublishConfig(), STRUCTURED_SKU)
+        .listingDescription
+    ).toBe(expected);
   });
 });

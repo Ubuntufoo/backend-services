@@ -76,6 +76,8 @@ const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
 const GENERATED_DESCRIPTION_NOTICE =
+  'Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\n\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
+const LEGACY_GENERATED_DESCRIPTION_NOTICE =
   'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 const jobLogger = createLogger('Job');
 const nowMs = () => performance.now();
@@ -237,6 +239,10 @@ function appendGeneratedDescriptionNotice(description: string): string {
 
   if (generatedDescription.endsWith(GENERATED_DESCRIPTION_NOTICE)) {
     return generatedDescription;
+  }
+
+  if (generatedDescription.endsWith(LEGACY_GENERATED_DESCRIPTION_NOTICE)) {
+    return `${generatedDescription.slice(0, -LEGACY_GENERATED_DESCRIPTION_NOTICE.length)}${GENERATED_DESCRIPTION_NOTICE}`;
   }
 
   return generatedDescription
