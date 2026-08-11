@@ -329,9 +329,9 @@ function createConditionalListingDeleteClient(expectedRow: ListingRow | null): S
             expect(listingId).toBe('LIST-001');
 
             return {
-              eq: vi.fn((statusColumn: string, status: string) => {
+              in: vi.fn((statusColumn: string, statuses: string[]) => {
                 expect(statusColumn).toBe('status');
-                expect(status).toBe('needs_review');
+                expect(statuses).toEqual(['assets_ready', 'needs_review']);
 
                 return {
                   eq: vi.fn((updatedAtColumn: string, updatedAt: string) => {
@@ -1978,7 +1978,7 @@ describe('shared repositories', () => {
     ]);
   });
 
-  it('conditionally deletes only an unchanged needs-review listing', async () => {
+  it('conditionally deletes only an unchanged abandonable listing', async () => {
     const deletedListing: ListingRow = {
       ...listingRow,
       status: 'needs_review',
