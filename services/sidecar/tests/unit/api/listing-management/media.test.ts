@@ -5,8 +5,7 @@ import { MediaApi } from '@/api/listing-management/media.js';
 
 const imageUrl = 'https://cdn.example.test/source/front.webp';
 const epsImageUrl = 'https://i.ebayimg.com/images/g/example/s-l1600.webp';
-const imageResourceUri =
-  'https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/image-123';
+const imageResourceUri = 'https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/image-123';
 const imageResponse = {
   imageUrl: epsImageUrl,
   expirationDate: '2026-08-12T00:00:00.000Z',
@@ -65,6 +64,18 @@ describe('MediaApi', () => {
       });
     });
 
+    it('treats the eBay image ID as an opaque URI segment', async () => {
+      const opaqueId = `${'A'.repeat(160)}%2Fchild%3D%3D`;
+      const opaqueLocation = `https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/${opaqueId}`;
+      vi.mocked(client.postWithFullUrlResponse).mockResolvedValue(
+        response(imageResponse, opaqueLocation)
+      );
+
+      await expect(api.createImageFromUrl(imageUrl)).resolves.toEqual(
+        expect.objectContaining({ imageId: opaqueId, location: opaqueLocation })
+      );
+    });
+
     it('rejects a non-HTTPS source before making a request', async () => {
       await expect(api.createImageFromUrl('http://example.test/image.jpg')).rejects.toThrow(
         'URL must use HTTPS'
@@ -77,9 +88,7 @@ describe('MediaApi', () => {
         response(imageResponse, imageResourceUri, 200)
       );
 
-      await expect(api.createImageFromUrl(imageUrl)).rejects.toThrow(
-        'unexpected status 200'
-      );
+      await expect(api.createImageFromUrl(imageUrl)).rejects.toThrow('unexpected status 200');
 
       vi.mocked(client.postWithFullUrlResponse).mockResolvedValue(
         response(imageResponse, 'https://evil.example.test/image/image-123')
@@ -135,9 +144,7 @@ describe('MediaApi', () => {
     it('treats a missing image as proof that authorization reached resource lookup', async () => {
       vi.mocked(client.getWithFullUrl).mockRejectedValue(axiosStatusError(404));
 
-      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).resolves.toBe(
-        'authorized'
-      );
+      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).resolves.toBe('authorized');
       expect(client.getWithFullUrl).toHaveBeenCalledWith(
         'https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/YP_MEDIA_AUTH_PROBE_MISSING'
       );
@@ -154,9 +161,7 @@ describe('MediaApi', () => {
     it('fails closed on unexpected responses', async () => {
       vi.mocked(client.getWithFullUrl).mockRejectedValue(axiosStatusError(500));
 
-      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).rejects.toThrow(
-        'HTTP 500'
-      );
+      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).rejects.toThrow('HTTP 500');
     });
   });
 });

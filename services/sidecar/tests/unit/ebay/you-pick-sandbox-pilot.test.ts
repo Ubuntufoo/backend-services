@@ -666,7 +666,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
   });
 
   it('preflights version 3 with ordered Media operations and resolves only exact ready EPS URLs', async () => {
-    const fixture = { ...(await loadFixture() as Record<string, unknown>), version: 3 };
+    const fixture = { ...((await loadFixture()) as Record<string, unknown>), version: 3 };
     const parsedFixture = youPickFixtureSchema.parse(fixture);
     const run = generateRunIdentity(2, fixedDate, fixedRandom());
     const plan = buildFuturePlan(parsedFixture, run);
@@ -684,9 +684,11 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     );
     expect(
-      (plan.operations.find(({ id }) => id === 'group-complete')?.payload as {
-        imageUrls: string[];
-      }).imageUrls
+      (
+        plan.operations.find(({ id }) => id === 'group-complete')?.payload as {
+          imageUrls: string[];
+        }
+      ).imageUrls
     ).toEqual(['$media.C01.front', '$media.C02.front']);
 
     const root = await tempRepo();
@@ -709,12 +711,12 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       join(root, '.local', 'you-pick-sandbox')
     );
     if (!('execution' in manifest)) throw new Error('Expected executable manifest.');
-    expect(manifest.execution.mediaResources?.map(({ operationId, state }) => ({
-      operationId,
-      state,
-    }))).toEqual(
-      plan.operations.slice(0, 4).map(({ id }) => ({ operationId: id, state: 'planned' }))
-    );
+    expect(
+      manifest.execution.mediaResources?.map(({ operationId, state }) => ({
+        operationId,
+        state,
+      }))
+    ).toEqual(plan.operations.slice(0, 4).map(({ id }) => ({ operationId: id, state: 'planned' })));
     expect(() => resolveFuturePlan(manifest)).toThrow(/not ready/);
 
     const unauthorizedRoot = await tempRepo();
@@ -766,9 +768,11 @@ describe('You Pick sandbox pilot fixture and plan', () => {
     });
     const resolved = resolveFuturePlan(ready);
     expect(
-      (resolved.operations.find(({ id }) => id === 'item-C01')?.payload as {
-        product: { imageUrls: string[] };
-      }).product.imageUrls
+      (
+        resolved.operations.find(({ id }) => id === 'item-C01')?.payload as {
+          product: { imageUrls: string[] };
+        }
+      ).product.imageUrls
     ).toEqual([
       'https://i.ebayimg.com/images/g/EPS0/s-l1600.jpg?quality=100',
       'https://i.ebayimg.com/images/g/EPS1/s-l1600.jpg',
@@ -780,18 +784,118 @@ describe('You Pick sandbox pilot fixture and plan', () => {
         resolvedItem
       )
     ).toBeNull();
-    await writeManifestAtomic(
-      report.manifestPath,
-      ready,
-      join(root, '.local', 'you-pick-sandbox')
-    );
+    await writeManifestAtomic(report.manifestPath, ready, join(root, '.local', 'you-pick-sandbox'));
     const roundTrip = await readManifest(
       report.manifestPath,
       join(root, '.local', 'you-pick-sandbox')
     );
+    expect('execution' in roundTrip ? roundTrip.execution.mediaResources?.[0].epsUrl : null).toBe(
+      'https://i.ebayimg.com/images/g/EPS0/s-l1600.jpg?quality=100'
+    );
+  });
+
+  it('builds version 4 with ordered child Media pairs and no group imageUrls', async () => {
+    const fixture = youPickFixtureSchema.parse({ ...(await loadFixture()), version: 4 });
+    const run = generateRunIdentity(2, fixedDate, fixedRandom());
+    const plan = buildFuturePlan(fixture, run);
+    const group = plan.operations.find(({ id }) => id === 'group-complete')?.payload as Record<
+      string,
+      unknown
+    >;
+
+    expect(plan.arrangementId).toMatch(/^arrangement-v4-/);
+    expect(plan.operations.slice(0, 4).map(({ id }) => id)).toEqual([
+      'media-C01-front',
+      'media-C01-back',
+      'media-C02-front',
+      'media-C02-back',
+    ]);
     expect(
-      'execution' in roundTrip ? roundTrip.execution.mediaResources?.[0].epsUrl : null
-    ).toBe('https://i.ebayimg.com/images/g/EPS0/s-l1600.jpg?quality=100');
+      plan.operations
+        .filter(({ kind }) => kind === 'create-or-replace-child-item')
+        .map(({ payload }) => (payload as { product: { imageUrls: string[] } }).product.imageUrls)
+    ).toEqual([
+      ['$media.C01.front', '$media.C01.back'],
+      ['$media.C02.front', '$media.C02.back'],
+    ]);
+    expect(group).not.toHaveProperty('imageUrls');
+    expect(group.variesBy).toEqual({
+      specifications: [{ name: 'Card', values: ['001 - Alpha Card', '002 - Beta Card'] }],
+      aspectsImageVariesBy: ['Card'],
+    });
+
+    const root = await tempRepo();
+    const fixturePath = join(root, 'version-4-fixture.json');
+    await writeFile(fixturePath, JSON.stringify(fixture));
+    const report = await runYouPickSandboxPilot({
+      api: createApi(),
+      fixturePath,
+      repoRoot: root,
+      now: () => fixedDate,
+      randomBytesImpl: fixedRandom,
+    });
+    const manifest = executableYouPickManifestSchema.parse(
+      await readManifest(report.manifestPath, join(root, '.local', 'you-pick-sandbox'))
+    );
+    const ready = executableYouPickManifestSchema.parse({
+      ...manifest,
+      execution: {
+        ...manifest.execution,
+        ledger: manifest.execution.ledger.map((entry) =>
+          entry.id.startsWith('media-')
+            ? {
+                ...entry,
+                state: 'completed',
+                attemptCount: 1,
+                startedAt: '2026-08-11T15:17:00.000Z',
+                completedAt: '2026-08-11T15:18:00.000Z',
+              }
+            : entry
+        ),
+        mediaResources: manifest.execution.mediaResources?.map((resource, index) => {
+          const epsUrl = `https://i.ebayimg.com/images/g/CHILD${index}/s-l1600.jpg`;
+          return {
+            ...resource,
+            state: 'ready',
+            imageId: `CHILD-${index}`,
+            location: `https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/CHILD-${index}`,
+            epsUrl,
+            epsUrlDigest: digest(epsUrl),
+            expirationDate: '2026-09-11T15:17:00.000Z',
+            createdAt: '2026-08-11T15:17:00.000Z',
+            verifiedAt: '2026-08-11T15:18:00.000Z',
+          };
+        }),
+      },
+    });
+    const resolved = resolveFuturePlan(ready);
+    expect(
+      resolved.operations
+        .filter(({ kind }) => kind === 'create-or-replace-child-item')
+        .map(({ payload }) => (payload as { product: { imageUrls: string[] } }).product.imageUrls)
+    ).toEqual([
+      [
+        'https://i.ebayimg.com/images/g/CHILD0/s-l1600.jpg',
+        'https://i.ebayimg.com/images/g/CHILD1/s-l1600.jpg',
+      ],
+      [
+        'https://i.ebayimg.com/images/g/CHILD2/s-l1600.jpg',
+        'https://i.ebayimg.com/images/g/CHILD3/s-l1600.jpg',
+      ],
+    ]);
+    expect(
+      resolved.operations.find(({ id }) => id === 'group-complete')?.payload
+    ).not.toHaveProperty('imageUrls');
+    const resolvedGroup = resolved.operations.find(({ id }) => id === 'group-complete');
+    expect(
+      normalizeYouPickGroup(
+        {
+          ...(resolvedGroup?.payload as Record<string, unknown>),
+          variantSKUs: [...run.childSkus].reverse(),
+        },
+        run.groupKey
+      ).snapshotDigest
+    ).toBe(resolvedGroup?.digest);
   });
 
   it('preserves the exact version-1 arrangement and operation digests', async () => {

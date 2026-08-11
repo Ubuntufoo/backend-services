@@ -4,20 +4,18 @@ import axios from 'axios';
 import { z } from 'zod';
 
 const mediaPath = '/commerce/media/v1_beta';
-const imageIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+const probeImageIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+const opaqueImageIdSchema = z.string().min(1).max(2048);
 
 const httpsUrlSchema = z
   .string({ required_error: 'URL is required', invalid_type_error: 'URL must be a string' })
   .trim()
   .url('URL must be a valid URL')
   .refine((value) => new URL(value).protocol === 'https:', 'URL must use HTTPS')
-  .refine(
-    (value) => {
-      const parsed = new URL(value);
-      return !parsed.username && !parsed.password;
-    },
-    'URL must not include credentials'
-  );
+  .refine((value) => {
+    const parsed = new URL(value);
+    return !parsed.username && !parsed.password;
+  }, 'URL must not include credentials');
 
 const createImageFromUrlRequestSchema = z
   .object({
@@ -83,13 +81,13 @@ function parseImageResourceUri(
     throw new Error('Media API response Location header is not an image resource URI');
   }
 
-  let imageId: string;
+  const imageId = match[1];
   try {
-    imageId = decodeURIComponent(match[1]);
+    decodeURIComponent(imageId);
   } catch {
     throw new Error('Media API response Location header contains an invalid image ID');
   }
-  if (!imageIdSchema.safeParse(imageId).success) {
+  if (!opaqueImageIdSchema.safeParse(imageId).success) {
     throw new Error('Media API response Location header contains an invalid image ID');
   }
 
@@ -167,7 +165,7 @@ export class MediaApi {
    * resource lookup, while 401/403 proves the token is unauthorized.
    */
   async probeImageAccess(missingImageId: string): Promise<MediaImageAccessProbe> {
-    const imageId = imageIdSchema.parse(missingImageId);
+    const imageId = probeImageIdSchema.parse(missingImageId);
     const environment = this.client.getConfig().environment;
     const location = `${getMediaBaseUrl(environment)}${mediaPath}/image/${encodeURIComponent(imageId)}`;
 
@@ -177,8 +175,7 @@ export class MediaApi {
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 404) return 'authorized';
-        if (error.response?.status === 401 || error.response?.status === 403)
-          return 'unauthorized';
+        if (error.response?.status === 401 || error.response?.status === 403) return 'unauthorized';
       }
       throw error;
     }

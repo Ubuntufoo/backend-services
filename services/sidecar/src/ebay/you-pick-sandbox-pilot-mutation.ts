@@ -72,6 +72,7 @@ const emptyMutationResponseSchema = z.union([
 ]);
 const createOfferResponseSchema = z.object({ offerId: id }).strict();
 const publishResponseSchema = z.object({ listingId: id }).strict();
+const opaqueMediaImageId = z.string().min(1).max(2048);
 const bulkEntrySchema = z
   .object({
     sku: id,
@@ -83,7 +84,7 @@ const bulkEntrySchema = z
 const bulkResponseSchema = z.object({ responses: z.tuple([bulkEntrySchema]) }).strict();
 const mediaImageSchema = z
   .object({
-    imageId: id,
+    imageId: opaqueMediaImageId,
     location: z.string().url(),
     imageUrl: z.string().url(),
     expirationDate: z.string().datetime(),
@@ -376,6 +377,19 @@ function expectedOfferPayload(
   return offer;
 }
 
+function requireExactGroupChildren(
+  manifest: ExecutableYouPickManifest,
+  actual: string[],
+  message: string
+): void {
+  const expected = manifest.run.childSkus;
+  const matches =
+    manifest.execution.fixture.version === 4
+      ? JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort())
+      : JSON.stringify(actual) === JSON.stringify(expected);
+  if (!matches) throw new Error(message);
+}
+
 async function validateCompleteQuantitySnapshot(
   options: MutationExecutionOptions,
   state: 'original' | 'target-zero'
@@ -386,8 +400,11 @@ async function validateCompleteQuantitySnapshot(
     await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey),
     `${state} quantity group`
   );
-  if (JSON.stringify(group.variantSKUs) !== JSON.stringify(options.manifest.run.childSkus))
-    throw new Error(`${state} quantity group membership changed.`);
+  requireExactGroupChildren(
+    options.manifest,
+    group.variantSKUs,
+    `${state} quantity group membership changed.`
+  );
   requireSnapshotDigest(group, digest(payload(plan, 'group-complete')), `${state} quantity group`);
   for (let index = 0; index < options.manifest.run.childSkus.length; index += 1) {
     const sku = options.manifest.run.childSkus[index];
@@ -577,9 +594,9 @@ async function executeMediaUploads(
   plan: ReturnType<typeof buildFuturePlan>
 ): Promise<void> {
   const fixture = options.manifest.execution.fixture;
-  if (fixture.version !== 3) return;
+  if (fixture.version < 3) return;
   if (!options.mutationApi.createImageFromUrl || !options.mutationApi.getImage)
-    throw new Error('Version-3 execution requires the guarded Media API.');
+    throw new Error('Media-backed execution requires the guarded Media API.');
   await setCheckpoint(options, 'creating-media');
   for (const resource of options.manifest.execution.mediaResources ?? []) {
     const operation = plan.operations.find((candidate) => candidate.id === resource.operationId);
@@ -630,9 +647,7 @@ async function executeMediaUploads(
       throw new Error(
         `Media mutation ${resource.operationId} has no recoverable resource identity; replay is forbidden.`
       );
-    const readBack = mediaImageSchema.parse(
-      await options.mutationApi.getImage(current.location)
-    );
+    const readBack = mediaImageSchema.parse(await options.mutationApi.getImage(current.location));
     if (
       readBack.imageId !== current.imageId ||
       readBack.location !== current.location ||
@@ -801,8 +816,11 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
           await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey),
           'group-complete'
         );
-        if (JSON.stringify(group.variantSKUs) !== JSON.stringify(options.manifest.run.childSkus))
-          throw new Error('Group ordered variant SKUs do not match.');
+        requireExactGroupChildren(
+          options.manifest,
+          group.variantSKUs,
+          'Group variant SKUs do not match.'
+        );
         requireSnapshotDigest(group, digest(groupRequest), 'group-complete');
         return group;
       },
@@ -836,8 +854,11 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
     await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey),
     'unpublished verification group'
   );
-  if (JSON.stringify(verifiedGroup.variantSKUs) !== JSON.stringify(options.manifest.run.childSkus))
-    throw new Error('Unpublished group ordered child snapshot changed before publication.');
+  requireExactGroupChildren(
+    options.manifest,
+    verifiedGroup.variantSKUs,
+    'Unpublished group child snapshot changed before publication.'
+  );
   requireSnapshotDigest(verifiedGroup, digest(groupRequest), 'unpublished group');
   const publishRequest = payload(plan, 'publish-group');
   const publication = await reconcileCompletePublicationState(options.readApi, options.manifest);
@@ -1016,8 +1037,11 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
   if (group.status === 'unknown') throw new Error('Cleanup group state is unknown.');
   if (group.status === 'found') {
     const expectedGroup = payload(plan, 'group-complete');
-    if (JSON.stringify(group.value.variantSKUs) !== JSON.stringify(options.manifest.run.childSkus))
-      throw new Error('Cleanup group does not contain the exact ordered run-owned children.');
+    requireExactGroupChildren(
+      options.manifest,
+      group.value.variantSKUs,
+      'Cleanup group does not contain the exact run-owned children.'
+    );
     requireSnapshotDigest(group.value, digest(expectedGroup), 'cleanup group');
   }
   for (let index = 0; index < options.manifest.run.childSkus.length; index += 1) {
@@ -1191,8 +1215,11 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
           await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey),
           'cleanup-group pre-state'
         );
-        if (JSON.stringify(read.variantSKUs) !== JSON.stringify(options.manifest.run.childSkus))
-          throw new Error('Cleanup group pre-state membership is not exact.');
+        requireExactGroupChildren(
+          options.manifest,
+          read.variantSKUs,
+          'Cleanup group pre-state membership is not exact.'
+        );
         requireSnapshotDigest(
           read,
           digest(payload(plan, 'group-complete')),

@@ -128,10 +128,15 @@ const youPickFixtureVersion3BaseSchema = strictObject({
   version: z.literal(3),
   ...youPickFixtureCommonShape,
 });
+const youPickFixtureVersion4BaseSchema = strictObject({
+  version: z.literal(4),
+  ...youPickFixtureCommonShape,
+});
 type YouPickFixtureRefinementInput =
   | z.infer<typeof youPickFixtureVersion1BaseSchema>
   | z.infer<typeof youPickFixtureVersion2BaseSchema>
-  | z.infer<typeof youPickFixtureVersion3BaseSchema>;
+  | z.infer<typeof youPickFixtureVersion3BaseSchema>
+  | z.infer<typeof youPickFixtureVersion4BaseSchema>;
 
 function refineYouPickFixture(fixture: YouPickFixtureRefinementInput, ctx: z.RefinementCtx): void {
   const childCount = fixture.children.length;
@@ -231,10 +236,13 @@ export const youPickFixtureVersion2Schema =
   youPickFixtureVersion2BaseSchema.superRefine(refineYouPickFixture);
 export const youPickFixtureVersion3Schema =
   youPickFixtureVersion3BaseSchema.superRefine(refineYouPickFixture);
+export const youPickFixtureVersion4Schema =
+  youPickFixtureVersion4BaseSchema.superRefine(refineYouPickFixture);
 export const youPickFixtureSchema = z.union([
   youPickFixtureVersion1Schema,
   youPickFixtureVersion2Schema,
   youPickFixtureVersion3Schema,
+  youPickFixtureVersion4Schema,
 ]);
 
 export type YouPickFixture = z.infer<typeof youPickFixtureSchema>;
@@ -404,16 +412,20 @@ const sandboxMediaLocationSchema = z
       !url.hash
     );
   }, 'Media location must be an exact Sandbox image resource URI.');
+const opaqueMediaImageIdSchema = z.string().min(1).max(2048);
 const mediaResourceSchema = strictObject({
   operationId: nonEmpty,
   slot: z.string().regex(CHILD_SLOT_PATTERN),
   role: z.enum(['front', 'back']),
   sourceFingerprint: z.string().regex(NON_SECRET_FINGERPRINT_PATTERN),
   state: z.enum(['planned', 'created', 'ready', 'unknown']),
-  imageId: z.string().regex(REMOTE_ID_PATTERN).nullable(),
+  imageId: opaqueMediaImageIdSchema.nullable(),
   location: sandboxMediaLocationSchema.nullable(),
   epsUrl: z.string().url().nullable(),
-  epsUrlDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  epsUrlDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
   expirationDate: z.string().datetime().nullable(),
   createdAt: z.string().datetime().nullable(),
   verifiedAt: z.string().datetime().nullable(),
@@ -759,6 +771,7 @@ const plannedGroupVersion3Schema = strictObject({
   ...plannedGroupCommonShape,
   imageUrls: z.array(plannedImageSchema).min(2).max(3),
 });
+const plannedGroupVersion4Schema = strictObject(plannedGroupCommonShape);
 const plannedGroupRequestSchema = strictObject({
   inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
   marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
@@ -994,10 +1007,7 @@ export function projectOfferSemanticSnapshot(value: unknown): OfferSemanticSnaps
     marketplaceId: semanticString(offer.marketplaceId, 'offer marketplace ID'),
     format: semanticString(offer.format, 'offer format'),
     categoryId: semanticString(offer.categoryId, 'offer category ID'),
-    merchantLocationKey: semanticString(
-      offer.merchantLocationKey,
-      'offer merchant location key'
-    ),
+    merchantLocationKey: semanticString(offer.merchantLocationKey, 'offer merchant location key'),
     availableQuantity: offer.availableQuantity,
     pricingSummary: {
       price: {
@@ -1010,14 +1020,8 @@ export function projectOfferSemanticSnapshot(value: unknown): OfferSemanticSnaps
         listingPolicies.fulfillmentPolicyId,
         'offer fulfillment policy ID'
       ),
-      paymentPolicyId: semanticString(
-        listingPolicies.paymentPolicyId,
-        'offer payment policy ID'
-      ),
-      returnPolicyId: semanticString(
-        listingPolicies.returnPolicyId,
-        'offer return policy ID'
-      ),
+      paymentPolicyId: semanticString(listingPolicies.paymentPolicyId, 'offer payment policy ID'),
+      returnPolicyId: semanticString(listingPolicies.returnPolicyId, 'offer return policy ID'),
     },
   });
 }
@@ -1046,17 +1050,13 @@ export function offerSemanticMismatch(
   if (actual.marketplaceId !== expected.marketplaceId) return 'marketplace ID';
   if (actual.format !== expected.format) return 'format';
   if (actual.categoryId !== expected.categoryId) return 'category ID';
-  if (actual.merchantLocationKey !== expected.merchantLocationKey)
-    return 'merchant location key';
+  if (actual.merchantLocationKey !== expected.merchantLocationKey) return 'merchant location key';
   if (actual.availableQuantity !== expected.availableQuantity) return 'available quantity';
   if (actual.pricingSummary.price.currency !== expected.pricingSummary.price.currency)
     return 'price currency';
   if (actual.pricingSummary.price.value !== expected.pricingSummary.price.value)
     return 'price value';
-  if (
-    actual.listingPolicies.fulfillmentPolicyId !==
-    expected.listingPolicies.fulfillmentPolicyId
-  )
+  if (actual.listingPolicies.fulfillmentPolicyId !== expected.listingPolicies.fulfillmentPolicyId)
     return 'fulfillment policy ID';
   if (actual.listingPolicies.paymentPolicyId !== expected.listingPolicies.paymentPolicyId)
     return 'payment policy ID';
@@ -1176,10 +1176,12 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
       ? fixture.children.flatMap((child) => child.images.map((image) => image.url))
       : fixture.version === 2
         ? fixture.children.map((child) => child.images[0].url)
-        : fixture.children.map((child) => `$media.${child.slot}.front`);
+        : fixture.version === 3
+          ? fixture.children.map((child) => `$media.${child.slot}.front`)
+          : undefined;
   const operations: PlannedOperation[] = [];
 
-  if (fixture.version === 3) {
+  if (fixture.version >= 3) {
     fixture.children.forEach((child) => {
       child.images.forEach((image) => {
         operations.push(
@@ -1221,9 +1223,7 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
               : {
                   aspects: child.productAspects,
                   imageUrls: child.images.map((image) =>
-                    fixture.version === 2
-                      ? image.url
-                      : `$media.${child.slot}.${image.role}`
+                    fixture.version === 2 ? image.url : `$media.${child.slot}.${image.role}`
                   ),
                 },
         }
@@ -1252,13 +1252,15 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
         ? plannedGroupVersion1Schema
         : fixture.version === 2
           ? plannedGroupVersion2Schema
-          : plannedGroupVersion3Schema,
+          : fixture.version === 3
+            ? plannedGroupVersion3Schema
+            : plannedGroupVersion4Schema,
       {
         inventoryItemGroupKey: run.groupKey,
         title: fixture.group.title,
         description: fixture.group.description,
         aspects: fixture.group.sharedAspects,
-        imageUrls: groupImages,
+        ...(groupImages ? { imageUrls: groupImages } : {}),
         variantSKUs: run.childSkus,
         variesBy: {
           specifications: [{ name: selectorName, values: fixture.selector.values }],
@@ -1352,9 +1354,9 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
 export function resolveFuturePlan(manifest: ExecutableYouPickManifest): FuturePlan {
   const fixture = youPickFixtureSchema.parse(manifest.execution.fixture);
   const plan = buildFuturePlan(fixture, manifest.run);
-  if (fixture.version !== 3) return plan;
+  if (fixture.version < 3) return plan;
   const resources = manifest.execution.mediaResources;
-  if (!resources) throw new Error('Version-3 publication requires Media API resources.');
+  if (!resources) throw new Error('Media-backed publication requires Media API resources.');
   const epsUrls = new Map<string, string>();
   for (const resource of resources) {
     if (
@@ -1453,7 +1455,7 @@ export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickMan
     manifest.run.childSkus.length
   );
   const expectedMediaIdentity =
-    fixture.version === 3
+    fixture.version >= 3
       ? fixture.children.flatMap((child) =>
           child.images.map((image) => ({
             operationId: `media-${child.slot}-${image.role}`,
@@ -1486,12 +1488,10 @@ export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickMan
       throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} state.`);
     if (ledger.state === 'completed' && resource.state !== 'ready')
       throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} state.`);
-    if (
-      resource.state === 'ready' &&
-      ledger.state !== 'started' &&
-      ledger.state !== 'completed'
-    )
-      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} ledger state.`);
+    if (resource.state === 'ready' && ledger.state !== 'started' && ledger.state !== 'completed')
+      throw new Error(
+        `Executable manifest integrity mismatch: ${resource.operationId} ledger state.`
+      );
     const nullableEvidence = [
       resource.imageId,
       resource.location,
@@ -1504,7 +1504,9 @@ export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickMan
       throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} evidence.`);
     if (resource.state === 'ready') {
       if (nullableEvidence.some((value) => value === null) || resource.verifiedAt === null)
-        throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} ready evidence.`);
+        throw new Error(
+          `Executable manifest integrity mismatch: ${resource.operationId} ready evidence.`
+        );
       if (digest(resource.epsUrl) !== resource.epsUrlDigest)
         throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} EPS URL.`);
     }
@@ -1706,7 +1708,7 @@ function initialManifest(
       publishedAttestationDigest: null,
       quantityZeroAttestationDigest: null,
       mediaResources:
-        fixture.version === 3
+        fixture.version >= 3
           ? fixture.children.flatMap((child) =>
               child.images.map((image) => ({
                 operationId: `media-${child.slot}-${image.role}`,
@@ -2145,9 +2147,13 @@ export async function runYouPickSandboxPilot(
   let planOperations: Omit<PlannedOperation, 'payload'>[] | undefined;
 
   if (options.fixturePath) {
-    const fixture = z.union([youPickFixtureVersion2Schema, youPickFixtureVersion3Schema]).parse(
-      JSON.parse(await readFile(resolve(options.fixturePath), 'utf8')) as unknown
-    );
+    const fixture = z
+      .union([
+        youPickFixtureVersion2Schema,
+        youPickFixtureVersion3Schema,
+        youPickFixtureVersion4Schema,
+      ])
+      .parse(JSON.parse(await readFile(resolve(options.fixturePath), 'utf8')) as unknown);
     const run = generateRunIdentity(
       fixture.children.length,
       now(),
@@ -2227,7 +2233,7 @@ export async function runYouPickSandboxPilot(
   try {
     const runtime = await api.getRuntimeSnapshot();
     gates.push(...validateRuntime(runtime));
-    if ('execution' in manifest && manifest.execution.fixture.version === 3) {
+    if ('execution' in manifest && manifest.execution.fixture.version >= 3) {
       activeGate = 'media-oauth-capability';
       gates.push(await validateMediaOAuth(runtime, api));
     }

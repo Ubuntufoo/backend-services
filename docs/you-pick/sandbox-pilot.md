@@ -226,6 +226,25 @@ front pivots with no selector association. This is a buyer-view failure. The sma
 preserves each child's ordered EPS `[front, back]` pair and omits group-level `imageUrls`; it does not
 change selector order, offers, prices, condition, or Media provenance.
 
+YP0.17 introduced fixture arrangement v4 for that child-only placement without changing v1–v3
+semantics. Fresh run `20260811T155913Z-8eba39` passed preflight, but its first authorized Media create
+returned a Location whose image ID failed local validation before the resource identity could be
+persisted. The operation is `unknown/1`, all later operations are `planned/0`, and no listing was
+published. The run is not resumable: the Media API provides no source-keyed lookup or image deletion,
+so replay could duplicate an unowned resource. It remains preserved as failed historical evidence.
+
+The defect was an invented local image-ID alphabet: a valid Sandbox identifier contained `~`. Media
+Location parsing now requires the exact HTTPS eBay host and one URI-safe path segment, forbids
+credentials, query, and fragment, validates percent encoding, and otherwise preserves the opaque
+segment. Separately authorized run `20260811T161151Z-184533` published listing `110590182836` with
+four reconciled EPS resources and child-only arrangement v4. Exact API reconciliation passed. Buyer
+view rendered exactly four images: Alpha front/back at positions 1–2 and Beta front/back at positions
+3–4, with no group-pivot images; selector order, prices, title, description, and condition also passed.
+The API may return group `variantSKUs` in a different order, so v4 reconciliation compares exact set
+membership while the declared selector order remains owned by `variesBy.specifications[].values`.
+The published-view attestation is recorded. Quantity-zero, restoration, withdrawal, and cleanup remain
+unexecuted and require their separately authorized roadmap steps.
+
 Cleanup-plan mode strictly normalizes
 exact group children, child/group associations, offers, statuses, marketplace/SKU ownership, and
 listing identity before producing a reverse dependency plan. Publication history is distinct from

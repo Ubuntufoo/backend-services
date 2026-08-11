@@ -339,8 +339,8 @@ export function normalizeYouPickGroup(
     title: stringField(record, 'title'),
     description: stringField(record, 'description'),
     aspects: record.aspects,
-    imageUrls: record.imageUrls,
-    variantSKUs,
+    ...(record.imageUrls === undefined ? {} : { imageUrls: record.imageUrls }),
+    variantSKUs: [...variantSKUs].sort(),
     variesBy: record.variesBy,
   };
   const snapshotDigest = Object.values(planned).every(
@@ -556,9 +556,7 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
     },
     async getOffers(sku, marketplaceId) {
       await ensureInitialized();
-      return await classifyYouPickOfferListRead(() =>
-        api.inventory.getOffers(sku, marketplaceId)
-      );
+      return await classifyYouPickOfferListRead(() => api.inventory.getOffers(sku, marketplaceId));
     },
   };
 }
@@ -609,12 +607,14 @@ export function adaptYouPickPilotMutationApi(
       return undefined;
     },
     createOffer: (payload, headers) => inventory.createOffer(payload, config(headers)),
-    createOrReplaceInventoryItemGroup: (groupKey, payload, headers) =>
-      inventory.createOrReplaceInventoryItemGroup(
+    createOrReplaceInventoryItemGroup: async (groupKey, payload, headers) => {
+      await inventory.createOrReplaceInventoryItemGroup(
         groupKey,
         payload as Parameters<typeof inventory.createOrReplaceInventoryItemGroup>[1],
         config(headers)
-      ),
+      );
+      return undefined;
+    },
     publishInventoryItemGroup: (payload, headers) =>
       inventory.publishOfferByInventoryItemGroup(
         payload as Parameters<typeof inventory.publishOfferByInventoryItemGroup>[0],

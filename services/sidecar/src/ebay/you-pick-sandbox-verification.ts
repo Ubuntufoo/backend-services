@@ -1,10 +1,10 @@
 import {
   assertExecutableManifestIntegrity,
-  buildFuturePlan,
   digest,
   executableYouPickManifestSchema,
   inventoryItemSemanticMismatch,
   offerSemanticMismatch,
+  resolveFuturePlan,
   sanitizeError,
   YOU_PICK_CONTENT_LANGUAGE,
   YOU_PICK_MARKETPLACE,
@@ -291,7 +291,7 @@ export async function verifyYouPickSandbox(
     );
 
   // -- Build immutable future plan ---------------------------------------
-  const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
+  const plan = resolveFuturePlan(manifest);
 
   // -- Bounded reads: items first ----------------------------------------
   const itemSummaries: {
@@ -439,7 +439,12 @@ export async function verifyYouPickSandbox(
 
   const group = groupRead.value;
   const expectedVariantSkus = manifest.run.childSkus;
-  if (JSON.stringify(group.variantSKUs) !== JSON.stringify(expectedVariantSkus))
+  const groupSkusMatch =
+    manifest.execution.fixture.version === 4
+      ? JSON.stringify([...group.variantSKUs].sort()) ===
+        JSON.stringify([...expectedVariantSkus].sort())
+      : JSON.stringify(group.variantSKUs) === JSON.stringify(expectedVariantSkus);
+  if (!groupSkusMatch)
     throw new Error(
       `Group variant SKUs mismatch: expected ${JSON.stringify(expectedVariantSkus)}, got ${JSON.stringify(group.variantSKUs)}.`
     );
