@@ -9,6 +9,7 @@ import {
   buildFuturePlan,
   resolveFuturePlan,
   executableYouPickManifestSchema,
+  matchesYouPickGroupChildren,
   inventoryItemSemanticMismatch,
   offerSemanticMismatch,
   sanitizeError,
@@ -382,12 +383,10 @@ function requireExactGroupChildren(
   actual: string[],
   message: string
 ): void {
-  const expected = manifest.run.childSkus;
-  const matches =
-    manifest.execution.fixture.version === 4
-      ? JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort())
-      : JSON.stringify(actual) === JSON.stringify(expected);
-  if (!matches) throw new Error(message);
+  if (
+    !matchesYouPickGroupChildren(manifest.execution.fixture.version, actual, manifest.run.childSkus)
+  )
+    throw new Error(message);
 }
 
 async function validateCompleteQuantitySnapshot(

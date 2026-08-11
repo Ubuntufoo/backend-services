@@ -1942,9 +1942,13 @@ async function cleanupReads(
   if (group.status === 'unknown') throw new Error('Cleanup group state is unknown.');
   if (
     group.status === 'found' &&
-    JSON.stringify(group.value.variantSKUs) !== JSON.stringify(manifest.run.childSkus)
+    !matchesYouPickGroupChildren(
+      manifest.version === YOU_PICK_MANIFEST_VERSION ? manifest.execution.fixture.version : 0,
+      group.value.variantSKUs,
+      manifest.run.childSkus
+    )
   ) {
-    throw new Error('Cleanup group children do not exactly match ordered run-owned SKUs.');
+    throw new Error('Cleanup group children do not exactly match run-owned SKUs.');
   }
   results.push({ identifier: manifest.run.groupKey, resource: 'group', status: group.status });
   const items: CleanupRemoteState['items'] = [];
@@ -2077,6 +2081,16 @@ async function cleanupReads(
       warnings,
     },
   };
+}
+
+export function matchesYouPickGroupChildren(
+  fixtureVersion: number,
+  actual: string[],
+  expected: string[]
+): boolean {
+  return fixtureVersion === 4
+    ? JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort())
+    : JSON.stringify(actual) === JSON.stringify(expected);
 }
 
 export function buildCleanupPlan(

@@ -16,6 +16,7 @@ import {
   executableYouPickManifestSchema,
   generateRunIdentity,
   inventoryItemSemanticMismatch,
+  matchesYouPickGroupChildren,
   parseCurrentUserIdentity,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
@@ -2546,7 +2547,13 @@ describe('You Pick cleanup planning and redaction', () => {
         cleanup: true,
         repoRoot: root,
       })
-    ).rejects.toThrow(/ordered run-owned SKUs/);
+    ).rejects.toThrow(/run-owned SKUs/);
+  });
+
+  it('accepts reordered child membership only for child-only EPS fixtures', () => {
+    expect(matchesYouPickGroupChildren(4, ['C02', 'C01'], ['C01', 'C02'])).toBe(true);
+    expect(matchesYouPickGroupChildren(3, ['C02', 'C01'], ['C01', 'C02'])).toBe(false);
+    expect(matchesYouPickGroupChildren(4, ['C02', 'FOREIGN'], ['C01', 'C02'])).toBe(false);
   });
 
   it('adds withdrawal from remote publication evidence and reports manifest reconciliation', async () => {

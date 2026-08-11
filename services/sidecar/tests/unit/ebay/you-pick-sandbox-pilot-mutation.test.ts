@@ -999,6 +999,31 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         sku,
         groupKeys: null,
         snapshotDigest: sku.endsWith('C01') ? first.digest : 'f'.repeat(64),
+        semanticSnapshot: projectInventoryItemSemanticSnapshot(first.payload),
+      },
+    }));
+    const firstOffer = plan.operations.find((operation) => operation.id === 'offer-C01')!;
+    readApi.getOffers = vi.fn(async (sku) => ({
+      status: 'found',
+      value: {
+        offers: sku.endsWith('C01')
+          ? [
+              {
+                offerId: 'OFFER-1',
+                sku,
+                marketplaceId: 'EBAY_US',
+                status: 'UNPUBLISHED',
+                listingId: null,
+                listingStatus: null,
+                lifecycleClass: null,
+                publicationObserved: false,
+                listingCurrentlyActive: false,
+                withdrawRequired: false,
+                snapshotDigest: firstOffer.digest,
+                semanticSnapshot: projectOfferSemanticSnapshot(firstOffer.payload),
+              },
+            ]
+          : [],
       },
     }));
     const mutationApi = {
@@ -1022,7 +1047,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         now: () => fixed,
         persist: async () => undefined,
       })
-    ).rejects.toThrow(/immutable planned payload digest/);
+    ).rejects.toThrow(/semantic SKU conflicts/);
     expect(mutationApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
   });
 
@@ -1052,6 +1077,11 @@ describe('guarded You Pick staged mutation lifecycle', () => {
           sku,
           groupKeys: null,
           snapshotDigest: operationDigest(sku.endsWith('C01') ? 'item-C01' : 'item-C02'),
+          semanticSnapshot: projectInventoryItemSemanticSnapshot(
+            plan.operations.find(
+              (operation) => operation.id === (sku.endsWith('C01') ? 'item-C01' : 'item-C02')
+            )!.payload
+          ),
         },
       })),
       getOffers: vi.fn(async () => ({
@@ -1313,12 +1343,23 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       let manifest = withUnresolvedOperation(await freshManifest(), 'item-C01', ledgerState);
       const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
       const expected = plan.operations.find((operation) => operation.id === 'item-C01')!.digest;
+      const expectedPayload = plan.operations.find(
+        (operation) => operation.id === 'item-C01'
+      )!.payload;
       let exists = false;
       const readApi = gateApi();
       readApi.getInventoryItem = vi.fn(async (sku) => {
         if (!sku.endsWith('C01')) return { status: 'unknown' };
         return exists
-          ? { status: 'found', value: { sku, groupKeys: null, snapshotDigest: expected } }
+          ? {
+              status: 'found',
+              value: {
+                sku,
+                groupKeys: null,
+                snapshotDigest: expected,
+                semanticSnapshot: projectInventoryItemSemanticSnapshot(expectedPayload),
+              },
+            }
           : { status: 'missing' };
       });
       const mutationApi = mutationSpies();
@@ -1360,6 +1401,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
             sku,
             groupKeys: [manifest.run.groupKey],
             snapshotDigest: operation(`item-C0${manifest.run.childSkus.indexOf(sku) + 1}`).digest,
+            semanticSnapshot: projectInventoryItemSemanticSnapshot(
+              operation(`item-C0${manifest.run.childSkus.indexOf(sku) + 1}`).payload
+            ),
           },
         })),
         getInventoryItemGroup: vi.fn(async () => ({
@@ -1390,6 +1434,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
                   listingCurrentlyActive: false,
                   withdrawRequired: false,
                   snapshotDigest: operation(`offer-C0${index + 1}`).digest,
+                  semanticSnapshot: projectOfferSemanticSnapshot(
+                    operation(`offer-C0${index + 1}`).payload
+                  ),
                 },
               ],
             },
@@ -1459,6 +1506,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
               groupKeys: [manifest.run.groupKey],
               quantity: manifest.ownership.itemQuantities[index],
               snapshotDigest: operation(`item-C0${index + 1}`).digest,
+              semanticSnapshot: projectInventoryItemSemanticSnapshot(
+                operation(`item-C0${index + 1}`).payload
+              ),
             },
           };
         }),
@@ -1481,6 +1531,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
                   withdrawRequired: true,
                   availableQuantity: manifest.ownership.offerQuantities[index],
                   snapshotDigest: operation(`offer-C0${index + 1}`).digest,
+                  semanticSnapshot: projectOfferSemanticSnapshot(
+                    operation(`offer-C0${index + 1}`).payload
+                  ),
                 },
               ],
             },
@@ -1547,6 +1600,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
               groupKeys: [manifest.run.groupKey],
               quantity: manifest.ownership.itemQuantities[index],
               snapshotDigest: operation(`item-C0${index + 1}`).digest,
+              semanticSnapshot: projectInventoryItemSemanticSnapshot(
+                operation(`item-C0${index + 1}`).payload
+              ),
             },
           };
         }),
@@ -1575,6 +1631,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
                   withdrawRequired: active,
                   availableQuantity: manifest.ownership.offerQuantities[index],
                   snapshotDigest: operation(`offer-C0${index + 1}`).digest,
+                  semanticSnapshot: projectOfferSemanticSnapshot(
+                    operation(`offer-C0${index + 1}`).payload
+                  ),
                 },
               ],
             },
@@ -1638,7 +1697,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       checkpoint: 'creating-items',
     });
     const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
-    const firstDigest = plan.operations.find((operation) => operation.id === 'item-C01')!.digest;
+    const firstItem = plan.operations.find((operation) => operation.id === 'item-C01')!;
     let firstExists = true;
     const readApi: YouPickPilotReadApi = {
       ...gateApi(),
@@ -1647,7 +1706,13 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         firstExists && sku === manifest.run.childSkus[0]
           ? {
               status: 'found',
-              value: { sku, groupKeys: null, quantity: 1, snapshotDigest: firstDigest },
+              value: {
+                sku,
+                groupKeys: null,
+                quantity: 1,
+                snapshotDigest: firstItem.digest,
+                semanticSnapshot: projectInventoryItemSemanticSnapshot(firstItem.payload),
+              },
             }
           : { status: 'missing' }
       ),
