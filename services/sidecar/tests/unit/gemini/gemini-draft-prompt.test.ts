@@ -118,6 +118,16 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).not.toMatch(/strongly inferable: Player, verified Year/i);
   });
 
+  it('requires positive team evidence for the internal sports Franchise field', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/For sports singles, include the internal Franchise aspect/);
+    expect(prompt).toMatch(/visible team name, team logo, or team wordmark/);
+    expect(prompt).toMatch(/Do not infer Franchise from player identity, career or roster history/);
+    expect(prompt).toMatch(/general model knowledge alone/);
+    expect(prompt).toMatch(/Keep this generated field named Franchise; do not emit the eBay Team field/);
+  });
+
   it('does not request deferred or speculative item specifics', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 

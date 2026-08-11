@@ -1133,6 +1133,7 @@ describe('publishListing', () => {
           'Card Condition': 'NEAR_MINT_OR_BETTER',
           Franchise: 'Chicago Bulls',
           Player: 'Michael Jordan',
+          Set: 'Upper Deck',
           Unsupported: 'must not leak',
           Year: '1991',
           __draft_metadata: {
@@ -1156,6 +1157,10 @@ describe('publishListing', () => {
         {
           localizedAspectName: 'Player/Athlete',
           aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
         },
         {
           localizedAspectName: 'Team',
@@ -1190,6 +1195,7 @@ describe('publishListing', () => {
         product: expect.objectContaining({
           aspects: {
             'Player/Athlete': ['Michael Jordan'],
+            Set: ['1991 Upper Deck'],
             Team: ['Chicago Bulls'],
             Type: ['Sports Trading Card'],
             'Year Manufactured': ['1991'],

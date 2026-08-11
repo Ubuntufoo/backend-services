@@ -129,6 +129,7 @@ describe('required item specifics validation', () => {
         'Card Condition': 'NEAR_MINT_OR_BETTER',
         Franchise: 'Chicago Bulls',
         Player: 'Michael Jordan',
+        Set: 'Upper Deck',
         Unsupported: 'must not leak',
         Year: '1991',
         __draft_metadata: {
@@ -146,6 +147,10 @@ describe('required item specifics validation', () => {
         {
           localizedAspectName: 'Player/Athlete',
           aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
         },
         {
           localizedAspectName: 'Team',
@@ -175,10 +180,172 @@ describe('required item specifics validation', () => {
       })
     ).toEqual({
       'Player/Athlete': ['Michael Jordan'],
+      Set: ['1991 Upper Deck'],
       Team: ['Chicago Bulls'],
       'Year Manufactured': ['1991'],
       Type: ['Sports Trading Card'],
     });
+  });
+
+  it.each([
+    { label: 'plain stored Set', year: '1985', set: 'Topps', expected: '1985 Topps' },
+    {
+      label: 'same-year stored Set',
+      year: '1985',
+      set: '1985 Topps',
+      expected: '1985 Topps',
+    },
+    {
+      label: 'authorized short season range',
+      year: '1995',
+      set: '1995-96 SkyBox',
+      expected: '1995-96 SkyBox',
+    },
+    {
+      label: 'authorized slash season range',
+      year: '1995',
+      set: '1995/96 SkyBox',
+      expected: '1995/96 SkyBox',
+    },
+    {
+      label: 'authorized full season range',
+      year: '1995',
+      set: '1995-1996 SkyBox',
+      expected: '1995-1996 SkyBox',
+    },
+    {
+      label: 'conflicting-year stored Set',
+      year: '1985',
+      set: '1986 Topps',
+      expected: '1985 Topps',
+    },
+    { label: 'unsupported-year stored Set', year: '1985', set: '1885 Topps', expected: null },
+    {
+      label: 'conflicting season range',
+      year: '1995',
+      set: '1996-97 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'ambiguous season range',
+      year: '1995',
+      set: '1995-97 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'unsupported season-range separator',
+      year: '1995',
+      set: '1995–96 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'unsupported Unicode minus separator',
+      year: '1995',
+      set: '1995−96 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'ambiguous multiple years',
+      year: '1995',
+      set: '1995 1996 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'mixed valid and conflicting ranges',
+      year: '1995',
+      set: ['1995-96 SkyBox', '1996-97 SkyBox'],
+      expected: null,
+    },
+  ])('canonicalizes an authorized sports Set for $label', ({ year, set, expected }) => {
+    const itemSpecifics = {
+      Set: set,
+      Year: year,
+      __draft_metadata: {
+        year: {
+          image_index: 1,
+          source_type: 'copyright_line',
+          visible_text: `© ${year} CARD COMPANY`,
+          year,
+        },
+      },
+    };
+    const storedBeforeNormalization = structuredClone(itemSpecifics);
+    const listing = createListing({ category_id: '261328', item_specifics: itemSpecifics });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual(expected ? { Set: [expected] } : {});
+    expect(listing.item_specifics).toBe(itemSpecifics);
+    expect(itemSpecifics).toEqual(storedBeforeNormalization);
+  });
+
+  it('keeps a sports Set unchanged without authorized year metadata', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { Set: 'Topps', Year: '1985' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({ Set: ['Topps'] });
+  });
+
+  it.each(['183050', '183454'])('keeps category %s Set naming unchanged', (categoryId) => {
+    const listing = createListing({
+      category_id: categoryId,
+      item_specifics: {
+        Set: 'Base Set',
+        Year: '1999',
+        __draft_metadata: {
+          year: {
+            image_index: 1,
+            source_type: 'copyright_line',
+            visible_text: '© 1999 CARD COMPANY',
+            year: '1999',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({ Set: ['Base Set'] });
   });
 
   it('preserves manual taxonomy-supported Season and Type while omitting unsafe values', () => {

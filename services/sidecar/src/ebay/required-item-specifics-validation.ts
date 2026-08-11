@@ -8,6 +8,7 @@ import {
   normalizeRawCardConditionToken,
   TRADING_CARD_CONDITION_ASPECT_KEY,
 } from '@/listings/trading-card-conditions.js';
+import { sanitizeSetYearClaims } from '@/gemini/year-normalization.js';
 import { readAuthorizedGeneratedDraftYearMetadata } from '@/pricing/generated-draft-metadata.js';
 import { createLogger } from '@/utils/logger.js';
 
@@ -295,6 +296,49 @@ function normalizeOutboundAspectValue(
   return normalizedValues.length > 0 ? normalizedValues : null;
 }
 
+function normalizeAuthorizedSportsSetValue(value: string, authorizedYear: string): string | null {
+  const storedSet = value.trim();
+  if (!storedSet) {
+    return null;
+  }
+
+  const seasonRange = /^((?:19|20)\d{2})\s*[-/]\s*(\d{2}|\d{4})(?=\s|$)/u.exec(
+    storedSet
+  );
+  if (seasonRange) {
+    const rangeStart = seasonRange[1]!;
+    const rangeEnd = seasonRange[2]!;
+    const expectedRangeEnd = String(Number(authorizedYear) + 1);
+    const remainingSetName = storedSet.slice(seasonRange[0].length).trim();
+
+    if (
+      rangeStart !== authorizedYear ||
+      (rangeEnd !== expectedRangeEnd && rangeEnd !== expectedRangeEnd.slice(-2)) ||
+      !/[\p{L}\p{N}]/u.test(remainingSetName) ||
+      /\b\d{4}\b/u.test(remainingSetName) ||
+      /^[-/]\s*\d{2,4}\b/u.test(remainingSetName)
+    ) {
+      return null;
+    }
+
+    return storedSet;
+  }
+
+  if (/\b\d{4}\s*(?:[-/–—−]|\bto\b)\s*\d{2,4}/iu.test(storedSet)) {
+    return null;
+  }
+
+  const supportedYearClaims = storedSet.match(/\b(?:19|20)\d{2}\b/gu) ?? [];
+  if (supportedYearClaims.length > 1) {
+    return null;
+  }
+
+  const canonicalSet = sanitizeSetYearClaims(storedSet);
+  return canonicalSet && !/\b\d{4}\b/u.test(canonicalSet)
+    ? `${authorizedYear} ${canonicalSet}`
+    : null;
+}
+
 function isCanonicalSingleCardListing(
   listing: Pick<ListingRow, 'capture_mode' | 'category_id'>
 ): boolean {
@@ -336,6 +380,7 @@ export function normalizeSingleCardOutboundItemSpecifics({
   const teamAspect =
     categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Team']) : undefined;
   const yearAspect = getTaxonomyAspectByName(aspectsByName, YEAR_ASPECT_NAMES);
+  const authorizedYear = readAuthorizedGeneratedDraftYearMetadata(itemSpecifics)?.year.trim();
   const outbound: NormalizedOutboundItemSpecifics = {};
 
   for (const [key, rawValue] of Object.entries(itemSpecifics)) {
@@ -356,13 +401,27 @@ export function normalizeSingleCardOutboundItemSpecifics({
       continue;
     }
 
-    const valueForNormalization =
+    let valueForNormalization =
       normalizedKey === normalizeAspectKey(TRADING_CARD_CONDITION_ASPECT_KEY)
         ? (() => {
             const token = normalizeRawCardConditionToken(rawValue);
             return token ? getRawCardConditionDisplayLabel(token) : rawValue;
           })()
         : rawValue;
+    if (categoryId === '261328' && normalizedKey === 'set' && authorizedYear) {
+      const storedSetValues =
+        typeof rawValue === 'string'
+          ? [rawValue]
+          : Array.isArray(rawValue)
+            ? rawValue.filter((value): value is string => typeof value === 'string')
+            : [];
+      const canonicalSetValues = storedSetValues.map((storedSetValue) =>
+        normalizeAuthorizedSportsSetValue(storedSetValue, authorizedYear)
+      );
+      valueForNormalization = canonicalSetValues.some((canonicalSet) => canonicalSet === null)
+        ? []
+        : canonicalSetValues;
+    }
     const normalizedValue = normalizeOutboundAspectValue(valueForNormalization, taxonomyAspect);
     if (normalizedValue) {
       outbound[taxonomyAspect.localizedName] = normalizedValue;
@@ -389,7 +448,6 @@ export function normalizeSingleCardOutboundItemSpecifics({
     }
   }
 
-  const authorizedYear = readAuthorizedGeneratedDraftYearMetadata(itemSpecifics)?.year;
   if (yearAspect && authorizedYear) {
     const normalizedValue = normalizeOutboundAspectValue(authorizedYear, yearAspect);
     if (normalizedValue) {
