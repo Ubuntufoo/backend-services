@@ -1921,6 +1921,7 @@ export async function runYouPickSandboxPilot(
           'setting-quantity-zero',
           'awaiting-quantity-zero-verification',
           'withdrawal-ready',
+          'cleanup-plan-ready',
           'cleanup-in-progress',
         ]
       : [
@@ -2072,6 +2073,10 @@ export async function runYouPickSandboxPilot(
       : options.cleanup
         ? 'cleanup-plan-ready'
         : 'preflight-complete',
+    lastError:
+      options.cleanup && !options.execute && manifest.cleanup.attempts === 0
+        ? null
+        : manifest.lastError,
     updatedAt: now().toISOString(),
   });
   await writeManifestAtomic(path, manifest, localRoot);

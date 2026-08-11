@@ -1904,6 +1904,50 @@ describe('You Pick execution attestation gates', () => {
 });
 
 describe('You Pick cleanup completion accounting', () => {
+  it('executes a valid cleanup-plan checkpoint and clears its stale pre-mutation error', async () => {
+    const root = await tempRepo();
+    const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');
+    const manifest = executableYouPickManifestSchema.parse({
+      ...prepared.manifest,
+      lastError: 'stale pre-mutation gate error',
+    });
+    await writeManifestAtomic(prepared.manifestPath, manifest, prepared.localRoot);
+    const harness = cleanupExecutionHarness(manifest);
+
+    await runYouPickSandboxPilot({
+      api: harness.readApi,
+      manifestPath: prepared.manifestPath,
+      cleanup: true,
+      repoRoot: root,
+      now: () => new Date('2026-08-05T15:59:00.000Z'),
+    });
+
+    const planned = await readManifest(prepared.manifestPath, prepared.localRoot);
+    expect(planned.checkpoint).toBe('cleanup-plan-ready');
+    expect(planned.lastError).toBeNull();
+
+    let tick = 0;
+    await runYouPickSandboxPilot({
+      api: harness.readApi,
+      manifestPath: prepared.manifestPath,
+      cleanup: true,
+      execute: true,
+      confirmSandboxSeller: 'sandbox-seller-123',
+      mutationApiFactory: vi.fn(async () => harness.mutationApi),
+      repoRoot: root,
+      now: () => new Date(Date.parse('2026-08-05T16:00:00.000Z') + tick++ * 1_000),
+    });
+
+    const persisted = await readManifest(prepared.manifestPath, prepared.localRoot);
+    expect(persisted).toEqual(
+      expect.objectContaining({
+        checkpoint: 'cleanup-complete',
+        lastError: null,
+        cleanup: { attempts: 1, finalAbsenceVerified: true },
+      })
+    );
+  });
+
   it('clears stale errors only after exact absence and records read-only verification completed/0', async () => {
     const root = await tempRepo();
     const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');

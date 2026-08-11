@@ -167,6 +167,9 @@ the versioned run manifest before resolving the credential-bearing read API,
 then emits sanitized structured JSON containing exact gate results, canonical Trading `UserID`,
 resolved `Content-Language`, selected resource IDs, metadata/collision summaries, stable request
 digests, the ordered future operation plan, and the separately authorized next-command shape.
+A successful cleanup plan persists `cleanup-plan-ready`, clears only stale pre-mutation errors when
+no cleanup attempt has begun, and is an executable cleanup checkpoint. Once cleanup starts, errors
+remain fail-closed until exact terminal absence is proven.
 The repository includes a non-saleable offline example at
 `services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`. That active fixture is payload
 arrangement version 2. The exact historical version-1 input remains at

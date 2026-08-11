@@ -382,6 +382,20 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     ).rejects.toThrow(/Guarded execution requires/);
     expect(readFactory).not.toHaveBeenCalled();
     expect(mutationFactory).not.toHaveBeenCalled();
+
+    await expect(
+      runYouPickSandboxPilot({
+        apiFactory: readFactory,
+        mutationApiFactory: mutationFactory,
+        manifestPath: state.manifestPath,
+        cleanup: true,
+        execute: true,
+        confirmSandboxSeller: 'sandbox-seller-123',
+        repoRoot: state.root,
+      })
+    ).rejects.toThrow(/Guarded execution requires/);
+    expect(readFactory).not.toHaveBeenCalled();
+    expect(mutationFactory).not.toHaveBeenCalled();
   });
 
   it('rejects missing checkpoint attestation before the mutation factory is resolved', async () => {
