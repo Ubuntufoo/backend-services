@@ -31,6 +31,7 @@ import type {
   YouPickPilotMutationApi,
 } from '@/ebay/you-pick-sandbox-pilot-mutation.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
+import type { MediaApi } from '@/api/listing-management/media.js';
 
 export interface YouPickPilotCliArgs {
   fixturePath?: string;
@@ -464,13 +465,15 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
   }
 
   return {
-    getRuntimeSnapshot(): Promise<RuntimeSnapshot> {
+    async getRuntimeSnapshot(): Promise<RuntimeSnapshot> {
+      await ensureInitialized();
       const isEnabled = (name: string) => process.env[name] !== 'false';
       const productionCredentialMaterialPresent = Object.entries(process.env).some(
         ([name, value]) =>
           name.includes('PRODUCTION') && name.includes('EBAY') && Boolean(value?.trim())
       );
-      return Promise.resolve({
+      const tokenScopes = api.getAuthClient().getTokenInfo().scopeInfo?.tokenScopes;
+      return {
         environment: process.env.EBAY_ENVIRONMENT?.trim() ?? '',
         restOrigin: environmentModule.getBaseUrl(config.environment),
         oauthOrigin: new URL(environmentModule.getAuthUrl(config.environment)).origin,
@@ -479,6 +482,7 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         marketplaceId: process.env.EBAY_MARKETPLACE_ID?.trim() ?? '',
         contentLanguage: process.env.EBAY_CONTENT_LANGUAGE?.trim(),
         hasUserRefreshToken: Boolean(config.refreshToken?.trim()),
+        grantedUserScopes: tokenScopes,
         productionCredentialMaterialPresent,
         background: {
           jobRunner: isEnabled('SIDECAR_JOB_RUNNER_ENABLED'),
@@ -495,7 +499,11 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
           ai: false,
           pricing: false,
         },
-      });
+      };
+    },
+    async probeMediaImageAccess(missingImageId) {
+      await ensureInitialized();
+      return await api.media.probeImageAccess(missingImageId);
     },
     async getCurrentUserIdentity() {
       await ensureInitialized();
@@ -548,7 +556,9 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
     },
     async getOffers(sku, marketplaceId) {
       await ensureInitialized();
-      return classifyYouPickOfferListRead(() => api.inventory.getOffers(sku, marketplaceId));
+      return await classifyYouPickOfferListRead(() =>
+        api.inventory.getOffers(sku, marketplaceId)
+      );
     },
   };
 }
@@ -560,16 +570,40 @@ export async function createYouPickPilotMutationApi(): Promise<YouPickPilotMutat
   ]);
   const api = new EbaySellerApi(environmentModule.getEbayConfig());
   await api.initialize();
-  return adaptYouPickPilotMutationApi(api.inventory);
+  return adaptYouPickPilotMutationApi(api.inventory, api.media);
 }
 
 type PilotInventoryAdapter = InventoryApi;
+type PilotMediaAdapter = MediaApi;
 
 export function adaptYouPickPilotMutationApi(
-  inventory: PilotInventoryAdapter
+  inventory: PilotInventoryAdapter,
+  media?: PilotMediaAdapter
 ): YouPickPilotMutationApi {
   const config = (headers: { 'Content-Language': 'en-US' }) => ({ headers });
   return {
+    createImageFromUrl: media
+      ? async (sourceUrl) => {
+          const image = await media.createImageFromUrl(sourceUrl);
+          return {
+            imageId: image.imageId,
+            location: image.location,
+            imageUrl: image.imageUrl,
+            expirationDate: image.expirationDate,
+          };
+        }
+      : undefined,
+    getImage: media
+      ? async (location) => {
+          const image = await media.getImage(location);
+          return {
+            imageId: image.imageId,
+            location: image.location,
+            imageUrl: image.imageUrl,
+            expirationDate: image.expirationDate,
+          };
+        }
+      : undefined,
     createOrReplaceInventoryItem: async (sku, payload, headers) => {
       await inventory.createOrReplaceInventoryItem(sku, payload, config(headers));
       return undefined;

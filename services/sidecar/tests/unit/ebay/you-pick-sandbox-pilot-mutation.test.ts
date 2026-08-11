@@ -8,6 +8,8 @@ import {
   digest,
   executableYouPickManifestSchema,
   legacyYouPickManifestSchema,
+  projectInventoryItemSemanticSnapshot,
+  projectOfferSemanticSnapshot,
   readManifest,
   runYouPickSandboxPilot,
   writeManifestAtomic,
@@ -42,6 +44,7 @@ function gateApi(): YouPickPilotReadApi {
       marketplaceId: 'EBAY_US',
       contentLanguage: 'en-US',
       hasUserRefreshToken: true,
+      grantedUserScopes: ['https://api.ebay.com/oauth/api_scope/sell.inventory'],
       productionCredentialMaterialPresent: false,
       background: {
         jobRunner: false,
@@ -122,6 +125,26 @@ async function freshManifestState(): Promise<{
 
 async function freshManifest(): Promise<ExecutableYouPickManifest> {
   return (await freshManifestState()).manifest;
+}
+
+async function freshVersion3Manifest(): Promise<ExecutableYouPickManifest> {
+  const root = await mkdtemp(join(tmpdir(), 'yp-mutation-media-'));
+  roots.push(root);
+  const fixture = JSON.parse(await readFile(fixturePath, 'utf8'));
+  fixture.version = 3;
+  const customFixturePath = join(root, 'media-two-card.json');
+  await writeFile(customFixturePath, JSON.stringify(fixture));
+  const report = await runYouPickSandboxPilot({
+    api: gateApi(),
+    fixturePath: customFixturePath,
+    repoRoot: root,
+    now: () => fixed,
+    randomBytesImpl: () => Buffer.from('d4e5f6', 'hex'),
+  });
+  if (!('manifestPath' in report)) throw new Error('Expected version-3 dry-run report.');
+  return executableYouPickManifestSchema.parse(
+    await readManifest(report.manifestPath, join(root, '.local', 'you-pick-sandbox'))
+  );
 }
 
 async function freshThreeChildManifest(): Promise<ExecutableYouPickManifest> {
@@ -277,6 +300,69 @@ function mutationSpies(): YouPickPilotMutationApi {
 }
 
 describe('guarded You Pick staged mutation lifecycle', () => {
+  it('creates and reconciles ordered EPS resources before sending resolved Inventory images', async () => {
+    let manifest = await freshVersion3Manifest();
+    const sourceUrls = manifest.execution.fixture.children.flatMap((child) =>
+      child.images.map((image) => image.url)
+    );
+    const imageByLocation = new Map<string, Record<string, unknown>>();
+    const createImageFromUrl = vi.fn(async (sourceUrl: string) => {
+      const index = sourceUrls.indexOf(sourceUrl);
+      const location = `https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/IMAGE-${index}`;
+      const image = {
+        imageId: `IMAGE-${index}`,
+        location,
+        imageUrl: `https://i.ebayimg.com/images/g/EPS${index}/s-l1600.jpg`,
+        expirationDate: '2026-09-11T15:00:00.000Z',
+      };
+      imageByLocation.set(location, image);
+      return image;
+    });
+    const getImage = vi.fn(async (location: string) => imageByLocation.get(location));
+    const createOrReplaceInventoryItem = vi.fn(async () => {
+      throw new Error('intentional stop after Media readiness');
+    });
+    const mutationApi = {
+      ...mutationSpies(),
+      createImageFromUrl,
+      getImage,
+      createOrReplaceInventoryItem,
+    };
+    await expect(
+      executeYouPickManifest({
+        manifest,
+        readApi: gateApi(),
+        mutationApi,
+        headers: { 'Content-Language': 'en-US' },
+        cleanup: false,
+        now: () => fixed,
+        persist: async (next) => {
+          manifest = next;
+        },
+      })
+    ).rejects.toThrow(/item-C01 outcome is unknown/);
+    expect(createImageFromUrl.mock.calls.map(([url]) => url)).toEqual(sourceUrls);
+    expect(getImage).toHaveBeenCalledTimes(4);
+    expect(createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      manifest.run.childSkus[0],
+      expect.objectContaining({
+        product: expect.objectContaining({
+          imageUrls: [
+            'https://i.ebayimg.com/images/g/EPS0/s-l1600.jpg',
+            'https://i.ebayimg.com/images/g/EPS1/s-l1600.jpg',
+          ],
+        }),
+      }),
+      { 'Content-Language': 'en-US' }
+    );
+    expect(manifest.execution.mediaResources?.every(({ state }) => state === 'ready')).toBe(true);
+    expect(
+      manifest.execution.ledger
+        .filter(({ id }) => id.startsWith('media-'))
+        .every(({ state, attemptCount }) => state === 'completed' && attemptCount === 1)
+    ).toBe(true);
+  });
+
   it.each([
     ['fixture policy', (value: any) => (value.execution.fixture.policies.paymentPolicyId += '-X')],
     ['fixture location', (value: any) => (value.execution.fixture.merchantLocationKey += '-X')],
@@ -427,10 +513,20 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   });
 
   it('checkpoints every operation, stops twice for exact attestations, and cleans exact resources', async () => {
-    let manifest = await freshManifest();
+    let manifest = executableYouPickManifestSchema.parse({
+      ...(await freshManifest()),
+      lastError: 'stale pre-publication validation error',
+    });
     let clock = fixed;
     const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
-    const items = new Map<string, { digest: string; quantity: number }>();
+    const items = new Map<
+      string,
+      {
+        digest: string;
+        quantity: number;
+        semanticSnapshot: ReturnType<typeof projectInventoryItemSemanticSnapshot>;
+      }
+    >();
     const offers = new Map<string, RemoteOffer>();
     let group: { digest: string; skus: string[] } | undefined;
     const readApi: YouPickPilotReadApi = {
@@ -445,6 +541,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
                 groupKeys: group ? [manifest.run.groupKey] : null,
                 quantity: item.quantity,
                 snapshotDigest: item.digest,
+                semanticSnapshot: item.semanticSnapshot,
               },
             }
           : { status: 'missing' };
@@ -466,6 +563,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         items.set(sku, {
           digest: digest({ sku, ...request }),
           quantity: (request.availability as any).shipToLocationAvailability.quantity as number,
+          semanticSnapshot: projectInventoryItemSemanticSnapshot({ sku, ...request }),
         });
       }),
       createOffer: vi.fn(async (request, guarded) => {
@@ -485,6 +583,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
           withdrawRequired: false,
           availableQuantity: request.availableQuantity as number,
           snapshotDigest: digest(request),
+          semanticSnapshot: projectOfferSemanticSnapshot(request),
         });
         return { offerId };
       }),
@@ -517,7 +616,11 @@ describe('guarded You Pick staged mutation lifecycle', () => {
           plan.operations.find((operation) => operation.id === 'item-C01')!.payload
         );
         (itemPayload.availability as any).shipToLocationAvailability.quantity = 0;
-        items.set(sku, { digest: digest(itemPayload), quantity: 0 });
+        items.set(sku, {
+          digest: digest(itemPayload),
+          quantity: 0,
+          semanticSnapshot: projectInventoryItemSemanticSnapshot(itemPayload),
+        });
         const offerPayload = structuredClone(
           plan.operations.find((operation) => operation.id === 'offer-C01')!.payload
         );
@@ -527,6 +630,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
           availableQuantity: 0,
           listingStatus: 'OUT_OF_STOCK',
           snapshotDigest: digest(offerPayload),
+          semanticSnapshot: projectOfferSemanticSnapshot(offerPayload),
         });
         return { responses: [{ sku, offerId: offers.get(sku)!.offerId, statusCode: 200 }] };
       }),
@@ -571,6 +675,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
 
     const published = await executeYouPickManifest({ ...base(), cleanup: false });
     expect(published.checkpoint).toBe('awaiting-published-view-verification');
+    expect(manifest.lastError).toBeNull();
     expect(mutationApi.createOrReplaceInventoryItem).toHaveBeenCalledTimes(2);
     expect(mutationApi.createOffer).toHaveBeenCalledTimes(2);
     expect(mutationApi.publishInventoryItemGroup).toHaveBeenCalledOnce();

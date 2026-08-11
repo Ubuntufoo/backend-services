@@ -12,12 +12,15 @@ import {
   buildFuturePlan,
   buildGuardedMutationHeaders,
   classifyYouPickListingStatus,
+  digest,
   executableYouPickManifestSchema,
   generateRunIdentity,
+  inventoryItemSemanticMismatch,
   parseCurrentUserIdentity,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
   readManifest,
+  resolveFuturePlan,
   runYouPickSandboxPilot,
   sanitizeReport,
   validateRunIdentity,
@@ -101,6 +104,7 @@ const runtime: RuntimeSnapshot = {
   marketplaceId: 'EBAY_US',
   contentLanguage: 'en-US',
   hasUserRefreshToken: true,
+  grantedUserScopes: ['https://api.ebay.com/oauth/api_scope/sell.inventory'],
   productionCredentialMaterialPresent: false,
   background: {
     jobRunner: false,
@@ -659,6 +663,135 @@ describe('You Pick sandbox pilot fixture and plan', () => {
         run.groupKey
       ).snapshotDigest
     ).not.toBe(first.operations.find(({ id }) => id === 'group-complete')?.digest);
+  });
+
+  it('preflights version 3 with ordered Media operations and resolves only exact ready EPS URLs', async () => {
+    const fixture = { ...(await loadFixture() as Record<string, unknown>), version: 3 };
+    const parsedFixture = youPickFixtureSchema.parse(fixture);
+    const run = generateRunIdentity(2, fixedDate, fixedRandom());
+    const plan = buildFuturePlan(parsedFixture, run);
+    expect(plan.operations.slice(0, 4).map(({ id }) => id)).toEqual([
+      'media-C01-front',
+      'media-C01-back',
+      'media-C02-front',
+      'media-C02-back',
+    ]);
+    expect(plan.operations.find(({ id }) => id === 'item-C01')?.payload).toEqual(
+      expect.objectContaining({
+        product: expect.objectContaining({
+          imageUrls: ['$media.C01.front', '$media.C01.back'],
+        }),
+      })
+    );
+    expect(
+      (plan.operations.find(({ id }) => id === 'group-complete')?.payload as {
+        imageUrls: string[];
+      }).imageUrls
+    ).toEqual(['$media.C01.front', '$media.C02.front']);
+
+    const root = await tempRepo();
+    const version3FixturePath = join(root, 'version-3-fixture.json');
+    await writeFile(version3FixturePath, JSON.stringify(fixture));
+    const probeMediaImageAccess = vi.fn(async () => 'authorized' as const);
+    const report = await runYouPickSandboxPilot({
+      api: createApi({
+        getRuntimeSnapshot: vi.fn(async () => ({ ...runtime, grantedUserScopes: undefined })),
+        probeMediaImageAccess,
+      }),
+      fixturePath: version3FixturePath,
+      repoRoot: root,
+      now: () => fixedDate,
+      randomBytesImpl: fixedRandom,
+    });
+    expect(probeMediaImageAccess).toHaveBeenCalledWith('YP_MEDIA_AUTH_PROBE_MISSING');
+    const manifest = await readManifest(
+      report.manifestPath,
+      join(root, '.local', 'you-pick-sandbox')
+    );
+    if (!('execution' in manifest)) throw new Error('Expected executable manifest.');
+    expect(manifest.execution.mediaResources?.map(({ operationId, state }) => ({
+      operationId,
+      state,
+    }))).toEqual(
+      plan.operations.slice(0, 4).map(({ id }) => ({ operationId: id, state: 'planned' }))
+    );
+    expect(() => resolveFuturePlan(manifest)).toThrow(/not ready/);
+
+    const unauthorizedRoot = await tempRepo();
+    const unauthorizedFixturePath = join(unauthorizedRoot, 'version-3-fixture.json');
+    await writeFile(unauthorizedFixturePath, JSON.stringify(fixture));
+    await expect(
+      runYouPickSandboxPilot({
+        api: createApi({
+          getRuntimeSnapshot: vi.fn(async () => ({ ...runtime, grantedUserScopes: undefined })),
+          probeMediaImageAccess: vi.fn(async () => 'unauthorized'),
+        }),
+        fixturePath: unauthorizedFixturePath,
+        repoRoot: unauthorizedRoot,
+        now: () => fixedDate,
+        randomBytesImpl: fixedRandom,
+      })
+    ).rejects.toThrow(/media-oauth-capability gate failed/);
+
+    const ready = executableYouPickManifestSchema.parse({
+      ...manifest,
+      execution: {
+        ...manifest.execution,
+        ledger: manifest.execution.ledger.map((entry) =>
+          entry.id.startsWith('media-')
+            ? {
+                ...entry,
+                state: 'completed',
+                attemptCount: 1,
+                startedAt: '2026-08-11T15:17:00.000Z',
+                completedAt: '2026-08-11T15:18:00.000Z',
+              }
+            : entry
+        ),
+        mediaResources: manifest.execution.mediaResources?.map((resource, index) => {
+          const epsUrl = `https://i.ebayimg.com/images/g/EPS${index}/s-l1600.jpg${index === 0 ? '?quality=100' : ''}`;
+          return {
+            ...resource,
+            state: 'ready',
+            imageId: `IMAGE-${index}`,
+            location: `https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/IMAGE-${index}`,
+            epsUrl,
+            epsUrlDigest: digest(epsUrl),
+            expirationDate: '2026-09-11T15:17:00.000Z',
+            createdAt: '2026-08-11T15:17:00.000Z',
+            verifiedAt: '2026-08-11T15:18:00.000Z',
+          };
+        }),
+      },
+    });
+    const resolved = resolveFuturePlan(ready);
+    expect(
+      (resolved.operations.find(({ id }) => id === 'item-C01')?.payload as {
+        product: { imageUrls: string[] };
+      }).product.imageUrls
+    ).toEqual([
+      'https://i.ebayimg.com/images/g/EPS0/s-l1600.jpg?quality=100',
+      'https://i.ebayimg.com/images/g/EPS1/s-l1600.jpg',
+    ]);
+    const resolvedItem = resolved.operations.find(({ id }) => id === 'item-C01')?.payload;
+    expect(
+      inventoryItemSemanticMismatch(
+        projectInventoryItemSemanticSnapshot(resolvedItem),
+        resolvedItem
+      )
+    ).toBeNull();
+    await writeManifestAtomic(
+      report.manifestPath,
+      ready,
+      join(root, '.local', 'you-pick-sandbox')
+    );
+    const roundTrip = await readManifest(
+      report.manifestPath,
+      join(root, '.local', 'you-pick-sandbox')
+    );
+    expect(
+      'execution' in roundTrip ? roundTrip.execution.mediaResources?.[0].epsUrl : null
+    ).toBe('https://i.ebayimg.com/images/g/EPS0/s-l1600.jpg?quality=100');
   });
 
   it('preserves the exact version-1 arrangement and operation digests', async () => {

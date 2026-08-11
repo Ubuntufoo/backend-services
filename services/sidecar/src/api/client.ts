@@ -3,7 +3,12 @@ import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 import { EbayOAuthClient } from '@/auth/oauth.js';
 import { getBaseUrl } from '@/config/environment.js';
 import type { EbayApiError, EbayConfig } from '@/types/ebay.js';
-import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import axios, {
+  type AxiosError,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+} from 'axios';
 import { apiLogger, logRequest, logResponse, logErrorResponse } from '@/utils/logger.js';
 
 // Extended Axios config with retry tracking
@@ -490,6 +495,71 @@ export class EbayApiClient {
       }
 
       // Re-throw other errors
+      throw error;
+    }
+  }
+
+  /**
+   * Make an authenticated POST request with a full URL and preserve response metadata.
+   * Used by APIs on a different eBay REST host, such as the Media API.
+   */
+  async postWithFullUrlResponse<T = unknown>(
+    fullUrl: string,
+    data?: unknown
+  ): Promise<AxiosResponse<T>> {
+    this.validateAccessToken();
+
+    if (!this.rateLimitTracker.canMakeRequest()) {
+      const stats = this.rateLimitTracker.getStats();
+      throw new Error(
+        `Rate limit exceeded: ${stats.current}/${stats.max} requests in ${stats.windowMs}ms window. Please wait before making more requests.`
+      );
+    }
+
+    let token = await this.authClient.getAccessToken();
+    this.rateLimitTracker.recordRequest();
+
+    const request = async (): Promise<AxiosResponse<T>> =>
+      await axios.post<T>(fullUrl, data, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...this.getDefaultHeaders(),
+        },
+        timeout: 30000,
+      });
+
+    try {
+      return await request();
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        apiLogger.warn(
+          'Authentication error (401) on full URL POST request. Attempting to refresh user token...'
+        );
+
+        try {
+          await this.authClient.refreshUserToken();
+          token = await this.authClient.getAccessToken();
+          apiLogger.info('Token refreshed successfully. Retrying request...');
+          return await request();
+        } catch (refreshError) {
+          apiLogger.error('Failed to refresh token', {
+            error: refreshError instanceof Error ? refreshError.message : 'Unknown error',
+          });
+
+          const ebayError = error.response?.data as EbayApiError;
+          const originalError =
+            ebayError.errors?.[0]?.longMessage ??
+            ebayError.errors?.[0]?.message ??
+            'Invalid access token';
+
+          throw new Error(
+            `${originalError}. ` +
+              `Token refresh failed: ${refreshError instanceof Error ? refreshError.message : 'Unknown error'}. ` +
+              'Please use the ebay_set_user_tokens_with_expiry tool to provide valid tokens.'
+          );
+        }
+      }
+
       throw error;
     }
   }

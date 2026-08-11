@@ -207,6 +207,25 @@ For fixture version 2, that rebuilt contract also includes exact ordered child
 Fixture version 1 deliberately retains its historical group-only requests and ignores child image
 fields during semantic recovery.
 
+Fixture version 3 preserves the version-2 child-pair and group-pivot placement but treats fixture
+URLs as immutable Media API ingestion sources. Its guarded plan creates one ordered Sandbox EPS
+resource per source through REST `createImageFromUrl`, persists the returned image identity,
+exact resource location, EPS URL digest, and expiration, then reconciles the exact resource with
+`getImage` before resolving any Inventory payload. Current Media OpenAPI security metadata requires
+the full `sell.inventory` Authorization Code user scope for both image operations. Preflight accepts
+that scope from complete token metadata; when refreshed token metadata omits its scope field, one
+read-only lookup of an intentionally missing Media image must return image-not-found rather than an
+authorization error. A started Media operation without a persisted Location is never replayed,
+because the API has no source-keyed lookup or image-delete operation. Exact returned EPS URLs live
+only in the ignored mode-0600 manifest and are redacted from console reports.
+
+YP0.15 live buyer verification established that EPS provenance fixes child-selector image binding,
+but retaining group-level `imageUrls` renders two additional unbound leading images: positions 3–4
+bind correctly to Alpha and positions 5–6 bind correctly to Beta, while positions 1–2 are duplicate
+front pivots with no selector association. This is a buyer-view failure. The smallest next experiment
+preserves each child's ordered EPS `[front, back]` pair and omits group-level `imageUrls`; it does not
+change selector order, offers, prices, condition, or Media provenance.
+
 Cleanup-plan mode strictly normalizes
 exact group children, child/group associations, offers, statuses, marketplace/SKU ownership, and
 listing identity before producing a reverse dependency plan. Publication history is distinct from

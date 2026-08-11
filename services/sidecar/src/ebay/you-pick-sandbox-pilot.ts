@@ -124,9 +124,14 @@ const youPickFixtureVersion2BaseSchema = strictObject({
   version: z.literal(2),
   ...youPickFixtureCommonShape,
 });
+const youPickFixtureVersion3BaseSchema = strictObject({
+  version: z.literal(3),
+  ...youPickFixtureCommonShape,
+});
 type YouPickFixtureRefinementInput =
   | z.infer<typeof youPickFixtureVersion1BaseSchema>
-  | z.infer<typeof youPickFixtureVersion2BaseSchema>;
+  | z.infer<typeof youPickFixtureVersion2BaseSchema>
+  | z.infer<typeof youPickFixtureVersion3BaseSchema>;
 
 function refineYouPickFixture(fixture: YouPickFixtureRefinementInput, ctx: z.RefinementCtx): void {
   const childCount = fixture.children.length;
@@ -161,8 +166,8 @@ function refineYouPickFixture(fixture: YouPickFixtureRefinementInput, ctx: z.Ref
     issue('Prices must be distinct and positive.', ['children']);
   if (new Set(fingerprints).size !== fingerprints.length)
     issue('Image fingerprints must be distinct.', ['children']);
-  if (fixture.version === 2 && new Set(imageUrls).size !== imageUrls.length)
-    issue('Version-2 image source URLs must be distinct across children.', ['children']);
+  if (fixture.version >= 2 && new Set(imageUrls).size !== imageUrls.length)
+    issue('Version-2+ image source URLs must be distinct across children.', ['children']);
   if (fixture.group.variesBy.aspectsImageVariesBy !== fixture.selector.name)
     issue('aspectsImageVariesBy must equal selector name.', ['group', 'variesBy']);
   const specification = fixture.group.variesBy.specifications[0];
@@ -224,9 +229,12 @@ export const youPickFixtureVersion1Schema =
   youPickFixtureVersion1BaseSchema.superRefine(refineYouPickFixture);
 export const youPickFixtureVersion2Schema =
   youPickFixtureVersion2BaseSchema.superRefine(refineYouPickFixture);
+export const youPickFixtureVersion3Schema =
+  youPickFixtureVersion3BaseSchema.superRefine(refineYouPickFixture);
 export const youPickFixtureSchema = z.union([
   youPickFixtureVersion1Schema,
   youPickFixtureVersion2Schema,
+  youPickFixtureVersion3Schema,
 ]);
 
 export type YouPickFixture = z.infer<typeof youPickFixtureSchema>;
@@ -292,6 +300,7 @@ const manifestCommonShape = {
   checkpoint: z.enum([
     'created',
     'preflight-complete',
+    'creating-media',
     'creating-items',
     'creating-offers',
     'replacing-group',
@@ -380,6 +389,36 @@ const operationLedgerEntrySchema = strictObject({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Incomplete operation has completedAt.' });
 });
 
+const sandboxMediaLocationSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      ['api.sandbox.ebay.com', 'apim.sandbox.ebay.com'].includes(url.hostname) &&
+      /^\/commerce\/media\/v1_beta\/image\/[^/]+$/.test(url.pathname) &&
+      !url.search &&
+      !url.hash
+    );
+  }, 'Media location must be an exact Sandbox image resource URI.');
+const mediaResourceSchema = strictObject({
+  operationId: nonEmpty,
+  slot: z.string().regex(CHILD_SLOT_PATTERN),
+  role: z.enum(['front', 'back']),
+  sourceFingerprint: z.string().regex(NON_SECRET_FINGERPRINT_PATTERN),
+  state: z.enum(['planned', 'created', 'ready', 'unknown']),
+  imageId: z.string().regex(REMOTE_ID_PATTERN).nullable(),
+  location: sandboxMediaLocationSchema.nullable(),
+  epsUrl: z.string().url().nullable(),
+  epsUrlDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  expirationDate: z.string().datetime().nullable(),
+  createdAt: z.string().datetime().nullable(),
+  verifiedAt: z.string().datetime().nullable(),
+});
+
 const executableStateSchema = strictObject({
   eligible: z.literal(true),
   fixture: youPickFixtureSchema,
@@ -392,6 +431,7 @@ const executableStateSchema = strictObject({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .nullable(),
+  mediaResources: z.array(mediaResourceSchema).min(4).max(6).optional(),
 });
 
 function refineManifest(
@@ -470,6 +510,7 @@ export interface RuntimeSnapshot {
   marketplaceId: string;
   contentLanguage?: string;
   hasUserRefreshToken: boolean;
+  grantedUserScopes?: string[];
   productionCredentialMaterialPresent: boolean;
   background: {
     jobRunner: boolean;
@@ -619,6 +660,7 @@ export type ExactRead<T = unknown> =
 
 export interface YouPickPilotReadApi {
   getRuntimeSnapshot(): Promise<RuntimeSnapshot>;
+  probeMediaImageAccess?(missingImageId: string): Promise<'authorized' | 'unauthorized'>;
   getCurrentUserIdentity(): Promise<CurrentUserIdentity>;
   getPolicyLocationSnapshot(): Promise<PolicyLocationSnapshot>;
   getMetadataSnapshot(categoryId: string): Promise<MetadataSnapshot>;
@@ -661,6 +703,21 @@ const plannedItemVersion2Schema = strictObject({
     imageUrls: z.tuple([imageSchema.shape.url, imageSchema.shape.url]),
   }),
 });
+const mediaReferenceSchema = z.string().regex(/^\$media\.C0[1-3]\.(?:front|back)$/);
+const plannedImageSchema = z.union([mediaReferenceSchema, imageSchema.shape.url]);
+const plannedItemVersion3Schema = strictObject({
+  ...plannedItemCommonShape,
+  product: strictObject({
+    aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)),
+    imageUrls: z.tuple([plannedImageSchema, plannedImageSchema]),
+  }),
+});
+const plannedMediaSchema = strictObject({
+  slot: z.string().regex(CHILD_SLOT_PATTERN),
+  role: z.enum(['front', 'back']),
+  sourceUrl: imageSchema.shape.url,
+  sourceFingerprint: z.string().regex(NON_SECRET_FINGERPRINT_PATTERN),
+});
 const plannedOfferSchema = strictObject({
   sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
   marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
@@ -697,6 +754,10 @@ const plannedGroupVersion1Schema = strictObject({
 const plannedGroupVersion2Schema = strictObject({
   ...plannedGroupCommonShape,
   imageUrls: z.array(imageSchema.shape.url).min(2).max(3),
+});
+const plannedGroupVersion3Schema = strictObject({
+  ...plannedGroupCommonShape,
+  imageUrls: z.array(plannedImageSchema).min(2).max(3),
 });
 const plannedGroupRequestSchema = strictObject({
   inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
@@ -865,8 +926,15 @@ export function projectInventoryItemSemanticSnapshot(
   });
 }
 
+const semanticImageUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.hash;
+  }, 'Inventory image URL must be public HTTPS without credentials or fragment.');
 const semanticImageUrlsSchema = z
-  .tuple([imageSchema.shape.url, imageSchema.shape.url])
+  .tuple([semanticImageUrlSchema, semanticImageUrlSchema])
   .refine(([front, back]) => front !== back, 'Inventory item semantic image URLs are duplicated.');
 
 export type InventoryItemSemanticField =
@@ -1106,8 +1174,30 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
   const groupImages =
     fixture.version === 1
       ? fixture.children.flatMap((child) => child.images.map((image) => image.url))
-      : fixture.children.map((child) => child.images[0].url);
+      : fixture.version === 2
+        ? fixture.children.map((child) => child.images[0].url)
+        : fixture.children.map((child) => `$media.${child.slot}.front`);
   const operations: PlannedOperation[] = [];
+
+  if (fixture.version === 3) {
+    fixture.children.forEach((child) => {
+      child.images.forEach((image) => {
+        operations.push(
+          operation(
+            `media-${child.slot}-${image.role}`,
+            'create-sandbox-eps-image-from-url',
+            plannedMediaSchema,
+            {
+              slot: child.slot,
+              role: image.role,
+              sourceUrl: image.url,
+              sourceFingerprint: image.fingerprint,
+            }
+          )
+        );
+      });
+    });
+  }
 
   fixture.children.forEach((child, index) => {
     const sku = run.childSkus[index];
@@ -1115,7 +1205,11 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
       operation(
         `item-${child.slot}`,
         'create-or-replace-child-item',
-        fixture.version === 1 ? plannedItemVersion1Schema : plannedItemVersion2Schema,
+        fixture.version === 1
+          ? plannedItemVersion1Schema
+          : fixture.version === 2
+            ? plannedItemVersion2Schema
+            : plannedItemVersion3Schema,
         {
           sku,
           availability: { shipToLocationAvailability: { quantity: child.itemQuantity } },
@@ -1126,7 +1220,11 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
               ? { aspects: child.productAspects }
               : {
                   aspects: child.productAspects,
-                  imageUrls: child.images.map((image) => image.url),
+                  imageUrls: child.images.map((image) =>
+                    fixture.version === 2
+                      ? image.url
+                      : `$media.${child.slot}.${image.role}`
+                  ),
                 },
         }
       )
@@ -1150,7 +1248,11 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
     operation(
       'group-complete',
       'replace-complete-inventory-item-group',
-      fixture.version === 1 ? plannedGroupVersion1Schema : plannedGroupVersion2Schema,
+      fixture.version === 1
+        ? plannedGroupVersion1Schema
+        : fixture.version === 2
+          ? plannedGroupVersion2Schema
+          : plannedGroupVersion3Schema,
       {
         inventoryItemGroupKey: run.groupKey,
         title: fixture.group.title,
@@ -1247,6 +1349,56 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
   };
 }
 
+export function resolveFuturePlan(manifest: ExecutableYouPickManifest): FuturePlan {
+  const fixture = youPickFixtureSchema.parse(manifest.execution.fixture);
+  const plan = buildFuturePlan(fixture, manifest.run);
+  if (fixture.version !== 3) return plan;
+  const resources = manifest.execution.mediaResources;
+  if (!resources) throw new Error('Version-3 publication requires Media API resources.');
+  const epsUrls = new Map<string, string>();
+  for (const resource of resources) {
+    if (
+      resource.state !== 'ready' ||
+      !resource.imageId ||
+      !resource.location ||
+      !resource.epsUrl ||
+      !resource.epsUrlDigest ||
+      !resource.expirationDate ||
+      !resource.verifiedAt
+    )
+      throw new Error(`Media resource ${resource.operationId} is not ready for publication.`);
+    if (digest(resource.epsUrl) !== resource.epsUrlDigest)
+      throw new Error(`Media resource ${resource.operationId} EPS URL digest changed.`);
+    const url = new URL(resource.epsUrl);
+    if (url.protocol !== 'https:' || url.username || url.password)
+      throw new Error(`Media resource ${resource.operationId} returned an unsafe EPS URL.`);
+    epsUrls.set(`$media.${resource.slot}.${resource.role}`, resource.epsUrl);
+  }
+  const replaceReferences = (value: unknown): unknown => {
+    if (typeof value === 'string' && value.startsWith('$media.')) {
+      const resolved = epsUrls.get(value);
+      if (!resolved) throw new Error(`Missing ready Media resource for ${value}.`);
+      return resolved;
+    }
+    if (Array.isArray(value)) return value.map(replaceReferences);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+          key,
+          replaceReferences(child),
+        ])
+      );
+    return value;
+  };
+  return {
+    arrangementId: plan.arrangementId,
+    operations: plan.operations.map((planned) => ({
+      ...planned,
+      payload: replaceReferences(planned.payload),
+    })),
+  };
+}
+
 function requireExactIntegrity(label: string, actual: unknown, expected: unknown): void {
   if (canonicalJson(actual) !== canonicalJson(expected))
     throw new Error(`Executable manifest integrity mismatch: ${label}.`);
@@ -1300,6 +1452,63 @@ export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickMan
     fixture.children.length,
     manifest.run.childSkus.length
   );
+  const expectedMediaIdentity =
+    fixture.version === 3
+      ? fixture.children.flatMap((child) =>
+          child.images.map((image) => ({
+            operationId: `media-${child.slot}-${image.role}`,
+            slot: child.slot,
+            role: image.role,
+            sourceFingerprint: image.fingerprint,
+          }))
+        )
+      : undefined;
+  const actualMediaIdentity = manifest.execution.mediaResources?.map(
+    ({ operationId, slot, role, sourceFingerprint }) => ({
+      operationId,
+      slot,
+      role,
+      sourceFingerprint,
+    })
+  );
+  requireExactIntegrity('ordered Media resources', actualMediaIdentity, expectedMediaIdentity);
+  for (const resource of manifest.execution.mediaResources ?? []) {
+    const ledger = manifest.execution.ledger.find((entry) => entry.id === resource.operationId);
+    if (!ledger)
+      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} ledger.`);
+    if (resource.state === 'planned' && ledger.state === 'completed')
+      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} state.`);
+    if (
+      (resource.state === 'created' || resource.state === 'unknown') &&
+      ledger.state !== 'started' &&
+      ledger.state !== 'unknown'
+    )
+      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} state.`);
+    if (ledger.state === 'completed' && resource.state !== 'ready')
+      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} state.`);
+    if (
+      resource.state === 'ready' &&
+      ledger.state !== 'started' &&
+      ledger.state !== 'completed'
+    )
+      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} ledger state.`);
+    const nullableEvidence = [
+      resource.imageId,
+      resource.location,
+      resource.epsUrl,
+      resource.epsUrlDigest,
+      resource.expirationDate,
+      resource.createdAt,
+    ];
+    if (resource.state === 'planned' && nullableEvidence.some((value) => value !== null))
+      throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} evidence.`);
+    if (resource.state === 'ready') {
+      if (nullableEvidence.some((value) => value === null) || resource.verifiedAt === null)
+        throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} ready evidence.`);
+      if (digest(resource.epsUrl) !== resource.epsUrlDigest)
+        throw new Error(`Executable manifest integrity mismatch: ${resource.operationId} EPS URL.`);
+    }
+  }
 }
 
 function manifestLocalRoot(repoRoot: string, override?: string): string {
@@ -1360,7 +1569,21 @@ export async function writeManifestAtomic(
   manifestInput: unknown,
   localRoot: string
 ): Promise<void> {
-  const manifest = youPickManifestSchema.parse(sanitizeReport(manifestInput));
+  const parsed = youPickManifestSchema.parse(manifestInput);
+  const sanitized = sanitizeReport(parsed);
+  const manifest = youPickManifestSchema.parse(
+    'execution' in parsed && 'execution' in sanitized
+      ? {
+          ...sanitized,
+          execution: {
+            ...sanitized.execution,
+            // These exact API-returned URLs are required for safe resume and listing payloads.
+            // They remain only in the ignored, mode-0600 local manifest; console reports redact them.
+            mediaResources: parsed.execution.mediaResources,
+          },
+        }
+      : sanitized
+  );
   const absolute = assertSafeManifestPath(path, localRoot, manifest.run.runId);
   const directory = dirname(absolute);
   await assertRealManifestContainment(absolute, localRoot);
@@ -1482,6 +1705,25 @@ function initialManifest(
       })),
       publishedAttestationDigest: null,
       quantityZeroAttestationDigest: null,
+      mediaResources:
+        fixture.version === 3
+          ? fixture.children.flatMap((child) =>
+              child.images.map((image) => ({
+                operationId: `media-${child.slot}-${image.role}`,
+                slot: child.slot,
+                role: image.role,
+                sourceFingerprint: image.fingerprint,
+                state: 'planned' as const,
+                imageId: null,
+                location: null,
+                epsUrl: null,
+                epsUrlDigest: null,
+                expirationDate: null,
+                createdAt: null,
+                verifiedAt: null,
+              }))
+            )
+          : undefined,
     },
     cleanup: { attempts: 0, finalAbsenceVerified: false },
     lastError: null,
@@ -1532,6 +1774,34 @@ function validateRuntime(runtime: RuntimeSnapshot): YouPickManifest['gates'] {
       'Supabase, R2, jobs, watcher, AI, and pricing must be unused'
     ),
   ];
+}
+
+const MEDIA_INVENTORY_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.inventory';
+const MEDIA_AUTH_PROBE_IMAGE_ID = 'YP_MEDIA_AUTH_PROBE_MISSING';
+
+async function validateMediaOAuth(
+  runtime: RuntimeSnapshot,
+  api: YouPickPilotReadApi
+): Promise<YouPickManifest['gates'][number]> {
+  if (runtime.grantedUserScopes !== undefined) {
+    return assertGate(
+      runtime.grantedUserScopes.includes(MEDIA_INVENTORY_SCOPE),
+      'media-oauth-capability',
+      'complete token scope metadata must include the Media API sell.inventory user scope'
+    );
+  }
+
+  if (!api.probeMediaImageAccess)
+    throw new Error(
+      'media-oauth-capability gate failed: token scope metadata is unavailable and no non-mutating Media probe is configured'
+    );
+
+  const result = await api.probeMediaImageAccess(MEDIA_AUTH_PROBE_IMAGE_ID);
+  return assertGate(
+    result === 'authorized',
+    'media-oauth-capability',
+    'non-mutating missing-image lookup must confirm Media API user-token authorization'
+  );
 }
 
 function validateIdentity(
@@ -1875,7 +2145,7 @@ export async function runYouPickSandboxPilot(
   let planOperations: Omit<PlannedOperation, 'payload'>[] | undefined;
 
   if (options.fixturePath) {
-    const fixture = youPickFixtureVersion2Schema.parse(
+    const fixture = z.union([youPickFixtureVersion2Schema, youPickFixtureVersion3Schema]).parse(
       JSON.parse(await readFile(resolve(options.fixturePath), 'utf8')) as unknown
     );
     const run = generateRunIdentity(
@@ -1912,6 +2182,7 @@ export async function runYouPickSandboxPilot(
     const allowed = options.cleanup
       ? [
           'preflight-complete',
+          'creating-media',
           'creating-items',
           'creating-offers',
           'replacing-group',
@@ -1926,6 +2197,7 @@ export async function runYouPickSandboxPilot(
         ]
       : [
           'preflight-complete',
+          'creating-media',
           'creating-items',
           'creating-offers',
           'replacing-group',
@@ -1955,6 +2227,10 @@ export async function runYouPickSandboxPilot(
   try {
     const runtime = await api.getRuntimeSnapshot();
     gates.push(...validateRuntime(runtime));
+    if ('execution' in manifest && manifest.execution.fixture.version === 3) {
+      activeGate = 'media-oauth-capability';
+      gates.push(await validateMediaOAuth(runtime, api));
+    }
     activeGate = 'seller-identity';
     identity = validateIdentity(
       await api.getCurrentUserIdentity(),

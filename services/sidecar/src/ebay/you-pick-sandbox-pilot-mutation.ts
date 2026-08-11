@@ -7,6 +7,7 @@ import {
   assertOfferSemanticMatch,
   assertExecutableManifestIntegrity,
   buildFuturePlan,
+  resolveFuturePlan,
   executableYouPickManifestSchema,
   inventoryItemSemanticMismatch,
   offerSemanticMismatch,
@@ -27,6 +28,8 @@ export interface GuardedMutationHeaders {
 }
 
 export interface YouPickPilotMutationApi {
+  createImageFromUrl?(sourceUrl: string): Promise<unknown>;
+  getImage?(location: string): Promise<unknown>;
   createOrReplaceInventoryItem(
     sku: string,
     payload: Record<string, unknown>,
@@ -78,6 +81,14 @@ const bulkEntrySchema = z
   })
   .strict();
 const bulkResponseSchema = z.object({ responses: z.tuple([bulkEntrySchema]) }).strict();
+const mediaImageSchema = z
+  .object({
+    imageId: id,
+    location: z.string().url(),
+    imageUrl: z.string().url(),
+    expirationDate: z.string().datetime(),
+  })
+  .strict();
 
 const attestedChildSchema = z
   .object({
@@ -369,7 +380,7 @@ async function validateCompleteQuantitySnapshot(
   options: MutationExecutionOptions,
   state: 'original' | 'target-zero'
 ): Promise<{ listingId: string; targetOfferId: string }> {
-  const plan = buildFuturePlan(options.manifest.execution.fixture, options.manifest.run);
+  const plan = resolveFuturePlan(options.manifest);
   const zeroTarget = state === 'target-zero';
   const group = exactFound(
     await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey),
@@ -543,8 +554,116 @@ async function setCheckpoint(
   await options.persist(options.manifest);
 }
 
+async function persistMediaResource(
+  options: MutationExecutionOptions,
+  operationId: string,
+  update: Record<string, unknown>
+): Promise<void> {
+  options.manifest = executableYouPickManifestSchema.parse({
+    ...options.manifest,
+    updatedAt: options.now().toISOString(),
+    execution: {
+      ...options.manifest.execution,
+      mediaResources: options.manifest.execution.mediaResources?.map((resource) =>
+        resource.operationId === operationId ? { ...resource, ...update } : resource
+      ),
+    },
+  });
+  await options.persist(options.manifest);
+}
+
+async function executeMediaUploads(
+  options: MutationExecutionOptions,
+  plan: ReturnType<typeof buildFuturePlan>
+): Promise<void> {
+  const fixture = options.manifest.execution.fixture;
+  if (fixture.version !== 3) return;
+  if (!options.mutationApi.createImageFromUrl || !options.mutationApi.getImage)
+    throw new Error('Version-3 execution requires the guarded Media API.');
+  await setCheckpoint(options, 'creating-media');
+  for (const resource of options.manifest.execution.mediaResources ?? []) {
+    const operation = plan.operations.find((candidate) => candidate.id === resource.operationId);
+    const request = operation?.payload as
+      | { sourceUrl?: unknown; sourceFingerprint?: unknown }
+      | undefined;
+    if (
+      !operation ||
+      typeof request?.sourceUrl !== 'string' ||
+      request.sourceFingerprint !== resource.sourceFingerprint
+    )
+      throw new Error(`Media operation ${resource.operationId} does not match its source.`);
+    const ledger = options.manifest.execution.ledger.find(
+      (entry) => entry.id === resource.operationId
+    );
+    if (!ledger) throw new Error(`Missing ledger operation ${resource.operationId}.`);
+    let current = options.manifest.execution.mediaResources?.find(
+      (candidate) => candidate.operationId === resource.operationId
+    );
+    if (current?.state === 'planned' && ledger.state !== 'planned')
+      throw new Error(
+        `Media mutation ${resource.operationId} has no recoverable resource identity; replay is forbidden.`
+      );
+    if (current?.state === 'planned') {
+      await updateLedger(options, resource.operationId, 'started', {});
+      try {
+        const created = mediaImageSchema.parse(
+          await options.mutationApi.createImageFromUrl(request.sourceUrl)
+        );
+        await persistMediaResource(options, resource.operationId, {
+          state: 'created',
+          imageId: created.imageId,
+          location: created.location,
+          epsUrl: created.imageUrl,
+          epsUrlDigest: digest(created.imageUrl),
+          expirationDate: created.expirationDate,
+          createdAt: options.now().toISOString(),
+        });
+      } catch (error) {
+        await persistMediaResource(options, resource.operationId, { state: 'unknown' });
+        throw error;
+      }
+      current = options.manifest.execution.mediaResources?.find(
+        (candidate) => candidate.operationId === resource.operationId
+      );
+    }
+    if (!current?.location || !current.imageId || !current.epsUrl || !current.expirationDate)
+      throw new Error(
+        `Media mutation ${resource.operationId} has no recoverable resource identity; replay is forbidden.`
+      );
+    const readBack = mediaImageSchema.parse(
+      await options.mutationApi.getImage(current.location)
+    );
+    if (
+      readBack.imageId !== current.imageId ||
+      readBack.location !== current.location ||
+      readBack.imageUrl !== current.epsUrl ||
+      readBack.expirationDate !== current.expirationDate
+    )
+      throw new Error(`Media resource ${resource.operationId} exact read-back changed.`);
+    await persistMediaResource(options, resource.operationId, {
+      state: 'ready',
+      verifiedAt: options.now().toISOString(),
+    });
+    if (ledger.state !== 'completed')
+      await updateLedger(options, resource.operationId, 'completed', {
+        result: {
+          imageId: readBack.imageId,
+          epsUrlDigest: digest(readBack.imageUrl),
+          expirationDate: readBack.expirationDate,
+        },
+        readBack: {
+          imageId: readBack.imageId,
+          epsUrlDigest: digest(readBack.imageUrl),
+          expirationDate: readBack.expirationDate,
+        },
+      });
+  }
+}
+
 async function executePublishPath(options: MutationExecutionOptions): Promise<void> {
-  const plan = buildFuturePlan(options.manifest.execution.fixture, options.manifest.run);
+  const sourcePlan = buildFuturePlan(options.manifest.execution.fixture, options.manifest.run);
+  await executeMediaUploads(options, sourcePlan);
+  const plan = resolveFuturePlan(options.manifest);
   await setCheckpoint(options, 'creating-items');
   for (let index = 0; index < options.manifest.run.childSkus.length; index += 1) {
     const sku = options.manifest.run.childSkus[index];
@@ -783,6 +902,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
   options.manifest = executableYouPickManifestSchema.parse({
     ...options.manifest,
     checkpoint: 'awaiting-published-view-verification',
+    lastError: null,
     updatedAt: options.now().toISOString(),
   });
   await options.persist(options.manifest);
@@ -830,7 +950,7 @@ async function executeQuantityZero(options: MutationExecutionOptions): Promise<v
   }
   const targetOfferId = snapshot.targetOfferId;
   if (!alreadyZero) {
-    const plan = buildFuturePlan(options.manifest.execution.fixture, options.manifest.run);
+    const plan = resolveFuturePlan(options.manifest);
     const request = structuredClone(payload(plan, 'quantity-zero'));
     const requests = request.requests as Record<string, unknown>[];
     const requestOffers = requests[0].offers as Record<string, unknown>[];
@@ -891,7 +1011,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
     cleanup: { ...options.manifest.cleanup, attempts: options.manifest.cleanup.attempts + 1 },
   });
   await options.persist(options.manifest);
-  const plan = buildFuturePlan(options.manifest.execution.fixture, options.manifest.run);
+  const plan = resolveFuturePlan(options.manifest);
   const group = await options.readApi.getInventoryItemGroup(options.manifest.run.groupKey);
   if (group.status === 'unknown') throw new Error('Cleanup group state is unknown.');
   if (group.status === 'found') {
