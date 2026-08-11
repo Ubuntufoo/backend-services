@@ -188,6 +188,63 @@ describe('required item specifics validation', () => {
   });
 
   it.each([
+    ['BSKBL', 'Basketball'],
+    ['BSBL', 'Baseball'],
+  ])('maps controlled %s SKU category evidence to Sport', (skuCategoryCode, sport) => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { skuCategoryCode },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Sport',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [
+            { localizedValue: 'Baseball' },
+            { localizedValue: 'Basketball' },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({ Sport: [sport] });
+  });
+
+  it('does not invent Sport from an unrecognized SKU category', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { skuCategoryCode: 'OTHER' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Sport',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+      })
+    ).toEqual({});
+  });
+
+  it.each([
     { label: 'plain stored Set', year: '1985', set: 'Topps', expected: '1985 Topps' },
     {
       label: 'same-year stored Set',

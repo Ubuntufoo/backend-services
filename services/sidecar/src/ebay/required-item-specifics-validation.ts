@@ -25,6 +25,10 @@ const LOT_PLAYER_RULE_BY_CATEGORY_ID: Record<string, string[]> = {
 };
 const LOT_ITEM_SPECIFIC_DEFAULT_VALUE = 'Various';
 const SINGLE_CARD_CATEGORY_IDS = new Set(['183050', '183454', '261328']);
+const SPORT_BY_SKU_CATEGORY_CODE: Record<string, string> = {
+  BSBL: 'Baseball',
+  BSKBL: 'Basketball',
+};
 const YEAR_ASPECT_NAMES = ['year manufactured', 'year'] as const;
 
 type TaxonomyAspectMode = 'FREE_TEXT' | 'SELECTION_ONLY';
@@ -379,6 +383,8 @@ export function normalizeSingleCardOutboundItemSpecifics({
       : undefined;
   const teamAspect =
     categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Team']) : undefined;
+  const sportAspect =
+    categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Sport']) : undefined;
   const yearAspect = getTaxonomyAspectByName(aspectsByName, YEAR_ASPECT_NAMES);
   const authorizedYear = readAuthorizedGeneratedDraftYearMetadata(itemSpecifics)?.year.trim();
   const outbound: NormalizedOutboundItemSpecifics = {};
@@ -445,6 +451,20 @@ export function normalizeSingleCardOutboundItemSpecifics({
     );
     if (normalizedValue) {
       outbound[teamAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (sportAspect && !outbound[sportAspect.localizedName]) {
+    const skuCategoryCode = getPersistedAspectValue(itemSpecifics, 'skuCategoryCode');
+    const deterministicSport =
+      typeof skuCategoryCode === 'string'
+        ? SPORT_BY_SKU_CATEGORY_CODE[skuCategoryCode.trim().toUpperCase()]
+        : undefined;
+    const normalizedValue = deterministicSport
+      ? normalizeOutboundAspectValue(deterministicSport, sportAspect)
+      : null;
+    if (normalizedValue) {
+      outbound[sportAspect.localizedName] = normalizedValue;
     }
   }
 
