@@ -15,10 +15,11 @@ evidence only; it does not reveal which seller API created the listing.
   US $1.50. This proves the two sampled selections' prices, not that every selection has
   the same price.
 - Gallery: 182 pictures. Selecting `#10` moved the active gallery position to picture
-  11; selecting `#11` moved it to picture 13. The two-position step is strong evidence
-  that these selectable cards expose paired images. The visible page does not label the
-  pair as front/back, so exact role and ordering remain an inference pending a sandbox
-  payload/read-back test.
+  11; selecting `#11` moved it to picture 13. At observation time, the two-position step
+  was evidence of paired images but did not reveal their API placement or role. The later
+  Phase 0 Sandbox proof independently established the MVP child-owned seller EPS
+  `[front, back]` contract documented in [`architecture.md`](architecture.md); it does not
+  retroactively reveal this reference seller's payload.
 
 ## Practical condition rule
 
@@ -38,13 +39,14 @@ buyer surface. It does not establish a new universal limit. Keep four separate f
    These are not established as a universal Inventory API submission contract.
 3. Category/account-specific: Metadata `variationsSupported`, accepted selector aspects,
    account eligibility, and effective limits can vary.
-4. Sandbox-proven: only an isolated reversible pilot can establish what this application's
-   account, category, selector payload, and image payload actually accept.
+4. Sandbox-proven for this application's two-child MVP pilot: child-only seller EPS pairs,
+   selector behavior, quantity zero, and cleanup worked for the tested Sandbox account and
+   category. Scale and production limits remain unresolved.
 
 Official references:
 
 - [Multiple-variation listings](https://developer.ebay.com/api-docs/user-guides/static/trading-user-guide/variations.html)
 - [ListingStructurePolicy](https://developer.ebay.com/api-docs/sell/metadata/types/sel%3AListingStructurePolicy)
 
-No fixed group-size constant should be introduced before sandbox evidence and an explicit
-operational cap decision.
+The initial operational cap remains two or three children. It is a conservative application
+choice, not a universal eBay limit, and must not increase without later scale evidence.

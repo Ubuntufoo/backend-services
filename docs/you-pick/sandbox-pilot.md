@@ -2,12 +2,12 @@
 
 ## Authority and hard stop
 
-This is the operational design for a future Inventory API sandbox pilot. **This task is
-no-write.** It must not call eBay, create remote resources, start a write-capable service,
-or load production credentials. Finishing this document does not authorize sandbox execution
-or production rollout.
+This is the durable operational and recovery reference for the completed Phase 0 Inventory API
+Sandbox pilot. Reading or editing this document is **no-write** and does not authorize another
+Sandbox execution or a production rollout. Every future remote mutation still requires its own
+explicit gate.
 
-The future pilot is limited to one run-scoped group containing two or three unsold, ungraded
+The pilot boundary is one run-scoped group containing two or three unsold, ungraded
 sports cards in `EBAY_US` category `261328`. It must not read or mutate an existing Single or
 Lot listing row, structured SKU, watcher intake, database record, object-storage object, job,
 or remote listing. Inventory API owns every remote object created by the pilot; Trading API and
@@ -151,7 +151,9 @@ pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --cleanup
   --confirm-sandbox-seller <UserID>
 ```
 
-No flag defaults to execution. `--fixture --execute`, `--execute` without an exact manifest and
+Without `--execute`, exact fixture input performs dry-run/read-only planning and exact manifest
+input performs read-only resume; no arguments fail exact-input validation. `--fixture --execute`,
+`--execute` without an exact manifest and
 seller confirmation, duplicate/unknown flags, and cleanup execution without a manifest fail before
 the mutation factory is resolved. `--cleanup`
 requires an existing manifest and resumes from remote read-back rather than trusting local
@@ -170,9 +172,9 @@ digests, the ordered future operation plan, and the separately authorized next-c
 A successful cleanup plan persists `cleanup-plan-ready`, clears only stale pre-mutation errors when
 no cleanup attempt has begun, and is an executable cleanup checkpoint. Once cleanup starts, errors
 remain fail-closed until exact terminal absence is proven.
-The repository includes a non-saleable offline example at
-`services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`. That active fixture is payload
-arrangement version 2. The exact historical version-1 input remains at
+The repository includes a non-saleable historical arrangement-v2 example at
+`services/sidecar/tests/fixtures/you-pick-sandbox/two-card.json`. The exact historical version-1
+input remains at
 `services/sidecar/tests/fixtures/you-pick-sandbox/two-card-legacy-v1.json` for compatibility proof;
 it is rejected as the input to a new run.
 
@@ -189,7 +191,8 @@ claims `cleanup-complete`. Version 4 remains readable for historical read-only i
 never silently upgraded or accepted for execution; create and review a fresh version-5 preflight run.
 Payload-arrangement versions are separate from manifest versions. Existing version-5 manifests
 may embed fixture version 1 and rebuild the exact historical child/group requests, arrangement ID,
-operation digests, and ledger identities. New version-5 manifests require fixture version 2. Run
+operation digests, and ledger identities. New Phase 0 version-5 manifests used fixture versions
+2–4; version 4 is the accepted child-only EPS arrangement. Run
 `20260804T173924Z-967292` was cleaned through its integrity-valid version-1 arrangement and is
 preserved byte-for-byte as historical evidence; it must never be rewritten to version 2.
 Credentials, authorization headers, raw responses, signed URLs, and buyer personal data are never
@@ -202,7 +205,9 @@ It requires exact ordered agreement with arrangement, operations, ledger request
 resource SKUs, selector values, image fingerprints, quantities, prices, condition evidence,
 policies, and merchant location. Checkpoint persistence cannot turn a divergent manifest into an
 executable one.
-For fixture version 2, that rebuilt contract also includes exact ordered child
+The following fixture-version 1–3 placement rules are historical compatibility contracts only;
+new MVP design uses accepted version 4. For fixture version 2, the rebuilt contract also includes
+exact ordered child
 `product.imageUrls` pairs and the complete group's ordered one-front-per-selector pivot list.
 Fixture version 1 deliberately retains its historical group-only requests and ignores child image
 fields during semantic recovery.
@@ -222,9 +227,9 @@ only in the ignored mode-0600 manifest and are redacted from console reports.
 YP0.15 live buyer verification established that EPS provenance fixes child-selector image binding,
 but retaining group-level `imageUrls` renders two additional unbound leading images: positions 3–4
 bind correctly to Alpha and positions 5–6 bind correctly to Beta, while positions 1–2 are duplicate
-front pivots with no selector association. This is a buyer-view failure. The smallest next experiment
-preserves each child's ordered EPS `[front, back]` pair and omits group-level `imageUrls`; it does not
-change selector order, offers, prices, condition, or Media provenance.
+front pivots with no selector association. This is a buyer-view failure. Fixture version 4 then
+preserved each child's ordered EPS `[front, back]` pair and omitted group-level `imageUrls` without
+changing selector order, offers, prices, condition, or Media provenance.
 
 YP0.17 introduced fixture arrangement v4 for that child-only placement without changing v1–v3
 semantics. Fresh run `20260811T155913Z-8eba39` passed preflight, but its first authorized Media create
@@ -242,8 +247,12 @@ view rendered exactly four images: Alpha front/back at positions 1–2 and Beta 
 3–4, with no group-pivot images; selector order, prices, title, description, and condition also passed.
 The API may return group `variantSKUs` in a different order, so v4 reconciliation compares exact set
 membership while the declared selector order remains owned by `variesBy.specifications[].values`.
-The published-view attestation is recorded. Quantity-zero, restoration, withdrawal, and cleanup remain
-unexecuted and require their separately authorized roadmap steps.
+The published-view attestation is recorded. Later separately authorized steps set C01 inventory
+and offer quantity to zero, proved Alpha absent from the selector while Beta remained purchasable,
+then withdrew and fully cleaned the run directly from zero without restoration. Exact reads proved
+the listing, both offers, group, and children absent. Historical publication identities remain in
+the manifest as ownership evidence; `cleanup-complete` and final-absence evidence represent the
+current state.
 
 Cleanup-plan mode strictly normalizes
 exact group children, child/group associations, offers, statuses, marketplace/SKU ownership, and
@@ -326,8 +335,10 @@ Strict fixture, manifest, attestation, and mutation-result schemas at the harnes
   marketplace, location, and business-policy IDs;
 - exactly two valid HTTPS image sources per child with distinct source fingerprints and explicit
   `front`, then `back`, roles;
-- for fixture version 2, distinct source URLs across the whole group, exact child
-  `product.imageUrls: [front, back]`, and exactly one group front/pivot per selector value;
+- for fixture versions 2–3, distinct source URLs across the whole group, exact child
+  `product.imageUrls: [front, back]`, and the historical group front/pivot arrangement;
+- for accepted fixture version 4, exact child seller EPS
+  `product.imageUrls: [front, back]` and no group-level `imageUrls`;
 - one group title/description, allowed shared aspects, and the exact publish request fields
   `inventoryItemGroupKey` plus `marketplaceId: EBAY_US`;
 - one compatible shared condition and identical condition/descriptor fields on every child; and
@@ -350,9 +361,9 @@ fixture. Never use saleable production inventory.
 | Decision | First attempt | Declared bounded fallback | Product pass evidence |
 | --- | --- | --- | --- |
 | Selector label | useful custom `Card` | useful custom `Card Selection` | accepted/read back exactly and clearly labels card choice |
-| Child product title/description | omit; group owns buyer content | repeat group title/description exactly | API read-back plus correct buyer title/description |
+| Child product title/description | omit; group owns buyer content | none for MVP | API read-back plus correct buyer title/description |
 | Offer description | omit `listingDescription` | none | group description remains buyer-facing |
-| Images | historical v1 group-only front/back sequence failed buyer verification | v2 group primary fronts plus child front/back pairs; fresh run only | selected child shows only its pair, front then back |
+| Images | seller EPS child `[front, back]` pairs; omit group `imageUrls` | none for MVP | each selector binds only its ordered child pair; no unbound group pivots |
 | Price | distinct offer price per child | none | every selection shows its mapped price |
 | Condition | identical ungraded tier on every child | none | compatible read-back and one shared buyer condition |
 
@@ -393,7 +404,7 @@ the other declared useful label only through a fresh run.
 Group `title` and `description` are always complete and buyer-facing; child offers always omit
 `listingDescription`. Official Inventory API pages are not perfectly uniform about child product
 fields: field-level guidance permits omission to avoid overriding group content, while the group
-guide requires child values to match when supplied. Therefore:
+guide requires child values to match when supplied. Phase 0 tested these historical branches:
 
 1. First omit child `product.title` and `product.description`.
 2. If pre-publication validation rejects omission or unpublished read-back is incomplete, retry
@@ -401,35 +412,27 @@ guide requires child values to match when supplied. Therefore:
 3. If omission publishes but buyer content is incomplete or wrong, withdraw, fully clean, verify
    absence, and attempt the repeated-fields fallback only in a fresh run.
 
-Any child-specific title/description, offer description override, or differing repeated value is
-invalid. Record which total payload was accepted and which fields the API returns after publish.
+Omission passed and is the MVP contract. Repetition remains historical fallback design evidence,
+not a production alternative. Any child-specific title/description, offer description override,
+or differing repeated value is invalid.
 
 ### Resolved image arrangement
 
-Run `20260804T173924Z-967292`, listing `110590142987`, published fixture version 1: group
-`imageUrls` flattened C01 front/back then C02 front/back, while child inventory items omitted
-`product.imageUrls`. Buyer verification found four non-renderable placeholders and selector
-changes did not update the image pair. That arrangement is closed for new runs.
+Historical v1 group-only external URLs failed to render. V2 child pairs plus group front pivots
+also failed with external provenance. EPS ingestion then proved that provenance was required, but
+the v3 group pivots rendered as two unbound duplicate leading images. Those arrangements remain
+historical evidence and are closed as production designs.
 
-Fixture version 2 keeps `aspectsImageVariesBy` as the single selector aspect array and submits:
+The accepted v4 MVP arrangement keeps `aspectsImageVariesBy` on the single selector, puts each
+child's seller EPS URLs in exact `product.imageUrls: [front, back]` order, and omits group-level
+`imageUrls`. Buyer verification rendered exactly Alpha front/back followed by Beta front/back and
+bound each selector to only its own pair. Application-declared selector values own order; a group
+GET must contain the exact child SKU membership but may return `variantSKUs` in another order.
 
-1. each child's `product.imageUrls` as its exact ordered `[front, back]` pair; and
-2. complete group `imageUrls` as exactly one front/pivot per selector value, in the same order as
-   `selector.values`, `variantSKUs`, and `variesBy.specifications[0].values`.
-
-No SKU sorting, adjacency inference, second pivot aspect, URL rewrite, proxy, or fallback placeholder
-may alter that mapping. The failed live listing must first be withdrawn, fully cleaned, and proven
-absent through its unchanged version-1 manifest under separate authorization. Only then may a fresh
-version-2 preflight/run use new run, group, child, manifest, and collision identities. Never revise
-listing `110590142987` in place to the version-2 payload.
-
-Each group/child GET must preserve the expected URL identity and order. Buyer verification is an
-explicit manual operator gate: in a browser, select each value independently and capture the
-active gallery position plus visible image fingerprints and screenshots. Pass only if selection
-N activates N's front image, its next relevant image is N's back, front is before back, and
-neither image belongs to another child. The operator records a pass/fail attestation in the
-manifest. A gallery that contains every URL but does not pair selection correctly fails. No
-third arrangement is attempted in this run.
+No SKU sorting, remote-array ordering, adjacency inference, second pivot aspect, URL rewrite, or
+fallback placeholder may alter the mapping. Each child GET must preserve its exact EPS URL identity
+and `[front, back]` order. Any later arrangement change requires a new evidence gate; the failed
+group-pivot arrangement is not an MVP fallback.
 
 ### Price and shared condition experiments
 
@@ -444,22 +447,19 @@ mixed-condition fallback.
 
 ### Quantity-zero experiment
 
-Run only after the group has published successfully with every child positive. Use
+The completed experiment ran only after the group published successfully with every child
+positive. It used
 `bulkUpdatePriceQuantity` for exactly one SKU and offer: set both
 `shipToLocationAvailability.quantity` and that offer's `availableQuantity` to `0`, leaving price
-and all other children unchanged. The future harness must add a strict typed request/response
-schema and require a success status for both SKU and offer before execution.
+and all other children unchanged. The guarded harness requires a strict typed request/response
+schema and a success status for both SKU and offer.
 
-Poll bounded API GETs, then buyer view. Pass only if item/offer read-back reports zero, group
-membership remains complete, the listing stays active, and the target selector is disabled or
-clearly out of stock while other children remain purchasable. Record account out-of-stock-control
-state because behavior may depend on it. If the update is rejected, status is ambiguous, the
-selector disappears, or another child's availability changes, stop and preserve IDs.
-
-When the experiment passes and cleanup can proceed immediately, continue to withdrawal without
-restoring. If buyer verification must remain available briefly, restore both inventory and offer
-quantities to their exact manifest values with the same operation, verify read-back, then withdraw.
-Never publish initially with a zero child.
+Exact item/offer reads reported zero and complete group membership remained. In the Sandbox buyer
+view, the target selector disappeared while the remaining child stayed purchasable. Disappearance
+is therefore the accepted MVP unavailable behavior; the pilot does not prove that every account or
+production listing will display a disabled/out-of-stock value instead. Cleanup then proceeded to
+withdrawal and exact deletion without restoring the target. Never publish initially with a zero
+child, and never require restoration merely to enter cleanup.
 
 ## API sequence, checkpoints, and rollback
 
@@ -481,12 +481,12 @@ exactly `Content-Language: en-US`; an optional client default is insufficient.
 | 1 | GET exact group key; GET each SKU and offers by SKU | absence results and timestamps | any existing object is collision, never adopted | stop, generate a new run only by new dry-run |
 | 2 | PUT complete child inventory item C01..C03, one at a time | SKU, request digest, HTTP/eBay status, confirmed item GET snapshot | GET SKU; exact matching owned snapshot means complete, mismatch means stop | delete only created child items after proving no offers/group reference them |
 | 3 | POST one compatible offer per child | SKU-to-offer ID, request digest, status, offer GET snapshot | GET offers by SKU; adopt only the one exact offer recorded by this run after an ambiguous response; duplicates stop | delete created offers, then child items |
-| 4 | PUT complete inventory item group | group key, full ordered `variantSKUs`, payload variant/digest, status | GET group; exact complete snapshot means complete, mismatch means stop | delete group, offers, then children |
+| 4 | PUT complete inventory item group | group key, application-ordered `variantSKUs`, payload variant/digest, status | GET group; exact child membership and other group semantics mean complete; response-order difference alone is accepted | delete group, offers, then children |
 | 5 | GET all children, offers, and group | sanitized snapshots/digests and comparison result | repeat until bounded consistency deadline; never mutate on mismatch | clean unpublished resources in dependency order |
 | 6 | POST `publish_by_inventory_item_group` with group key and `EBAY_US` | listing ID, buyer URL, warnings/errors, publish response digest | GET group/offers first; an existing common listing ID means published; otherwise retry only when reads prove unpublished | if published, withdraw group; then clean. If ambiguous, preserve IDs and stop |
 | 7 | GET children/offers/group and manually verify buyer selector/content/images/prices/condition | API snapshots, published arrangement ID, and evidence checklist | read-only repeat allowed within bounded window | product mismatch: stop, withdraw, fully clean, verify absence; declared fallback requires a fresh run |
 | 8 | POST one-SKU `bulk_update_price_quantity` to zero inventory and offer availability | target SKU/offer, before/after quantities, per-entry statuses | GET item/offer before retry; zero means complete, original means retry once only for a proven no-op | unexpected or ambiguous state: preserve IDs; withdraw before cleanup if possible |
-| 9 | Optionally restore exact original quantities with the same operation | restoration statuses and GET snapshots | restore only when current value is zero and manifest owns SKU/offer | withdrawal still required; preserve before/after evidence |
+| 9 | Optionally restore only to extend buyer inspection, never as a cleanup prerequisite | restoration statuses and GET snapshots | restore only when current value is zero and manifest owns SKU/offer | withdrawal may proceed directly from zero; preserve before/after evidence |
 | 10 | POST `withdraw_by_inventory_item_group` | group key, marketplace, status, ended timestamp | GET offers; all unpublished/ended means complete | retry only after exact read-back proves still active; otherwise preserve IDs for manual cleanup |
 | 11 | DELETE each offer by recorded ID | per-offer status and absence GET | missing is complete; active means return to withdrawal | stop child deletion for affected SKU; preserve IDs |
 | 12 | DELETE group by exact key | status and absence GET | missing is complete; non-empty/active reference blocks retry | preserve group/SKUs; do not delete children |
@@ -536,23 +536,20 @@ sensitive payloads, buyer data, or signed image query parameters.
 
 ## Success outputs and next design inputs
 
-The execution report must return one explicit value for each decision; `unknown` blocks later
-persistence/orchestration design:
+The completed execution reports supplied the Phase 0 decisions promoted into
+[`architecture.md`](architecture.md): accepted selector/order evidence, group-owned content with
+child title/description omission, mandatory offer-description omission, child-only seller EPS
+`[front, back]` placement, quantity-zero selector removal, cleanup directly from zero, canonical
+Sandbox identity/header evidence, and exact final absence. Historical arrangement, publication,
+listing, offer, and cleanup identities remain provenance rather than current-resource claims.
 
-- accepted selector name, exact value convention, ordering, and product-acceptability verdict;
-- child product title/description omit-or-repeat rule and mandatory offer-description omission;
-- group/child image placement plus exact front/back ordering rule;
-- quantity-zero request contract and observed selector behavior;
-- canonical sandbox `UserID`, identity stability verdict, and exact content-language verdict;
-- published arrangement ID and any separately cleaned predecessor/fallback run relationship;
-- effective **initial operational cap of 2-3 only** for the next implementation stage, without
-  claiming a production maximum;
-- cleanup reliability, retries/manual intervention required, and verified final absence; and
-- category, seller-account, policy, revision, out-of-stock-control, or API limitations.
+The initial operational cap remains **2-3 only**. Larger scale, production behavior, post-sale and
+order reconciliation, category/account variability, revision behavior, out-of-stock settings, and
+universal platform limits remain explicit later evidence gates.
 
-Only a fully passing, fully cleaned, separately authorized sandbox run unblocks detailed You Pick
-persistence and orchestration design. It does not authorize a larger group, production write, or
-any change to existing Single/Lot workflows.
+The fully passing, fully cleaned, separately authorized Sandbox run completed this Phase 0 gate and
+unblocked YP1 architecture work. It does not authorize a larger group, production write, or any
+change to existing Single/Lot workflows.
 
 ## Official references
 
