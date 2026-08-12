@@ -348,7 +348,7 @@ describe('EbayOAuthClient', () => {
     const writeFileSyncMock = vi.mocked(fs.writeFileSync);
 
     /**
-     * Locate the most recent fs.writeFileSync call targeting `.env.local`
+     * Locate the most recent fs.writeFileSync call targeting `.env`
      * and return its parsed content. Used to verify token persistence.
      */
     const getLastEnvWrite = (): {
@@ -358,12 +358,12 @@ describe('EbayOAuthClient', () => {
     } => {
       const envWrite = [...writeFileSyncMock.mock.calls]
         .reverse()
-        .find(([filePath]) => String(filePath).endsWith(`${path.sep}.env.local`));
+        .find(([filePath]) => String(filePath).endsWith(`${path.sep}.env`));
 
       expect(envWrite).toBeDefined();
 
       const [filePath, content] = envWrite!;
-      expect(String(filePath)).toMatch(/[\\/]\.env\.local$/);
+      expect(String(filePath)).toMatch(/[\\/]\.env$/);
       expect(typeof content).toBe('string');
 
       const envContent = content as string;
@@ -376,7 +376,7 @@ describe('EbayOAuthClient', () => {
 
     beforeEach(() => {
       tempDir = mkdtempSync(path.join(tmpdir(), 'ebay-oauth-persistence-'));
-      envPath = path.join(tempDir, '.env.local');
+      envPath = path.join(tempDir, '.env');
       oauthClient = new EbayOAuthClient(config, new DotEnvCredentialStore(() => envPath));
       writeFileSyncMock.mockClear();
     });
@@ -389,7 +389,7 @@ describe('EbayOAuthClient', () => {
       delete process.env.EBAY_USER_ACCESS_TOKEN;
     });
 
-    it('exchangeCodeForToken persists both access and refresh tokens to .env.local (issue #113)', async () => {
+    it('exchangeCodeForToken persists both access and refresh tokens to .env (issue #113)', async () => {
       mockOAuthTokenEndpoint('sandbox', {
         access_token: 'AT1',
         token_type: 'Bearer',
@@ -405,7 +405,7 @@ describe('EbayOAuthClient', () => {
       expect(envWrite.content).toContain('EBAY_USER_REFRESH_TOKEN=RT1');
     });
 
-    it('refreshUserToken persists in-memory refresh token to .env.local even when eBay omits refresh_token (issue #114)', async () => {
+    it('refreshUserToken persists in-memory refresh token to .env even when eBay omits refresh_token (issue #114)', async () => {
       process.env.EBAY_USER_REFRESH_TOKEN = 'stale_env_refresh';
       oauthClient.setUserTokens('old_access_token', 'in_memory_refresh');
       writeFileSyncMock.mockClear();

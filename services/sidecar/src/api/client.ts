@@ -1,5 +1,5 @@
 import { DotEnvCredentialStore } from '@/auth/credential-session.js';
-import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
+import { ROOT_ENV_PATH } from '@/config/env-paths.js';
 import { EbayOAuthClient } from '@/auth/oauth.js';
 import { getBaseUrl } from '@/config/environment.js';
 import type { EbayApiError, EbayConfig } from '@/types/ebay.js';
@@ -97,7 +97,7 @@ export class EbayApiClient {
     this.config = config;
     this.authClient = new EbayOAuthClient(
       config,
-      new DotEnvCredentialStore(() => ROOT_ENV_LOCAL_PATH)
+      new DotEnvCredentialStore(() => ROOT_ENV_PATH)
     );
     this.baseUrl = getBaseUrl(config.environment);
     this.rateLimitTracker = new RateLimitTracker();

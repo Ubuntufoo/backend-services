@@ -36,7 +36,7 @@ export const tokenManagementTools: ToolDefinition[] = [
       '- Authorization codes expire in ~5 minutes - get fresh code if "invalid grant" error\n' +
       '- "Insufficient permissions" errors mean you need to re-authorize with additional scopes\n' +
       '- OAuth URL format: Use + to separate scopes (e.g., scope=scope1+scope2), not %2B\n' +
-      '- Refresh tokens last 18 months and are saved to backend-services/.env.local for persistence',
+      '- Refresh tokens last 18 months and are saved to backend-services/.env for persistence',
     inputSchema: {
       redirectUri: z
         .string()
@@ -140,7 +140,7 @@ export const tokenManagementTools: ToolDefinition[] = [
   {
     name: 'ebay_refresh_access_token',
     description:
-      'Manually refresh the user access token using the stored refresh token. This is useful when you want to proactively refresh an access token before it expires, or when recovering from authentication errors. Requires that user tokens are already set (either via EBAY_USER_REFRESH_TOKEN in backend-services/.env.local or via ebay_set_user_tokens_with_expiry). Returns the new access token and expiry time.',
+      'Manually refresh the user access token using the stored refresh token. This is useful when you want to proactively refresh an access token before it expires, or when recovering from authentication errors. Requires that user tokens are already set (either via EBAY_USER_REFRESH_TOKEN in backend-services/.env or via ebay_set_user_tokens_with_expiry). Returns the new access token and expiry time.',
     inputSchema: {},
     outputSchema: {
       type: 'object',
@@ -156,7 +156,7 @@ export const tokenManagementTools: ToolDefinition[] = [
       '- Authorization codes expire in ~5 minutes - if you get "invalid grant" error, get a fresh code\n' +
       '- Codes can be URL-encoded (e.g., v%5E1.1%23...) - this tool automatically decodes them\n' +
       '- Extract the code parameter from the redirect URL (your RuName Accept URL): https://your-redirect-uri?code=YOUR_CODE&expires_in=299\n' +
-      '- Tokens are saved to backend-services/.env.local and will auto-refresh every 2 hours\n' +
+      '- Tokens are saved to backend-services/.env and will auto-refresh every 2 hours\n' +
       '- Refresh tokens last 18 months before requiring re-authorization\n\n' +
       'COMMON ERRORS:\n' +
       '- "invalid or was issued to another client": Code expired, get fresh code\n' +

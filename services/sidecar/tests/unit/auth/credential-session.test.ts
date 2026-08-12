@@ -14,6 +14,7 @@ import {
   isTokenExpired,
   maskToken,
 } from '@/auth/credential-session.js';
+import { ROOT_ENV_PATH } from '@/config/env-paths.js';
 
 describe('credential session', () => {
   let tempDir: string | undefined;
@@ -30,9 +31,18 @@ describe('credential session', () => {
     expect(maskToken('abcdef1234567890')).toBe('abcdef...567890');
   });
 
-  it('persists env updates through an adapter', () => {
+  it('targets the canonical repo-root env by default', () => {
+    const store = new DotEnvCredentialStore();
+    const getEnvPath = Reflect.get(store, 'getEnvPath') as () => string;
+
+    expect(getEnvPath()).toBe(ROOT_ENV_PATH);
+    expect(getEnvPath()).not.toMatch(/\.env\.local$/);
+  });
+
+  it('merges token updates into the canonical env without creating env.local', () => {
     tempDir = mkdtempSync(path.join(tmpdir(), 'ebay-credential-store-'));
     const envPath = path.join(tempDir, '.env');
+    const envLocalPath = path.join(tempDir, '.env.local');
     writeFileSync(envPath, 'EBAY_CLIENT_ID=client\n', 'utf-8');
 
     const store = new DotEnvCredentialStore(() => envPath);
@@ -44,6 +54,7 @@ describe('credential session', () => {
       EBAY_USER_ACCESS_TOKEN: 'access',
       EBAY_USER_REFRESH_TOKEN: 'refresh',
     });
+    expect(() => readFileSync(envLocalPath, 'utf-8')).toThrow();
   });
 
   it('centralizes default token expiry calculations', () => {
