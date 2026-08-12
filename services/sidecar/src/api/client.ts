@@ -306,6 +306,80 @@ export class EbayApiClient {
   }
 
   /**
+   * Make an explicit read-only GET request with an Application access token.
+   * This bypasses the User-token-preferred interceptor used by seller APIs.
+   */
+  async getWithApplicationToken<T = unknown>(
+    endpoint: string,
+    params?: Record<string, unknown>,
+    config?: AxiosRequestConfig
+  ): Promise<T> {
+    this.validateAccessToken();
+
+    const request = async (forceRefresh: boolean): Promise<T> => {
+      if (!this.rateLimitTracker.canMakeRequest()) {
+        const stats = this.rateLimitTracker.getStats();
+        throw new Error(
+          `Rate limit exceeded: ${stats.current}/${stats.max} requests in ${stats.windowMs}ms window. Please wait before making more requests.`
+        );
+      }
+
+      const token = forceRefresh
+        ? await this.authClient.getOrRefreshAppAccessToken(true)
+        : await this.authClient.getOrRefreshAppAccessToken();
+      this.rateLimitTracker.recordRequest();
+
+      try {
+        const response = await axios.get<T>(endpoint, {
+          baseURL: this.baseUrl,
+          timeout: 30000,
+          ...config,
+          params,
+          headers: {
+            ...this.getDefaultHeaders(),
+            ...config?.headers,
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        return response.data;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 401 && !forceRefresh) {
+          apiLogger.warn(
+            'Authentication error (401) on Application-token GET. Reminting Application token...'
+          );
+          return await request(true);
+        }
+
+        if (axios.isAxiosError(error) && error.response?.status === 429) {
+          const retryAfter = error.response.headers['retry-after'] as string | undefined;
+          const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : 60000;
+          throw new Error(
+            `eBay API rate limit exceeded. Retry after ${waitTime / 1000} seconds. ` +
+              'Consider reducing request frequency or upgrading to user tokens for higher limits.'
+          );
+        }
+
+        if (axios.isAxiosError(error) && error.response?.data) {
+          const ebayError = error.response.data as EbayApiError;
+          const errorMessage =
+            ebayError.errors?.[0]?.longMessage ??
+            ebayError.errors?.[0]?.message ??
+            error.message;
+          throw new EbayApiRequestError(
+            `eBay API Error: ${errorMessage}`,
+            ebayError.errors ?? [],
+            error.response.status
+          );
+        }
+
+        throw error;
+      }
+    };
+
+    return await request(false);
+  }
+
+  /**
    * Make a POST request to eBay API
    */
   async post<T = unknown>(

@@ -185,7 +185,12 @@ export class EbayOAuthClient {
    * This method ensures that a valid app access token is always available.
    * Rate limit: 1,000 requests/day
    */
-  async getOrRefreshAppAccessToken(): Promise<string> {
+  async getOrRefreshAppAccessToken(forceRefresh = false): Promise<string> {
+    if (forceRefresh) {
+      this.appAccessToken = null;
+      this.appAccessTokenExpiry = 0;
+    }
+
     // Return cached token if still valid
     if (this.appAccessToken && !isTokenExpired(this.appAccessTokenExpiry)) {
       return this.appAccessToken;
