@@ -193,6 +193,43 @@ describe('BrowseApi', () => {
     expect(client.getWithApplicationToken).not.toHaveBeenCalled();
   });
 
+  it.each([
+    '/buy/browse/v1/item_summary/search',
+    '/buy/browse/v1/item_summary/search?offset=-1',
+    '/buy/browse/v1/item_summary/search?offset=not-a-number',
+    '/buy/browse/v1/item_summary/search?offset=9007199254740992',
+  ])('rejects unsafe continuation offset %s before authentication', async (next) => {
+    const { api, client } = createApi({ itemSummaries: [] });
+
+    await expect(api.search({ ...input, offset: undefined, next })).rejects.toThrow(
+      BrowseMalformedResponseError
+    );
+    expect(client.getWithApplicationToken).not.toHaveBeenCalled();
+  });
+
+  it('preserves safe continuation when diagnostic total is zero', async () => {
+    const { api } = createApi({
+      itemSummaries: [],
+      total: 0,
+      next: '/buy/browse/v1/item_summary/search?offset=100',
+    });
+
+    await expect(api.search(input)).resolves.toEqual({
+      items: [],
+      total: 0,
+      next: '/buy/browse/v1/item_summary/search?offset=100',
+    });
+  });
+
+  it('propagates client failures unchanged', async () => {
+    const failure = new Error('sanitized API failure');
+    const client = {
+      getWithApplicationToken: vi.fn().mockRejectedValue(failure),
+    } as unknown as EbayApiClient;
+
+    await expect(new BrowseApi(client).search(input)).rejects.toBe(failure);
+  });
+
   it('rejects malformed item, pagination, and structureless payloads predictably', async () => {
     const malformedItem = createApi({
       itemSummaries: [
@@ -207,11 +244,38 @@ describe('BrowseApi', () => {
     await expect(structurelessPage.api.search(input)).rejects.toThrow(BrowseMalformedResponseError);
   });
 
+  it.each([
+    { itemSummaries: [], total: -1 },
+    {
+      itemSummaries: [
+        {
+          legacyItemId: '555',
+          title: 'Invalid price',
+          price: { value: 'not-a-price', currency: 'USD' },
+          itemWebUrl: 'https://www.ebay.com/itm/555',
+        },
+      ],
+    },
+  ])('rejects invalid total and price shapes', async (response) => {
+    await expect(createApi(response).api.search(input)).rejects.toThrow(
+      BrowseMalformedResponseError
+    );
+  });
+
   it('rejects limits above eBay Browse maximum', async () => {
     const { api, client } = createApi({ itemSummaries: [] });
 
     await expect(api.search({ ...input, limit: 201 })).rejects.toThrow(
       'limit must be an integer from 1 through 200'
+    );
+    expect(client.getWithApplicationToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unsafe initial offset before authentication', async () => {
+    const { api, client } = createApi({ itemSummaries: [] });
+
+    await expect(api.search({ ...input, offset: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow(
+      'offset must be a non-negative safe integer when provided'
     );
     expect(client.getWithApplicationToken).not.toHaveBeenCalled();
   });

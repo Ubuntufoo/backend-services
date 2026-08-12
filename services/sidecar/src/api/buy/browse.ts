@@ -255,8 +255,8 @@ function validateInput(input: BrowseSearchPageInput): void {
   if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200) {
     throw new Error('limit must be an integer from 1 through 200');
   }
-  if (input.offset !== undefined && (!Number.isInteger(input.offset) || input.offset < 0)) {
-    throw new Error('offset must be a non-negative integer when provided');
+  if (input.offset !== undefined && (!Number.isSafeInteger(input.offset) || input.offset < 0)) {
+    throw new Error('offset must be a non-negative safe integer when provided');
   }
   if (input.next !== undefined && input.offset !== undefined) {
     throw new Error('next and offset cannot both be provided');

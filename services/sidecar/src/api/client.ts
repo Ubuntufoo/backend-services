@@ -12,6 +12,27 @@ interface AxiosConfigWithRetry extends AxiosRequestConfig {
   retryCount?: number;
 }
 
+function redactEbayErrors(
+  errors: EbayApiError['errors'] | undefined,
+  token: string
+): EbayApiError['errors'] {
+  return (errors ?? []).map((error) => ({
+    ...error,
+    message: error.message.replaceAll(token, '[redacted]'),
+    ...(error.longMessage === undefined
+      ? {}
+      : { longMessage: error.longMessage.replaceAll(token, '[redacted]') }),
+    ...(error.parameters === undefined
+      ? {}
+      : {
+          parameters: error.parameters.map((parameter) => ({
+            ...parameter,
+            value: parameter.value.replaceAll(token, '[redacted]'),
+          })),
+        }),
+  }));
+}
+
 export class EbayApiRequestError extends Error {
   readonly ebayErrors: EbayApiError['errors'];
   readonly statusCode?: number;
@@ -95,10 +116,7 @@ export class EbayApiClient {
 
   constructor(config: EbayConfig) {
     this.config = config;
-    this.authClient = new EbayOAuthClient(
-      config,
-      new DotEnvCredentialStore(() => ROOT_ENV_PATH)
-    );
+    this.authClient = new EbayOAuthClient(config, new DotEnvCredentialStore(() => ROOT_ENV_PATH));
     this.baseUrl = getBaseUrl(config.environment);
     this.rateLimitTracker = new RateLimitTracker();
 
@@ -361,13 +379,14 @@ export class EbayApiClient {
 
         if (axios.isAxiosError(error) && error.response?.data) {
           const ebayError = error.response.data as EbayApiError;
+          const safeErrors = redactEbayErrors(ebayError.errors, token);
           const errorMessage =
-            ebayError.errors?.[0]?.longMessage ??
-            ebayError.errors?.[0]?.message ??
-            error.message;
+            safeErrors[0]?.longMessage ??
+            safeErrors[0]?.message ??
+            error.message.replaceAll(token, '[redacted]');
           throw new EbayApiRequestError(
             `eBay API Error: ${errorMessage}`,
-            ebayError.errors ?? [],
+            safeErrors,
             error.response.status
           );
         }
