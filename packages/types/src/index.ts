@@ -232,6 +232,8 @@ export interface ListingLatestPricingResearchSummary {
   sold_count: number | null;
   status: string;
   suggested_price: number | null;
+  terapeak_max_price: number | null;
+  terapeak_min_price: number | null;
   updated_at: string;
 }
 

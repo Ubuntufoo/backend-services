@@ -578,6 +578,8 @@ describe('data API router', () => {
       sold_count: 3,
       status: 'succeeded',
       suggested_price: 24,
+      terapeak_max_price: null,
+      terapeak_min_price: null,
       updated_at: '2026-06-17T16:00:00.000Z',
     };
 
@@ -719,6 +721,8 @@ describe('data API router', () => {
           sold_count: null,
           status: 'failed',
           suggested_price: null,
+          terapeak_max_price: null,
+          terapeak_min_price: null,
           updated_at: '2026-06-17T16:00:00.000Z',
         },
         pricing_analysis_warnings: [],

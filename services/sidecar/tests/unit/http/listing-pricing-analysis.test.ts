@@ -49,6 +49,57 @@ describe('serializeLatestPricingResearch', () => {
     expect(result?.price_adjustment).toBeNull();
   });
 
+  it.each([
+    { median: 4, expectedMin: 1, expectedMax: 12 },
+    { median: 5, expectedMin: 1, expectedMax: 15 },
+    { median: 12.8, expectedMin: 4, expectedMax: 38 },
+    { median: 1, expectedMin: 1, expectedMax: 3 },
+    { median: 0.25, expectedMin: 1, expectedMax: 1 },
+  ])(
+    'derives the Terapeak price band from a $median SoldComps median',
+    ({ median, expectedMin, expectedMax }) => {
+      const result = serializeLatestPricingResearch(
+        createResearch({
+          median_sold_price: median,
+          provider: 'soldcomps',
+          status: 'succeeded',
+        })
+      );
+
+      expect(result?.terapeak_min_price).toBe(expectedMin);
+      expect(result?.terapeak_max_price).toBe(expectedMax);
+    }
+  );
+
+  it.each([
+    { label: 'failed', overrides: { median_sold_price: 5, provider: 'soldcomps' } },
+    {
+      label: 'non-SoldComps',
+      overrides: { median_sold_price: 5, provider: 'apify', status: 'succeeded' },
+    },
+    {
+      label: 'missing median',
+      overrides: { median_sold_price: null, provider: 'soldcomps', status: 'succeeded' },
+    },
+    {
+      label: 'zero median',
+      overrides: { median_sold_price: 0, provider: 'soldcomps', status: 'succeeded' },
+    },
+    {
+      label: 'non-finite median',
+      overrides: {
+        median_sold_price: Number.POSITIVE_INFINITY,
+        provider: 'soldcomps',
+        status: 'succeeded',
+      },
+    },
+  ])('returns a null Terapeak price band for $label research', ({ overrides }) => {
+    const result = serializeLatestPricingResearch(createResearch(overrides));
+
+    expect(result?.terapeak_min_price).toBeNull();
+    expect(result?.terapeak_max_price).toBeNull();
+  });
+
   it('exposes the persisted adjustment audit for new successful research', () => {
     const result = serializeLatestPricingResearch(
       createResearch({

@@ -477,6 +477,20 @@ export function serializeLatestPricingResearch(
     return null;
   }
 
+  const medianSoldPrice = asNumber(research.median_sold_price);
+  const hasTerapeakPriceBand =
+    research.status === 'succeeded' &&
+    research.provider === 'soldcomps' &&
+    medianSoldPrice !== null &&
+    medianSoldPrice > 0;
+  const terapeakMinPrice = hasTerapeakPriceBand
+    ? Math.max(1, Math.floor(medianSoldPrice / 3))
+    : null;
+  const terapeakMaxPrice =
+    terapeakMinPrice === null || medianSoldPrice === null
+      ? null
+      : Math.max(terapeakMinPrice, Math.floor(medianSoldPrice * 3));
+
   return {
     comp_summary: getLatestPricingResearchCompSummary(research),
     confidence: asString(research.confidence),
@@ -486,7 +500,7 @@ export function serializeLatestPricingResearch(
     failure_summary: buildFailureSummary(research),
     listing_id: research.listing_id,
     llm_price_explanation: asString(research.llm_price_explanation),
-    median_sold_price: asNumber(research.median_sold_price),
+    median_sold_price: medianSoldPrice,
     pricing_model_name: asString(research.pricing_model_name),
     price_adjustment: buildPriceAdjustment(research),
     provider: research.provider,
@@ -495,6 +509,8 @@ export function serializeLatestPricingResearch(
     sold_count: asNumber(research.sold_count),
     status: research.status,
     suggested_price: asNumber(research.suggested_price),
+    terapeak_max_price: terapeakMaxPrice,
+    terapeak_min_price: terapeakMinPrice,
     updated_at: research.updated_at,
   };
 }
