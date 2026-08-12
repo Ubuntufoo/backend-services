@@ -372,6 +372,12 @@ export class EbayApiClient {
           );
         }
 
+        if (axios.isAxiosError(error)) {
+          const code = error.code ? ` [${error.code}]` : '';
+          const message = error.message.replaceAll(token, '[redacted]');
+          throw new Error(`eBay API request failed${code}: ${message}`);
+        }
+
         throw error;
       }
     };

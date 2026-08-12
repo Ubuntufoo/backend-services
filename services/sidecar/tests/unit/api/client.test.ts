@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import nock from 'nock';
+import axios, { AxiosError } from 'axios';
 import { EbayApiClient } from '@/api/client.js';
 import { getEbayConfig } from '@/config/environment.js';
 import type { EbayConfig } from '@/types/ebay.js';
@@ -227,6 +228,58 @@ describe('EbayApiClient Unit Tests', () => {
 
       expect(String(error)).not.toContain('secret_app_token');
       expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    });
+
+    it('sanitizes timeout failures without retaining Axios request metadata', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken.mockResolvedValue('timeout_secret_app_token');
+      nock('https://api.sandbox.ebay.com')
+        .get('/buy/browse/v1/test')
+        .delayConnection(50)
+        .reply(200, { itemSummaries: [] });
+
+      const error = await apiClient
+        .getWithApplicationToken('/buy/browse/v1/test', undefined, { timeout: 5 })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('ECONNABORTED');
+      expect(String(error)).not.toContain('timeout_secret_app_token');
+      expect(error).not.toMatchObject({
+        config: expect.anything(),
+        request: expect.anything(),
+        headers: expect.anything(),
+        cause: expect.anything(),
+      });
+      expect(JSON.stringify(error)).not.toContain('timeout_secret_app_token');
+    });
+
+    it('sanitizes generic network failures without retaining Axios request metadata', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken.mockResolvedValue('network_secret_app_token');
+      const axiosGet = vi.spyOn(axios, 'get').mockRejectedValueOnce(
+        new AxiosError(
+          'socket hang up',
+          'ECONNRESET',
+          { headers: { Authorization: 'Bearer network_secret_app_token' } } as never,
+          { authorization: 'Bearer network_secret_app_token' }
+        )
+      );
+
+      const error = await apiClient
+        .getWithApplicationToken('/buy/browse/v1/test')
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('ECONNRESET');
+      expect(String(error)).toContain('socket hang up');
+      expect(String(error)).not.toContain('network_secret_app_token');
+      expect(error).not.toMatchObject({
+        config: expect.anything(),
+        request: expect.anything(),
+        headers: expect.anything(),
+        cause: expect.anything(),
+      });
+      expect(JSON.stringify(error)).not.toContain('network_secret_app_token');
+      axiosGet.mockRestore();
     });
 
     it('keeps the default seller GET on the User-token-preferred path after a 401', async () => {
