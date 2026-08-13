@@ -39,14 +39,13 @@ import {
   PublishListingValidationError,
   validatePublishListingReadiness,
 } from '@/ebay/publish-validation.js';
-import {
-  assertListingImageUrlsReadyForEbay,
-} from '@/ebay/image-url-readiness.js';
+import { assertListingImageUrlsReadyForEbay } from '@/ebay/image-url-readiness.js';
 import {
   getPublishConfigCandidate,
   resolvePublishConfig,
   type ResolvedPublishConfig,
 } from '@/ebay/publish-config.js';
+import { selectFulfillmentPolicyForListing } from '@/ebay/fulfillment-policy.js';
 import {
   getCategoryTreeIdFromTaxonomyResponse,
   getRequiredAspectNames,
@@ -58,10 +57,17 @@ import {
 
 type PublishInventoryApi = Pick<
   InventoryApi,
-  'createOrReplaceInventoryItem' | 'createOffer' | 'getInventoryLocation' | 'getOffers' | 'publishOffer'
+  | 'createOrReplaceInventoryItem'
+  | 'createOffer'
+  | 'getInventoryLocation'
+  | 'getOffers'
+  | 'publishOffer'
 >;
 type PublishMetadataApi = Pick<MetadataApi, 'getItemConditionPolicies'>;
-type PublishTaxonomyApi = Pick<TaxonomyApi, 'getDefaultCategoryTreeId' | 'getItemAspectsForCategory'>;
+type PublishTaxonomyApi = Pick<
+  TaxonomyApi,
+  'getDefaultCategoryTreeId' | 'getItemAspectsForCategory'
+>;
 
 type MetadataItemConditionDescriptor = MetadataComponents['schemas']['ItemConditionDescriptor'];
 type OfferLookupResponse = Awaited<ReturnType<PublishInventoryApi['getOffers']>>;
@@ -230,7 +236,10 @@ function buildTradingCardMismatchIssue(
   ].join(' ');
 }
 
-function buildTradingCardValidationError(listing: ListingRow, message: string): PublishListingValidationError {
+function buildTradingCardValidationError(
+  listing: ListingRow,
+  message: string
+): PublishListingValidationError {
   return new PublishListingValidationError(listing.listing_id, [message]);
 }
 
@@ -307,7 +316,10 @@ async function resolveTradingCardConditionDescriptors(
   );
 
   if (!descriptorValue?.conditionDescriptorValueId) {
-    throw buildTradingCardValidationError(listing, buildTradingCardMismatchIssue(listing, savedToken, descriptor));
+    throw buildTradingCardValidationError(
+      listing,
+      buildTradingCardMismatchIssue(listing, savedToken, descriptor)
+    );
   }
 
   return [
@@ -418,10 +430,11 @@ function buildTraceBackedListingRepairUpdate(
 }
 
 function getEbayErrorText(error: EbayApiError['errors'][number]): string {
-  return [error.message, error.longMessage, ...(error.parameters ?? []).flatMap((parameter) => [
-    parameter.name,
-    parameter.value,
-  ])]
+  return [
+    error.message,
+    error.longMessage,
+    ...(error.parameters ?? []).flatMap((parameter) => [parameter.name, parameter.value]),
+  ]
     .filter((value) => typeof value === 'string' && value.trim().length > 0)
     .join(' ')
     .toLowerCase();
@@ -450,7 +463,9 @@ function getDuplicateOfferIdFromError(error: unknown): string | undefined {
       entry.errorId === 25002 && getEbayErrorText(entry).includes('offer entity already exists')
   );
 
-  return duplicateOfferError ? getEbayErrorParameterValue(duplicateOfferError, 'offerId') : undefined;
+  return duplicateOfferError
+    ? getEbayErrorParameterValue(duplicateOfferError, 'offerId')
+    : undefined;
 }
 
 function getOfferIdFromLookupEntry(offer: OfferLookupEntry): string | undefined {
@@ -497,14 +512,10 @@ async function loadPublishListing(
   const listing = await dataAccess.listings.getByListingId(listingId);
 
   if (!listing) {
-    throw new PublishListingError(
-      'LISTING_NOT_FOUND',
-      `Listing "${listingId}" was not found.`,
-      {
-        listingId,
-        stage: 'load',
-      }
-    );
+    throw new PublishListingError('LISTING_NOT_FOUND', `Listing "${listingId}" was not found.`, {
+      listingId,
+      stage: 'load',
+    });
   }
 
   return listing;
@@ -555,7 +566,9 @@ async function verifyResolvedMerchantLocation(
   publishConfig: ResolvedPublishConfig
 ): Promise<void> {
   try {
-    const location = (await inventoryApi.getInventoryLocation(publishConfig.merchantLocationKey)) as {
+    const location = (await inventoryApi.getInventoryLocation(
+      publishConfig.merchantLocationKey
+    )) as {
       merchantLocationStatus?: string | null;
     };
     const status = getTrimmedString(location.merchantLocationStatus)?.toUpperCase();
@@ -594,6 +607,9 @@ export async function publishListing(
     environment: resolvedDependencies.runtimeConfig.environment,
     runtimeMarketplaceId,
   });
+  const selectedPublishConfig = publishConfigResult.config
+    ? selectFulfillmentPolicyForListing(listing, publishConfigResult.config)
+    : null;
 
   if (hasPublishedListingTrace(listing)) {
     if (!publishConfigResult.config) {
@@ -602,16 +618,20 @@ export async function publishListing(
 
     const ebayListingId = getTrimmedString(listing.ebay_listing_id)!;
     const offerId = getTrimmedString(listing.ebay_offer_id) ?? null;
-    const exportedAt = getTrimmedString(listing.exported_at) ?? resolvedDependencies.now().toISOString();
+    const exportedAt =
+      getTrimmedString(listing.exported_at) ?? resolvedDependencies.now().toISOString();
     const sku = buildPublishSku(listing);
 
     // TODO: add explicit environment tagging before treating stored publish trace as cross-env safe.
-    publishLogger.info('Listing already has published trace; repairing exported state and skipping eBay write path.', {
-      ebayListingId,
-      listingId,
-      offerId,
-      sku,
-    });
+    publishLogger.info(
+      'Listing already has published trace; repairing exported state and skipping eBay write path.',
+      {
+        ebayListingId,
+        listingId,
+        offerId,
+        sku,
+      }
+    );
 
     try {
       await resolvedDependencies.dataAccess.listings.update(
@@ -647,7 +667,7 @@ export async function publishListing(
 
   assertPublishReady({
     listing,
-    publishConfig: publishConfigCandidate,
+    publishConfig: selectedPublishConfig ?? publishConfigCandidate,
     quantity: 1,
   });
 
@@ -660,7 +680,7 @@ export async function publishListing(
     throw new PublishListingValidationError(listing.listing_id, publishConfigResult.issues);
   }
 
-  const publishConfig = publishConfigResult.config;
+  const publishConfig = selectedPublishConfig!;
 
   await assertListingImageUrlsReadyForEbay(listing, {
     allowedPublicBaseUrl: resolvedDependencies.imagePublicBaseUrl,
@@ -690,9 +710,7 @@ export async function publishListing(
     listing,
     outboundItemSpecifics: outboundItemSpecifics ?? undefined,
     requiredAspectNames: getRequiredAspectNames(taxonomyAspects),
-    satisfiedAspectNames: conditionDescriptorsPresent
-      ? [TRADING_CARD_CONDITION_ASPECT_KEY]
-      : [],
+    satisfiedAspectNames: conditionDescriptorsPresent ? [TRADING_CARD_CONDITION_ASPECT_KEY] : [],
   });
   const inventoryItemPayload = mapListingToInventoryItemPayload(listing, appSettings, {
     conditionDescriptors,
@@ -786,7 +804,9 @@ export async function publishListing(
         }
       }
 
-      const recoveredOfferId = recoveredOffer ? getOfferIdFromLookupEntry(recoveredOffer) : undefined;
+      const recoveredOfferId = recoveredOffer
+        ? getOfferIdFromLookupEntry(recoveredOffer)
+        : undefined;
       offerId = offerId ?? recoveredOfferId ?? null;
 
       if (!offerId) {
@@ -826,10 +846,14 @@ export async function publishListing(
   }
 
   if (!offerId) {
-    throw new PublishListingError('OFFER_CREATE_FAILED', `Failed to resolve an offer for listing "${listingId}".`, {
-      listingId,
-      stage: 'offer',
-    });
+    throw new PublishListingError(
+      'OFFER_CREATE_FAILED',
+      `Failed to resolve an offer for listing "${listingId}".`,
+      {
+        listingId,
+        stage: 'offer',
+      }
+    );
   }
 
   if (recoveredOffer && isPublishedOffer(recoveredOffer)) {

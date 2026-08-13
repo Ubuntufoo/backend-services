@@ -27,6 +27,7 @@
     "ebay:opt-in-selling-policies": "tsx src/scripts/opt-in-selling-policies.ts",
     "ebay:reconcile-published-listing": "tsx src/scripts/reconcile-published-listing.ts",
     "ebay:setup-sandbox": "tsx src/scripts/setup-sandbox.ts",
+    "ebay:setup-combined-fulfillment-policy": "tsx src/scripts/setup-combined-fulfillment-policy.ts",
     "lint": "eslint .",
     "validate:env": "tsx src/scripts/validate-env.ts",
     "ebay:validate-oauth": "tsx src/scripts/validate-ebay-oauth.ts",

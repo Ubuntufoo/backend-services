@@ -1326,6 +1326,7 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         category_id: '261328',
         condition_id: '4000',
+        ese_eligible: true,
         condition_notes: 'Visible edge wear and light corner wear.',
         description: `Ungraded single card with visible edge wear.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
         item_specifics: {
@@ -1359,9 +1360,9 @@ describe('runSidecarJob', () => {
     expect(dataAccess.spies.listingsUpdate.mock.invocationCallOrder[0]).toBeLessThan(
       dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
     );
-    expect(
-      dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
-    ).toBeLessThan(dataAccess.spies.jobsComplete.mock.invocationCallOrder[0]);
+    expect(dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.spies.jobsComplete.mock.invocationCallOrder[0]
+    );
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
       gemini_attempt_count: 1,
       gemini_attempts: [
@@ -2264,9 +2265,9 @@ describe('runSidecarJob', () => {
     });
     expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
     expect(dataAccess.jobs.complete).toHaveBeenCalledTimes(1);
-    expect(
-      dataAccess.spies.listingsUpdateWorkflowState.mock.invocationCallOrder[0]
-    ).toBeLessThan(dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]);
+    expect(dataAccess.spies.listingsUpdateWorkflowState.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
+    );
     expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(jobLoggerWarn).toHaveBeenCalledWith(
@@ -2600,6 +2601,7 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         category_id: null,
         condition_id: '4000',
+        ese_eligible: false,
       })
     );
   });
@@ -4005,16 +4007,14 @@ describe('runSidecarJob', () => {
           writeOrder.push('listing_update');
         },
       });
-      dataAccess.spies.listingPriceResearchMarkSucceeded.mockImplementationOnce(
-        async (input) => {
-          writeOrder.push('research_success');
-          return createListingPriceResearchRow({
-            ...input,
-            id: input.id,
-            status: 'succeeded',
-          });
-        }
-      );
+      dataAccess.spies.listingPriceResearchMarkSucceeded.mockImplementationOnce(async (input) => {
+        writeOrder.push('research_success');
+        return createListingPriceResearchRow({
+          ...input,
+          id: input.id,
+          status: 'succeeded',
+        });
+      });
 
       const result = await runSidecarJob('job-research-price', {
         dataAccess,
@@ -5378,14 +5378,16 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
         title: 'Broken provider listing',
       });
-      const fetchSoldComps = vi.fn().mockRejectedValue(
-        new SoldCompsPricingProviderError(
-          'soldcomps_provider_failure',
-          'provider_failure',
-          'SoldComps provider exploded',
-          'broken provider listing'
-        )
-      );
+      const fetchSoldComps = vi
+        .fn()
+        .mockRejectedValue(
+          new SoldCompsPricingProviderError(
+            'soldcomps_provider_failure',
+            'provider_failure',
+            'SoldComps provider exploded',
+            'broken provider listing'
+          )
+        );
       const apifyProvider = createFixturePricingProvider();
       const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
         mode === 'soldcomps'

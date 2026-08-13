@@ -57,7 +57,11 @@ describe('browse-pricing-options', () => {
   it('rejects non-boolean skipBrowse shapes', () => {
     for (const skipBrowse of ['true', 1, undefined, {}, ['no']]) {
       expect(() =>
-        normalizeBrowsePricingOptions({ skipBrowse, minPriceMultiplier: 0.33, maxPriceMultiplier: 3 })
+        normalizeBrowsePricingOptions({
+          skipBrowse,
+          minPriceMultiplier: 0.33,
+          maxPriceMultiplier: 3,
+        })
       ).toThrow(TypeError);
     }
   });
@@ -69,42 +73,84 @@ describe('browse-pricing-options', () => {
   });
 
   it('rejects non-finite minPriceMultiplier values', () => {
-    for (const minPriceMultiplier of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '0.33']) {
+    for (const minPriceMultiplier of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      '0.33',
+    ]) {
       expect(() =>
-        normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier, maxPriceMultiplier: 3 })
+        normalizeBrowsePricingOptions({
+          skipBrowse: false,
+          minPriceMultiplier,
+          maxPriceMultiplier: 3,
+        })
       ).toThrow(RangeError);
     }
   });
 
   it('rejects non-finite maxPriceMultiplier values', () => {
-    for (const maxPriceMultiplier of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '3']) {
+    for (const maxPriceMultiplier of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      '3',
+    ]) {
       expect(() =>
-        normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: 0.33, maxPriceMultiplier })
+        normalizeBrowsePricingOptions({
+          skipBrowse: false,
+          minPriceMultiplier: 0.33,
+          maxPriceMultiplier,
+        })
       ).toThrow(RangeError);
     }
   });
 
   it('rejects zero or negative multipliers', () => {
     expect(() =>
-      normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: 0, maxPriceMultiplier: 3 })
+      normalizeBrowsePricingOptions({
+        skipBrowse: false,
+        minPriceMultiplier: 0,
+        maxPriceMultiplier: 3,
+      })
     ).toThrow(RangeError);
     expect(() =>
-      normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: -0.5, maxPriceMultiplier: 3 })
+      normalizeBrowsePricingOptions({
+        skipBrowse: false,
+        minPriceMultiplier: -0.5,
+        maxPriceMultiplier: 3,
+      })
     ).toThrow(RangeError);
     expect(() =>
-      normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: 0.33, maxPriceMultiplier: 0 })
+      normalizeBrowsePricingOptions({
+        skipBrowse: false,
+        minPriceMultiplier: 0.33,
+        maxPriceMultiplier: 0,
+      })
     ).toThrow(RangeError);
     expect(() =>
-      normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: 0.33, maxPriceMultiplier: -1 })
+      normalizeBrowsePricingOptions({
+        skipBrowse: false,
+        minPriceMultiplier: 0.33,
+        maxPriceMultiplier: -1,
+      })
     ).toThrow(RangeError);
   });
 
   it('rejects min >= max multiplier order', () => {
     expect(() =>
-      normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: 3, maxPriceMultiplier: 3 })
+      normalizeBrowsePricingOptions({
+        skipBrowse: false,
+        minPriceMultiplier: 3,
+        maxPriceMultiplier: 3,
+      })
     ).toThrow(RangeError);
     expect(() =>
-      normalizeBrowsePricingOptions({ skipBrowse: false, minPriceMultiplier: 4, maxPriceMultiplier: 3 })
+      normalizeBrowsePricingOptions({
+        skipBrowse: false,
+        minPriceMultiplier: 4,
+        maxPriceMultiplier: 3,
+      })
     ).toThrow(RangeError);
   });
 

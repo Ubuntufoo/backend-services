@@ -145,14 +145,18 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
   if (appSettings.ebay_publish_config == null) {
     appSettings.ebay_publish_config = {
       production: {
+        combinedFulfillmentPolicyId: 'LIVE-COMBINED-1',
         fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+        groundFulfillmentPolicyId: 'LIVE-GROUND-1',
         marketplaceId: 'EBAY_US',
         merchantLocationKey: 'live-warehouse-1',
         paymentPolicyId: 'LIVE-PAYMENT-1',
         returnPolicyId: 'LIVE-RETURN-1',
       },
       sandbox: {
+        combinedFulfillmentPolicyId: 'SANDBOX-COMBINED-1',
         fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        groundFulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
         marketplaceId: appSettings.ebay_marketplace_id,
         merchantLocationKey: appSettings.merchant_location_key,
         paymentPolicyId: appSettings.default_payment_policy_id,
@@ -736,7 +740,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
       expect.objectContaining({
         listingPolicies: {
-          fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+          fulfillmentPolicyId: 'LIVE-GROUND-1',
           paymentPolicyId: 'LIVE-PAYMENT-1',
           returnPolicyId: 'LIVE-RETURN-1',
         },
@@ -746,19 +750,57 @@ describe('publishListing', () => {
     );
   });
 
+  it('uses the combined policy for an explicitly eSE-eligible listing under $20', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        ese_eligible: true,
+        item_specifics: {
+          'Card Condition': 'VERY_GOOD',
+          Player: 'Michael Jordan',
+        },
+        listing_type: 'single',
+        price: 19.99,
+      }),
+      runtimeConfig: {
+        environment: 'production',
+        marketplaceId: 'EBAY_US',
+      },
+    });
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingPolicies: {
+          fulfillmentPolicyId: 'LIVE-COMBINED-1',
+          paymentPolicyId: 'LIVE-PAYMENT-1',
+          returnPolicyId: 'LIVE-RETURN-1',
+        },
+        marketplaceId: 'EBAY_US',
+        merchantLocationKey: 'live-warehouse-1',
+      })
+    );
+  });
+
   it('fails before createOffer when sandbox location key cannot be verified', async () => {
     const dependencies = createDependencies({
       appSettings: createAppSettings({
         ebay_publish_config: {
           production: {
+            combinedFulfillmentPolicyId: 'LIVE-COMBINED-1',
             fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+            groundFulfillmentPolicyId: 'LIVE-GROUND-1',
             marketplaceId: 'EBAY_US',
             merchantLocationKey: 'live-warehouse-1',
             paymentPolicyId: 'LIVE-PAYMENT-1',
             returnPolicyId: 'LIVE-RETURN-1',
           },
           sandbox: {
+            combinedFulfillmentPolicyId: 'SANDBOX-COMBINED-1',
             fulfillmentPolicyId: 'SANDBOX-FULFILLMENT-1',
+            groundFulfillmentPolicyId: 'SANDBOX-GROUND-1',
             marketplaceId: 'EBAY_US',
             merchantLocationKey: 'prod-location-key-in-sandbox',
             paymentPolicyId: 'SANDBOX-PAYMENT-1',
@@ -1148,9 +1190,7 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse([
-        { id: '400010', name: 'Near mint or better' },
-      ])
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }])
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
       aspects: [
@@ -1221,10 +1261,9 @@ describe('publishListing', () => {
       }),
     });
     dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
-      createTradingCardConditionPoliciesResponse(
-        [{ id: '400010', name: 'Near mint or better' }],
-        { categoryId: '183454' }
-      )
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183454',
+      })
     );
     dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
       aspects: [
@@ -1606,17 +1645,6 @@ describe('publishListing', () => {
     },
     {
       appSettings: {
-        default_fulfillment_policy_id: '   ',
-      },
-      issue: {
-        field: 'fulfillmentPolicyId',
-        message: 'Fulfillment policy ID is required before publishing.',
-        scope: 'publish_config',
-      },
-      label: 'blank fulfillment policy',
-    },
-    {
-      appSettings: {
         default_return_policy_id: '   ',
       },
       issue: {
@@ -1660,6 +1688,25 @@ describe('publishListing', () => {
     }
   );
 
+  it('reports a missing Ground-only fulfillment policy before eBay writes', async () => {
+    const dependencies = createDependencies({
+      appSettings: createAppSettings({ default_fulfillment_policy_id: '   ' }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.groundFulfillmentPolicyId is required for sandbox publish config.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+  });
+
   it('keeps placeholder publish-config failures on existing non-required validation path', async () => {
     const dependencies = createDependencies({
       appSettings: createAppSettings({
@@ -1675,7 +1722,7 @@ describe('publishListing', () => {
       context: {
         issues: [
           'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId "mock-payment-policy-id" is a placeholder.',
-          'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
+          'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.groundFulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
           'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId "mock-return-policy-id" is a placeholder.',
           'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "default-main-location" looks like a placeholder.',
         ],
@@ -1831,11 +1878,6 @@ describe('publishListing', () => {
           {
             field: 'paymentPolicyId',
             message: 'Payment policy ID is required before publishing.',
-            scope: 'publish_config',
-          },
-          {
-            field: 'fulfillmentPolicyId',
-            message: 'Fulfillment policy ID is required before publishing.',
             scope: 'publish_config',
           },
           {

@@ -7,6 +7,8 @@ import {
   isTokenExpired,
   type CredentialStore,
   type EbayUserTokenResponse,
+  CANONICAL_REFRESH_TOKEN_KEY,
+  getConfiguredRefreshToken,
 } from '@/auth/credential-session.js';
 import { getBaseUrl, getDefaultScopes } from '@/config/environment.js';
 import type {
@@ -48,13 +50,10 @@ export class EbayOAuthClient {
 
   /**
    * Initialize user tokens from environment variables only
-   * If EBAY_USER_REFRESH_TOKEN exists, automatically refresh to get a valid access token
+   * If EBAY_REFRESH_TOKEN exists (or legacy EBAY_USER_REFRESH_TOKEN fallback), automatically refresh.
    */
   async initialize(): Promise<void> {
-    const envRefreshToken =
-      process.env.EBAY_REFRESH_TOKEN ??
-      process.env.EBAY_USER_REFRESH_TOKEN ??
-      this.config.refreshToken;
+    const envRefreshToken = getConfiguredRefreshToken(process.env) ?? this.config.refreshToken;
     const envAccessToken = process.env.EBAY_USER_ACCESS_TOKEN;
     const envAppToken = process.env.EBAY_APP_ACCESS_TOKEN ?? '';
     const locale = this.config?.locale ?? LocaleEnum.en_US;
@@ -79,7 +78,7 @@ export class EbayOAuthClient {
       } catch (error) {
         authLogger.error('Failed to refresh access token', {
           error: error instanceof Error ? error.message : String(error),
-          hint: 'The EBAY_USER_REFRESH_TOKEN in .env may be invalid or expired',
+          hint: 'The EBAY_REFRESH_TOKEN in .env may be invalid or expired',
         });
         // Clear invalid tokens
         this.userTokens = null;
@@ -138,7 +137,7 @@ export class EbayOAuthClient {
         authLogger.error('User refresh token expired. User needs to re-authorize.');
         this.userTokens = null;
         throw new Error(
-          'User authorization expired. Please update EBAY_USER_REFRESH_TOKEN in backend-services/.env with a new refresh token.'
+          'User authorization expired. Please update EBAY_REFRESH_TOKEN in backend-services/.env with a new refresh token.'
         );
       }
     }
@@ -171,12 +170,9 @@ export class EbayOAuthClient {
     });
 
     // Update the canonical .env with new tokens
-    const refreshTokenKey = process.env.EBAY_REFRESH_TOKEN
-      ? 'EBAY_REFRESH_TOKEN'
-      : 'EBAY_USER_REFRESH_TOKEN';
     this.credentialStore.write({
       EBAY_USER_ACCESS_TOKEN: accessToken,
-      [refreshTokenKey]: refreshToken,
+      [CANONICAL_REFRESH_TOKEN_KEY]: refreshToken,
     });
   }
 
@@ -275,12 +271,9 @@ export class EbayOAuthClient {
       });
 
       // Persist tokens to the canonical .env so they survive process restarts.
-      const refreshTokenKey = process.env.EBAY_REFRESH_TOKEN
-        ? 'EBAY_REFRESH_TOKEN'
-        : 'EBAY_USER_REFRESH_TOKEN';
       this.credentialStore.write({
         EBAY_USER_ACCESS_TOKEN: tokenData.access_token,
-        [refreshTokenKey]: tokenData.refresh_token,
+        [CANONICAL_REFRESH_TOKEN_KEY]: tokenData.refresh_token,
       });
 
       return tokenData;
@@ -341,13 +334,12 @@ export class EbayOAuthClient {
       };
 
       // Reconcile .env with the authoritative in-memory refresh token.
-      const currentRefreshToken =
-        process.env.EBAY_REFRESH_TOKEN ?? process.env.EBAY_USER_REFRESH_TOKEN;
-      if (this.userTokens.userRefreshToken !== currentRefreshToken) {
-        const refreshTokenKey = process.env.EBAY_REFRESH_TOKEN
-          ? 'EBAY_REFRESH_TOKEN'
-          : 'EBAY_USER_REFRESH_TOKEN';
-        envUpdates[refreshTokenKey] = this.userTokens.userRefreshToken;
+      const currentRefreshToken = getConfiguredRefreshToken(process.env);
+      if (
+        !process.env[CANONICAL_REFRESH_TOKEN_KEY] ||
+        this.userTokens.userRefreshToken !== currentRefreshToken
+      ) {
+        envUpdates[CANONICAL_REFRESH_TOKEN_KEY] = this.userTokens.userRefreshToken;
       }
 
       // Write updates to the canonical .env
@@ -372,7 +364,7 @@ export class EbayOAuthClient {
 
   /**
    * Clear all authentication tokens from memory
-   * Note: To persist this change, remove EBAY_USER_REFRESH_TOKEN from .env
+   * Note: To persist this change, remove EBAY_REFRESH_TOKEN from .env
    */
   clearAllTokens(): void {
     this.appAccessToken = null;

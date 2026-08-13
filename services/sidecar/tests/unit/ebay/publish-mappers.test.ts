@@ -88,8 +88,10 @@ function createResolvedPublishConfig(
   overrides: Partial<ResolvedPublishConfig> = {}
 ): ResolvedPublishConfig {
   return {
+    combinedFulfillmentPolicyId: 'COMBINED-1',
     environment: 'sandbox',
     fulfillmentPolicyId: 'FULFILLMENT-1',
+    groundFulfillmentPolicyId: 'FULFILLMENT-1',
     marketplaceId: 'EBAY_US',
     merchantLocationKey: 'warehouse-1',
     paymentPolicyId: 'PAYMENT-1',
@@ -323,9 +325,9 @@ describe('publish mappers', () => {
     const listing = createListing({ description });
     const expected = formatEbayListingDescription(description);
 
-    expect(mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description).toBe(
-      expected
-    );
+    expect(
+      mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description
+    ).toBe(expected);
     expect(
       mapListingToOfferPayload(listing, createResolvedPublishConfig(), STRUCTURED_SKU)
         .listingDescription
@@ -338,9 +340,9 @@ describe('publish mappers', () => {
   ])('preserves %s description behavior', (_case, description, expected) => {
     const listing = createListing({ description });
 
-    expect(mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description).toBe(
-      expected
-    );
+    expect(
+      mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description
+    ).toBe(expected);
     expect(
       mapListingToOfferPayload(listing, createResolvedPublishConfig(), STRUCTURED_SKU)
         .listingDescription

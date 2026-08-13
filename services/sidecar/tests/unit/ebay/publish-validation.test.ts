@@ -85,7 +85,9 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
   if (appSettings.ebay_publish_config == null) {
     appSettings.ebay_publish_config = {
       sandbox: {
+        combinedFulfillmentPolicyId: 'SANDBOX-COMBINED-1',
         fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        groundFulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
         marketplaceId: appSettings.ebay_marketplace_id,
         merchantLocationKey: appSettings.merchant_location_key,
         paymentPolicyId: appSettings.default_payment_policy_id,
@@ -101,8 +103,10 @@ function createPublishConfig(
   overrides: Partial<ResolvedPublishConfig> = {}
 ): ResolvedPublishConfig {
   return {
+    combinedFulfillmentPolicyId: 'COMBINED-1',
     environment: 'sandbox',
     fulfillmentPolicyId: 'FULFILLMENT-1',
+    groundFulfillmentPolicyId: 'FULFILLMENT-1',
     marketplaceId: 'EBAY_US',
     merchantLocationKey: 'warehouse-1',
     paymentPolicyId: 'PAYMENT-1',
@@ -359,7 +363,9 @@ describe('validatePublishReady', () => {
         quantity,
       })
     ).toMatchObject({
-      fields: [{ field: 'quantity', message: 'Quantity must be greater than 0 before publishing.' }],
+      fields: [
+        { field: 'quantity', message: 'Quantity must be greater than 0 before publishing.' },
+      ],
       ok: false,
     });
   });
@@ -376,7 +382,9 @@ describe('validatePublishReady', () => {
         quantity: 1,
       })
     ).toMatchObject({
-      fields: [{ field: 'marketplaceId', message: 'Marketplace ID is required before publishing.' }],
+      fields: [
+        { field: 'marketplaceId', message: 'Marketplace ID is required before publishing.' },
+      ],
       ok: false,
     });
   });
@@ -434,7 +442,9 @@ describe('validatePublishReady', () => {
         quantity: 1,
       })
     ).toMatchObject({
-      fields: [{ field: 'returnPolicyId', message: 'Return policy ID is required before publishing.' }],
+      fields: [
+        { field: 'returnPolicyId', message: 'Return policy ID is required before publishing.' },
+      ],
       ok: false,
     });
   });
@@ -491,9 +501,21 @@ describe('validatePublishReady', () => {
           message: 'Description is required before publishing.',
           scope: 'listing',
         },
-        { field: 'price', message: 'Price must be greater than 0 before publishing.', scope: 'listing' },
-        { field: 'categoryId', message: 'Category ID is required before publishing.', scope: 'listing' },
-        { field: 'conditionId', message: 'Condition ID is required before publishing.', scope: 'listing' },
+        {
+          field: 'price',
+          message: 'Price must be greater than 0 before publishing.',
+          scope: 'listing',
+        },
+        {
+          field: 'categoryId',
+          message: 'Category ID is required before publishing.',
+          scope: 'listing',
+        },
+        {
+          field: 'conditionId',
+          message: 'Condition ID is required before publishing.',
+          scope: 'listing',
+        },
         {
           field: 'sku',
           message: 'SKU or custom label is required before publishing.',
@@ -549,9 +571,7 @@ describe('publish validation app settings checks', () => {
   });
 
   it('flags blank ebay marketplace before offer creation', () => {
-    expect(
-      getPublishAppSettingIssues(createAppSettings({ ebay_marketplace_id: '   ' }))
-    ).toContain(
+    expect(getPublishAppSettingIssues(createAppSettings({ ebay_marketplace_id: '   ' }))).toContain(
       'marketplace_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.marketplaceId is required for sandbox publish config.'
     );
   });
@@ -572,7 +592,7 @@ describe('publish validation app settings checks', () => {
         })
       )
     ).toContain(
-      'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.'
+      'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.groundFulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.'
     );
   });
 
@@ -580,7 +600,7 @@ describe('publish validation app settings checks', () => {
     expect(
       getPublishAppSettingIssues(createAppSettings({ default_fulfillment_policy_id: '   ' }))
     ).toContain(
-      'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId is required for sandbox publish config.'
+      'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.groundFulfillmentPolicyId is required for sandbox publish config.'
     );
   });
 

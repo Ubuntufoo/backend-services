@@ -83,6 +83,27 @@ const scopeDefinitionSchema = z.array(
 );
 
 /**
+ * Scopes required by the current production setup workflow.
+ *
+ * Keep this separate from the documentation catalog: that catalog includes
+ * optional and special-access scopes that must not be requested during the
+ * initial user-consent flow.
+ */
+export const PRODUCTION_APP_OAUTH_SCOPES = [
+  'https://api.ebay.com/oauth/api_scope',
+  'https://api.ebay.com/oauth/api_scope/sell.inventory',
+  'https://api.ebay.com/oauth/api_scope/sell.account',
+  'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
+] as const;
+
+/**
+ * Return a mutable copy of the minimal production consent scope set.
+ */
+export function getProductionAppOAuthScopes(): string[] {
+  return [...PRODUCTION_APP_OAUTH_SCOPES];
+}
+
+/**
  * Load and parse production scopes from JSON file
  */
 function getProductionScopes(): string[] {
@@ -263,7 +284,7 @@ export function getEbayConfig(): EbayConfig {
   // Only require client credentials - tokens can be optional (generated from refresh token)
   if (isEbayEnabled(process.env) && (clientId === '' || clientSecret === '')) {
     console.error(
-      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env or backend-services/.env.local'
+      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env'
     );
   }
 

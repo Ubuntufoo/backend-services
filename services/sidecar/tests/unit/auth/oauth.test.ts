@@ -180,6 +180,30 @@ describe('EbayOAuthClient', () => {
       expect(token).toBe(newAccessToken);
     });
 
+    it('does not narrow refresh-token grants with an explicit scope parameter', async () => {
+      await oauthClient.setUserTokens('expired_token', 'user_refresh_token', Date.now() - 1000);
+
+      nock('https://api.sandbox.ebay.com')
+        .post('/identity/v1/oauth2/token', (body: unknown) => {
+          if (typeof body === 'string') {
+            return !body.includes('scope=');
+          }
+          return !Object.prototype.hasOwnProperty.call(body, 'scope');
+        })
+        .reply(200, {
+          access_token: 'refreshed_access_token',
+          token_type: 'Bearer',
+          expires_in: 7200,
+          refresh_token: 'user_refresh_token',
+          scope:
+            'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account',
+        });
+
+      await oauthClient.refreshUserToken();
+
+      expect(oauthClient.getUserTokens()?.scope).toContain('sell.account');
+    });
+
     it('should throw error when both access and refresh tokens are expired', async () => {
       // Set tokens with both expired
       const pastExpiry = Date.now() - 1000;
@@ -402,7 +426,7 @@ describe('EbayOAuthClient', () => {
 
       const envWrite = getLastEnvWrite();
       expect(envWrite.content).toContain('EBAY_USER_ACCESS_TOKEN=AT1');
-      expect(envWrite.content).toContain('EBAY_USER_REFRESH_TOKEN=RT1');
+      expect(envWrite.content).toContain('EBAY_REFRESH_TOKEN=RT1');
     });
 
     it('refreshUserToken persists in-memory refresh token to .env even when eBay omits refresh_token (issue #114)', async () => {
@@ -419,8 +443,8 @@ describe('EbayOAuthClient', () => {
 
       const envWrite = getLastEnvWrite();
       expect(envWrite.parsed.EBAY_USER_ACCESS_TOKEN).toBe('new_access_token');
-      expect(envWrite.parsed.EBAY_USER_REFRESH_TOKEN).toBe('in_memory_refresh');
-      expect(envWrite.parsed.EBAY_USER_REFRESH_TOKEN).not.toBe('stale_env_refresh');
+      expect(envWrite.parsed.EBAY_REFRESH_TOKEN).toBe('in_memory_refresh');
+      expect(envWrite.parsed.EBAY_USER_REFRESH_TOKEN).toBeUndefined();
     });
 
     it('refreshUserToken persists same refresh token when in-memory differs from env (issue #114, no rotation case)', async () => {
@@ -438,7 +462,7 @@ describe('EbayOAuthClient', () => {
 
       const envWrite = getLastEnvWrite();
       expect(envWrite.parsed.EBAY_USER_ACCESS_TOKEN).toBe('new_access_token');
-      expect(envWrite.parsed.EBAY_USER_REFRESH_TOKEN).toBe('fresh_oauth_refresh');
+      expect(envWrite.parsed.EBAY_REFRESH_TOKEN).toBe('fresh_oauth_refresh');
     });
 
     it('refreshUserToken does NOT rewrite refresh token when in-memory matches env', async () => {
@@ -459,7 +483,7 @@ describe('EbayOAuthClient', () => {
 
       const envWrite = getLastEnvWrite();
       expect(envWrite.parsed.EBAY_USER_ACCESS_TOKEN).toBe('new_access_token');
-      expect(envWrite.parsed.EBAY_USER_REFRESH_TOKEN).toBe('same_refresh');
+      expect(envWrite.parsed.EBAY_REFRESH_TOKEN).toBe('same_refresh');
     });
   });
 });

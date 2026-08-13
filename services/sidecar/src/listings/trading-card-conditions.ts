@@ -1,6 +1,7 @@
 import type { Json, ListingRow } from '@ebay-inventory/data';
 
 export const TRADING_CARD_CONDITION_ASPECT_KEY = 'Card Condition';
+export const SPORTS_TRADING_CARD_CATEGORY_ID = '261328';
 export const RAW_TRADING_CARD_CONDITION_ID = '4000';
 export const GRADED_TRADING_CARD_CONDITION_ID = '2750';
 
@@ -94,6 +95,17 @@ export function isTradingCardCategoryId(categoryId: string | null | undefined): 
   return normalizedCategoryId.length > 0 && TRADING_CARD_CATEGORY_IDS.has(normalizedCategoryId);
 }
 
+/** eSE structural support currently covers raw sports-card singles only. */
+export function isStructurallyEseEligibleListing(
+  listing: Pick<ListingRow, 'category_id' | 'condition_id' | 'listing_type'>
+): boolean {
+  return (
+    listing.listing_type === 'single' &&
+    listing.category_id?.trim() === SPORTS_TRADING_CARD_CATEGORY_ID &&
+    listing.condition_id?.trim() === RAW_TRADING_CARD_CONDITION_ID
+  );
+}
+
 export function isRawCardConditionToken(value: unknown): value is RawCardConditionToken {
   return (
     typeof value === 'string' &&
@@ -101,7 +113,9 @@ export function isRawCardConditionToken(value: unknown): value is RawCardConditi
   );
 }
 
-export function isLegacyRawCardConditionToken(value: unknown): value is LegacyRawCardConditionToken {
+export function isLegacyRawCardConditionToken(
+  value: unknown
+): value is LegacyRawCardConditionToken {
   return (
     typeof value === 'string' &&
     (LEGACY_RAW_CARD_CONDITION_TOKENS as readonly string[]).includes(value.trim())
@@ -114,7 +128,9 @@ export function normalizeRawCardConditionToken(value: unknown): RawCardCondition
   }
 
   if (isLegacyRawCardConditionToken(value)) {
-    return LEGACY_RAW_CARD_CONDITION_TOKEN_NORMALIZATION[value.trim() as LegacyRawCardConditionToken];
+    return LEGACY_RAW_CARD_CONDITION_TOKEN_NORMALIZATION[
+      value.trim() as LegacyRawCardConditionToken
+    ];
   }
 
   return null;

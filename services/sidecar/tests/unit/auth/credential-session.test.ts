@@ -13,6 +13,7 @@ import {
   DotEnvCredentialStore,
   isTokenExpired,
   maskToken,
+  persistEnvConfig,
 } from '@/auth/credential-session.js';
 import { ROOT_ENV_PATH } from '@/config/env-paths.js';
 
@@ -52,7 +53,31 @@ describe('credential session', () => {
     expect(parsed).toMatchObject({
       EBAY_CLIENT_ID: 'client',
       EBAY_USER_ACCESS_TOKEN: 'access',
-      EBAY_USER_REFRESH_TOKEN: 'refresh',
+      EBAY_REFRESH_TOKEN: 'refresh',
+    });
+    expect(() => readFileSync(envLocalPath, 'utf-8')).toThrow();
+  });
+
+  it('merges setup configuration while preserving unrelated canonical env entries', () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), 'ebay-setup-env-'));
+    const envPath = path.join(tempDir, '.env');
+    const envLocalPath = path.join(tempDir, '.env.local');
+    writeFileSync(envPath, 'UNRELATED_SETTING=keep\nEBAY_CLIENT_ID=old-client\n', 'utf-8');
+
+    persistEnvConfig(
+      {
+        EBAY_CLIENT_ID: 'new-client',
+        EBAY_ENVIRONMENT: 'production',
+        EBAY_REFRESH_TOKEN: 'refresh',
+      },
+      envPath
+    );
+
+    expect(dotenv.parse(readFileSync(envPath, 'utf-8'))).toMatchObject({
+      UNRELATED_SETTING: 'keep',
+      EBAY_CLIENT_ID: 'new-client',
+      EBAY_ENVIRONMENT: 'production',
+      EBAY_REFRESH_TOKEN: 'refresh',
     });
     expect(() => readFileSync(envLocalPath, 'utf-8')).toThrow();
   });

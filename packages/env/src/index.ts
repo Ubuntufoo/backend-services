@@ -147,6 +147,7 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     EBAY_CLIENT_SECRET: optionalNonEmptyString(),
     EBAY_REDIRECT_URI: optionalNonEmptyString(),
     EBAY_ENVIRONMENT: optionalTrimmedString(),
+    EBAY_REFRESH_TOKEN: optionalNonEmptyString(),
     EBAY_USER_REFRESH_TOKEN: optionalNonEmptyString(),
     EBAY_USER_ACCESS_TOKEN: optionalNonEmptyString(),
     EBAY_APP_ACCESS_TOKEN: optionalNonEmptyString(),

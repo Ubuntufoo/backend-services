@@ -16,7 +16,7 @@ import { detectLLMClients } from '../utils/llm-client-detector.js';
 import { displayScopeVerification, parseScopeString } from '../utils/scope-helper.js';
 import { readEnvironment } from './setup-shared.js';
 import { EbaySellerApi } from '../api/index.js';
-import { REPO_ROOT, ROOT_ENV_LOCAL_PATH } from '../config/env-paths.js';
+import { REPO_ROOT, ROOT_ENV_PATH } from '../config/env-paths.js';
 import type { EbayConfig } from '../types/ebay.js';
 
 const PROJECT_ROOT = REPO_ROOT;
@@ -202,7 +202,7 @@ async function displayAuthenticationTest(config: EbayConfig): Promise<void> {
  * Generate diagnostic report
  */
 async function generateDiagnosticReport(exportPath?: string): Promise<DiagnosticReport> {
-  const envVars = parseEnvFile(ROOT_ENV_LOCAL_PATH);
+  const envVars = parseEnvFile(ROOT_ENV_PATH);
 
   // Run security checks
   const securityResults = await runSecurityChecks(PROJECT_ROOT);
@@ -273,7 +273,7 @@ async function runDiagnostics(exportReport = false): Promise<void> {
   displaySecurityResults(securityResults);
 
   // Configuration status
-  const envVars = parseEnvFile(ROOT_ENV_LOCAL_PATH);
+  const envVars = parseEnvFile(ROOT_ENV_PATH);
   displayConfigurationStatus(envVars);
 
   // LLM client detection

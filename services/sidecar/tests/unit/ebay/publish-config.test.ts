@@ -13,14 +13,18 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
     ebay_marketplace_id: 'EBAY_US',
     ebay_publish_config: {
       production: {
+        combinedFulfillmentPolicyId: 'LIVE-COMBINED',
         fulfillmentPolicyId: 'LIVE-FULFILLMENT',
+        groundFulfillmentPolicyId: 'LIVE-GROUND',
         marketplaceId: 'EBAY_US',
         merchantLocationKey: 'live-warehouse',
         paymentPolicyId: 'LIVE-PAYMENT',
         returnPolicyId: 'LIVE-RETURN',
       },
       sandbox: {
+        combinedFulfillmentPolicyId: 'SANDBOX-COMBINED',
         fulfillmentPolicyId: 'SANDBOX-FULFILLMENT',
+        groundFulfillmentPolicyId: 'SANDBOX-GROUND',
         marketplaceId: 'EBAY_US',
         merchantLocationKey: 'sandbox-warehouse',
         paymentPolicyId: 'SANDBOX-PAYMENT',
@@ -51,7 +55,9 @@ describe('resolvePublishConfig', () => {
     expect(result.issues).toEqual([]);
     expect(result.config).toMatchObject({
       environment: 'sandbox',
-      fulfillmentPolicyId: 'SANDBOX-FULFILLMENT',
+      combinedFulfillmentPolicyId: 'SANDBOX-COMBINED',
+      fulfillmentPolicyId: 'SANDBOX-GROUND',
+      groundFulfillmentPolicyId: 'SANDBOX-GROUND',
       merchantLocationKey: 'sandbox-warehouse',
       paymentPolicyId: 'SANDBOX-PAYMENT',
       returnPolicyId: 'SANDBOX-RETURN',
@@ -67,7 +73,9 @@ describe('resolvePublishConfig', () => {
     expect(result.issues).toEqual([]);
     expect(result.config).toMatchObject({
       environment: 'production',
-      fulfillmentPolicyId: 'LIVE-FULFILLMENT',
+      combinedFulfillmentPolicyId: 'LIVE-COMBINED',
+      fulfillmentPolicyId: 'LIVE-GROUND',
+      groundFulfillmentPolicyId: 'LIVE-GROUND',
       merchantLocationKey: 'live-warehouse',
       paymentPolicyId: 'LIVE-PAYMENT',
       returnPolicyId: 'LIVE-RETURN',
@@ -192,6 +200,38 @@ describe('resolvePublishConfig', () => {
     expect(result.config).toBeNull();
     expect(result.issues).toContain(
       'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey is required for sandbox publish config.'
+    );
+  });
+
+  it('reports missing combined fulfillment policy ID', () => {
+    const appSettings = createAppSettings();
+    const production = (appSettings.ebay_publish_config as Record<string, Record<string, unknown>>)
+      .production;
+    delete production.combinedFulfillmentPolicyId;
+
+    expect(
+      resolvePublishConfig(appSettings, {
+        environment: 'production',
+        runtimeMarketplaceId: 'EBAY_US',
+      }).issues
+    ).toContain(
+      'combined_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.production.combinedFulfillmentPolicyId is required for production publish config.'
+    );
+  });
+
+  it('reports missing Ground-only fulfillment policy ID', () => {
+    const appSettings = createAppSettings();
+    const production = (appSettings.ebay_publish_config as Record<string, Record<string, unknown>>)
+      .production;
+    delete production.groundFulfillmentPolicyId;
+
+    expect(
+      resolvePublishConfig(appSettings, {
+        environment: 'production',
+        runtimeMarketplaceId: 'EBAY_US',
+      }).issues
+    ).toContain(
+      'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.production.groundFulfillmentPolicyId is required for production publish config.'
     );
   });
 });
