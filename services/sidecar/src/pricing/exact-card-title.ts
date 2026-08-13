@@ -34,7 +34,7 @@ const SET_NOISE_TOKENS = new Set([
   'trading',
 ]);
 const MULTI_WORD_BASE_BRAND_PAIRS = new Set(['nba hoops', 'upper deck']);
-interface ExactCardTitleTarget {
+export interface ExactCardTitleTarget {
   baseSetTokens: string[];
   cardNumber: string | null;
   playerTokenGroups: string[][];

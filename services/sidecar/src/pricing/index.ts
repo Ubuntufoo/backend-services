@@ -11,6 +11,7 @@ export * from './soldcomps-provider.js';
 export * from './fixture-provider.js';
 export * from './provider-resolver.js';
 export * from './normalizer.js';
+export * from './active-market-title.js';
 export * from './stats.js';
 export * from './confidence.js';
 export * from './condition-adjustment.js';
