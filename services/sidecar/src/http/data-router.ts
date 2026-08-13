@@ -35,6 +35,7 @@ import {
   type EditableListingFieldsInput,
   type SellerEditableListingFieldsInput,
 } from '@/schemas/data-api.js';
+import { mergeBrowsePricingOptions } from '@/listings/browse-pricing-options.js';
 import { mergePricingModifierOptions } from '@/listings/pricing-modifier-options.js';
 import {
   abandonNeedsReviewListing,
@@ -241,15 +242,23 @@ async function runRoute(
 }
 
 function mapEditableListingFields(input: EditableListingFieldsInput): ListingUpdate {
-  const itemSpecifics =
-    input.pricingModifierOptions === undefined
-      ? sanitizeClientDraftMetadata(input.itemSpecifics as ListingUpdate['item_specifics'])
-      : sanitizeClientDraftMetadata(
-          mergePricingModifierOptions(
-          (input.itemSpecifics ?? {}) as Json,
-          input.pricingModifierOptions
-          ) as ListingUpdate['item_specifics']
-        );
+  let itemSpecifics = sanitizeClientDraftMetadata(
+    input.itemSpecifics as ListingUpdate['item_specifics']
+  );
+
+  if (input.pricingModifierOptions !== undefined) {
+    itemSpecifics = mergePricingModifierOptions(
+      (itemSpecifics ?? {}) as Json,
+      input.pricingModifierOptions
+    ) as ListingUpdate['item_specifics'];
+  }
+
+  if (input.browsePricingOptions !== undefined) {
+    itemSpecifics = mergeBrowsePricingOptions(
+      (itemSpecifics ?? {}) as Json,
+      input.browsePricingOptions
+    ) as ListingUpdate['item_specifics'];
+  }
 
   return {
     capture_mode: input.captureMode,
@@ -277,15 +286,30 @@ function mapSellerEditableListingFields(
   input: SellerEditableListingFieldsInput,
   existingItemSpecifics?: ListingUpdate['item_specifics']
 ): ListingUpdate {
-  const itemSpecificsBase =
-    input.pricingModifierOptions === undefined
-      ? sanitizeClientDraftMetadata(input.itemSpecifics as ListingUpdate['item_specifics'])
-      : sanitizeClientDraftMetadata(
-          mergePricingModifierOptions(
-          (input.itemSpecifics ?? existingItemSpecifics ?? {}) as Json,
-          input.pricingModifierOptions
-          ) as ListingUpdate['item_specifics']
-        );
+  let itemSpecificsBase = sanitizeClientDraftMetadata(
+    input.itemSpecifics as ListingUpdate['item_specifics']
+  );
+
+  if (
+    (input.pricingModifierOptions !== undefined || input.browsePricingOptions !== undefined) &&
+    itemSpecificsBase === undefined
+  ) {
+    itemSpecificsBase = existingItemSpecifics;
+  }
+
+  if (input.pricingModifierOptions !== undefined) {
+    itemSpecificsBase = mergePricingModifierOptions(
+      (itemSpecificsBase ?? {}) as Json,
+      input.pricingModifierOptions
+    ) as ListingUpdate['item_specifics'];
+  }
+
+  if (input.browsePricingOptions !== undefined) {
+    itemSpecificsBase = mergeBrowsePricingOptions(
+      (itemSpecificsBase ?? {}) as Json,
+      input.browsePricingOptions
+    ) as ListingUpdate['item_specifics'];
+  }
   const itemSpecifics = preserveInternalDraftMetadata(
     itemSpecificsBase as ListingUpdate['item_specifics'],
     existingItemSpecifics
@@ -573,7 +597,11 @@ export function createDataApiRouter(options: DataApiRouterOptions = {}): Router 
       const dataAccess = getDataAccess();
       let existingItemSpecifics: ListingUpdate['item_specifics'] | undefined;
 
-      if (body.pricingModifierOptions !== undefined || body.itemSpecifics !== undefined) {
+      if (
+        body.pricingModifierOptions !== undefined ||
+        body.browsePricingOptions !== undefined ||
+        body.itemSpecifics !== undefined
+      ) {
         const existingListing = await dataAccess.listings.getByListingId(params.listingId);
 
         if (!existingListing) {

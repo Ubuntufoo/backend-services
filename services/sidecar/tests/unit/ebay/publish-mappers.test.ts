@@ -269,6 +269,24 @@ describe('publish mappers', () => {
     expect(listing.item_specifics).toEqual(originalItemSpecifics);
   });
 
+  it('filters saved Browse options from product aspects without mutating listing specifics', () => {
+    const listing = createListing({
+      item_specifics: {
+        Brand: 'Acme',
+        browsePricingOptions: {
+          skipBrowse: false,
+          minPriceMultiplier: 0.33,
+          maxPriceMultiplier: 3,
+        },
+      },
+    });
+
+    const payload = mapListingToInventoryItemPayload(listing, createAppSettings());
+
+    expect(payload.product?.aspects).toEqual({ Brand: ['Acme'] });
+    expect(listing.item_specifics).toHaveProperty('browsePricingOptions');
+  });
+
   it('maps listing data to an offer payload using stored policies and location key', () => {
     const payload = mapListingToOfferPayload(
       createListing(),

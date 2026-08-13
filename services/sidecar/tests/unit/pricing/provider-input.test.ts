@@ -140,6 +140,24 @@ describe('buildPricingProviderInput', () => {
     expect(buildPricingSearchQuery(input)).toContain('Willie Stargell 1974 Topps 100');
   });
 
+  it('reads saved Browse options for later pricing orchestration', () => {
+    const listing = createListingRow({
+      item_specifics: {
+        browsePricingOptions: {
+          skipBrowse: true,
+          minPriceMultiplier: 0.5,
+          maxPriceMultiplier: 2,
+        },
+      },
+    });
+
+    expect(buildPricingProviderInput(listing, listing.listing_id).browsePricingOptions).toEqual({
+      skipBrowse: true,
+      minPriceMultiplier: 0.5,
+      maxPriceMultiplier: 2,
+    });
+  });
+
   it('sanitizes array-valued Set and removes array-valued Year and Season without valid metadata', () => {
     const listing = createListingRow({
       item_specifics: {

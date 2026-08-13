@@ -2,6 +2,7 @@ import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { parseStructuredSku } from '@ebay-inventory/types';
 import { Condition } from '@/types/ebay-enums.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
+import { BROWSE_PRICING_OPTIONS_ITEM_SPECIFIC_KEY } from '@/listings/browse-pricing-options.js';
 import {
   getEffectiveItemSpecificsForCategoryValidation,
   type NormalizedOutboundItemSpecifics,
@@ -35,6 +36,7 @@ const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'CategorySuggestion',
   'ConditionSuggestion',
+  BROWSE_PRICING_OPTIONS_ITEM_SPECIFIC_KEY,
   'pricingModifierOptions',
   'skuCategoryCode',
 ]);

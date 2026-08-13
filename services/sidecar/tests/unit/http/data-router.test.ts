@@ -1274,6 +1274,56 @@ describe('data API router', () => {
     });
   });
 
+  it('merges Browse options into existing listing item specifics on seller patch', async () => {
+    const dataAccess = createDataAccess();
+    dataAccess.listings.getByListingId = vi.fn(async () => ({
+      ...listingRow,
+      item_specifics: {
+        Brand: 'Topps',
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: true,
+          excludeVariants: false,
+        },
+      },
+    }));
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({ browsePricingOptions: { minPriceMultiplier: 0.5 } });
+
+    expect(response.status).toBe(200);
+    expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
+      item_specifics: {
+        Brand: 'Topps',
+        pricingModifierOptions: {
+          excludeAutographs: false,
+          excludeGraded: true,
+          excludeVariants: false,
+        },
+        browsePricingOptions: {
+          skipBrowse: false,
+          minPriceMultiplier: 0.5,
+          maxPriceMultiplier: 3,
+        },
+      },
+    });
+  });
+
+  it('rejects invalid partial Browse option ranges as a client error', async () => {
+    const dataAccess = createDataAccess();
+    const app = createApp(dataAccess);
+
+    const response = await request(app)
+      .patch('/api/listings/LIST-001')
+      .send({ browsePricingOptions: { minPriceMultiplier: 4 } });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('invalid_request');
+    expect(dataAccess.listings.update).not.toHaveBeenCalled();
+  });
+
   it('rejects review patch attempts that try to authoritatively set a full sku', async () => {
     const dataAccess = createDataAccess();
     const app = createApp(dataAccess);

@@ -1,4 +1,5 @@
 import type { PricingModifierOptions } from '@ebay-inventory/types';
+import type { BrowsePricingOptions } from './browse-pricing-options.js';
 
 export interface PricingProviderInput {
   listingId: string;
@@ -8,6 +9,7 @@ export interface PricingProviderInput {
   conditionId?: string | null;
   itemSpecifics?: Record<string, string | string[] | null | undefined>;
   pricingModifierOptions?: PricingModifierOptions;
+  browsePricingOptions?: BrowsePricingOptions;
   requestedCompCount?: number;
   requestContext?: {
     correlationId: string;
