@@ -6,6 +6,9 @@ import { IdentityApi } from '@/api/other/identity.js';
 
 import {
   ACTIVE_MARKET_PAGE_SIZE,
+  buildActiveMarketSnapshot,
+  computePriceDistribution,
+  projectActiveMarketCompetitors,
   traverseActiveMarket,
   type ActiveMarketTraversalInput,
 } from '@/pricing/active-market.js';
@@ -283,5 +286,113 @@ describe('active-market traversal', () => {
 
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
     expect(result.itemPriceWindow?.currency).toBe('USD');
+  });
+});
+
+describe('active-market projection and distributions', () => {
+  it('projects the approved competitor shape in accepted traversal order', () => {
+    const rows = [
+      {
+        ...item('first', 'first'),
+        condition: null,
+        shippingCost: { value: 0.5, currency: 'USD' },
+        shippingType: 'FREE_SHIPPING',
+      },
+      {
+        ...item('second', 'second'),
+        itemPrice: { value: 2, currency: 'USD' },
+        shippingCost: null,
+      },
+    ];
+
+    expect(projectActiveMarketCompetitors(rows)).toEqual([
+      {
+        legacyItemId: 'first',
+        title: 'first',
+        condition: null,
+        conditionId: '4000',
+        itemPrice: { value: 1.5, currency: 'USD' },
+        shippingCost: { value: 0.5, currency: 'USD' },
+        shippingType: 'FREE_SHIPPING',
+        totalPrice: { value: 2, currency: 'USD' },
+        itemUrl: 'https://www.ebay.com/itm/first',
+      },
+      {
+        legacyItemId: 'second',
+        title: 'second',
+        condition: 'Ungraded',
+        conditionId: '4000',
+        itemPrice: { value: 2, currency: 'USD' },
+        shippingCost: null,
+        shippingType: null,
+        totalPrice: null,
+        itemUrl: 'https://www.ebay.com/itm/second',
+      },
+    ]);
+  });
+
+  it('only computes total price for finite, non-negative, same-currency shipping', () => {
+    const rows = [
+      { ...item('missing', 'missing') },
+      { ...item('currency', 'currency'), shippingCost: { value: 1, currency: 'EUR' } },
+      { ...item('negative', 'negative'), shippingCost: { value: -1, currency: 'USD' } },
+      { ...item('nan', 'nan'), shippingCost: { value: Number.NaN, currency: 'USD' } },
+      { ...item('usable', 'usable'), shippingCost: { value: 1, currency: 'USD' } },
+    ];
+
+    expect(projectActiveMarketCompetitors(rows).map((entry) => entry.totalPrice)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      { value: 2.5, currency: 'USD' },
+    ]);
+  });
+
+  it('computes odd/even medians without cross-currency aggregation', () => {
+    expect(
+      computePriceDistribution([
+        { value: 5, currency: 'USD' },
+        { value: 1, currency: 'USD' },
+        { value: 3, currency: 'USD' },
+      ])
+    ).toEqual({ low: 1, median: 3, high: 5, currency: 'USD' });
+    expect(
+      computePriceDistribution([
+        { value: 4, currency: 'USD' },
+        { value: 1, currency: 'USD' },
+        { value: 3, currency: 'USD' },
+        { value: 2, currency: 'USD' },
+      ])
+    ).toEqual({ low: 1, median: 2.5, high: 4, currency: 'USD' });
+    expect(
+      computePriceDistribution([
+        { value: 5, currency: 'USD' },
+        { value: 1, currency: 'EUR' },
+      ])
+    ).toBeNull();
+  });
+
+  it('gates exact census and distributions on complete traversal', () => {
+    const rows = [
+      { ...item('known', 'known'), shippingCost: { value: 1, currency: 'USD' } },
+      { ...item('unknown', 'unknown'), itemPrice: { value: 2, currency: 'USD' } },
+    ];
+
+    expect(buildActiveMarketSnapshot(rows, false)).toMatchObject({
+      complete: false,
+      exactAcceptedCount: null,
+      shippingKnownAcceptedCount: 1,
+      itemPriceDistribution: null,
+      shippingKnownTotalDistribution: null,
+      tacticalSellPrice: null,
+    });
+    expect(buildActiveMarketSnapshot(rows, true)).toMatchObject({
+      complete: true,
+      exactAcceptedCount: 2,
+      shippingKnownAcceptedCount: 1,
+      itemPriceDistribution: { low: 1.5, median: 1.75, high: 2, currency: 'USD' },
+      shippingKnownTotalDistribution: { low: 2.5, median: 2.5, high: 2.5, currency: 'USD' },
+    });
   });
 });

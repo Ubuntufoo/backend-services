@@ -1,4 +1,10 @@
-import { BrowseMalformedResponseError, type BrowseApi, type BrowseSearchPage, type BrowseSearchPageItem } from '@/api/buy/browse.js';
+import {
+  BrowseMalformedResponseError,
+  type BrowseApi,
+  type BrowseSearchPage,
+  type BrowseSearchPageItem,
+  type Money,
+} from '@/api/buy/browse.js';
 import type { IdentityApi } from '@/api/other/identity.js';
 import { resolveBrowseShippingContext, type BrowseShippingContext } from '@/config/environment.js';
 
@@ -88,6 +94,115 @@ export interface ActiveMarketTraversalResult {
   rejectionReasonCounts: Record<string, number>;
   acceptedItems: BrowseSearchPageItem[];
   latencyMs: number;
+}
+
+/** A Browse competitor with a landed-price value only when shipping is usable. */
+export interface ActiveMarketCompetitor {
+  legacyItemId: string;
+  title: string;
+  condition: string | null;
+  conditionId: string | null;
+  itemPrice: Money;
+  shippingCost: Money | null;
+  shippingType: string | null;
+  totalPrice: Money | null;
+  itemUrl: string;
+}
+
+export interface PriceDistribution {
+  low: number;
+  median: number;
+  high: number;
+  currency: string;
+}
+
+export interface ActiveMarketSnapshot {
+  complete: boolean;
+  competitors: ActiveMarketCompetitor[];
+  exactAcceptedCount: number | null;
+  shippingKnownAcceptedCount: number;
+  itemPriceDistribution: PriceDistribution | null;
+  shippingKnownTotalDistribution: PriceDistribution | null;
+  tacticalSellPrice: null;
+}
+
+export function projectActiveMarketCompetitor(item: BrowseSearchPageItem): ActiveMarketCompetitor {
+  const totalValue =
+    isUsableMoney(item.itemPrice) && isCompatibleShipping(item.itemPrice, item.shippingCost)
+      ? item.itemPrice.value + item.shippingCost.value
+      : null;
+  const totalPrice =
+    totalValue !== null && Number.isFinite(totalValue)
+      ? { value: roundCurrency(totalValue), currency: item.itemPrice.currency }
+      : null;
+
+  return {
+    legacyItemId: item.legacyItemId,
+    title: item.title,
+    condition: item.condition,
+    conditionId: item.conditionId,
+    itemPrice: item.itemPrice,
+    shippingCost: item.shippingCost,
+    shippingType: item.shippingType,
+    totalPrice,
+    itemUrl: item.itemUrl,
+  };
+}
+
+export function projectActiveMarketCompetitors(
+  items: readonly BrowseSearchPageItem[]
+): ActiveMarketCompetitor[] {
+  return items.map(projectActiveMarketCompetitor);
+}
+
+export function computePriceDistribution(values: readonly Money[]): PriceDistribution | null {
+  const usableValues = values.filter(isUsableMoney);
+  const currencies = new Set(usableValues.map((value) => value.currency));
+  if (currencies.size > 1) return null;
+  const selectedCurrency = usableValues[0]?.currency;
+  if (!selectedCurrency) return null;
+
+  const sortedValues = usableValues
+    .map((value) => value.value)
+    .sort((left, right) => left - right);
+  if (sortedValues.length === 0) return null;
+
+  const midpoint = Math.floor(sortedValues.length / 2);
+  const median =
+    sortedValues.length % 2 === 1
+      ? sortedValues[midpoint]!
+      : ((sortedValues[midpoint - 1]! + sortedValues[midpoint]!) / 2);
+
+  return {
+    low: roundCurrency(sortedValues[0]!),
+    median: roundCurrency(median),
+    high: roundCurrency(sortedValues[sortedValues.length - 1]!),
+    currency: selectedCurrency,
+  };
+}
+
+export function buildActiveMarketSnapshot(
+  acceptedItems: readonly BrowseSearchPageItem[],
+  complete: boolean
+): ActiveMarketSnapshot {
+  const competitors = projectActiveMarketCompetitors(acceptedItems);
+  const shippingKnown = competitors.filter((competitor) => competitor.totalPrice !== null);
+
+  return {
+    complete,
+    competitors,
+    exactAcceptedCount: complete ? competitors.length : null,
+    shippingKnownAcceptedCount: shippingKnown.length,
+    itemPriceDistribution: complete
+      ? computePriceDistribution(competitors.map((competitor) => competitor.itemPrice))
+      : null,
+    shippingKnownTotalDistribution: complete
+      ? computePriceDistribution(
+          shippingKnown.flatMap((competitor) => (competitor.totalPrice ? [competitor.totalPrice] : []))
+        )
+      : null,
+    tacticalSellPrice: null,
+  };
 }
 
 export class ActiveMarketTraversal {
@@ -476,4 +591,21 @@ function nonEmpty(value: string | null | undefined): string | null {
 
 function isValidAnchor(value: BrowsePricingAnchor): boolean {
   return Number.isFinite(value.value) && value.value > 0 && nonEmpty(value.currency) !== null;
+}
+
+function isUsableMoney(value: Money | null): value is Money {
+  return (
+    value !== null &&
+    Number.isFinite(value.value) &&
+    value.value >= 0 &&
+    nonEmpty(value.currency) !== null
+  );
+}
+
+function isCompatibleShipping(itemPrice: Money, shippingCost: Money | null): shippingCost is Money {
+  return isUsableMoney(shippingCost) && shippingCost.currency === itemPrice.currency;
+}
+
+function roundCurrency(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
