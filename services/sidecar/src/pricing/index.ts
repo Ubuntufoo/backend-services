@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './apify-config.js';
 export * from './soldcomps-config.js';
 export * from './browse-pricing-options.js';
+export * from './browse-price-window.js';
 export * from './provider-input.js';
 export * from './apify-diagnostic.js';
 export * from './sold-comps-query.js';

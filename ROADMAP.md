@@ -1,6 +1,6 @@
 # ROADMAP
 
-Note: Commented out early tasks that have been completed to keep the focus on upcoming work.
+Note: Comment out early tasks that have been completed to keep the focus on upcoming work.
 
 | Phase | Area | Task | Output |
 | ----: | ---- | ---- | ------ |
@@ -8,7 +8,6 @@ Note: Commented out early tasks that have been completed to keep the focus on up
 <!--PREVIOUS ROADMAP TASKS ARCHIVED
 | Fix |  BE/Pricing | Skip comp API and LLM reasoning for known sports-card singles | Add a new `skip_comp_api` checkbox beside the generate button that bypasses the comp API call and LLM reasoning step, returning only the Gemini listing output. |
 | Fix | BE/Listing | Add listing abandonment workflow | Add a new "Abandon Listing" button in the review UI that allows users to permanently delete a listing and all associated data, including persisted AI attempts, R2 images, and database rows. Ensure that this action is irreversible and prompts for confirmation before proceeding. |
-COMPLETED TASKS COMMENTED OUT -->
 --------------- READY FOR LIVE PILOT: SPORTS CARD SINGLES --------------
 **Phase 10 architecture guardrail:** Browse is a supplemental tactical-pricing branch, not a SoldComps replacement. The existing SoldComps provider, normalization, LLM/condition work, deterministic adjustments, persisted Suggested price, API result, and current UI rendering remain a complete standalone result and must continue to work exactly as they do now. Browse consumes the existing pricing output only after that baseline exists, derives a user-controllable credible live-market window, searches current fixed-price competition, and may later return a distinct nullable `tacticalSellPrice`. Browse must never overwrite the baseline Suggested price or `listings.price` automatically; the operator must always be able to ignore or skip Browse. `Auto Pricing?` remains the master per-listing switch: when false, neither SoldComps nor Browse runs. A separate `Skip Browse API` option may disable only Browse while leaving baseline pricing unchanged. Keep Browse options and result data separate from existing SoldComps modifier semantics, keep Browse behind a small read-only adapter/service boundary, add no generic provider/auth framework, and never fail `research_price`.
 
@@ -27,6 +26,8 @@ COMPLETED TASKS COMMENTED OUT -->
 | 10C.2 COMPLETED | BE/Tests | [DeepSeek Pro] Lock SoldComps behavior and Browse recall | Added active/sold parity regression coverage asserting shared identity mismatch reasons stay identical across SoldComps and Browse while Browse adds only the intended precision checks, and legitimate titles that omit or contextualize card number/year remain Browse-accepted. No runtime source changes; one pre-existing unrelated normalizer title-fallback failure remains, documented in the run RESULT. |
 | 10D.1 COMPLETED | BE/Pricing | [DeepSeek Pro] Add Browse options contract/defaults/validation | Added `BrowsePricingOptions` (`skipBrowse`, `minPriceMultiplier`, `maxPriceMultiplier`) with canonical defaults `skipBrowse: false` / `0.33` / `3`, plus `normalizeBrowsePricingOptions()` that returns the defaults for missing input and rejects non-boolean `skipBrowse`, non-finite/non-positive multipliers, and `min >= max` with stable TypeError/RangeError. Exported via the pricing barrel and kept separate from SoldComps `PricingModifierOptions`. |
 | 10D.2 COMPLETED | BE/Listing/Publish | [DeepSeek Pro] Persist Browse options and strip internal metadata on publish | Read/write `item_specifics.browsePricingOptions` without a schema migration, reuse the saved values for retry/reprice, centralize the internal key if natural, and explicitly exclude it from eBay outbound item-specific/aspect mapping like `pricingModifierOptions`. |
+USE THIS COMMENT LINE AS A ROLLING MARKER FOR COMPLETED TASKS -->
+
 | 10D.3 | BE/Pricing | [DeepSeek Pro] Derive Browse item-price window from pricing anchor | Add a pure helper using `finalPriceAdjustment.basePrice` plus selected multipliers; floor the minimum cent and ceil the maximum cent so rounding never narrows the requested window. Keep baseline pricing math untouched. |
 | 10D.4 | BE/Config | [DeepSeek Pro] Resolve stable Browse shipping-context config | Add the small non-secret country/postal-code config seam required by Browse. Require both values together when Browse runs, build the stable contextual-location value, and do not introduce a hard-coded discovery ZIP. |
 | 10D.5 | BE/Pricing | [Codex] Build bounded multi-page active-market snapshot traversal | Combine options, anchor/window, seller exclusion, shipping context, one-page Browse adapter, and Browse-specific identity predicate. Follow `next` until exhausted or an evidence-based page/time/offset safeguard stops traversal; dedupe by `legacyItemId`, preserve accepted eBay order, and retain partial diagnostics without claiming completeness. |
