@@ -153,6 +153,8 @@ export const sidecarRootEnvSchema = supabaseEnvSchema
     EBAY_APP_ACCESS_TOKEN: optionalNonEmptyString(),
     EBAY_MARKETPLACE_ID: optionalNonEmptyString(),
     EBAY_CONTENT_LANGUAGE: optionalNonEmptyString(),
+    EBAY_BROWSE_CONTEXT_COUNTRY: optionalNonEmptyString(),
+    EBAY_BROWSE_CONTEXT_POSTAL_CODE: optionalNonEmptyString(),
     EBAY_LOG_LEVEL: optionalNonEmptyString(),
     EBAY_ENABLE_FILE_LOGGING: z.enum(['true', 'false']).optional(),
     R2_ACCOUNT_ID: optionalNonEmptyString(),

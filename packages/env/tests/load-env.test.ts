@@ -115,6 +115,26 @@ describe('loadEnv', () => {
 
     expect(env.EBAY_ENVIRONMENT).toBeUndefined();
     expect(env.EBAY_CLIENT_ID).toBe('client-id');
+    expect(env.EBAY_BROWSE_CONTEXT_COUNTRY).toBeUndefined();
+    expect(env.EBAY_BROWSE_CONTEXT_POSTAL_CODE).toBeUndefined();
+  });
+
+  it('loads and trims the optional Browse shipping context pair', () => {
+    const env = loadSidecarRootEnv({
+      env: {
+        NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+        SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+        SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+        EBAY_CLIENT_ID: 'client-id',
+        EBAY_CLIENT_SECRET: 'client-secret',
+        EBAY_BROWSE_CONTEXT_COUNTRY: '  US  ',
+        EBAY_BROWSE_CONTEXT_POSTAL_CODE: ' TEST-POSTAL ',
+      },
+    });
+
+    expect(env.EBAY_BROWSE_CONTEXT_COUNTRY).toBe('US');
+    expect(env.EBAY_BROWSE_CONTEXT_POSTAL_CODE).toBe('TEST-POSTAL');
   });
 
   it('normalizes blank optional legacy ebay token values to undefined', () => {

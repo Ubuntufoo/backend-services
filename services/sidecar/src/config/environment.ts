@@ -67,6 +67,34 @@ export function isEbayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.EBAY_ENABLED !== 'false';
 }
 
+export interface BrowseShippingContext {
+  country: string;
+  postalCode: string;
+}
+
+/**
+ * Resolve the configured eBay Browse shipping context when Browse is requested.
+ * The pair is intentionally optional during ordinary sidecar startup, but
+ * Browse requests must not proceed with a partial or implicit location.
+ */
+export function resolveBrowseShippingContext(
+  env: Partial<Pick<
+    NodeJS.ProcessEnv,
+    'EBAY_BROWSE_CONTEXT_COUNTRY' | 'EBAY_BROWSE_CONTEXT_POSTAL_CODE'
+  >> = process.env
+): BrowseShippingContext {
+  const country = env.EBAY_BROWSE_CONTEXT_COUNTRY?.trim() ?? '';
+  const postalCode = env.EBAY_BROWSE_CONTEXT_POSTAL_CODE?.trim() ?? '';
+
+  if (!country || !postalCode) {
+    throw new Error(
+      'EBAY_BROWSE_CONTEXT_COUNTRY and EBAY_BROWSE_CONTEXT_POSTAL_CODE must both be configured for Browse shipping context'
+    );
+  }
+
+  return { country, postalCode };
+}
+
 // Type for scope JSON structure
 interface ScopeDefinition {
   /* eslint-disable-next-line @typescript-eslint/naming-convention -- scope docs use PascalCase keys */

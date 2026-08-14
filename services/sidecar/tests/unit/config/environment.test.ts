@@ -4,6 +4,7 @@ import {
   getBaseUrl,
   getOauthBaseUrl,
   getAuthUrl,
+  resolveBrowseShippingContext,
   isEbayEnabled,
   validateEnvironmentConfig,
 } from '@/config/environment.js';
@@ -128,6 +129,40 @@ describe('Environment Configuration', () => {
 
       expect(config.marketplaceId).toBe('EBAY_DE');
       expect(config.contentLanguage).toBe('de-DE');
+    });
+  });
+
+  describe('resolveBrowseShippingContext', () => {
+    it('resolves a complete configured pair without a default postal code', () => {
+      const context = resolveBrowseShippingContext({
+        EBAY_BROWSE_CONTEXT_COUNTRY: 'US',
+        EBAY_BROWSE_CONTEXT_POSTAL_CODE: 'TEST-POSTAL',
+      });
+
+      expect(context).toEqual({ country: 'US', postalCode: 'TEST-POSTAL' });
+    });
+
+    it('trims configured values', () => {
+      expect(
+        resolveBrowseShippingContext({
+          EBAY_BROWSE_CONTEXT_COUNTRY: '  US ',
+          EBAY_BROWSE_CONTEXT_POSTAL_CODE: ' TEST-POSTAL ',
+        })
+      ).toEqual({ country: 'US', postalCode: 'TEST-POSTAL' });
+    });
+
+    it('rejects absent or partial configuration', () => {
+      for (const env of [
+        {},
+        { EBAY_BROWSE_CONTEXT_COUNTRY: 'US' },
+        { EBAY_BROWSE_CONTEXT_POSTAL_CODE: 'TEST-POSTAL' },
+        { EBAY_BROWSE_CONTEXT_COUNTRY: '  ', EBAY_BROWSE_CONTEXT_POSTAL_CODE: 'TEST-POSTAL' },
+        { EBAY_BROWSE_CONTEXT_COUNTRY: 'US', EBAY_BROWSE_CONTEXT_POSTAL_CODE: '  ' },
+      ]) {
+        expect(() => resolveBrowseShippingContext(env)).toThrow(
+          /EBAY_BROWSE_CONTEXT_COUNTRY and EBAY_BROWSE_CONTEXT_POSTAL_CODE/
+        );
+      }
     });
   });
 
