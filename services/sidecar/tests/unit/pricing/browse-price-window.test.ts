@@ -53,6 +53,25 @@ describe('deriveBrowseItemPriceWindow', () => {
     });
   });
 
+  it('uses the pricing anchor directly at binary floating-point cent boundaries', () => {
+    const options: BrowsePricingOptions = {
+      skipBrowse: false,
+      minPriceMultiplier: 1,
+      maxPriceMultiplier: 2,
+    };
+
+    expect(deriveBrowseItemPriceWindow(0.29, options)).toEqual({
+      minItemPrice: 0.29,
+      maxItemPrice: 0.58,
+    });
+    expect(
+      deriveBrowseItemPriceWindow(0.01, { ...options, maxPriceMultiplier: 7 })
+    ).toEqual({
+      minItemPrice: 0.01,
+      maxItemPrice: 0.07,
+    });
+  });
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
     'rejects invalid base price %s',
     (basePrice) => {

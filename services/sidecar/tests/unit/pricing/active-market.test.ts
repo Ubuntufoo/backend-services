@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import axios, { AxiosError } from 'axios';
 
 import { EbayApiClient } from '@/api/client.js';
+import { BrowseMalformedResponseError } from '@/api/buy/browse.js';
 import { IdentityApi } from '@/api/other/identity.js';
 
 import {
@@ -54,6 +55,48 @@ function item(legacyItemId: string, title: string) {
 }
 
 describe('active-market traversal', () => {
+  it('marks an empty usable page complete with an exact zero census', async () => {
+    const identity = vi.fn().mockResolvedValue('private-seller');
+    const search = vi.fn().mockResolvedValue({ items: [], next: null, total: 0 });
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: identity },
+    });
+
+    expect(result).toMatchObject({
+      status: 'available',
+      complete: true,
+      exactAcceptedCount: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      pagesScanned: 1,
+      candidateRowsScanned: 0,
+      sellerExclusionApplied: true,
+    });
+    expect(identity).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a one-page usable result complete and keeps accepted order', async () => {
+    const search = vi.fn().mockResolvedValue({
+      items: [item('one', '1990 Pro Set Barry Sanders #102')],
+      next: null,
+      total: 1,
+    });
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: vi.fn().mockResolvedValue('private-seller') },
+    });
+
+    expect(result.complete).toBe(true);
+    expect(result.exactAcceptedCount).toBe(1);
+    expect(result.acceptedItems.map((entry) => entry.legacyItemId)).toEqual(['one']);
+    expect(result.pagesScanned).toBe(1);
+    expect(result.candidateRowsScanned).toBe(1);
+  });
+
   it('shares the original deadline signal across an Application-token 401 remint retry', async () => {
     const client = new EbayApiClient({
       clientId: 'client-id',
@@ -207,6 +250,9 @@ describe('active-market traversal', () => {
     expect(result.acceptedItems.map((entry) => entry.legacyItemId)).toEqual(['1', '3']);
     expect(result.rejectedCount).toBe(1);
     expect(result.rejectionReasonCounts.active_multi_card_mismatch).toBe(1);
+    expect(result.candidateRowsScanned).toBe(4);
+    expect(result.acceptedCount).toBe(2);
+    expect(result.pagesScanned).toBe(2);
     expect(search).toHaveBeenCalledTimes(2);
     expect(search.mock.calls[0][0]).toMatchObject({
       limit: ACTIVE_MARKET_PAGE_SIZE,
@@ -241,6 +287,125 @@ describe('active-market traversal', () => {
     expect(result.safeguards.maxPages).toBe(1);
   });
 
+  it('stops before consuming a continuation above maxOffset', async () => {
+    const search = vi.fn().mockResolvedValue({
+      items: [item('offset-row', '1990 Pro Set Barry Sanders #102')],
+      next: '/buy/browse/v1/item_summary/search?offset=200',
+      total: 300,
+    });
+
+    const result = await traverseActiveMarket(
+      { ...input, safeguards: { maxOffset: 100 } },
+      {
+        browse: { search },
+        identity: { getUsername: vi.fn().mockResolvedValue('private-seller') },
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: 'available',
+      complete: false,
+      incompleteReason: 'offset_limit',
+      acceptedCount: 1,
+      exactAcceptedCount: null,
+      pagesScanned: 1,
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search.mock.calls[0]?.[0]).not.toHaveProperty('next');
+  });
+
+  it.each([
+    ['/buy/browse/v1/item_summary/search?offset=0', 'same offset'],
+    ['/buy/browse/v1/item_summary/search?offset=not-a-number', 'malformed offset'],
+    ['https://evil.example/buy/browse/v1/item_summary/search?offset=200', 'unsafe host'],
+    ['/buy/browse/v1/item_summary/other?offset=200', 'unsafe path'],
+  ])('commits a usable page but rejects an unsafe or non-monotonic %s continuation', async (next) => {
+    const search = vi.fn().mockResolvedValue({
+      items: [item('continuation-row', '1990 Pro Set Barry Sanders #102')],
+      next,
+      total: 300,
+    });
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: vi.fn().mockResolvedValue('private-seller') },
+    });
+
+    expect(result).toMatchObject({
+      status: 'available',
+      complete: false,
+      incompleteReason: 'page_error',
+      acceptedCount: 1,
+      exactAcceptedCount: null,
+      pagesScanned: 1,
+    });
+    expect(result.acceptedItems.map((entry) => entry.legacyItemId)).toEqual(['continuation-row']);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a backward continuation after committing the preceding usable page', async () => {
+    const search = vi.fn().mockResolvedValueOnce({
+      items: [item('forward-row', '1990 Pro Set Barry Sanders #102')],
+      next: '/buy/browse/v1/item_summary/search?offset=200',
+      total: 300,
+    }).mockResolvedValueOnce({
+      items: [item('backward-row', '1990 Pro Set Barry Sanders #102')],
+      next: '/buy/browse/v1/item_summary/search?offset=100',
+      total: 300,
+    });
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: vi.fn().mockResolvedValue('private-seller') },
+    });
+
+    expect(result).toMatchObject({
+      status: 'available',
+      complete: false,
+      incompleteReason: 'page_error',
+      pagesScanned: 2,
+      acceptedCount: 2,
+      exactAcceptedCount: null,
+    });
+    expect(result.acceptedItems.map((entry) => entry.legacyItemId)).toEqual([
+      'forward-row',
+      'backward-row',
+    ]);
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains accepted rows and gates exact stats on a time-limited partial scan', async () => {
+    let calls = 0;
+    const now = vi.fn(() => {
+      calls += 1;
+      return calls >= 5 ? 1_000 : 0;
+    });
+    const search = vi.fn().mockResolvedValue({
+      items: [item('time-row', '1990 Pro Set Barry Sanders #102')],
+      next: '/buy/browse/v1/item_summary/search?offset=200',
+      total: 300,
+    });
+
+    const result = await traverseActiveMarket(
+      { ...input, safeguards: { maxDurationMs: 100 } },
+      {
+        browse: { search },
+        identity: { getUsername: vi.fn().mockResolvedValue('private-seller') },
+        now,
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: 'available',
+      complete: false,
+      incompleteReason: 'time_limit',
+      acceptedCount: 1,
+      exactAcceptedCount: null,
+      pagesScanned: 1,
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('passes remaining timeout to each page and rejects an in-flight overrun', async () => {
     let elapsed = 0;
     const search = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
@@ -269,6 +434,63 @@ describe('active-market traversal', () => {
     expect(result.acceptedItems).toEqual([]);
   });
 
+  it.each([
+    ['api', Object.assign(new Error('server failure'), { statusCode: 500 }), 'api_failed'],
+    ['auth', Object.assign(new Error('unauthorized'), { statusCode: 401 }), 'auth_failed'],
+    ['malformed', new BrowseMalformedResponseError('itemSummaries'), 'malformed_response'],
+  ])('returns unavailable/%s before the first usable page', async (_kind, error, reason) => {
+    const identity = vi.fn().mockResolvedValue('private-seller');
+    const search = vi.fn().mockRejectedValue(error);
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: identity },
+    });
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      unavailableReason: reason,
+      complete: false,
+      pagesScanned: 0,
+      acceptedItems: [],
+      exactAcceptedCount: null,
+      sellerExclusionApplied: false,
+    });
+    expect(identity).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['api', Object.assign(new Error('server failure'), { statusCode: 500 })],
+    ['auth', Object.assign(new Error('unauthorized'), { statusCode: 401 })],
+    ['malformed', new BrowseMalformedResponseError('itemSummaries')],
+  ])('returns available/incomplete page_error after a usable %s page', async (_kind, error) => {
+    const search = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [item('retained', '1990 Pro Set Barry Sanders #102')],
+        next: '/buy/browse/v1/item_summary/search?offset=200',
+        total: 300,
+      })
+      .mockRejectedValueOnce(error);
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: vi.fn().mockResolvedValue('private-seller') },
+    });
+
+    expect(result).toMatchObject({
+      status: 'available',
+      incompleteReason: 'page_error',
+      complete: false,
+      pagesScanned: 1,
+      acceptedCount: 1,
+      exactAcceptedCount: null,
+    });
+    expect(result.acceptedItems.map((entry) => entry.legacyItemId)).toEqual(['retained']);
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
   it('always uses anchor currency; traversal input has no currency override', async () => {
     const search = vi.fn().mockResolvedValue({
       items: [],
@@ -286,6 +508,88 @@ describe('active-market traversal', () => {
 
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
     expect(result.itemPriceWindow?.currency).toBe('USD');
+  });
+
+  it('does not call Identity or Browse when Browse is disabled', async () => {
+    const identity = vi.fn();
+    const search = vi.fn();
+
+    const result = await traverseActiveMarket(
+      {
+        ...input,
+        options: { skipBrowse: true, minPriceMultiplier: 0.33, maxPriceMultiplier: 3 },
+      },
+      { browse: { search }, identity: { getUsername: identity } }
+    );
+
+    expect(result).toMatchObject({ status: 'skipped', skipReason: 'browse_disabled' });
+    expect(identity).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on invalid options before calling Identity or Browse', async () => {
+    const identity = vi.fn();
+    const search = vi.fn();
+
+    const result = await traverseActiveMarket(
+      { ...input, options: { minPriceMultiplier: 0 } },
+      { browse: { search }, identity: { getUsername: identity } }
+    );
+
+    expect(result).toMatchObject({ status: 'unavailable', unavailableReason: 'invalid_options' });
+    expect(identity).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a missing anchor before calling Identity or Browse', async () => {
+    const identity = vi.fn();
+    const search = vi.fn();
+
+    const result = await traverseActiveMarket(
+      { ...input, anchor: null },
+      { browse: { search }, identity: { getUsername: identity } }
+    );
+
+    expect(result).toMatchObject({ status: 'unavailable', unavailableReason: 'missing_anchor' });
+    expect(identity).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on Identity failure before calling Browse', async () => {
+    const identity = vi.fn().mockRejectedValue(new Error('identity unavailable'));
+    const search = vi.fn();
+
+    const result = await traverseActiveMarket(input, {
+      browse: { search },
+      identity: { getUsername: identity },
+    });
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      unavailableReason: 'seller_identity_unavailable',
+      sellerExclusionApplied: false,
+    });
+    expect(identity).toHaveBeenCalledTimes(1);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when Browse is requested without a complete shipping context', async () => {
+    const search = vi.fn();
+    const identity = vi.fn().mockResolvedValue('private-seller');
+    const result = await traverseActiveMarket(
+      { ...input, shippingContext: undefined },
+      {
+        browse: { search },
+        identity: { getUsername: identity },
+        environment: {},
+      }
+    );
+
+    expect(result.status).toBe('unavailable');
+    expect(result.unavailableReason).toBe('missing_shipping_context');
+    expect(result.shippingContext).toBeNull();
+    expect(identity).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
   });
 });
 
@@ -337,6 +641,12 @@ describe('active-market projection and distributions', () => {
       { ...item('currency', 'currency'), shippingCost: { value: 1, currency: 'EUR' } },
       { ...item('negative', 'negative'), shippingCost: { value: -1, currency: 'USD' } },
       { ...item('nan', 'nan'), shippingCost: { value: Number.NaN, currency: 'USD' } },
+      { ...item('zero', 'zero'), shippingCost: { value: 0, currency: 'USD' } },
+      {
+        ...item('invalid-item', 'invalid-item'),
+        itemPrice: { value: -1, currency: 'USD' },
+        shippingCost: { value: 1, currency: 'USD' },
+      },
       { ...item('usable', 'usable'), shippingCost: { value: 1, currency: 'USD' } },
     ];
 
@@ -344,6 +654,8 @@ describe('active-market projection and distributions', () => {
       null,
       null,
       null,
+      null,
+      { value: 1.5, currency: 'USD' },
       null,
       { value: 2.5, currency: 'USD' },
     ]);

@@ -143,6 +143,11 @@ describe('buildPricingProviderInput', () => {
   it('reads saved Browse options for later pricing orchestration', () => {
     const listing = createListingRow({
       item_specifics: {
+        pricingModifierOptions: {
+          excludeAutographs: true,
+          excludeGraded: false,
+          excludeVariants: true,
+        },
         browsePricingOptions: {
           skipBrowse: true,
           minPriceMultiplier: 0.5,
@@ -151,10 +156,17 @@ describe('buildPricingProviderInput', () => {
       },
     });
 
-    expect(buildPricingProviderInput(listing, listing.listing_id).browsePricingOptions).toEqual({
+    const providerInput = buildPricingProviderInput(listing, listing.listing_id);
+
+    expect(providerInput.browsePricingOptions).toEqual({
       skipBrowse: true,
       minPriceMultiplier: 0.5,
       maxPriceMultiplier: 2,
+    });
+    expect(providerInput.pricingModifierOptions).toEqual({
+      excludeAutographs: true,
+      excludeGraded: false,
+      excludeVariants: true,
     });
   });
 

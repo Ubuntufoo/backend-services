@@ -172,4 +172,27 @@ describe('browse-pricing-options', () => {
       ['skipBrowse', 'minPriceMultiplier', 'maxPriceMultiplier'].sort()
     );
   });
+
+  it('uses stable rejection messages for invalid option fields', () => {
+    expect(() => normalizeBrowsePricingOptions({
+      skipBrowse: 'false',
+      minPriceMultiplier: 0.33,
+      maxPriceMultiplier: 3,
+    })).toThrow('skipBrowse must be a boolean.');
+    expect(() => normalizeBrowsePricingOptions({
+      skipBrowse: false,
+      minPriceMultiplier: 0,
+      maxPriceMultiplier: 3,
+    })).toThrow('minPriceMultiplier must be a finite positive number.');
+    expect(() => normalizeBrowsePricingOptions({
+      skipBrowse: false,
+      minPriceMultiplier: 0.33,
+      maxPriceMultiplier: Number.NaN,
+    })).toThrow('maxPriceMultiplier must be a finite positive number.');
+    expect(() => normalizeBrowsePricingOptions({
+      skipBrowse: false,
+      minPriceMultiplier: 3,
+      maxPriceMultiplier: 3,
+    })).toThrow('minPriceMultiplier must be less than maxPriceMultiplier.');
+  });
 });

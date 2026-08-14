@@ -23,6 +23,12 @@ export const ACTIVE_MARKET_TRAVERSAL_SAFEGUARDS = {
   maxOffset: 2_000,
 } as const;
 
+const BROWSE_CONTINUATION_PATH = '/buy/browse/v1/item_summary/search';
+const BROWSE_CONTINUATION_ORIGINS = new Set([
+  'https://api.ebay.com',
+  'https://api.sandbox.ebay.com',
+]);
+
 export interface BrowsePricingAnchor {
   value: number;
   currency: string;
@@ -459,7 +465,7 @@ export class ActiveMarketTraversal {
       commitPage();
 
       const nextOffset = parseContinuationOffset(next);
-      if (nextOffset === null) {
+      if (nextOffset === null || nextOffset <= offset) {
         return finish(base, startedAt, this.now, {
           status: 'available',
           incompleteReason: 'page_error',
@@ -560,6 +566,13 @@ function getSafeguardReason(
 function parseContinuationOffset(next: string): number | null {
   try {
     const url = new URL(next, 'https://api.ebay.com');
+    const isRelative = next.startsWith('/') && !next.startsWith('//');
+    if (
+      (!isRelative && !BROWSE_CONTINUATION_ORIGINS.has(url.origin)) ||
+      url.pathname !== BROWSE_CONTINUATION_PATH
+    ) {
+      return null;
+    }
     const offset = url.searchParams.get('offset');
     if (!offset || !/^\d+$/.test(offset)) return null;
     const parsed = Number(offset);
