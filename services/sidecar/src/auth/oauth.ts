@@ -25,6 +25,10 @@ interface OAuthErrorResponse {
   error_description?: string;
 }
 
+export interface OAuthRequestOptions {
+  signal?: AbortSignal;
+}
+
 const getAxiosErrorMessage = (error: unknown): string => {
   if (axios.isAxiosError<OAuthErrorResponse>(error)) {
     return error.response?.data?.error_description ?? error.message;
@@ -112,7 +116,9 @@ export class EbayOAuthClient {
    * 1. User access token (if available and valid, or refreshable)
    * 2. App access token from client credentials (fallback)
    */
-  async getAccessToken(): Promise<string> {
+  async getAccessToken(options?: OAuthRequestOptions): Promise<string> {
+    options?.signal?.throwIfAborted();
+
     // Try to use user token first
     if (this.userTokens) {
       // Check if access token is still valid
@@ -123,9 +129,14 @@ export class EbayOAuthClient {
       // Try to refresh if refresh token is valid
       if (!this.isUserRefreshTokenExpired(this.userTokens)) {
         try {
-          await this.refreshUserToken();
+          if (options === undefined) {
+            await this.refreshUserToken();
+          } else {
+            await this.refreshUserToken(options);
+          }
           return this.userTokens.userAccessToken;
         } catch (error) {
+          if (options?.signal?.aborted) throw error;
           authLogger.error('Failed to refresh user token, falling back to app access token', {
             error: error instanceof Error ? error.message : String(error),
           });
@@ -147,7 +158,11 @@ export class EbayOAuthClient {
       return this.appAccessToken;
     }
 
-    await this.getOrRefreshAppAccessToken();
+    if (options === undefined) {
+      await this.getOrRefreshAppAccessToken();
+    } else {
+      await this.getOrRefreshAppAccessToken(false, options);
+    }
     return this.appAccessToken!;
   }
 
@@ -181,7 +196,11 @@ export class EbayOAuthClient {
    * This method ensures that a valid app access token is always available.
    * Rate limit: 1,000 requests/day
    */
-  async getOrRefreshAppAccessToken(forceRefresh = false): Promise<string> {
+  async getOrRefreshAppAccessToken(
+    forceRefresh = false,
+    options?: OAuthRequestOptions
+  ): Promise<string> {
+    options?.signal?.throwIfAborted();
     if (forceRefresh) {
       this.appAccessToken = null;
       this.appAccessTokenExpiry = 0;
@@ -189,6 +208,7 @@ export class EbayOAuthClient {
 
     // Return cached token if still valid
     if (this.appAccessToken && !isTokenExpired(this.appAccessTokenExpiry)) {
+      options?.signal?.throwIfAborted();
       return this.appAccessToken;
     }
 
@@ -213,6 +233,7 @@ export class EbayOAuthClient {
             'Content-Type': 'application/x-www-form-urlencoded',
             Authorization: `Basic ${credentials}`,
           },
+          signal: options?.signal,
         }
       );
 
@@ -289,7 +310,9 @@ export class EbayOAuthClient {
    * Refresh user access token using the configured refresh token
    * This method is public and can be called by LLMs when encountering authentication errors
    */
-  async refreshUserToken(): Promise<void> {
+  async refreshUserToken(options?: OAuthRequestOptions): Promise<void> {
+    options?.signal?.throwIfAborted();
+
     if (!this.userTokens) {
       throw new Error('No user tokens available to refresh');
     }
@@ -317,6 +340,7 @@ export class EbayOAuthClient {
             'Content-Type': 'application/x-www-form-urlencoded',
             Authorization: `Basic ${credentials}`,
           },
+          signal: options?.signal,
         }
       );
 

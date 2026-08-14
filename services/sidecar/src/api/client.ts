@@ -12,6 +12,11 @@ interface AxiosConfigWithRetry extends AxiosRequestConfig {
   retryCount?: number;
 }
 
+function throwIfRequestAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Request deadline exceeded');
+}
+
 function redactEbayErrors(
   errors: EbayApiError['errors'] | undefined,
   token: string
@@ -333,8 +338,10 @@ export class EbayApiClient {
     config?: AxiosRequestConfig
   ): Promise<T> {
     this.validateAccessToken();
+    const signal = config?.signal as AbortSignal | undefined;
 
     const request = async (forceRefresh: boolean): Promise<T> => {
+      throwIfRequestAborted(signal);
       if (!this.rateLimitTracker.canMakeRequest()) {
         const stats = this.rateLimitTracker.getStats();
         throw new Error(
@@ -343,8 +350,13 @@ export class EbayApiClient {
       }
 
       const token = forceRefresh
-        ? await this.authClient.getOrRefreshAppAccessToken(true)
-        : await this.authClient.getOrRefreshAppAccessToken();
+        ? signal === undefined
+          ? await this.authClient.getOrRefreshAppAccessToken(true)
+          : await this.authClient.getOrRefreshAppAccessToken(true, { signal })
+        : signal === undefined
+          ? await this.authClient.getOrRefreshAppAccessToken()
+          : await this.authClient.getOrRefreshAppAccessToken(false, { signal });
+      throwIfRequestAborted(signal);
       this.rateLimitTracker.recordRequest();
 
       try {
@@ -514,8 +526,14 @@ export class EbayApiClient {
    * Make a GET request with a full URL (for APIs that use different base URLs)
    * Used by Identity API which uses apiz subdomain
    */
-  async getWithFullUrl<T = unknown>(fullUrl: string, params?: Record<string, unknown>): Promise<T> {
+  async getWithFullUrl<T = unknown>(
+    fullUrl: string,
+    params?: Record<string, unknown>,
+    config?: AxiosRequestConfig
+  ): Promise<T> {
     this.validateAccessToken();
+    const signal = config?.signal as AbortSignal | undefined;
+    throwIfRequestAborted(signal);
 
     // Check rate limit
     if (!this.rateLimitTracker.canMakeRequest()) {
@@ -526,7 +544,11 @@ export class EbayApiClient {
     }
 
     // Get auth token
-    let token = await this.authClient.getAccessToken();
+    let token =
+      signal === undefined
+        ? await this.authClient.getAccessToken()
+        : await this.authClient.getAccessToken({ signal });
+    throwIfRequestAborted(signal);
 
     // Record the request
     this.rateLimitTracker.recordRequest();
@@ -534,12 +556,14 @@ export class EbayApiClient {
     try {
       // Make request with full URL
       const response = await axios.get<T>(fullUrl, {
+        ...config,
         params,
         headers: {
-          Authorization: `Bearer ${token}`,
           ...this.getDefaultHeaders(),
+          ...config?.headers,
+          Authorization: `Bearer ${token}`,
         },
-        timeout: 30000,
+        timeout: config?.timeout ?? 30000,
       });
       return response.data;
     } catch (error) {
@@ -550,22 +574,33 @@ export class EbayApiClient {
         );
 
         try {
+          throwIfRequestAborted(signal);
           // Refresh the token
-          await this.authClient.refreshUserToken();
+          if (signal === undefined) {
+            await this.authClient.refreshUserToken();
+          } else {
+            await this.authClient.refreshUserToken({ signal });
+          }
 
           // Get the new token
-          token = await this.authClient.getAccessToken();
+          token =
+            signal === undefined
+              ? await this.authClient.getAccessToken()
+              : await this.authClient.getAccessToken({ signal });
+          throwIfRequestAborted(signal);
 
           apiLogger.info('Token refreshed successfully. Retrying request...');
 
           // Retry the request with the new token
           const response = await axios.get<T>(fullUrl, {
+            ...config,
             params,
             headers: {
-              Authorization: `Bearer ${token}`,
               ...this.getDefaultHeaders(),
+              ...config?.headers,
+              Authorization: `Bearer ${token}`,
             },
-            timeout: 30000,
+            timeout: config?.timeout ?? 30000,
           });
 
           return response.data;

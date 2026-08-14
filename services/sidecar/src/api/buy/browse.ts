@@ -22,6 +22,10 @@ export interface BrowseSearchPageInput {
     postalCode: string;
   };
   limit: number;
+  /** Per-request timeout used by bounded traversals. */
+  timeoutMs?: number;
+  /** Shared traversal cancellation signal. */
+  signal?: AbortSignal;
   offset?: number;
   next?: string;
 }
@@ -255,6 +259,12 @@ function validateInput(input: BrowseSearchPageInput): void {
   if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200) {
     throw new Error('limit must be an integer from 1 through 200');
   }
+  if (
+    input.timeoutMs !== undefined &&
+    (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0)
+  ) {
+    throw new Error('timeoutMs must be a positive finite number when provided');
+  }
   if (input.offset !== undefined && (!Number.isSafeInteger(input.offset) || input.offset < 0)) {
     throw new Error('offset must be a non-negative safe integer when provided');
   }
@@ -308,6 +318,8 @@ export class BrowseApi {
           'X-EBAY-C-MARKETPLACE-ID': input.marketplaceId,
           'X-EBAY-C-ENDUSERCTX': `contextualLocation=country=${input.context.country},zip=${input.context.postalCode}`,
         },
+        ...(input.timeoutMs === undefined ? {} : { timeout: input.timeoutMs }),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       }
     );
 
