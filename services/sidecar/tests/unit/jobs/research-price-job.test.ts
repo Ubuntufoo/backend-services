@@ -9,12 +9,14 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import { priceListingNow } from '@/jobs/research-price-job.js';
+import type { ActiveMarketTraversalInput } from '@/pricing/active-market.js';
 import {
   ApifyPricingProviderError,
   buildPricingSearchQuery,
   buildSoldCompsQuery,
   createProductionPricingAnalyst,
   SoldCompsPricingProviderError,
+  traverseActiveMarket,
 } from '@/pricing/index.js';
 
 const originalSoldCompsEnabled = process.env.SOLDCOMPS_ENABLED;
@@ -141,6 +143,32 @@ function createVictorComp(
     price: { currency: 'USD', value: price },
     soldDate,
     title,
+  };
+}
+
+function createBaselinePricingProvider() {
+  return {
+    fetchSoldComps: vi.fn().mockResolvedValue({
+      fetchedAt: '2026-06-12T10:05:00.000Z',
+      provider: 'apify',
+      query: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+      rawResult: { actorId: 'actor-123' },
+      soldComps: [
+        createVictorComp(
+          20,
+          '2026-06-01T10:00:00.000Z',
+          '2023 Panini Prizm Victor Wembanyama #136'
+        ),
+        createVictorComp(22, '2026-05-31T10:00:00.000Z', '2023 Panini Prizm Victor Wembanyama'),
+        createVictorComp(24, '2026-05-30T10:00:00.000Z', 'Panini Prizm Victor Wembanyama #136'),
+        createVictorComp(
+          26,
+          '2026-05-29T10:00:00.000Z',
+          '2023 Panini Prizm RC Victor Wembanyama #136'
+        ),
+      ],
+    }),
+    name: 'apify' as const,
   };
 }
 
@@ -430,6 +458,267 @@ describe('priceListingNow', () => {
       suggestedPrice: expect.any(Number),
     });
     expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('runs Browse as an isolated shadow branch from the condition-adjusted base anchor', async () => {
+    const listing = createListing({
+      item_specifics: {
+        ...createListing().item_specifics,
+        browsePricingOptions: {
+          skipBrowse: false,
+          minPriceMultiplier: 0.5,
+          maxPriceMultiplier: 2,
+        },
+      },
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketTraversal = vi.fn().mockResolvedValue({
+      acceptedCount: 1,
+      complete: true,
+      incompleteReason: null,
+      pagesScanned: 1,
+      status: 'available',
+      unavailableReason: null,
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    const shadowInput = activeMarketTraversal.mock.calls[0]?.[0] as ActiveMarketTraversalInput;
+    const persisted = spies.markSucceeded.mock.calls[0]?.[0];
+    expect(shadowInput).toMatchObject({
+      options: {
+        maxPriceMultiplier: 2,
+        minPriceMultiplier: 0.5,
+        skipBrowse: false,
+      },
+      providerInput: {
+        browsePricingOptions: {
+          maxPriceMultiplier: 2,
+          minPriceMultiplier: 0.5,
+          skipBrowse: false,
+        },
+      },
+    });
+    expect(shadowInput.anchor).toEqual({
+      basis: 'condition_adjusted_base_price_before_competitive_velocity',
+      currency: 'USD',
+      value: persisted.raw_result_json.finalPriceAdjustment.basePrice,
+    });
+    expect(persisted.raw_result_json).not.toHaveProperty('activeMarket');
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+    expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('keeps baseline persistence unchanged when active market is incomplete', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketTraversal = vi.fn().mockResolvedValue({
+      acceptedCount: 1,
+      complete: false,
+      incompleteReason: 'page_limit',
+      pagesScanned: 1,
+      status: 'available',
+      unavailableReason: null,
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    const persisted = spies.markSucceeded.mock.calls[0]?.[0];
+    expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
+    expect(persisted.suggested_price).toBe(result.suggestedPrice);
+    expect(persisted.raw_result_json.finalPriceAdjustment.finalPrice).toBe(result.suggestedPrice);
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+  });
+
+  it('keeps browse skip inside traversal and avoids Identity/Browse calls', async () => {
+    const listing = createListing({
+      item_specifics: {
+        ...createListing().item_specifics,
+        browsePricingOptions: {
+          skipBrowse: true,
+          minPriceMultiplier: 0.33,
+          maxPriceMultiplier: 3,
+        },
+      },
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const identity = vi.fn().mockResolvedValue('private-seller');
+    const search = vi.fn();
+    const activeMarketTraversal = vi
+      .fn()
+      .mockImplementation((input: ActiveMarketTraversalInput) =>
+        traverseActiveMarket(input, {
+          browse: { search },
+          identity: { getUsername: identity },
+        })
+      );
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
+    expect(identity).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+  });
+
+  it('isolates an active market shadow exception from baseline persistence and completion', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketTraversal = vi.fn().mockRejectedValue(new Error('Browse unavailable'));
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+    expect(spies.markFailed).not.toHaveBeenCalled();
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+    expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('keeps baseline persistence unchanged when active market is unavailable', async () => {
+    const listing = createListing();
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketTraversal = vi.fn().mockResolvedValue({
+      acceptedCount: 0,
+      complete: false,
+      incompleteReason: null,
+      pagesScanned: 0,
+      status: 'unavailable',
+      unavailableReason: 'api_failed',
+    });
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    const persisted = spies.markSucceeded.mock.calls[0]?.[0];
+    expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
+    expect(persisted.suggested_price).toBe(result.suggestedPrice);
+    expect(persisted.raw_result_json.finalPriceAdjustment.finalPrice).toBe(result.suggestedPrice);
+    expect(persisted.raw_result_json).not.toHaveProperty('activeMarket');
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+    expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('initializes the default active market facade before traversal', async () => {
+    const listing = createListing();
+    const { dataAccess } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const order: string[] = [];
+    const activeMarketApi = {
+      browse: {
+        search: vi.fn().mockImplementation(async () => {
+          order.push('browse');
+          return { items: [], next: null, total: 0 };
+        }),
+      },
+      identity: {
+        getUsername: vi.fn().mockImplementation(async () => {
+          order.push('identity');
+          return 'private-seller';
+        }),
+      },
+      initialize: vi.fn().mockImplementation(async () => {
+        order.push('initialize');
+      }),
+    } as never;
+    const createActiveMarketApi = vi.fn(() => activeMarketApi);
+
+    await priceListingNow(listing.listing_id, {
+      createActiveMarketApi,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+      pricingProviderEnv: {
+        EBAY_BROWSE_CONTEXT_COUNTRY: 'US',
+        EBAY_BROWSE_CONTEXT_POSTAL_CODE: '19406',
+        SOLDCOMPS_ENABLED: 'true',
+      },
+    });
+
+    expect(createActiveMarketApi).toHaveBeenCalledTimes(1);
+    expect(activeMarketApi.initialize).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['initialize', 'identity', 'browse']);
+  });
+
+  it('does not initialize or call eBay APIs for default browse skip', async () => {
+    const listing = createListing({
+      item_specifics: {
+        ...createListing().item_specifics,
+        browsePricingOptions: {
+          skipBrowse: true,
+          minPriceMultiplier: 0.33,
+          maxPriceMultiplier: 3,
+        },
+      },
+    });
+    const { dataAccess } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketApi = {
+      browse: { search: vi.fn() },
+      identity: { getUsername: vi.fn() },
+      initialize: vi.fn(),
+    } as never;
+    const createActiveMarketApi = vi.fn(() => activeMarketApi);
+
+    await priceListingNow(listing.listing_id, {
+      createActiveMarketApi,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    expect(createActiveMarketApi).toHaveBeenCalledTimes(1);
+    expect(activeMarketApi.initialize).not.toHaveBeenCalled();
+    expect(activeMarketApi.identity.getUsername).not.toHaveBeenCalled();
+    expect(activeMarketApi.browse.search).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke active market traversal when automatic pricing is disabled', async () => {
+    const listing = createListing({ auto_pricing_enabled: false });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketTraversal = vi.fn();
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    expect(activeMarketTraversal).not.toHaveBeenCalled();
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
   });
 
   it('blocks a negative top-condition modifier through persistence and listing update', async () => {
