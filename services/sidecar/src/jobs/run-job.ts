@@ -28,10 +28,10 @@ import {
   type PreparedGenerateListingDraftExecutionResult,
 } from '@/gemini/index.js';
 import {
-  parseExplicitSellerYearDirectives,
   sanitizeSetAspectValue,
   sanitizeTitleYearClaims,
 } from '@/gemini/year-normalization.js';
+import { parseAuthorizedSellerYears } from '@/gemini/seller-year-hints.js';
 import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
@@ -191,7 +191,7 @@ function getListingNotesHint(listing: ListingRow): string | undefined {
 }
 
 function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHints'] | undefined {
-  const explicitYears = parseExplicitSellerYearDirectives(listing.seller_hints);
+  const explicitYears = parseAuthorizedSellerYears(listing.seller_hints);
   if (explicitYears.length > 1) {
     throw new GeminiDraftValidationError([
       {
