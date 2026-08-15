@@ -9,7 +9,10 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JOB_ERROR_CODES } from '@/jobs/job-errors.js';
 import { priceListingNow } from '@/jobs/research-price-job.js';
-import type { ActiveMarketTraversalInput } from '@/pricing/active-market.js';
+import type {
+  ActiveMarketTraversalInput,
+  ActiveMarketTraversalResult,
+} from '@/pricing/active-market.js';
 import {
   ApifyPricingProviderError,
   buildPricingSearchQuery,
@@ -36,6 +39,7 @@ afterAll(() => {
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     approved_for_export_at: null,
+    auto_pricing_enabled: false,
     capture_mode: null,
     category_id: '261328',
     condition_id: '2750',
@@ -186,6 +190,85 @@ function createNormalizedComp(id: string, title: string, totalPrice: number) {
   };
 }
 
+function createActiveMarketResult(
+  overrides: Partial<ActiveMarketTraversalResult> = {}
+): ActiveMarketTraversalResult {
+  const acceptedItems = [
+    {
+      condition: 'Ungraded',
+      conditionId: '2750',
+      itemPrice: {
+        currency: 'USD',
+        value: 19,
+        oauth: { access_token: 'nested-secret' },
+        rawEbayPayload: { userId: 'nested-user' },
+        sellerUsername: 'nested-seller',
+      },
+      itemUrl: 'https://www.ebay.com/itm/active-1',
+      legacyItemId: 'active-1',
+      shippingCost: {
+        currency: 'USD',
+        value: 2,
+        oauth: { refresh_token: 'nested-refresh' },
+        rawEbayPayload: { sellerId: 'nested-seller-id' },
+      },
+      shippingType: 'CALCULATED',
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+      rawEbayPayload: { access_token: 'secret-token' },
+      sellerUsername: 'private-seller',
+    },
+    {
+      condition: 'Ungraded',
+      conditionId: '2750',
+      itemPrice: { currency: 'USD', value: 24 },
+      itemUrl: 'https://www.ebay.com/itm/active-2',
+      legacyItemId: 'active-2',
+      shippingCost: null,
+      shippingType: null,
+      title: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+    },
+  ];
+
+  return {
+    acceptedCount: acceptedItems.length,
+    acceptedItems,
+    anchor: {
+      basis: 'condition_adjusted_base_price_before_competitive_velocity',
+      currency: 'USD',
+      value: 23,
+    },
+    candidateRowsScanned: acceptedItems.length,
+    capturedAt: '2026-06-12T10:00:01.000Z',
+    complete: true,
+    exactAcceptedCount: acceptedItems.length,
+    incompleteReason: null,
+    itemPriceWindow: { currency: 'USD', max: 69, min: 7.59 },
+    latencyMs: 10,
+    multipliers: { maxPriceMultiplier: 3, minPriceMultiplier: 0.33 },
+    pagesScanned: 1,
+    query: {
+      buyingOption: 'FIXED_PRICE',
+      canonical: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+      categoryId: '261328',
+      conditionId: '2750',
+      marketplaceId: 'EBAY_US',
+    },
+    rejectionReasonCounts: {},
+    rejectedCount: 0,
+    safeguards: { maxDurationMs: 15_000, maxOffset: 2_000, maxPages: 10 },
+    sellerExclusionApplied: true,
+    shippingContext: {
+      basis: 'configured_contextual_location',
+      country: 'US',
+      postalCode: '19406',
+    },
+    skipReason: null,
+    status: 'available',
+    unavailableReason: null,
+    ...overrides,
+  };
+}
+
 function createResolvedAiModelRoute(
   overrides: Partial<ResolvedAiModelRoute> = {}
 ): ResolvedAiModelRoute {
@@ -216,6 +299,7 @@ function createDataAccess(
   options: {
     aiModelRouteError?: Error;
     aiModelRoutes?: ResolvedAiModelRoute[];
+    markSucceededError?: Error;
   } = {}
 ) {
   const getByListingId = vi.fn().mockResolvedValue(listing);
@@ -245,6 +329,12 @@ function createDataAccess(
   });
   const markSucceeded = vi.fn().mockImplementation(async (input) => {
     operationLog.push('research.markSucceeded');
+    if (
+      options.markSucceededError &&
+      operationLog.filter((entry) => entry === 'research.markSucceeded').length > 1
+    ) {
+      throw options.markSucceededError;
+    }
     return createResearchRow({
       confidence: input.confidence,
       id: input.id,
@@ -462,6 +552,7 @@ describe('priceListingNow', () => {
 
   it('runs Browse as an isolated shadow branch from the condition-adjusted base anchor', async () => {
     const listing = createListing({
+      auto_pricing_enabled: true,
       item_specifics: {
         ...createListing().item_specifics,
         browsePricingOptions: {
@@ -474,13 +565,11 @@ describe('priceListingNow', () => {
     const { dataAccess, spies } = createDataAccess(listing);
     const pricingProvider = createBaselinePricingProvider();
     const activeMarketTraversal = vi.fn().mockResolvedValue({
-      acceptedCount: 1,
-      complete: true,
-      incompleteReason: null,
-      pagesScanned: 1,
-      status: 'available',
-      unavailableReason: null,
-    });
+      ...createActiveMarketResult(),
+      oauth: { access_token: 'secret-token' },
+      sellerUsername: 'private-seller',
+      userId: 'commerce-user-id',
+    } as ActiveMarketTraversalResult);
 
     const result = await priceListingNow(listing.listing_id, {
       activeMarketTraversal,
@@ -491,6 +580,7 @@ describe('priceListingNow', () => {
 
     const shadowInput = activeMarketTraversal.mock.calls[0]?.[0] as ActiveMarketTraversalInput;
     const persisted = spies.markSucceeded.mock.calls[0]?.[0];
+    const attached = spies.markSucceeded.mock.calls[1]?.[0];
     expect(shadowInput).toMatchObject({
       options: {
         maxPriceMultiplier: 2,
@@ -511,22 +601,100 @@ describe('priceListingNow', () => {
       value: persisted.raw_result_json.finalPriceAdjustment.basePrice,
     });
     expect(persisted.raw_result_json).not.toHaveProperty('activeMarket');
+    expect(attached.raw_result_json.activeMarket).toEqual({
+      acceptedCount: 2,
+      anchor: {
+        basis: 'condition_adjusted_base_price_before_competitive_velocity',
+        currency: 'USD',
+        value: 23,
+      },
+      candidateRowsScanned: 2,
+      capturedAt: '2026-06-12T10:00:01.000Z',
+      complete: true,
+      competitors: [
+        {
+          condition: 'Ungraded',
+          conditionId: '2750',
+          itemPrice: { currency: 'USD', value: 19 },
+          itemUrl: 'https://www.ebay.com/itm/active-1',
+          legacyItemId: 'active-1',
+          shippingCost: { currency: 'USD', value: 2 },
+          shippingType: 'CALCULATED',
+          title: '2023 Panini Prizm Victor Wembanyama Rookie Card',
+          totalPrice: { currency: 'USD', value: 21 },
+        },
+        {
+          condition: 'Ungraded',
+          conditionId: '2750',
+          itemPrice: { currency: 'USD', value: 24 },
+          itemUrl: 'https://www.ebay.com/itm/active-2',
+          legacyItemId: 'active-2',
+          shippingCost: null,
+          shippingType: null,
+          title: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+          totalPrice: null,
+        },
+      ],
+      distributions: {
+        itemPrice: { currency: 'USD', high: 24, low: 19, median: 21.5 },
+        shippingKnownTotal: { currency: 'USD', high: 21, low: 21, median: 21 },
+      },
+      exactAcceptedCount: 2,
+      incompleteReason: null,
+      itemPriceWindow: { currency: 'USD', max: 69, min: 7.59 },
+      latencyMs: 10,
+      multipliers: { maxPriceMultiplier: 3, minPriceMultiplier: 0.33 },
+      pagesScanned: 1,
+      query: {
+        buyingOption: 'FIXED_PRICE',
+        canonical: '2023 Panini Prizm Victor Wembanyama Rookie Card 136',
+        categoryId: '261328',
+        conditionId: '2750',
+        marketplaceId: 'EBAY_US',
+      },
+      rejectionReasonCounts: {},
+      rejectedCount: 0,
+      safeguards: { maxDurationMs: 15_000, maxOffset: 2_000, maxPages: 10 },
+      sellerExclusionApplied: true,
+      shippingContext: {
+        basis: 'configured_contextual_location',
+        country: 'US',
+        postalCode: '19406',
+      },
+      shippingKnownAcceptedCount: 1,
+      skipReason: null,
+      status: 'available',
+      tacticalSellPrice: null,
+      unavailableReason: null,
+    });
+    expect(attached.raw_result_json.activeMarket).not.toHaveProperty('sellerUsername');
+    expect(attached.raw_result_json.activeMarket).not.toHaveProperty('userId');
+    expect(attached.raw_result_json.activeMarket).not.toHaveProperty('oauth');
+    expect(attached.raw_result_json.activeMarket.competitors[0]?.itemPrice).toEqual({
+      currency: 'USD',
+      value: 19,
+    });
+    expect(attached.raw_result_json.activeMarket.competitors[0]?.shippingCost).toEqual({
+      currency: 'USD',
+      value: 2,
+    });
+    const { activeMarket: _activeMarket, ...attachedBaseline } = attached.raw_result_json;
+    expect(attachedBaseline).toEqual(persisted.raw_result_json);
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
   it('keeps baseline persistence unchanged when active market is incomplete', async () => {
-    const listing = createListing();
+    const listing = createListing({ auto_pricing_enabled: true });
     const { dataAccess, spies } = createDataAccess(listing);
     const pricingProvider = createBaselinePricingProvider();
-    const activeMarketTraversal = vi.fn().mockResolvedValue({
-      acceptedCount: 1,
-      complete: false,
-      incompleteReason: 'page_limit',
-      pagesScanned: 1,
-      status: 'available',
-      unavailableReason: null,
-    });
+    const activeMarketTraversal = vi.fn().mockResolvedValue(
+      createActiveMarketResult({
+        complete: false,
+        exactAcceptedCount: null,
+        incompleteReason: 'page_limit',
+      })
+    );
 
     const result = await priceListingNow(listing.listing_id, {
       activeMarketTraversal,
@@ -536,14 +704,25 @@ describe('priceListingNow', () => {
     });
 
     const persisted = spies.markSucceeded.mock.calls[0]?.[0];
+    const attached = spies.markSucceeded.mock.calls[1]?.[0];
     expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
     expect(persisted.suggested_price).toBe(result.suggestedPrice);
     expect(persisted.raw_result_json.finalPriceAdjustment.finalPrice).toBe(result.suggestedPrice);
+    expect(attached.raw_result_json.activeMarket).toMatchObject({
+      complete: false,
+      competitors: expect.any(Array),
+      distributions: null,
+      exactAcceptedCount: null,
+      incompleteReason: 'page_limit',
+      status: 'available',
+      tacticalSellPrice: null,
+    });
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
   });
 
   it('keeps browse skip inside traversal and avoids Identity/Browse calls', async () => {
     const listing = createListing({
+      auto_pricing_enabled: true,
       item_specifics: {
         ...createListing().item_specifics,
         browsePricingOptions: {
@@ -576,12 +755,26 @@ describe('priceListingNow', () => {
     expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
     expect(identity).not.toHaveBeenCalled();
     expect(search).not.toHaveBeenCalled();
-    expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(2);
+    expect(spies.markSucceeded.mock.calls[1]?.[0]).toMatchObject({
+      id: 'listing-price-research-id',
+      raw_result_json: {
+        activeMarket: expect.objectContaining({
+          complete: false,
+          distributions: null,
+          exactAcceptedCount: null,
+          skipReason: 'browse_disabled',
+          status: 'skipped',
+          tacticalSellPrice: null,
+          unavailableReason: null,
+        }),
+      },
+    });
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
   });
 
   it('isolates an active market shadow exception from baseline persistence and completion', async () => {
-    const listing = createListing();
+    const listing = createListing({ auto_pricing_enabled: true });
     const { dataAccess, spies } = createDataAccess(listing);
     const pricingProvider = createBaselinePricingProvider();
     const activeMarketTraversal = vi.fn().mockRejectedValue(new Error('Browse unavailable'));
@@ -601,17 +794,21 @@ describe('priceListingNow', () => {
   });
 
   it('keeps baseline persistence unchanged when active market is unavailable', async () => {
-    const listing = createListing();
+    const listing = createListing({ auto_pricing_enabled: true });
     const { dataAccess, spies } = createDataAccess(listing);
     const pricingProvider = createBaselinePricingProvider();
-    const activeMarketTraversal = vi.fn().mockResolvedValue({
-      acceptedCount: 0,
-      complete: false,
-      incompleteReason: null,
-      pagesScanned: 0,
-      status: 'unavailable',
-      unavailableReason: 'api_failed',
-    });
+    const activeMarketTraversal = vi.fn().mockResolvedValue(
+      createActiveMarketResult({
+        acceptedCount: 0,
+        acceptedItems: [],
+        candidateRowsScanned: 0,
+        complete: false,
+        exactAcceptedCount: null,
+        pagesScanned: 0,
+        status: 'unavailable',
+        unavailableReason: 'api_failed',
+      })
+    );
 
     const result = await priceListingNow(listing.listing_id, {
       activeMarketTraversal,
@@ -621,16 +818,56 @@ describe('priceListingNow', () => {
     });
 
     const persisted = spies.markSucceeded.mock.calls[0]?.[0];
+    const attached = spies.markSucceeded.mock.calls[1]?.[0];
     expect(activeMarketTraversal).toHaveBeenCalledTimes(1);
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(2);
     expect(persisted.suggested_price).toBe(result.suggestedPrice);
     expect(persisted.raw_result_json.finalPriceAdjustment.finalPrice).toBe(result.suggestedPrice);
     expect(persisted.raw_result_json).not.toHaveProperty('activeMarket');
+    expect(attached.raw_result_json.activeMarket).toMatchObject({
+      complete: false,
+      distributions: null,
+      exactAcceptedCount: null,
+      incompleteReason: null,
+      status: 'unavailable',
+      tacticalSellPrice: null,
+      unavailableReason: 'api_failed',
+    });
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
     expect(result.listing.price).toBe(result.suggestedPrice);
   });
 
+  it('keeps baseline success when active-market attachment persistence fails', async () => {
+    const listing = createListing({ auto_pricing_enabled: true });
+    const { dataAccess, spies } = createDataAccess(listing, createAppSettings(), {
+      markSucceededError: new Error('active-market attachment failed'),
+    });
+    const pricingProvider = createBaselinePricingProvider();
+    const activeMarketTraversal = vi.fn().mockResolvedValue(createActiveMarketResult());
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider,
+    });
+
+    expect(result.listing.price).toBe(result.suggestedPrice);
+    expect(spies.markSucceeded).toHaveBeenCalledTimes(2);
+    expect(spies.markFailed).not.toHaveBeenCalled();
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, {
+      price: result.suggestedPrice,
+    });
+    expect(spies.operationLog).toEqual([
+      'research.create',
+      'research.markSucceeded',
+      'listing.update',
+      'research.markSucceeded',
+    ]);
+  });
+
   it('initializes the default active market facade before traversal', async () => {
-    const listing = createListing();
+    const listing = createListing({ auto_pricing_enabled: true });
     const { dataAccess } = createDataAccess(listing);
     const pricingProvider = createBaselinePricingProvider();
     const order: string[] = [];
@@ -672,6 +909,7 @@ describe('priceListingNow', () => {
 
   it('does not initialize or call eBay APIs for default browse skip', async () => {
     const listing = createListing({
+      auto_pricing_enabled: true,
       item_specifics: {
         ...createListing().item_specifics,
         browsePricingOptions: {

@@ -36,6 +36,7 @@ import {
 import { ProductionPricingAnalystError } from '@/pricing/production-llm-pricing-analyst.js';
 import { computePricingStats } from '@/pricing/stats.js';
 import {
+  buildActiveMarketSnapshot,
   traverseActiveMarket,
   type ActiveMarketTraversalInput,
   type ActiveMarketTraversalResult,
@@ -1343,6 +1344,104 @@ function isQualifyingSoldCompsFallbackFailure(
   );
 }
 
+function projectActiveMarketPersistenceSnapshot(
+  result: ActiveMarketTraversalResult
+): Json {
+  const snapshot = buildActiveMarketSnapshot(
+    result.acceptedItems,
+    result.status === 'available' && result.complete
+  );
+  const complete = snapshot.complete;
+
+  return asJson({
+    status: result.status,
+    skipReason: result.skipReason,
+    unavailableReason: result.unavailableReason,
+    incompleteReason: result.incompleteReason,
+    capturedAt: result.capturedAt,
+    anchor: result.anchor
+      ? {
+          basis: result.anchor.basis,
+          currency: result.anchor.currency,
+          value: result.anchor.value,
+        }
+      : null,
+    multipliers: result.multipliers
+      ? {
+          maxPriceMultiplier: result.multipliers.maxPriceMultiplier,
+          minPriceMultiplier: result.multipliers.minPriceMultiplier,
+        }
+      : null,
+    itemPriceWindow: result.itemPriceWindow
+      ? {
+          currency: result.itemPriceWindow.currency,
+          max: result.itemPriceWindow.max,
+          min: result.itemPriceWindow.min,
+        }
+      : null,
+    query: {
+      canonical: result.query.canonical,
+      marketplaceId: result.query.marketplaceId,
+      categoryId: result.query.categoryId,
+      conditionId: result.query.conditionId,
+      buyingOption: result.query.buyingOption,
+    },
+    sellerExclusionApplied: result.sellerExclusionApplied,
+    shippingContext: result.shippingContext
+      ? {
+          basis: result.shippingContext.basis,
+          country: result.shippingContext.country,
+          postalCode: result.shippingContext.postalCode,
+        }
+      : null,
+    safeguards: {
+      maxPages: result.safeguards.maxPages,
+      maxDurationMs: result.safeguards.maxDurationMs,
+      maxOffset: result.safeguards.maxOffset,
+    },
+    pagesScanned: result.pagesScanned,
+    candidateRowsScanned: result.candidateRowsScanned,
+    complete,
+    exactAcceptedCount: snapshot.exactAcceptedCount,
+    acceptedCount: result.acceptedCount,
+    rejectedCount: result.rejectedCount,
+    rejectionReasonCounts: { ...result.rejectionReasonCounts },
+    distributions: complete
+      ? {
+          itemPrice: snapshot.itemPriceDistribution,
+          shippingKnownTotal: snapshot.shippingKnownTotalDistribution,
+        }
+      : null,
+    shippingKnownAcceptedCount: snapshot.shippingKnownAcceptedCount,
+    latencyMs: result.latencyMs,
+    tacticalSellPrice: null,
+    competitors: snapshot.competitors.map((competitor) => ({
+      legacyItemId: competitor.legacyItemId,
+      title: competitor.title,
+      condition: competitor.condition,
+      conditionId: competitor.conditionId,
+      itemPrice: {
+        value: competitor.itemPrice.value,
+        currency: competitor.itemPrice.currency,
+      },
+      shippingCost: competitor.shippingCost
+        ? {
+            value: competitor.shippingCost.value,
+            currency: competitor.shippingCost.currency,
+          }
+        : null,
+      shippingType: competitor.shippingType,
+      totalPrice: competitor.totalPrice
+        ? {
+            value: competitor.totalPrice.value,
+            currency: competitor.totalPrice.currency,
+          }
+        : null,
+      itemUrl: competitor.itemUrl,
+    })),
+  });
+}
+
 async function runActiveMarketShadow(
   listing: ListingRow,
   listingId: string,
@@ -1350,9 +1449,9 @@ async function runActiveMarketShadow(
   selectedBasePrice: number,
   baselineCurrency: string | null,
   dependencies: ResearchPriceJobDependencies
-): Promise<void> {
+): Promise<ActiveMarketTraversalResult | null> {
   if (listing.auto_pricing_enabled === false || !baselineCurrency) {
-    return;
+    return null;
   }
 
   const input: ActiveMarketTraversalInput = {
@@ -1392,12 +1491,14 @@ async function runActiveMarketShadow(
       status: result.status,
       unavailableReason: result.unavailableReason,
     });
+    return result;
   } catch (error) {
     jobLogger.warn('Active-market shadow traversal failed; baseline retained.', {
       errorType: error instanceof Error ? error.name : typeof error,
       event: 'research_price_active_market_shadow_failed',
       listingId,
     });
+    return null;
   }
 }
 
@@ -1603,6 +1704,35 @@ async function persistSucceededResearch(
     sold_count: input.soldCount,
     suggested_price: input.suggestedPrice,
   });
+}
+
+async function persistActiveMarketSnapshotBestEffort(
+  dataAccess: SidecarDataAccess,
+  input: {
+    listingId: string;
+    researchId: string;
+    rawResultJson: Json;
+    traversalResult: ActiveMarketTraversalResult;
+  }
+): Promise<void> {
+  try {
+    const activeMarket = projectActiveMarketPersistenceSnapshot(input.traversalResult);
+    const baselineRawResult = isRecord(input.rawResultJson) ? input.rawResultJson : {};
+
+    await dataAccess.listingPriceResearch.markSucceeded({
+      id: input.researchId,
+      raw_result_json: asJson({
+        ...baselineRawResult,
+        activeMarket,
+      }),
+    });
+  } catch (error) {
+    jobLogger.warn('Failed to attach active-market snapshot; baseline retained.', {
+      errorType: error instanceof Error ? error.name : typeof error,
+      event: 'research_price_active_market_snapshot_persist_failed',
+      listingId: input.listingId,
+    });
+  }
 }
 
 export async function priceListingNow(
@@ -1882,7 +2012,7 @@ export async function priceListingNow(
     const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
       price: finalSuggestedPrice,
     });
-    await runActiveMarketShadow(
+    const activeMarketResult = await runActiveMarketShadow(
       listing,
       listingId,
       providerInput!,
@@ -1890,6 +2020,14 @@ export async function priceListingNow(
       stats.currency,
       dependencies
     );
+    if (activeMarketResult && research) {
+      await persistActiveMarketSnapshotBestEffort(dependencies.dataAccess, {
+        listingId,
+        rawResultJson: pricingRawResult,
+        researchId: research.id,
+        traversalResult: activeMarketResult,
+      });
+    }
 
     jobLogger.info(getResearchPriceLogMessage('succeeded', options.executionSource), {
       acceptedCompCount: normalizedCompCount,
