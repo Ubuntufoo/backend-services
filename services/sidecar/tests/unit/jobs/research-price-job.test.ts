@@ -176,6 +176,26 @@ function createBaselinePricingProvider() {
   };
 }
 
+function createBaselinePricingAnalyst() {
+  return {
+    analyze: vi.fn().mockResolvedValue({
+      modelName: 'test-analyst',
+      prompt: { systemInstruction: 'system', userPrompt: 'user' },
+      rawOutput: { source: 'test' },
+      reasoning: {
+        confidence: 'high',
+        conditionAdjustedPrice: 23,
+        conditionAdjustmentPercent: 0,
+        conditionAdjustmentReason: 'Exact target accepted.',
+        priceExplanation: 'Condition-aware baseline accepted.',
+        rejectedCompIds: [],
+        selectedCompIds: ['comp-1', 'comp-2', 'comp-3', 'comp-4'],
+      },
+    }),
+    name: 'test-analyst' as const,
+  };
+}
+
 function createNormalizedComp(id: string, title: string, totalPrice: number) {
   return {
     condition: null,
@@ -864,6 +884,170 @@ describe('priceListingNow', () => {
       'listing.update',
       'research.markSucceeded',
     ]);
+  });
+
+  it.each([
+    {
+      name: 'Browse success',
+      result: createActiveMarketResult(),
+      expectAttachment: true,
+    },
+    {
+      name: 'explicit skip',
+      result: createActiveMarketResult({
+        acceptedCount: 0,
+        acceptedItems: [],
+        candidateRowsScanned: 0,
+        complete: false,
+        exactAcceptedCount: null,
+        pagesScanned: 0,
+        skipReason: 'browse_disabled',
+        status: 'skipped',
+      }),
+      expectAttachment: true,
+    },
+    {
+      name: 'Browse/API failure',
+      result: createActiveMarketResult({
+        acceptedCount: 0,
+        acceptedItems: [],
+        candidateRowsScanned: 0,
+        complete: false,
+        exactAcceptedCount: null,
+        pagesScanned: 0,
+        status: 'unavailable',
+        unavailableReason: 'api_failed',
+      }),
+      expectAttachment: true,
+    },
+    {
+      name: 'Browse timeout/time-limit',
+      result: createActiveMarketResult({
+        complete: false,
+        exactAcceptedCount: null,
+        incompleteReason: 'time_limit',
+        status: 'available',
+      }),
+      expectAttachment: true,
+    },
+    {
+      name: 'malformed Browse result',
+      result: {} as ActiveMarketTraversalResult,
+      expectAttachment: false,
+    },
+    {
+      name: 'partial/incomplete after usable rows',
+      result: createActiveMarketResult({
+        complete: false,
+        exactAcceptedCount: null,
+        incompleteReason: 'page_limit',
+        status: 'available',
+      }),
+      expectAttachment: true,
+    },
+  ])('isolates the unchanged LLM baseline from $name', async ({ result, expectAttachment }) => {
+    const baselineListing = createListing();
+    const baselineAccess = createDataAccess(baselineListing);
+    const baselineProvider = createBaselinePricingProvider();
+    const baselineAnalyst = createBaselinePricingAnalyst();
+    const baseline = await priceListingNow(baselineListing.listing_id, {
+      dataAccess: baselineAccess.dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: baselineAnalyst,
+      pricingProvider: baselineProvider,
+    });
+    const baselinePersistence = baselineAccess.spies.markSucceeded.mock.calls[0]?.[0];
+    const baselineRaw = baselinePersistence?.raw_result_json;
+    const withoutLatency = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+      const record = raw as Record<string, unknown>;
+      const diagnostics = record.diagnostics;
+      if (!diagnostics || typeof diagnostics !== 'object' || Array.isArray(diagnostics)) {
+        return raw;
+      }
+      const { latency: _latency, ...stableDiagnostics } = diagnostics as Record<string, unknown>;
+      return { ...record, diagnostics: stableDiagnostics };
+    };
+
+    const listing = createListing({ auto_pricing_enabled: true });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const pricingProvider = createBaselinePricingProvider();
+    const pricingAnalyst = createBaselinePricingAnalyst();
+    const activeMarketTraversal = vi.fn().mockResolvedValue(result);
+
+    const actual = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst,
+      pricingProvider,
+    });
+
+    const firstPersistence = spies.markSucceeded.mock.calls[0]?.[0];
+    const normalizePersistence = (persistence: unknown) => {
+      if (!persistence || typeof persistence !== 'object' || Array.isArray(persistence)) {
+        return persistence;
+      }
+      const record = persistence as Record<string, unknown>;
+      return {
+        ...record,
+        raw_result_json: withoutLatency(record.raw_result_json),
+      };
+    };
+    expect(pricingProvider.fetchSoldComps).toHaveBeenCalledTimes(1);
+    expect(pricingAnalyst.analyze).toHaveBeenCalledTimes(1);
+    expect(actual).toMatchObject({
+      acceptedCompCount: baseline.acceptedCompCount,
+      provider: baseline.provider,
+      rawCompCount: baseline.rawCompCount,
+      selectedProviderMode: baseline.selectedProviderMode,
+      suggestedPrice: baseline.suggestedPrice,
+    });
+    expect(actual.listing.price).toBe(baseline.listing.price);
+    expect(normalizePersistence(firstPersistence)).toEqual(
+      normalizePersistence(baselinePersistence)
+    );
+    expect(firstPersistence.suggested_price).toBe(baseline.suggestedPrice);
+    expect(withoutLatency(firstPersistence.raw_result_json)).toEqual(withoutLatency(baselineRaw));
+    expect(firstPersistence.raw_result_json).not.toHaveProperty('activeMarket');
+    expect(spies.markFailed).not.toHaveBeenCalled();
+    expect(spies.operationLog.slice(0, 3)).toEqual([
+      'research.create',
+      'research.markSucceeded',
+      'listing.update',
+    ]);
+
+    if (expectAttachment) {
+      expect(spies.markSucceeded).toHaveBeenCalledTimes(2);
+      const attachment = spies.markSucceeded.mock.calls[1]?.[0];
+      expect(Object.keys(attachment).sort()).toEqual(['id', 'raw_result_json']);
+      const { activeMarket: _activeMarket, ...attachmentBaseline } = attachment.raw_result_json;
+      expect(attachmentBaseline).toEqual(firstPersistence.raw_result_json);
+      expect(attachment.raw_result_json.activeMarket).toMatchObject({
+        tacticalSellPrice: null,
+      });
+      expect(attachment.raw_result_json.activeMarket).not.toHaveProperty('suggested_price');
+      expect(attachment.raw_result_json.activeMarket).not.toHaveProperty('finalPriceAdjustment');
+      if (result.complete === false) {
+        expect(attachment.raw_result_json.activeMarket).toMatchObject({
+          distributions: null,
+          exactAcceptedCount: null,
+        });
+      }
+      expect(spies.operationLog).toEqual([
+        'research.create',
+        'research.markSucceeded',
+        'listing.update',
+        'research.markSucceeded',
+      ]);
+    } else {
+      expect(spies.markSucceeded).toHaveBeenCalledTimes(1);
+      expect(spies.operationLog).toEqual([
+        'research.create',
+        'research.markSucceeded',
+        'listing.update',
+      ]);
+    }
   });
 
   it('initializes the default active market facade before traversal', async () => {
@@ -2208,7 +2392,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(4.79);
+    expect(result.suggestedPrice).toBe(4.75);
     expect(spies.resolveForTask).toHaveBeenCalledWith({
       provider: 'google',
       requireJsonOutput: true,
@@ -2253,13 +2437,13 @@ describe('priceListingNow', () => {
             recentAcceptedCompCount: 4,
             salesVelocityTier: 'medium',
             salesVelocityDiscountPercent: 2.5,
-            finalPrice: 4.79,
+            finalPrice: 4.75,
           },
         }),
-        suggested_price: 4.79,
+        suggested_price: 4.75,
       })
     );
-    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 4.79 });
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 4.75 });
     expect(spies.markSucceeded.mock.calls[0]?.[0]?.llm_reasoning_json).not.toHaveProperty(
       'warnings'
     );
@@ -2682,7 +2866,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.46);
+    expect(result.suggestedPrice).toBe(5.45);
     expect(executeModel).not.toHaveBeenCalled();
     expect(spies.incrementGeminiCallsUsed).not.toHaveBeenCalled();
     expect(spies.markSucceeded).toHaveBeenCalledWith(
@@ -2712,13 +2896,13 @@ describe('priceListingNow', () => {
             recentAcceptedCompCount: 4,
             salesVelocityTier: 'medium',
             salesVelocityDiscountPercent: 2.5,
-            finalPrice: 5.46,
+            finalPrice: 5.45,
           },
         }),
-        suggested_price: 5.46,
+        suggested_price: 5.45,
       })
     );
-    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 5.46 });
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: 5.45 });
   });
 
   it('uses valid exact condition-adjusted target as final price', async () => {
@@ -2797,7 +2981,7 @@ describe('priceListingNow', () => {
       },
     });
 
-    expect(result.suggestedPrice).toBe(5.21);
+    expect(result.suggestedPrice).toBe(5.2);
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         llm_reasoning_json: expect.objectContaining({
@@ -2807,7 +2991,7 @@ describe('priceListingNow', () => {
             conditionAdjustmentPercent: -0.0441,
           }),
         }),
-        suggested_price: 5.21,
+        suggested_price: 5.2,
       })
     );
   });
@@ -2903,7 +3087,7 @@ describe('priceListingNow', () => {
             }),
           ],
         }),
-        suggested_price: 5.46,
+        suggested_price: 5.45,
       })
     );
   });
@@ -2992,7 +3176,7 @@ describe('priceListingNow', () => {
             }),
           ],
         }),
-        suggested_price: 5.46,
+        suggested_price: 5.45,
       })
     );
   });
@@ -3072,7 +3256,7 @@ describe('priceListingNow', () => {
       pricingAnalyst: productionAnalyst,
     });
 
-    expect(result.suggestedPrice).toBe(5.46);
+    expect(result.suggestedPrice).toBe(5.45);
     expect(spies.markSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         llm_reasoning_json: expect.objectContaining({
@@ -3105,7 +3289,7 @@ describe('priceListingNow', () => {
           ],
         }),
         pricing_model_name: 'gemma-4-31b-it',
-        suggested_price: 5.46,
+        suggested_price: 5.45,
       })
     );
 
