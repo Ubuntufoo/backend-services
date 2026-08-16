@@ -552,7 +552,7 @@ function nullableCount(value: unknown): number | null | undefined {
   return asCount(value) ?? undefined;
 }
 
-function nullableNumber(value: unknown): number | null | undefined {
+function nullableCurrencyAmount(value: unknown): number | null | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -561,7 +561,15 @@ function nullableNumber(value: unknown): number | null | undefined {
     return null;
   }
 
-  return asNumber(value) ?? undefined;
+  const amount = asPositiveNumber(value);
+  if (amount === null) {
+    return undefined;
+  }
+
+  const cents = Math.round(amount * 100);
+  return Number.isSafeInteger(cents) && Math.abs(amount * 100 - cents) < 1e-9
+    ? Number(amount.toFixed(2))
+    : undefined;
 }
 
 function mapRequiredActiveMarketMoney(value: unknown): ListingActiveMarketMoney | undefined {
@@ -1033,9 +1041,9 @@ function buildLatestPricingResearchActiveMarket(
     return null;
   }
 
-  const tacticalSellPrice = nullableNumber(activeMarket.tacticalSellPrice);
+  const tacticalSellPrice = nullableCurrencyAmount(activeMarket.tacticalSellPrice);
 
-  if (tacticalSellPrice === undefined || tacticalSellPrice !== null) {
+  if (tacticalSellPrice === undefined) {
     return null;
   }
 

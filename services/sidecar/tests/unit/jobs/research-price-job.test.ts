@@ -289,6 +289,29 @@ function createActiveMarketResult(
   };
 }
 
+function createQualifiedActiveMarketResult(
+  overrides: Partial<ActiveMarketTraversalResult> = {}
+): ActiveMarketTraversalResult {
+  const base = createActiveMarketResult();
+  const acceptedItems = Array.from({ length: 20 }, (_, index) => ({
+    ...base.acceptedItems[index % 2]!,
+    legacyItemId: `active-qualified-${index}`,
+    itemPrice: { currency: 'USD', value: 10 + index },
+    shippingCost: { currency: 'USD', value: 1 },
+    shippingType: 'CALCULATED',
+  }));
+
+  return {
+    ...base,
+    acceptedItems,
+    acceptedCount: acceptedItems.length,
+    candidateRowsScanned: acceptedItems.length,
+    exactAcceptedCount: acceptedItems.length,
+    shippingContext: base.shippingContext,
+    ...overrides,
+  };
+}
+
 function createResolvedAiModelRoute(
   overrides: Partial<ResolvedAiModelRoute> = {}
 ): ResolvedAiModelRoute {
@@ -701,7 +724,105 @@ describe('priceListingNow', () => {
     const { activeMarket: _activeMarket, ...attachedBaseline } = attached.raw_result_json;
     expect(attachedBaseline).toEqual(persisted.raw_result_json);
     expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+    expect(spies.operationLog).toEqual([
+      'research.create',
+      'research.markSucceeded',
+      'listing.update',
+      'research.markSucceeded',
+    ]);
     expect(result.listing.price).toBe(result.suggestedPrice);
+  });
+
+  it('persists a qualifying tactical price without changing baseline price', async () => {
+    const listing = createListing({ auto_pricing_enabled: true, ese_eligible: false });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const activeMarketTraversal = vi.fn().mockResolvedValue(createQualifiedActiveMarketResult());
+
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider: createBaselinePricingProvider(),
+    });
+
+    const baseline = spies.markSucceeded.mock.calls[0]?.[0];
+    const attached = spies.markSucceeded.mock.calls[1]?.[0];
+    expect(attached?.raw_result_json.activeMarket.tacticalSellPrice).toBe(13.95);
+    expect(baseline?.suggested_price).toBe(result.suggestedPrice);
+    expect(spies.update).toHaveBeenCalledWith(listing.listing_id, { price: result.suggestedPrice });
+    expect(spies.operationLog).toEqual([
+      'research.create',
+      'research.markSucceeded',
+      'listing.update',
+      'research.markSucceeded',
+    ]);
+    expect(attached?.raw_result_json.activeMarket).not.toHaveProperty('suggested_price');
+    expect(attached?.raw_result_json.activeMarket).not.toHaveProperty('finalPriceAdjustment');
+  });
+
+  it('does not treat combined-policy eligibility alone as proof of free own shipping', async () => {
+    const listing = createListing({
+      auto_pricing_enabled: true,
+      condition_id: '4000',
+      ese_eligible: true,
+    });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const analyst = createBaselinePricingAnalyst();
+    analyst.analyze.mockResolvedValueOnce({
+      modelName: 'test-analyst',
+      prompt: { systemInstruction: 'system', userPrompt: 'user' },
+      rawOutput: { source: 'test' },
+      reasoning: {
+        confidence: 'high',
+        conditionAdjustedPrice: 15,
+        conditionAdjustmentPercent: 0,
+        conditionAdjustmentReason: 'Exact target accepted.',
+        priceExplanation: 'Condition-aware baseline accepted.',
+        rejectedCompIds: [],
+        selectedCompIds: ['comp-1', 'comp-2', 'comp-3', 'comp-4'],
+      },
+    });
+
+    const activeMarketTraversal = vi.fn().mockResolvedValue(createQualifiedActiveMarketResult());
+    const result = await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingAnalyst: analyst,
+      pricingProvider: createBaselinePricingProvider(),
+    });
+
+    const attached = spies.markSucceeded.mock.calls[1]?.[0];
+    expect(result.suggestedPrice).toBeLessThan(20);
+    expect(attached?.raw_result_json.activeMarket.tacticalSellPrice).toBe(13.95);
+  });
+
+  it.each([
+    { label: 'null exact count', overrides: { exactAcceptedCount: null } },
+    { label: 'mismatched exact count', overrides: { exactAcceptedCount: 19 } },
+    { label: 'mismatched accepted count', overrides: { acceptedCount: 19 } },
+  ])('fails closed for complete Browse evidence with $label', async ({ overrides }) => {
+    const listing = createListing({ auto_pricing_enabled: true });
+    const { dataAccess, spies } = createDataAccess(listing);
+    const activeMarketTraversal = vi.fn().mockResolvedValue(
+      createQualifiedActiveMarketResult(overrides)
+    );
+
+    await priceListingNow(listing.listing_id, {
+      activeMarketTraversal,
+      dataAccess,
+      now: () => new Date('2026-06-12T10:00:00.000Z'),
+      pricingProvider: createBaselinePricingProvider(),
+    });
+
+    const attached = spies.markSucceeded.mock.calls[1]?.[0];
+    expect(attached?.raw_result_json.activeMarket).toMatchObject({
+      complete: false,
+      exactAcceptedCount: null,
+      status: 'unavailable',
+      tacticalSellPrice: null,
+      unavailableReason: 'malformed_response',
+    });
   });
 
   it('keeps baseline persistence unchanged when active market is incomplete', async () => {

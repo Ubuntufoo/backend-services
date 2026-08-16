@@ -129,7 +129,7 @@ export interface ActiveMarketSnapshot {
   shippingKnownAcceptedCount: number;
   itemPriceDistribution: PriceDistribution | null;
   shippingKnownTotalDistribution: PriceDistribution | null;
-  tacticalSellPrice: null;
+  tacticalSellPrice: number | null;
 }
 
 export function projectActiveMarketCompetitor(item: BrowseSearchPageItem): ActiveMarketCompetitor {

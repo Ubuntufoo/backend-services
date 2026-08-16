@@ -41,6 +41,7 @@ import {
   type ActiveMarketTraversalInput,
   type ActiveMarketTraversalResult,
 } from '@/pricing/active-market.js';
+import { computeTacticalSellPrice } from '@/pricing/tactical-price.js';
 import type {
   ConditionAdjustmentSummary,
   LlmPricingPromptFactKey,
@@ -1344,19 +1345,34 @@ function isQualifyingSoldCompsFallbackFailure(
   );
 }
 
-function projectActiveMarketPersistenceSnapshot(
-  result: ActiveMarketTraversalResult
-): Json {
+function projectActiveMarketPersistenceSnapshot(result: ActiveMarketTraversalResult): Json {
+  const completeEvidenceIsConsistent =
+    result.status === 'available' &&
+    result.complete &&
+    Number.isSafeInteger(result.exactAcceptedCount) &&
+    result.exactAcceptedCount === result.acceptedItems.length &&
+    result.acceptedCount === result.acceptedItems.length;
+  const persistedStatus =
+    result.status === 'available' && result.complete && !completeEvidenceIsConsistent
+      ? 'unavailable'
+      : result.status;
+  const persistedUnavailableReason =
+    persistedStatus === 'unavailable' && result.status === 'available' && result.complete
+      ? 'malformed_response'
+      : result.unavailableReason;
   const snapshot = buildActiveMarketSnapshot(
     result.acceptedItems,
-    result.status === 'available' && result.complete
+    completeEvidenceIsConsistent
   );
   const complete = snapshot.complete;
+  const tacticalSellPrice = complete
+    ? computeTacticalSellPrice(snapshot, null)
+    : null;
 
   return asJson({
-    status: result.status,
+    status: persistedStatus,
     skipReason: result.skipReason,
-    unavailableReason: result.unavailableReason,
+    unavailableReason: persistedUnavailableReason,
     incompleteReason: result.incompleteReason,
     capturedAt: result.capturedAt,
     anchor: result.anchor
@@ -1414,7 +1430,7 @@ function projectActiveMarketPersistenceSnapshot(
       : null,
     shippingKnownAcceptedCount: snapshot.shippingKnownAcceptedCount,
     latencyMs: result.latencyMs,
-    tacticalSellPrice: null,
+    tacticalSellPrice,
     competitors: snapshot.competitors.map((competitor) => ({
       legacyItemId: competitor.legacyItemId,
       title: competitor.title,

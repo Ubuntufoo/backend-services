@@ -742,16 +742,24 @@ describe('serializeLatestPricingResearch active_market', () => {
       label: 'unavailable with complete true',
       overrides: { status: 'unavailable', unavailableReason: 'missing_anchor' },
     },
-    {
-      label: 'non-null tacticalSellPrice',
-      overrides: { tacticalSellPrice: 42.5 },
-    },
+    { label: 'non-positive tacticalSellPrice', overrides: { tacticalSellPrice: 0 } },
+    { label: 'fractional-cent tacticalSellPrice', overrides: { tacticalSellPrice: 42.505 } },
   ])('omits active_market when $label', ({ overrides }) => {
     const result = serializeLatestPricingResearch(
       createResearch({ raw_result_json: { activeMarket: createActiveMarket(overrides) } })
     );
 
     expect(result?.active_market).toBeUndefined();
+  });
+
+  it('serializes a valid nullable tactical sell price', () => {
+    const result = serializeLatestPricingResearch(
+      createResearch({
+        raw_result_json: { activeMarket: createActiveMarket({ tacticalSellPrice: 42.5 }) },
+      })
+    );
+
+    expect(result?.active_market?.tactical_sell_price).toBe(42.5);
   });
 
   it.each([
