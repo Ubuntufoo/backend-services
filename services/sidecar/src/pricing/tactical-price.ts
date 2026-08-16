@@ -46,7 +46,10 @@ export function computeTacticalSellPrice(
     itemValues.push(itemPrice.value);
 
     const totalPrice = competitor.totalPrice;
-    if (totalPrice !== null && isFiniteNonNegativeUsd(totalPrice.value, totalPrice.currency)) {
+    if (totalPrice !== null) {
+      if (!isFiniteNonNegativeUsd(totalPrice.value, totalPrice.currency)) {
+        return null;
+      }
       landedValues.push(totalPrice.value);
     }
   }
