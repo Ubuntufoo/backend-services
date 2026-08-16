@@ -78,7 +78,7 @@ function getVelocityAdjustment(recentAcceptedCompCount: number): {
   return { discountPercent: 5, tier: 'low' };
 }
 
-function roundFinalListingPrice(value: number): number {
+export function roundFinalListingPrice(value: number): number {
   const roundedDownToNickel = Math.floor((value + 1e-9) * 20) / 20;
   let roundedCents = Math.round(roundedDownToNickel * 100);
 
