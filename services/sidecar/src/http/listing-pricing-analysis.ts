@@ -1,5 +1,16 @@
 import type { ListingPriceResearchRow, ListingRow } from '@ebay-inventory/data';
 import type {
+  ListingActiveMarketAnchor,
+  ListingActiveMarketCompetitor,
+  ListingActiveMarketDistribution,
+  ListingActiveMarketDistributions,
+  ListingActiveMarketItemPriceWindow,
+  ListingActiveMarketMoney,
+  ListingActiveMarketMultipliers,
+  ListingActiveMarketQuery,
+  ListingActiveMarketSafeguards,
+  ListingActiveMarketShippingContext,
+  ListingLatestPricingResearchActiveMarket,
   ListingLatestPricingResearchFailureSummary,
   ListingLatestPricingResearchCompSummary,
   ListingLatestPricingResearchPriceAdjustment,
@@ -164,9 +175,9 @@ function hasProviderRoutingFailureEvidence(value: unknown): boolean {
 
   return Boolean(
     record &&
-      (hasExplicitProviderFailureDetails(record) ||
-        firstRawString(record.provider, record.query, record.message) ||
-        asRecord(record.rawResult))
+    (hasExplicitProviderFailureDetails(record) ||
+      firstRawString(record.provider, record.query, record.message) ||
+      asRecord(record.rawResult))
   );
 }
 
@@ -299,7 +310,9 @@ function getLatestPricingResearchCompSummary(
   const selectedCompIds = asStringArray(reasoning?.selectedCompIds);
   const rejectedCompIdsFromRow = asStringArray(research.llm_rejected_comp_ids);
   const rejectedCompIds =
-    rejectedCompIdsFromRow.length > 0 ? rejectedCompIdsFromRow : asStringArray(reasoning?.rejectedCompIds);
+    rejectedCompIdsFromRow.length > 0
+      ? rejectedCompIdsFromRow
+      : asStringArray(reasoning?.rejectedCompIds);
   const normalizationAcceptedCount =
     firstCount(
       diagnostics?.normalizationAcceptedCount,
@@ -412,10 +425,15 @@ function buildFailureSummary(
     hasProviderRoutingFailureEvidence(firstProviderFailure);
   const allCounts = [
     providerReturnedCount,
-    firstCount(diagnostics?.rawCompCount, diagnostics?.normalizationInputCount, normalization?.rawCount),
+    firstCount(
+      diagnostics?.rawCompCount,
+      diagnostics?.normalizationInputCount,
+      normalization?.rawCount
+    ),
   ].filter((value): value is number => value !== null);
   const zeroCountsOnly = allCounts.length > 0 && allCounts.every((value) => value === 0);
-  const zeroContext = hasZeroResultsText(research.error_message) || hasZeroResultsText(failure?.message);
+  const zeroContext =
+    hasZeroResultsText(research.error_message) || hasZeroResultsText(failure?.message);
 
   if (
     (providerReturnedCount ?? 0) > 0 &&
@@ -430,7 +448,11 @@ function buildFailureSummary(
     };
   }
 
-  if (zeroCountsOnly || (providerReturnedCount === 0 && !hasProviderFailureContext) || zeroContext) {
+  if (
+    zeroCountsOnly ||
+    (providerReturnedCount === 0 && !hasProviderFailureContext) ||
+    zeroContext
+  ) {
     return {
       ...baseSummary,
       ...countSummary,
@@ -470,6 +492,581 @@ function buildFailureSummary(
   };
 }
 
+const ACTIVE_MARKET_STATUSES = new Set(['available', 'skipped', 'unavailable']);
+
+const ACTIVE_MARKET_BUYING_OPTION = 'FIXED_PRICE';
+const ACTIVE_MARKET_ANCHOR_BASIS = 'condition_adjusted_base_price_before_competitive_velocity';
+const ACTIVE_MARKET_SHIPPING_CONTEXT_BASIS = 'configured_contextual_location';
+
+const ACTIVE_MARKET_SKIP_REASONS = new Set(['browse_disabled']);
+const ACTIVE_MARKET_UNAVAILABLE_REASONS = new Set([
+  'missing_anchor',
+  'invalid_options',
+  'missing_shipping_context',
+  'seller_identity_unavailable',
+  'time_limit',
+  'auth_failed',
+  'api_failed',
+  'malformed_response',
+]);
+const ACTIVE_MARKET_INCOMPLETE_REASONS = new Set([
+  'page_limit',
+  'time_limit',
+  'offset_limit',
+  'page_error',
+]);
+
+function requiredString(value: unknown): string | undefined {
+  return asString(value) ?? undefined;
+}
+
+function nullableString(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return asString(value) ?? undefined;
+}
+
+function requiredBoolean(value: unknown): boolean | undefined {
+  return asBoolean(value) ?? undefined;
+}
+
+function requiredCount(value: unknown): number | undefined {
+  return asCount(value) ?? undefined;
+}
+
+function nullableCount(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return asCount(value) ?? undefined;
+}
+
+function nullableNumber(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return asNumber(value) ?? undefined;
+}
+
+function mapRequiredActiveMarketMoney(value: unknown): ListingActiveMarketMoney | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const amount = asNumber(record.value);
+  const currency = asString(record.currency);
+
+  if (amount === null || !currency) {
+    return undefined;
+  }
+
+  return { value: amount, currency };
+}
+
+function mapNullableActiveMarketMoney(value: unknown): ListingActiveMarketMoney | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return mapRequiredActiveMarketMoney(value);
+}
+
+function mapRequiredActiveMarketDistribution(
+  value: unknown
+): ListingActiveMarketDistribution | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const low = asNumber(record.low);
+  const median = asNumber(record.median);
+  const high = asNumber(record.high);
+  const currency = asString(record.currency);
+
+  if (low === null || median === null || high === null || !currency) {
+    return undefined;
+  }
+
+  return { low, median, high, currency };
+}
+
+function mapNullableActiveMarketDistribution(
+  value: unknown
+): ListingActiveMarketDistribution | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return mapRequiredActiveMarketDistribution(value);
+}
+
+function mapActiveMarketQuery(value: unknown): ListingActiveMarketQuery | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const marketplaceId = requiredString(record.marketplaceId);
+  const buyingOption = requiredString(record.buyingOption);
+  const canonical = nullableString(record.canonical);
+  const categoryId = nullableString(record.categoryId);
+  const conditionId = nullableString(record.conditionId);
+
+  if (
+    !marketplaceId ||
+    buyingOption !== ACTIVE_MARKET_BUYING_OPTION ||
+    canonical === undefined ||
+    categoryId === undefined ||
+    conditionId === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    canonical,
+    marketplace_id: marketplaceId,
+    category_id: categoryId,
+    condition_id: conditionId,
+    buying_option: buyingOption,
+  };
+}
+
+function mapActiveMarketAnchor(value: unknown): ListingActiveMarketAnchor | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const amount = asNumber(record.value);
+  const currency = asString(record.currency);
+  const basis = asString(record.basis);
+
+  if (amount === null || !currency || basis !== ACTIVE_MARKET_ANCHOR_BASIS) {
+    return undefined;
+  }
+
+  return { value: amount, currency, basis };
+}
+
+function mapActiveMarketMultipliers(
+  value: unknown
+): ListingActiveMarketMultipliers | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const minPriceMultiplier = asNumber(record.minPriceMultiplier);
+  const maxPriceMultiplier = asNumber(record.maxPriceMultiplier);
+
+  if (minPriceMultiplier === null || maxPriceMultiplier === null) {
+    return undefined;
+  }
+
+  return {
+    min_price_multiplier: minPriceMultiplier,
+    max_price_multiplier: maxPriceMultiplier,
+  };
+}
+
+function mapActiveMarketItemPriceWindow(
+  value: unknown
+): ListingActiveMarketItemPriceWindow | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const min = asNumber(record.min);
+  const max = asNumber(record.max);
+  const currency = asString(record.currency);
+
+  if (min === null || max === null || !currency) {
+    return undefined;
+  }
+
+  return { min, max, currency };
+}
+
+function mapActiveMarketShippingContext(
+  value: unknown
+): ListingActiveMarketShippingContext | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const country = asString(record.country);
+  const postalCode = asString(record.postalCode);
+  const basis = asString(record.basis);
+
+  if (!country || !postalCode || basis !== ACTIVE_MARKET_SHIPPING_CONTEXT_BASIS) {
+    return undefined;
+  }
+
+  return { country, postal_code: postalCode, basis };
+}
+
+function mapActiveMarketSafeguards(value: unknown): ListingActiveMarketSafeguards | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const maxPages = requiredCount(record.maxPages);
+  const maxDurationMs = requiredCount(record.maxDurationMs);
+  const maxOffset = requiredCount(record.maxOffset);
+
+  if (maxPages === undefined || maxDurationMs === undefined || maxOffset === undefined) {
+    return undefined;
+  }
+
+  return {
+    max_pages: maxPages,
+    max_duration_ms: maxDurationMs,
+    max_offset: maxOffset,
+  };
+}
+
+function mapActiveMarketRejectionReasonCounts(value: unknown): Record<string, number> | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const counts: Record<string, number> = {};
+
+  for (const [rawKey, countValue] of Object.entries(record)) {
+    const key = sanitizeReasonCountKey(rawKey);
+    const count = asCount(countValue);
+
+    if (!key || count === null) {
+      return undefined;
+    }
+
+    counts[key] = (counts[key] ?? 0) + count;
+  }
+
+  return counts;
+}
+
+function mapActiveMarketCompetitors(value: unknown): ListingActiveMarketCompetitor[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const competitors: ListingActiveMarketCompetitor[] = [];
+
+  for (const entry of value) {
+    const record = asRecord(entry);
+
+    if (!record) {
+      return undefined;
+    }
+
+    const legacyItemId = requiredString(record.legacyItemId);
+    const title = requiredString(record.title);
+    const itemUrl = requiredString(record.itemUrl);
+    const itemPrice = mapRequiredActiveMarketMoney(record.itemPrice);
+    const condition = nullableString(record.condition);
+    const conditionId = nullableString(record.conditionId);
+    const shippingType = nullableString(record.shippingType);
+    const shippingCost = mapNullableActiveMarketMoney(record.shippingCost);
+    const totalPrice = mapNullableActiveMarketMoney(record.totalPrice);
+
+    if (
+      !legacyItemId ||
+      !title ||
+      !itemUrl ||
+      !itemPrice ||
+      condition === undefined ||
+      conditionId === undefined ||
+      shippingType === undefined ||
+      shippingCost === undefined ||
+      totalPrice === undefined
+    ) {
+      return undefined;
+    }
+
+    competitors.push({
+      legacy_item_id: legacyItemId,
+      title,
+      condition,
+      condition_id: conditionId,
+      item_price: itemPrice,
+      shipping_cost: shippingCost,
+      shipping_type: shippingType,
+      total_price: totalPrice,
+      item_url: itemUrl,
+    });
+  }
+
+  return competitors;
+}
+
+function mapActiveMarketDistributions(
+  value: unknown,
+  complete: boolean
+): ListingActiveMarketDistributions | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return complete ? undefined : null;
+  }
+
+  if (!complete) {
+    return undefined;
+  }
+
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const itemPrice = mapNullableActiveMarketDistribution(record.itemPrice);
+  const shippingKnownTotal = mapNullableActiveMarketDistribution(record.shippingKnownTotal);
+
+  if (itemPrice === undefined || shippingKnownTotal === undefined) {
+    return undefined;
+  }
+
+  return {
+    item_price: itemPrice,
+    shipping_known_total: shippingKnownTotal,
+  };
+}
+
+function buildLatestPricingResearchActiveMarket(
+  research: ListingPriceResearchRow
+): ListingLatestPricingResearchActiveMarket | null {
+  const rawResult = asRecord(research.raw_result_json);
+  const activeMarket = asRecord(rawResult?.activeMarket);
+
+  if (!activeMarket) {
+    return null;
+  }
+
+  const status = requiredString(activeMarket.status);
+  const capturedAt = requiredString(activeMarket.capturedAt);
+  const complete = requiredBoolean(activeMarket.complete);
+
+  if (!status || !ACTIVE_MARKET_STATUSES.has(status) || !capturedAt || complete === undefined) {
+    return null;
+  }
+
+  const skipReason = nullableString(activeMarket.skipReason);
+  const unavailableReason = nullableString(activeMarket.unavailableReason);
+  const incompleteReason = nullableString(activeMarket.incompleteReason);
+
+  if (
+    skipReason === undefined ||
+    unavailableReason === undefined ||
+    incompleteReason === undefined
+  ) {
+    return null;
+  }
+
+  if (skipReason !== null && !ACTIVE_MARKET_SKIP_REASONS.has(skipReason)) {
+    return null;
+  }
+  if (unavailableReason !== null && !ACTIVE_MARKET_UNAVAILABLE_REASONS.has(unavailableReason)) {
+    return null;
+  }
+  if (incompleteReason !== null && !ACTIVE_MARKET_INCOMPLETE_REASONS.has(incompleteReason)) {
+    return null;
+  }
+
+  if (status === 'skipped' && skipReason === null) {
+    return null;
+  }
+  if (status !== 'skipped' && skipReason !== null) {
+    return null;
+  }
+  if (status === 'unavailable' && unavailableReason === null) {
+    return null;
+  }
+  if (status !== 'unavailable' && unavailableReason !== null) {
+    return null;
+  }
+  if ((status === 'skipped' || status === 'unavailable') && complete) {
+    return null;
+  }
+
+  const incompleteAvailable = status === 'available' && !complete;
+  if (incompleteAvailable && incompleteReason === null) {
+    return null;
+  }
+  if (!incompleteAvailable && incompleteReason !== null) {
+    return null;
+  }
+
+  const exactAcceptedCount = nullableCount(activeMarket.exactAcceptedCount);
+
+  if (exactAcceptedCount === undefined) {
+    return null;
+  }
+  if (complete && exactAcceptedCount === null) {
+    return null;
+  }
+  if (!complete && exactAcceptedCount !== null) {
+    return null;
+  }
+
+  const pagesScanned = requiredCount(activeMarket.pagesScanned);
+  const candidateRowsScanned = requiredCount(activeMarket.candidateRowsScanned);
+  const acceptedCount = requiredCount(activeMarket.acceptedCount);
+  const rejectedCount = requiredCount(activeMarket.rejectedCount);
+  const shippingKnownAcceptedCount = requiredCount(activeMarket.shippingKnownAcceptedCount);
+  const latencyMs = requiredCount(activeMarket.latencyMs);
+  const sellerExclusionApplied = requiredBoolean(activeMarket.sellerExclusionApplied);
+
+  if (
+    pagesScanned === undefined ||
+    candidateRowsScanned === undefined ||
+    acceptedCount === undefined ||
+    rejectedCount === undefined ||
+    shippingKnownAcceptedCount === undefined ||
+    latencyMs === undefined ||
+    sellerExclusionApplied === undefined
+  ) {
+    return null;
+  }
+
+  const query = mapActiveMarketQuery(activeMarket.query);
+  const safeguards = mapActiveMarketSafeguards(activeMarket.safeguards);
+  const rejectionReasonCounts = mapActiveMarketRejectionReasonCounts(
+    activeMarket.rejectionReasonCounts
+  );
+  const competitors = mapActiveMarketCompetitors(activeMarket.competitors);
+
+  if (!query || !safeguards || !rejectionReasonCounts || !competitors) {
+    return null;
+  }
+
+  const anchor = mapActiveMarketAnchor(activeMarket.anchor);
+  const multipliers = mapActiveMarketMultipliers(activeMarket.multipliers);
+  const itemPriceWindow = mapActiveMarketItemPriceWindow(activeMarket.itemPriceWindow);
+  const shippingContext = mapActiveMarketShippingContext(activeMarket.shippingContext);
+
+  if (
+    anchor === undefined ||
+    multipliers === undefined ||
+    itemPriceWindow === undefined ||
+    shippingContext === undefined
+  ) {
+    return null;
+  }
+
+  const distributions = mapActiveMarketDistributions(activeMarket.distributions, complete);
+
+  if (distributions === undefined) {
+    return null;
+  }
+
+  const tacticalSellPrice = nullableNumber(activeMarket.tacticalSellPrice);
+
+  if (tacticalSellPrice === undefined || tacticalSellPrice !== null) {
+    return null;
+  }
+
+  return {
+    status: status as ListingLatestPricingResearchActiveMarket['status'],
+    skip_reason: skipReason,
+    unavailable_reason: unavailableReason,
+    incomplete_reason: incompleteReason,
+    captured_at: capturedAt,
+    anchor,
+    multipliers,
+    item_price_window: itemPriceWindow,
+    query,
+    seller_exclusion_applied: sellerExclusionApplied,
+    shipping_context: shippingContext,
+    safeguards,
+    pages_scanned: pagesScanned,
+    candidate_rows_scanned: candidateRowsScanned,
+    complete,
+    exact_accepted_count: exactAcceptedCount,
+    accepted_count: acceptedCount,
+    rejected_count: rejectedCount,
+    rejection_reason_counts: rejectionReasonCounts,
+    distributions,
+    shipping_known_accepted_count: shippingKnownAcceptedCount,
+    latency_ms: latencyMs,
+    tactical_sell_price: tacticalSellPrice,
+    competitors,
+  };
+}
+
 export function serializeLatestPricingResearch(
   research: ListingPriceResearchRow | null
 ): ListingLatestPricingResearchSummary | null {
@@ -490,9 +1087,11 @@ export function serializeLatestPricingResearch(
     terapeakMinPrice === null || medianSoldPrice === null
       ? null
       : Math.max(terapeakMinPrice, Math.floor(medianSoldPrice * 3));
+  const activeMarket = buildLatestPricingResearchActiveMarket(research);
 
   return {
     comp_summary: getLatestPricingResearchCompSummary(research),
+    ...(activeMarket ? { active_market: activeMarket } : {}),
     confidence: asString(research.confidence),
     created_at: research.created_at,
     error_code: asString(research.error_code),
@@ -542,25 +1141,17 @@ function buildPriceAdjustment(
   const listingConditionLabel =
     listingConditionSignalValue === null ? null : asString(listingConditionSignal?.label);
   const listingConditionScore = asNullableNumber(conditionAdjustment?.listingConditionScore);
-  const compMedianConditionScore = asNullableNumber(
-    conditionAdjustment?.compMedianConditionScore
-  );
+  const compMedianConditionScore = asNullableNumber(conditionAdjustment?.compMedianConditionScore);
   const observedConditionDelta = asNullableNumber(conditionAdjustment?.conditionDelta);
   const rawConditionPercent = asNullableNumber(allowedAdjustment?.rawPercent);
   const medianSoldPrice = asPositiveNumber(conditionAdjustment?.deterministicMedianPrice);
   const conditionAdjustedPrice = asPositiveNumber(finalPriceAdjustment?.basePrice);
-  const competitiveDiscountPercent = asNumber(
-    finalPriceAdjustment?.competitiveDiscountPercent
-  );
-  const competitiveAdjustedPrice = asPositiveNumber(
-    finalPriceAdjustment?.competitiveAdjustedPrice
-  );
+  const competitiveDiscountPercent = asNumber(finalPriceAdjustment?.competitiveDiscountPercent);
+  const competitiveAdjustedPrice = asPositiveNumber(finalPriceAdjustment?.competitiveAdjustedPrice);
   const recentWindowDays = asCount(finalPriceAdjustment?.recentWindowDays);
   const recentAcceptedCompCount = asCount(finalPriceAdjustment?.recentAcceptedCompCount);
   const salesVelocityTier = asString(finalPriceAdjustment?.salesVelocityTier);
-  const salesVelocityDiscountPercent = asNumber(
-    finalPriceAdjustment?.salesVelocityDiscountPercent
-  );
+  const salesVelocityDiscountPercent = asNumber(finalPriceAdjustment?.salesVelocityDiscountPercent);
   const finalSuggestedPrice = asPositiveNumber(finalPriceAdjustment?.finalPrice);
   const explicitCompConditionCount = asCount(conditionAdjustment?.explicitCompConditionCount);
   const conditionReason = asString(allowedAdjustment?.reason);

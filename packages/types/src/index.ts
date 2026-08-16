@@ -214,8 +214,102 @@ export interface ListingLatestPricingResearchPriceAdjustment {
   final_suggested_price: number;
 }
 
+export interface ListingActiveMarketMoney {
+  value: number;
+  currency: string;
+}
+
+export interface ListingActiveMarketAnchor {
+  value: number;
+  currency: string;
+  basis: string;
+}
+
+export interface ListingActiveMarketMultipliers {
+  min_price_multiplier: number;
+  max_price_multiplier: number;
+}
+
+export interface ListingActiveMarketItemPriceWindow {
+  min: number;
+  max: number;
+  currency: string;
+}
+
+export interface ListingActiveMarketQuery {
+  canonical: string | null;
+  marketplace_id: string;
+  category_id: string | null;
+  condition_id: string | null;
+  buying_option: string;
+}
+
+export interface ListingActiveMarketShippingContext {
+  country: string;
+  postal_code: string;
+  basis: string;
+}
+
+export interface ListingActiveMarketSafeguards {
+  max_pages: number;
+  max_duration_ms: number;
+  max_offset: number;
+}
+
+export interface ListingActiveMarketDistribution {
+  low: number;
+  median: number;
+  high: number;
+  currency: string;
+}
+
+export interface ListingActiveMarketDistributions {
+  item_price: ListingActiveMarketDistribution | null;
+  shipping_known_total: ListingActiveMarketDistribution | null;
+}
+
+export interface ListingActiveMarketCompetitor {
+  legacy_item_id: string;
+  title: string;
+  condition: string | null;
+  condition_id: string | null;
+  item_price: ListingActiveMarketMoney;
+  shipping_cost: ListingActiveMarketMoney | null;
+  shipping_type: string | null;
+  total_price: ListingActiveMarketMoney | null;
+  item_url: string;
+}
+
+export interface ListingLatestPricingResearchActiveMarket {
+  status: 'available' | 'skipped' | 'unavailable';
+  skip_reason: string | null;
+  unavailable_reason: string | null;
+  incomplete_reason: string | null;
+  captured_at: string;
+  anchor: ListingActiveMarketAnchor | null;
+  multipliers: ListingActiveMarketMultipliers | null;
+  item_price_window: ListingActiveMarketItemPriceWindow | null;
+  query: ListingActiveMarketQuery;
+  seller_exclusion_applied: boolean;
+  shipping_context: ListingActiveMarketShippingContext | null;
+  safeguards: ListingActiveMarketSafeguards;
+  pages_scanned: number;
+  candidate_rows_scanned: number;
+  complete: boolean;
+  exact_accepted_count: number | null;
+  accepted_count: number;
+  rejected_count: number;
+  rejection_reason_counts: Record<string, number>;
+  distributions: ListingActiveMarketDistributions | null;
+  shipping_known_accepted_count: number;
+  latency_ms: number;
+  tactical_sell_price: number | null;
+  competitors: ListingActiveMarketCompetitor[];
+}
+
 export interface ListingLatestPricingResearchSummary {
   comp_summary: ListingLatestPricingResearchCompSummary;
+  active_market?: ListingLatestPricingResearchActiveMarket;
   confidence: string | null;
   created_at: string;
   error_code: string | null;
