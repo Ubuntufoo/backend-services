@@ -46,10 +46,7 @@ export function computeTacticalSellPrice(
     itemValues.push(itemPrice.value);
 
     const totalPrice = competitor.totalPrice;
-    if (
-      totalPrice !== null &&
-      isFiniteNonNegativeUsd(totalPrice.value, totalPrice.currency)
-    ) {
+    if (totalPrice !== null && isFiniteNonNegativeUsd(totalPrice.value, totalPrice.currency)) {
       landedValues.push(totalPrice.value);
     }
   }
@@ -62,9 +59,7 @@ export function computeTacticalSellPrice(
     snapshot.shippingKnownTotalDistribution !== null;
 
   const selectedValues =
-    landedQualifies && isKnownFreeShipping(ourEffectiveBuyerShipping)
-      ? landedValues
-      : itemValues;
+    landedQualifies && isKnownFreeShipping(ourEffectiveBuyerShipping) ? landedValues : itemValues;
 
   const q1 = nearestRankQ1(selectedValues);
   if (q1 === null) return null;

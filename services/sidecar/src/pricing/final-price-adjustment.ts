@@ -41,8 +41,7 @@ export function computeFinalPriceAdjustment(input: {
     );
   }).length;
   const velocityAdjustment = getVelocityAdjustment(recentAcceptedCompCount);
-  const competitivelyAdjustedPrice =
-    input.basePrice * (1 - COMPETITIVE_DISCOUNT_PERCENT / 100);
+  const competitivelyAdjustedPrice = input.basePrice * (1 - COMPETITIVE_DISCOUNT_PERCENT / 100);
   const finalPrice = roundFinalListingPrice(
     competitivelyAdjustedPrice * (1 - velocityAdjustment.discountPercent / 100)
   );
