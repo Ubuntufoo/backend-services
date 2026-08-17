@@ -40,7 +40,12 @@ const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'pricingModifierOptions',
   'skuCategoryCode',
 ]);
-const DESCRIPTION_LABELS = ['Condition & Photography:', 'Combined Shipping:'] as const;
+const DESCRIPTION_LABELS = [
+  'Condition & Photography:',
+  'Shipping:',
+  'Combined Shipping:',
+  'Feedback:',
+] as const;
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];
@@ -194,7 +199,9 @@ export function mapListingToInventoryItemPayload(
       },
     },
     condition: mapListingConditionIdToInventoryCondition(listing.condition_id ?? undefined),
-    conditionDescription: hasConditionDescriptors ? undefined : listing.condition_notes ?? undefined,
+    conditionDescription: hasConditionDescriptors
+      ? undefined
+      : (listing.condition_notes ?? undefined),
     conditionDescriptors: options.conditionDescriptors,
     packageWeightAndSize: buildPackageWeightAndSize(listing, appSettings),
     product: {
