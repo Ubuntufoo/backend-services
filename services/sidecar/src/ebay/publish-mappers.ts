@@ -42,8 +42,8 @@ const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
 ]);
 const DESCRIPTION_LABELS = [
   'Condition & Photography:',
-  'Shipping:',
   'Combined Shipping:',
+  'Shipping:',
   'Feedback:',
 ] as const;
 
