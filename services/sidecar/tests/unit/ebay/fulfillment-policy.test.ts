@@ -62,9 +62,9 @@ const groundPolicy = {
       optionType: 'DOMESTIC',
       shippingServices: [
         {
-          shippingCarrierCode: 'USPS',
+          shippingCarrierCode: 'FedEx',
           shippingCost: { currency: 'USD', value: '6.49' },
-          shippingServiceCode: 'USPSParcel',
+          shippingServiceCode: 'FedExSmartPost',
           sortOrder: 1,
         },
         {
@@ -172,8 +172,8 @@ describe('fulfillment policy selection', () => {
 });
 
 describe('combined fulfillment policy setup', () => {
-  it('uses the canonical Ground Advantage source policy name', () => {
-    expect(GROUND_FULFILLMENT_POLICY_NAME).toBe('$6.49 Domestic Shipping - 5 Day');
+  it('uses the canonical FedEx Ground Economy source policy name', () => {
+    expect(GROUND_FULFILLMENT_POLICY_NAME).toBe('$6.49 FedEx Ground Economy - 5 Day');
   });
 
   it('preserves source service fields without mutating source policies', () => {
@@ -186,7 +186,7 @@ describe('combined fulfillment policy setup', () => {
     expect(services).toHaveLength(3);
     expect(services?.map((service) => service.shippingServiceCode)).toEqual([
       'US_eBayStandardEnvelope',
-      'USPSParcel',
+      'FedExSmartPost',
       'Pickup',
     ]);
     expect(services?.map((service) => service.sortOrder)).toEqual([1, 2, 3]);
@@ -260,7 +260,7 @@ describe('combined fulfillment policy setup', () => {
     expect(request.shippingOptions[0].shippingServices).toHaveLength(3);
   });
 
-  it('fails closed when Ground Advantage is missing or ambiguous', () => {
+  it('fails closed when FedEx Ground Economy is missing or ambiguous', () => {
     expect(() =>
       buildCombinedFulfillmentPolicyRequest({
         esePolicy,
@@ -272,8 +272,8 @@ describe('combined fulfillment policy setup', () => {
               shippingServices: [
                 {
                   ...groundPolicy.shippingOptions[0]?.shippingServices?.[0],
-                  shippingServiceCode: 'FedExHomeDelivery',
-                  shippingCarrierCode: 'FEDEX',
+                  shippingServiceCode: 'USPSPriority',
+                  shippingCarrierCode: 'USPS',
                 },
                 groundPolicy.shippingOptions[0]?.shippingServices?.[1],
               ],
@@ -281,7 +281,7 @@ describe('combined fulfillment policy setup', () => {
           ],
         },
       })
-    ).toThrow('USPS Ground Advantage service');
+    ).toThrow('FedEx Ground Economy service');
 
     expect(() =>
       buildCombinedFulfillmentPolicyRequest({
@@ -302,7 +302,7 @@ describe('combined fulfillment policy setup', () => {
           ],
         },
       })
-    ).toThrow('USPS Ground Advantage service');
+    ).toThrow('FedEx Ground Economy service');
   });
 
   it('fails closed when eBay Standard Envelope is missing or ambiguous', () => {

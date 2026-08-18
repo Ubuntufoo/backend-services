@@ -54,7 +54,9 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
   if (appSettings.ebay_publish_config == null) {
     appSettings.ebay_publish_config = {
       production: {
-        fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        combinedFulfillmentPolicyId: 'COMBINED-REAL',
+        fulfillmentPolicyId: 'ESE-SOURCE-REAL',
+        groundFulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
         marketplaceId: appSettings.ebay_marketplace_id,
         merchantLocationKey: appSettings.merchant_location_key,
         paymentPolicyId: appSettings.default_payment_policy_id,
@@ -72,10 +74,20 @@ function createApi() {
       createFulfillmentPolicy: vi.fn(),
       createPaymentPolicy: vi.fn(),
       createReturnPolicy: vi.fn(),
-      getFulfillmentPolicy: vi.fn().mockResolvedValue({
-        fulfillmentPolicyId: 'FULFILLMENT-REAL',
-        marketplaceId: 'EBAY_US',
-        name: 'Live Fulfillment',
+      getFulfillmentPolicy: vi.fn().mockImplementation(async (id: string) => {
+        if (id === 'COMBINED-REAL') {
+          return {
+            fulfillmentPolicyId: id,
+            marketplaceId: 'EBAY_US',
+            name: 'eSE + FedEx Ground Economy',
+          };
+        }
+
+        return {
+          fulfillmentPolicyId: id,
+          marketplaceId: 'EBAY_US',
+          name: '$6.49 FedEx Ground Economy - 5 Day',
+        };
       }),
       getPaymentPolicy: vi.fn().mockResolvedValue({
         marketplaceId: 'EBAY_US',
@@ -195,6 +207,14 @@ describe('live readiness diagnostic', () => {
     expect(report.checks.find((check) => check.name === 'inventory_location')?.details).toMatchObject({
       merchantLocationKey: 'warehouse-main',
     });
+    expect(report.checks.find((check) => check.name === 'fulfillment_policy')?.details).toMatchObject({
+      combinedFulfillmentPolicyId: 'COMBINED-REAL',
+      combinedPolicyName: 'eSE + FedEx Ground Economy',
+      groundFulfillmentPolicyId: 'FULFILLMENT-REAL',
+      groundPolicyName: '$6.49 FedEx Ground Economy - 5 Day',
+    });
+    expect(api.account.getFulfillmentPolicy).toHaveBeenCalledWith('FULFILLMENT-REAL');
+    expect(api.account.getFulfillmentPolicy).toHaveBeenCalledWith('COMBINED-REAL');
     expect(
       report.checks.find((check) => check.name === 'publish_config_resolution')?.details
     ).toMatchObject({
@@ -235,6 +255,46 @@ describe('live readiness diagnostic', () => {
     expect(api.inventory.createOrReplaceInventoryLocation).not.toHaveBeenCalled();
     expect(api.inventory.updateLocationDetails).not.toHaveBeenCalled();
     expect(api.inventory.enableInventoryLocation).not.toHaveBeenCalled();
+  });
+
+  it('blocks when either configured fulfillment policy cannot be verified remotely', async () => {
+    process.env.EBAY_ENVIRONMENT = 'production';
+
+    const api = createApi();
+    api.account.getFulfillmentPolicy = vi.fn().mockImplementation(async (id: string) => {
+      if (id === 'COMBINED-REAL') {
+        throw new Error('combined policy missing');
+      }
+
+      return {
+        fulfillmentPolicyId: id,
+        marketplaceId: 'EBAY_US',
+        name: '$6.49 FedEx Ground Economy - 5 Day',
+      };
+    });
+
+    const report = await getLiveReadinessDiagnostic({
+      api,
+      dataAccess: createDataAccess(createAppSettings()),
+      oauthConfig: createOauthConfig(),
+      runtimeConfig: createRuntimeConfig(),
+      validateOAuth: vi.fn().mockResolvedValue({
+        environment: 'production',
+        expiresIn: 7200,
+        marketplaceId: 'EBAY_US',
+        ok: true,
+        tokenType: 'Bearer',
+      }),
+    });
+
+    expect(report.overallStatus).toBe('blocked');
+    expect(report.checks.find((check) => check.name === 'fulfillment_policy')).toMatchObject({
+      status: 'fail',
+      details: {
+        combinedFulfillmentPolicyId: 'COMBINED-REAL',
+        groundFulfillmentPolicyId: 'FULFILLMENT-REAL',
+      },
+    });
   });
 
   it('returns overallStatus warning when only production publish guard is disabled', async () => {

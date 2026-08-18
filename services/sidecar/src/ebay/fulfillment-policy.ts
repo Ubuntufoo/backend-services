@@ -9,12 +9,12 @@ type FulfillmentPolicy = components['schemas']['FulfillmentPolicy'];
 type FulfillmentPolicyRequest = components['schemas']['FulfillmentPolicyRequest'];
 type ShippingOption = components['schemas']['ShippingOption'];
 type ShippingService = components['schemas']['ShippingService'];
-export const GROUND_FULFILLMENT_POLICY_NAME = '$6.49 Domestic Shipping - 5 Day';
-export const COMBINED_FULFILLMENT_POLICY_NAME = 'eSE + USPS Ground Advantage';
+export const GROUND_FULFILLMENT_POLICY_NAME = '$6.49 FedEx Ground Economy - 5 Day';
+export const COMBINED_FULFILLMENT_POLICY_NAME = 'eSE + FedEx Ground Economy';
 
 const ESE_SHIPPING_SERVICE_CODE = 'US_eBayStandardEnvelope';
-const GROUND_ADVANTAGE_SHIPPING_SERVICE_CODE = 'USPSParcel';
-const GROUND_ADVANTAGE_CARRIER_CODE = 'USPS';
+const GROUND_ECONOMY_SHIPPING_SERVICE_CODE = 'FedExSmartPost';
+const GROUND_ECONOMY_CARRIER_CODE = 'FEDEX';
 const PICKUP_SHIPPING_SERVICE_CODE = 'Pickup';
 
 type CombinedPolicyApi = Pick<
@@ -66,10 +66,10 @@ function getUniqueShippingService(
   return matches[0];
 }
 
-function isGroundAdvantageService(service: ShippingService): boolean {
+function isGroundEconomyService(service: ShippingService): boolean {
   return (
-    service.shippingServiceCode === GROUND_ADVANTAGE_SHIPPING_SERVICE_CODE &&
-    service.shippingCarrierCode?.trim().toUpperCase() === GROUND_ADVANTAGE_CARRIER_CODE
+    service.shippingServiceCode === GROUND_ECONOMY_SHIPPING_SERVICE_CODE &&
+    service.shippingCarrierCode?.trim().toUpperCase() === GROUND_ECONOMY_CARRIER_CODE
   );
 }
 
@@ -116,8 +116,8 @@ export function buildCombinedFulfillmentPolicyRequest(input: {
   );
   const groundService = getUniqueShippingService(
     groundDomestic.shippingServices ?? [],
-    isGroundAdvantageService,
-    `Fulfillment policy "${GROUND_FULFILLMENT_POLICY_NAME}" USPS Ground Advantage service`
+    isGroundEconomyService,
+    `Fulfillment policy "${GROUND_FULFILLMENT_POLICY_NAME}" FedEx Ground Economy service`
   );
   const pickupService = [
     ...(eseDomestic.shippingServices ?? []),
