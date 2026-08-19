@@ -72,7 +72,9 @@ import {
 } from '@/pricing/index.js';
 
 const GENERATED_DESCRIPTION_NOTICE =
-  'Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\n\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value cards under $20 ship via eBay Standard Envelope for $0.99. One or two eligible cards cost $0.99 total; three or more eligible cards receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Cards priced at $20 or more, or cards not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const PREVIOUS_GENERATED_DESCRIPTION_NOTICE =
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: For cards under $20, I ship securely and free via eBay Standard Envelope, which includes integrated tracking. USPS Ground Advantage is also available at the buyer's expense for an additional $6.49. You can select your preferred shipping option at checkout.\n\nCombined Shipping: Combined shipping is often available for multiple items from my store. Please add items to your eBay cart and message me before payment to request a combined-shipping total.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
 const LEGACY_GENERATED_DESCRIPTION_NOTICE =
   'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 
@@ -1511,6 +1513,11 @@ describe('runSidecarJob', () => {
     [
       'legacy-noticed',
       `Original description.\n\n${LEGACY_GENERATED_DESCRIPTION_NOTICE}`,
+      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
+    [
+      'previous-runtime-noticed',
+      `Original description.\n\n${PREVIOUS_GENERATED_DESCRIPTION_NOTICE}`,
       `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
     ],
   ])(

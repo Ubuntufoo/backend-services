@@ -79,7 +79,11 @@ const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
 const GENERATED_DESCRIPTION_NOTICE =
-  'Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: For cards under $20, I ship securely and free via eBay Standard Envelope, which includes integrated tracking. USPS Ground Advantage is also available at the buyer\'s expense for an additional $6.49. You can select your preferred shipping option at checkout.\n\nCombined Shipping: Combined shipping is often available for multiple items from my store. Please add items to your eBay cart and message me before payment to request a combined-shipping total.\n\nFeedback: If you have feedback about the shipping process, please message me. I\'m always open to practical, cost-effective shipping improvements.';
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value items under $20 ship via eBay Standard Envelope for $0.99. One or two eligible items cost $0.99 total; three or more eligible items receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Items priced at $20 or more, or items not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const PREVIOUS_GENERATED_DESCRIPTION_NOTICE =
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: For cards under $20, I ship securely and free via eBay Standard Envelope, which includes integrated tracking. USPS Ground Advantage is also available at the buyer's expense for an additional $6.49. You can select your preferred shipping option at checkout.\n\nCombined Shipping: Combined shipping is often available for multiple items from my store. Please add items to your eBay cart and message me before payment to request a combined-shipping total.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const LEGACY_GENERATED_DESCRIPTION_NOTICE =
+  'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 const jobLogger = createLogger('Job');
 const nowMs = () => performance.now();
 const elapsedMs = (startedAt: number) => Math.max(0, Math.round(performance.now() - startedAt));
@@ -254,6 +258,18 @@ function appendGeneratedDescriptionNotice(description: string): string {
 
   if (generatedDescription.endsWith(GENERATED_DESCRIPTION_NOTICE)) {
     return generatedDescription;
+  }
+
+  for (const staleNotice of [
+    PREVIOUS_GENERATED_DESCRIPTION_NOTICE,
+    LEGACY_GENERATED_DESCRIPTION_NOTICE,
+  ]) {
+    if (generatedDescription.endsWith(staleNotice)) {
+      const withoutStaleNotice = generatedDescription.slice(0, -staleNotice.length).trimEnd();
+      return withoutStaleNotice
+        ? `${withoutStaleNotice}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+        : GENERATED_DESCRIPTION_NOTICE;
+    }
   }
 
   return generatedDescription
