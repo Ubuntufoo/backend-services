@@ -30,7 +30,8 @@
 - Pricing is sidecar-local today.
 - Primary code: `services/sidecar/src/pricing/`
 - Job entry: `services/sidecar/src/jobs/research-price-job.ts`
-- Runtime provider selection comes from `public.app_settings.pricing_provider_mode` with current modes `off`, `soldcomps`, and `apify`.
+- Runtime selectable provider modes come from `public.app_settings.pricing_provider_mode`: `off` and `soldcomps`.
+- Explicit invalid or legacy values, including persisted `apify`, resolve to `off`; Apify remains a runtime fallback/diagnostic provider and is not a selectable persisted mode.
 - There is no dedicated pricing service in the current runtime.
 
 ### eBay

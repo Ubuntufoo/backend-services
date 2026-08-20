@@ -18,7 +18,7 @@ Minimal notes for safely testing first real eBay listings while fulfillment/admi
 - Confirm production OAuth is valid.
 - Confirm production policy/location config is correct in `public.app_settings`.
 - Current env-specific values live under `public.app_settings.ebay_publish_config.production`.
-- Confirm `public.app_settings.pricing_provider_mode` is intentionally set for the pilot: `off`, `soldcomps`, or `apify`.
+- Confirm `public.app_settings.pricing_provider_mode` is intentionally set for the pilot: `off` or `soldcomps`. Explicit invalid or legacy values, including `apify`, resolve to `off`; Apify is used only by runtime fallback/diagnostic paths.
 - Confirm image URLs are public and load correctly.
 - Confirm listing has title, price, category, condition, images, and required item specifics.
 - Confirm item is physically available and easy to ship.
@@ -69,7 +69,8 @@ set ebay_publish_config = jsonb_set(
   '{
     "marketplaceId": "EBAY_US",
     "paymentPolicyId": "260524452013",
-    "fulfillmentPolicyId": "260524990013",
+    "combinedFulfillmentPolicyId": "<verify-production-combined-policy-id>",
+    "groundFulfillmentPolicyId": "<verify-production-ground-policy-id>",
     "returnPolicyId": "260524680013",
     "merchantLocationKey": "mfh-main-location"
   }'::jsonb,

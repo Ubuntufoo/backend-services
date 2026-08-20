@@ -11,8 +11,9 @@
 
 ## Environment Rules
 
-- Configure eBay credentials in repo-root `.env`
-- Keep machine-local values in repo-root `.env.local` only when the same key is absent from `.env`; root env loading preserves the first loaded value
+- Configure eBay credentials in the repo-root `.env`; sidecar startup reads this file.
+- `pnpm setup` and refreshed OAuth credentials persist to the repo-root `.env`.
+- The watcher service is the exception: its CLI loads repo-root `.env` and then `.env.local` without replacing keys already loaded from `.env`.
 - Preferred refresh token var: `EBAY_REFRESH_TOKEN`
 - Compatibility fallback: `EBAY_USER_REFRESH_TOKEN`
 - Quote refresh tokens in env files because eBay values contain `#`
@@ -38,6 +39,11 @@ pnpm ebay:reconcile-published-listing -- --offer-id <offerId>
 Before live publish:
 
 - valid production OAuth
+- production consent must include exactly the setup workflow scopes:
+  - `https://api.ebay.com/oauth/api_scope`
+  - `https://api.ebay.com/oauth/api_scope/sell.inventory`
+  - `https://api.ebay.com/oauth/api_scope/sell.account`
+  - `https://api.ebay.com/oauth/api_scope/commerce.identity.readonly`
 - correct marketplace/policy/location values in `public.app_settings`
 - listing has title, category, condition, price, images, required item specifics
 - public image URLs resolve
@@ -46,26 +52,38 @@ Live-pilot checklist: [../live-pilot-notes.md](../live-pilot-notes.md)
 
 ## `app_settings` Environment Config
 
-Current live project keeps environment-specific publish defaults in `public.app_settings.ebay_publish_config`:
+`public.app_settings.ebay_publish_config` stores environment-specific publish
+defaults. Use the following complete shape as an illustrative template only;
+replace every `replace-with-...` value with an ID discovered from the matching
+eBay environment. These are not live IDs:
 
 ```json
 {
   "sandbox": {
     "marketplaceId": "EBAY_US",
-    "paymentPolicyId": "6227962000",
-    "fulfillmentPolicyId": "6227963000",
-    "returnPolicyId": "6227964000",
-    "merchantLocationKey": "default-main-location"
+      "paymentPolicyId": "replace-with-sandbox-payment-policy-id",
+      "combinedFulfillmentPolicyId": "replace-with-sandbox-combined-fulfillment-policy-id",
+      "groundFulfillmentPolicyId": "replace-with-sandbox-ground-fulfillment-policy-id",
+      "returnPolicyId": "replace-with-sandbox-return-policy-id",
+    "merchantLocationKey": "replace-with-sandbox-merchant-location-key"
   },
   "production": {
     "marketplaceId": "EBAY_US",
-    "paymentPolicyId": "260524452013",
-    "fulfillmentPolicyId": "260524990013",
-    "returnPolicyId": "260524680013",
-    "merchantLocationKey": "mfh-main-location"
+      "paymentPolicyId": "replace-with-production-payment-policy-id",
+      "combinedFulfillmentPolicyId": "replace-with-production-combined-fulfillment-policy-id",
+      "groundFulfillmentPolicyId": "replace-with-production-ground-fulfillment-policy-id",
+      "returnPolicyId": "replace-with-production-return-policy-id",
+    "merchantLocationKey": "replace-with-production-merchant-location-key"
   }
 }
 ```
+
+Both `combinedFulfillmentPolicyId` and `groundFulfillmentPolicyId` are
+required. For structurally eBay Standard Envelope-eligible raw sports-card
+singles priced below `$20`, publish selects the combined policy when
+`ese_eligible=true`; all other listings select the Ground policy. The
+resolved `fulfillmentPolicyId` is retained as a compatibility alias for the
+Ground policy.
 
 The same row may also carry top-level values:
 
@@ -76,6 +94,14 @@ The same row may also carry top-level values:
 - `merchant_location_key`
 
 Those legacy flat fields are not a production fallback. Production publish requires a complete `ebay_publish_config.production` object.
+
+## Published Description
+
+The shared publish mapper escapes and formats the stored description, then
+prepends a compact eBay-only promotion: a bold green `1.1em` shipping sentence
+followed immediately by one `Follow / Save this seller` link to the
+`mfhbusiness` eBay profile. The existing escaped description content follows
+unchanged.
 
 ## Sandbox Notes
 

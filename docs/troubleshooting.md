@@ -2,7 +2,8 @@
 
 ## Env File Confusion
 
-- Canonical env files are repo-root `.env` and `.env.local`.
+- Sidecar setup, OAuth refresh persistence, and sidecar runtime loading use the repo-root `.env`; the sidecar does not load `.env.local`.
+- Watcher-service is the exception: it overlays repo-root `.env.local` after `.env`.
 - If a guide mentions `services/sidecar/.env`, treat it as stale.
 
 ## OAuth Token Problems
@@ -34,6 +35,7 @@
 
 - Current runtime selection comes from `public.app_settings.pricing_provider_mode`.
 - `pricing_provider_mode=off` disables pricing; unset mode currently resolves to `soldcomps`.
-- `apify` and `soldcomps` are the live provider modes; the fixture provider exists for tests and injected runs, not normal production mode selection.
+- Selectable persisted modes are `off` and `soldcomps`; an explicit invalid or legacy mode, including `apify`, resolves to `off`.
+- Apify remains available to the runtime fallback/diagnostic path; it is not a normal persisted production mode. The fixture provider exists for tests and injected runs.
 - Presence of Apify env vars or fixture coverage alone does not mean that live Apify pricing is active.
 - `retry-pricing-analysis` reruns only the LLM pricing-analysis step against persisted comps; it does not refetch provider comps.

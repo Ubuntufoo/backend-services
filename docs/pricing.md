@@ -18,21 +18,26 @@ There is no dedicated extracted pricing service in the current runtime.
 Authoritative runtime selection comes from `public.app_settings.pricing_provider_mode`.
 
 - `off`: pricing disabled
-- `soldcomps`: live SoldComps provider
-- `apify`: live Apify provider
+- `soldcomps`: selectable live SoldComps provider
+
+Apify is a live provider implementation used as the recoverable SoldComps
+fallback in the production research path and directly by its diagnostic/smoke
+commands. It is not a selectable `pricing_provider_mode` value and cannot be
+enabled through the app-settings API.
 
 Current helper behavior:
 
-- if `pricing_provider_mode` is set to one of the supported values, that value wins
-- if old compatibility state leaves `pricing_service_enabled=false`, provider resolution falls back to `off`
-- if `pricing_provider_mode` is unset or invalid, the current default resolves to `soldcomps`
+- if `pricing_provider_mode` is `off` or `soldcomps`, that value wins
+- if old compatibility state leaves `pricing_service_enabled=false` and no provider mode is present, provider resolution falls back to `off`
+- if `pricing_provider_mode` is unset, the current default resolves to `soldcomps`
+- an explicitly invalid provider mode resolves to `off`
 
 ## Current Runtime Flow
 
 1. A `research_price` job runs only for eligible `single` listings already in `needs_review` with `sub_status=review_pending`.
 2. Sidecar creates a pending `listing_price_research` row.
 3. Sidecar resolves the selected live provider from `pricing_provider_mode`.
-4. The selected provider fetches sold comps. If that provider fails with a recoverable runtime failure, sidecar attempts the other live provider as a fallback.
+4. SoldComps fetches sold comps. If it fails with a recoverable runtime failure and Apify is configured, sidecar attempts Apify as a fallback.
 5. Sidecar normalizes sold comps, computes deterministic stats, and computes confidence.
 6. If a pricing analyst is available, sidecar optionally runs LLM pricing analysis on the normalized comps and deterministic stats.
 7. Sidecar persists the succeeded or failed pricing research row, including warning/failure metadata when present.
@@ -43,7 +48,7 @@ Current helper behavior:
 ### Live Providers
 
 - `soldcomps`: resolved through `resolveProductionPricingProvider()` and current SoldComps env
-- `apify`: resolved through `resolveProductionPricingProvider()` and current Apify env
+- `apify`: resolved through `resolveProductionPricingProvider()` only for the recoverable SoldComps fallback and current Apify env
 
 ### Test / Injected Provider
 
@@ -90,15 +95,15 @@ Listing API serialization includes pricing context:
 
 Relevant review routes:
 
-- `POST /listings/:listingId/retry-pricing-analysis`
+- `POST /api/listings/:listingId/retry-pricing-analysis`
   - reruns only the LLM pricing-analysis step against persisted comps and existing listing data
   - does not refetch provider comps
-- `POST /listings/:listingId/pricing-analysis-warnings/dismiss`
+- `POST /api/listings/:listingId/pricing-analysis-warnings/dismiss`
   - persists dismissed warning codes on the current research row
-- `POST /listings/:listingId/retry-pricing`
+- `POST /api/listings/:listingId/retry-pricing`
   - reruns the broader pricing review workflow rather than only the LLM warning path
-- `GET /app-settings` and `PATCH /app-settings`
-  - expose and update `pricing_provider_mode`
+- `GET /api/app-settings` and `PATCH /api/app-settings`
+  - expose and update the selectable `pricing_provider_mode` values `off` and `soldcomps`
 
 ## Persistence
 
@@ -163,9 +168,23 @@ Command behavior:
 - pricing failure should not block review/export
 - pricing failure should not write listing `last_error_*`; failure state belongs on the job and `listing_price_research`
 
+## Browse Shadow Runtime Contract
+
+Browse is an optional, read-only shadow after a successful baseline pricing run.
+It is skipped when `listing.auto_pricing_enabled=false` or the baseline price
+has no currency. When Browse is requested, both `EBAY_BROWSE_CONTEXT_COUNTRY`
+and `EBAY_BROWSE_CONTEXT_POSTAL_CODE` must be configured; a partial pair is
+rejected rather than replaced with an implicit location.
+
+Traversal or snapshot attachment failures are best-effort: the baseline
+Suggested price and research result remain intact. Persisted `raw_result_json.activeMarket`
+contains a sanitized projection of accepted competitors and distributions; raw
+Browse pages, seller identity, OAuth material, and arbitrary provider fields are
+not persisted.
+
 ## Active-Market Browse Shadow Pilot (10F.1)
 
-Browse is an optional, read-only shadow beside the SoldComps/LLM Suggested-price path. The pilot below was captured on 2026-08-16 at 15:09:01Z against production `EBAY_US` with the existing typed `BrowseApi` and `ActiveMarketTraversal` seam. It used one Commerce Identity read for seller exclusion and 11 Browse searches (7 + 2 + 1 + 1). User-token refresh and the Application token were held in memory for the probe; no `.env`, database row, listing, offer, inventory, policy, or seller state was written. `tacticalSellPrice` remained `null` for every result.
+The following is a historical pilot observation, not a current runtime status report. It was captured on 2026-08-16 at 15:09:01Z against production `EBAY_US` with the existing typed `BrowseApi` and `ActiveMarketTraversal` seam. It used one Commerce Identity read for seller exclusion and 11 Browse searches (7 + 2 + 1 + 1). User-token refresh and the Application token were held in memory for the probe; no `.env`, database row, listing, offer, inventory, policy, or seller state was written. `tacticalSellPrice` was `null` in that probe because tactical-price computation had not yet been enabled in the runtime.
 
 The configured contextual shipping location was `US` / `19406`. Prices and distributions below are USD. A snapshot is exact only because traversal exhausted `next`; `total` from Browse/UI was treated as diagnostic, not as pagination authority. Accepted competitors remain in eBay-returned order and are not re-sorted by item or landed price.
 
@@ -191,13 +210,13 @@ Manual eBay review used bounded first-page checks plus current result headings: 
 
 The Mays canonical query intentionally reflects the current query builder (`Willie Mays 1996 Topps 261`); the structured `Set=Topps Chrome` identity remains enforced by the Browse title predicate and was checked against the returned title during manual review.
 
-## Deterministic Tactical Price Rule (10F.2)
+## Deterministic Tactical Price Rule (10F.2; implemented)
 
-10G.1 must implement this as a pure calculation over one completed `activeMarket` snapshot plus one explicit nullable `ourEffectiveBuyerShipping` money input (`{ value: number, currency: string }`; `null` means unknown). It must never read or mutate the baseline Suggested price or infer our shipping from competitor rows. Treat our shipping as free only when its value is finite, its currency is `USD`, and its value is exactly `$0.00`.
+The implementation is a pure calculation over one completed `activeMarket` snapshot plus one explicit nullable `ourEffectiveBuyerShipping` money input (`{ value: number, currency: string }`; `null` means unknown). It never reads or mutates the baseline Suggested price or infers our shipping from competitor rows. The current research job supplies `null` for own shipping, so it uses the item-price basis unless a future caller supplies an explicit known-free value. Treat own shipping as free only when its value is finite, its currency is `USD`, and its value is exactly `$0.00`.
 
 1. Evidence gate: derive item values from `competitors[].itemPrice.value` and landed values only from non-null `competitors[].totalPrice.value`. Return `null` unless `complete === true`, `exactAcceptedCount` is an integer at least `20` and equals `competitors.length`, and every accepted competitor has one finite non-negative item-price value in the same `USD` currency. Incomplete, skipped, unavailable, mixed-currency, count-inconsistent, malformed, or thin snapshots are non-exact and return `null`; this is why the one-row Mays result returns `null`.
 2. Basis selection: let `usableLandedValues` be the finite non-negative `USD` totals derived above. Existing landed coverage qualifies only when its count is at least `20`, equals `shippingKnownAcceptedCount`, its count divided by `exactAcceptedCount` is at least `0.75`, and `shippingKnownTotalDistribution` is present. Use competitor landed totals only when that coverage qualifies **and** `ourEffectiveBuyerShipping` is known-free by the preceding rule; otherwise use all accepted item values. Unknown, unavailable, malformed, non-`USD`, or nonzero own buyer-paid shipping always falls back to the item-price basis. Do not subtract, estimate, or otherwise adjust competitor values for our shipping. Missing competitor shipping is never estimated. The 75% gate keeps the 76% Barry/Stargell and 98.7% Dennis cases eligible for landed pricing when our shipping is free, while still failing closed when shipping is entirely absent.
 3. Statistic: take the lower quartile (Q1) of the selected complete basis using nearest-rank indexing: sort ascending and select `values[Math.ceil(0.25 * values.length) - 1]`. Q1 is a deterministic bulk-competition reference: a price just below it is below roughly three quarters of comparable asks, without chasing the isolated low or high. With known-free own shipping, pilot landed Q1 values were Barry `$1.99`, Stargell `$5.75`, Dennis `$1.79`; with unknown or nonzero own shipping, the item-price Q1 values are Barry `$1.28`, Stargell `$3.99`, Dennis `$1.00`. Mays had no usable landed basis and failed the evidence gate.
-4. Undercut and rounding: subtract exactly `$0.01` from Q1, then apply the same independent nickel/psychological rounding order as `roundFinalListingPrice()` (`floor((value + 1e-9) * 20) / 20`, convert to cents, and when at least `$1.00` with cents `00–10`, move to the prior `x.95`). Return `null` if the post-undercut value or rounded result is not finite or is less than `$0.01`. Do not mutate or feed the tactical value back into baseline pricing. For reference only, the disabled pilot rule would yield landed/free-own-shipping `$1.95` Barry, `$5.70` Stargell, `$1.75` Dennis, and item-basis fallback `$1.25`, `$3.95`, `$0.95` respectively; Mays is `null` under either branch because it fails the evidence gate.
+4. Undercut and rounding: subtract exactly `$0.01` from Q1, then apply the same independent nickel/psychological rounding order as `roundFinalListingPrice()` (`floor((value + 1e-9) * 20) / 20`, convert to cents, and when at least `$1.00` with cents `00–10`, move to the prior `x.95`). Return `null` if the post-undercut value or rounded result is not finite or is less than `$0.01`. Do not mutate or feed the tactical value back into baseline pricing. For reference, applying the current rule to the historical pilot evidence yields landed/free-own-shipping `$1.95` Barry, `$5.70` Stargell, `$1.75` Dennis, and item-basis fallback `$1.25`, `$3.95`, `$0.95` respectively; Mays is `null` under either branch because it fails the evidence gate.
 
-This rule is intentionally conservative: it uses only complete exact evidence, avoids a single low or high listing, prefers landed competition only with strong shipping coverage and known-free own buyer shipping, and leaves `tacticalSellPrice` nullable until 10G.1/10G.2 implement and test it.
+This rule is intentionally conservative: it uses only complete exact evidence, avoids a single low or high listing, and prefers landed competition only with strong shipping coverage and known-free own buyer shipping. Current implementation returns `null` when the evidence gate fails and persists the rounded tactical value for qualified complete snapshots without changing the baseline Suggested price. The dated pilot observations above remain historical evidence.

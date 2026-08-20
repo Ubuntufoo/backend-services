@@ -1,9 +1,9 @@
-# eBay API Status (latest)
+# eBay API Status (snapshot)
 
 Auto-updated snapshot from the [eBay API Status RSS feed](https://developer.ebay.com/rss/api-status).
 Full list: [developer.ebay.com/support/api-status](https://developer.ebay.com/support/api-status).
 
-*Last updated: 2026-04-22T09:12:38.806Z*
+*Snapshot last updated: 2026-04-22T09:12:38.806Z*
 
 | Title | API | Site | Status | Last updated | Link |
 |-------|-----|------|--------|--------------|------|
