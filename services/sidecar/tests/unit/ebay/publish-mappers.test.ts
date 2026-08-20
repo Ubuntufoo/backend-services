@@ -10,6 +10,8 @@ import {
 } from '@/ebay/publish-mappers.js';
 
 const STRUCTURED_SKU = 'BSKBL-Single-000001';
+const SHIPPING_PROMOTION_HTML =
+  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 eligible cards for discounted shipping or 3+ for FREE shipping!</strong><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a><br>';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -108,14 +110,24 @@ describe('publish mappers', () => {
         `First & <second> "quoted" 'value'.\r\nSingle line.\r\n\r\nCondition & Photography: A & B < C.\n\nCombined Shipping: message us.`
       )
     ).toBe(
-      'First &amp; &lt;second&gt; &quot;quoted&quot; &#39;value&#39;.<br>Single line.<br><br><strong>Condition &amp; Photography:</strong> A &amp; B &lt; C.<br><br><strong>Combined Shipping:</strong> message us.'
+      `${SHIPPING_PROMOTION_HTML}First &amp; &lt;second&gt; &quot;quoted&quot; &#39;value&#39;.<br>Single line.<br><br><strong>Condition &amp; Photography:</strong> A &amp; B &lt; C.<br><br><strong>Combined Shipping:</strong> message us.`
     );
   });
 
   it('escapes model-provided HTML instead of rendering it', () => {
     expect(formatEbayListingDescription('<script>alert("x")</script>')).toBe(
-      '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;'
+      `${SHIPPING_PROMOTION_HTML}&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;`
     );
+  });
+
+  it('prepends the compact shipping promotion and seller CTA before unchanged description HTML', () => {
+    const description = 'Existing description content.<br>'; // literal HTML is escaped by mapper
+    const formatted = formatEbayListingDescription(description);
+
+    expect(formatted).toMatch(
+      /^<strong style="color: green; font-size: 1\.1em;">Buy more, save more — combine 2 eligible cards for discounted shipping or 3\+ for FREE shipping!<\/strong><br><a href="https:\/\/www\.ebay\.com\/usr\/mfhbusiness">Follow \/ Save this seller<\/a><br>/
+    );
+    expect(formatted.endsWith('Existing description content.&lt;br&gt;')).toBe(true);
   });
 
   it('builds a stable publish sku from stored structured sku only', () => {
@@ -165,7 +177,7 @@ describe('publish mappers', () => {
           Brand: ['Acme'],
           Material: ['Cardboard', 'Paper'],
         },
-        description: 'Detailed listing description.',
+        description: `${SHIPPING_PROMOTION_HTML}Detailed listing description.`,
         imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
         title: 'Vintage puzzle',
       },
@@ -301,7 +313,7 @@ describe('publish mappers', () => {
       categoryId: '1234',
       format: 'FIXED_PRICE',
       listingDuration: 'GTC',
-      listingDescription: 'Detailed listing description.',
+      listingDescription: `${SHIPPING_PROMOTION_HTML}Detailed listing description.`,
       listingPolicies: {
         fulfillmentPolicyId: 'FULFILLMENT-1',
         paymentPolicyId: 'PAYMENT-1',

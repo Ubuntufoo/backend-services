@@ -46,6 +46,13 @@ const DESCRIPTION_LABELS = [
   'Shipping:',
   'Feedback:',
 ] as const;
+// Longest-first alternation so overlapping labels (e.g. 'Combined Shipping:' vs
+// 'Shipping:') match as a single non-overlapping token instead of nesting tags.
+const DESCRIPTION_LABEL_PATTERN = DESCRIPTION_LABELS.map((label) => label.replace('&', '&amp;'))
+  .sort((a, b) => b.length - a.length)
+  .join('|');
+const SHIPPING_PROMOTION_HTML =
+  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 eligible cards for discounted shipping or 3+ for FREE shipping!</strong><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a><br>';
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];
@@ -60,16 +67,18 @@ export function formatEbayListingDescription(description: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-  const withBoldLabels = DESCRIPTION_LABELS.reduce(
-    (formatted, label) =>
-      formatted.replaceAll(
-        label.replace('&', '&amp;'),
-        `<strong>${label.replace('&', '&amp;')}</strong>`
-      ),
-    escaped
+  const withBoldLabels = escaped.replace(
+    new RegExp(`(${DESCRIPTION_LABEL_PATTERN})`, 'g'),
+    '<strong>$1</strong>'
   );
 
-  return withBoldLabels.replace(/\n[\t ]*\n+/g, '<br><br>').replace(/\n/g, '<br>');
+  const formattedDescription = withBoldLabels
+    .replace(/\n[\t ]*\n+/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+
+  return formattedDescription.length === 0
+    ? formattedDescription
+    : `${SHIPPING_PROMOTION_HTML}${formattedDescription}`;
 }
 
 function normalizeAspectValue(value: Json): string[] | null {
