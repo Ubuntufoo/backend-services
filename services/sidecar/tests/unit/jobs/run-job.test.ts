@@ -72,7 +72,7 @@ import {
 } from '@/pricing/index.js';
 
 const GENERATED_DESCRIPTION_NOTICE =
-  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value cards under $20 ship via eBay Standard Envelope for $0.99. One or two eligible cards cost $0.99 total; three or more eligible cards receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Cards priced at $20 or more, or cards not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value items under $20 ship via eBay Standard Envelope for $0.99. One or two eligible items cost $0.99 total; three or more eligible items receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Items priced at $20 or more, or items not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
 const PREVIOUS_GENERATED_DESCRIPTION_NOTICE =
   "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: For cards under $20, I ship securely and free via eBay Standard Envelope, which includes integrated tracking. USPS Ground Advantage is also available at the buyer's expense for an additional $6.49. You can select your preferred shipping option at checkout.\n\nCombined Shipping: Combined shipping is often available for multiple items from my store. Please add items to your eBay cart and message me before payment to request a combined-shipping total.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
 const LEGACY_GENERATED_DESCRIPTION_NOTICE =
@@ -1330,7 +1330,7 @@ describe('runSidecarJob', () => {
         condition_id: '4000',
         ese_eligible: true,
         condition_notes: 'Visible edge wear and light corner wear.',
-        description: `Ungraded single card with visible edge wear.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+        description: `Item Info: Ungraded single card with visible edge wear.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
         item_specifics: {
           'Card Condition': 'VERY_GOOD',
           Franchise: 'Utah Jazz',
@@ -1502,23 +1502,27 @@ describe('runSidecarJob', () => {
   });
 
   it.each([
-    ['normal', 'Original description.', `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`],
+    [
+      'normal',
+      'Original description.',
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
     ['empty', '', GENERATED_DESCRIPTION_NOTICE],
     ['whitespace-only', '   \n\t', GENERATED_DESCRIPTION_NOTICE],
     [
       'already-noticed',
       `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
-      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
     ],
     [
       'legacy-noticed',
       `Original description.\n\n${LEGACY_GENERATED_DESCRIPTION_NOTICE}`,
-      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
     ],
     [
       'previous-runtime-noticed',
       `Original description.\n\n${PREVIOUS_GENERATED_DESCRIPTION_NOTICE}`,
-      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
     ],
   ])(
     'persists the generated description notice for %s descriptions',
@@ -2531,7 +2535,7 @@ describe('runSidecarJob', () => {
     );
     expect(result.job.gemini_selected_model).toBe('gemini-3.5-flash');
     expect(result.listing?.description).toBe(
-      `Recovered after preview-first attempt.\n\n${GENERATED_DESCRIPTION_NOTICE}`
+      `Item Info: Recovered after preview-first attempt.\n\n${GENERATED_DESCRIPTION_NOTICE}`
     );
   });
 

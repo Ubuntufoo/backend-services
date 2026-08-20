@@ -253,11 +253,29 @@ function buildGeneratedListingAspects(
   return itemSpecifics as NonNullable<ListingUpdate['item_specifics']>;
 }
 
+const GENERATED_ITEM_INFO_LABEL = 'Item Info: ';
+
+// Prepends the label for the Gemini-generated card segment so published
+// descriptions read "Item Info: <generated content>". No-op when the segment
+// is empty or already labeled.
+function prefixGeneratedItemInfo(description: string): string {
+  if (description.length === 0 || description.startsWith(GENERATED_ITEM_INFO_LABEL)) {
+    return description;
+  }
+
+  return `${GENERATED_ITEM_INFO_LABEL}${description}`;
+}
+
 function appendGeneratedDescriptionNotice(description: string): string {
   const generatedDescription = description.trimEnd();
 
   if (generatedDescription.endsWith(GENERATED_DESCRIPTION_NOTICE)) {
-    return generatedDescription;
+    const cardSegment = generatedDescription
+      .slice(0, -GENERATED_DESCRIPTION_NOTICE.length)
+      .trimEnd();
+    return cardSegment
+      ? `${prefixGeneratedItemInfo(cardSegment)}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+      : GENERATED_DESCRIPTION_NOTICE;
   }
 
   for (const staleNotice of [
@@ -267,13 +285,13 @@ function appendGeneratedDescriptionNotice(description: string): string {
     if (generatedDescription.endsWith(staleNotice)) {
       const withoutStaleNotice = generatedDescription.slice(0, -staleNotice.length).trimEnd();
       return withoutStaleNotice
-        ? `${withoutStaleNotice}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+        ? `${prefixGeneratedItemInfo(withoutStaleNotice)}\n\n${GENERATED_DESCRIPTION_NOTICE}`
         : GENERATED_DESCRIPTION_NOTICE;
     }
   }
 
   return generatedDescription
-    ? `${generatedDescription}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+    ? `${prefixGeneratedItemInfo(generatedDescription)}\n\n${GENERATED_DESCRIPTION_NOTICE}`
     : GENERATED_DESCRIPTION_NOTICE;
 }
 

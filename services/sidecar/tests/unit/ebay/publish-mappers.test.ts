@@ -11,7 +11,7 @@ import {
 
 const STRUCTURED_SKU = 'BSKBL-Single-000001';
 const SHIPPING_PROMOTION_HTML =
-  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 eligible cards for discounted shipping or 3+ for FREE shipping!</strong><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a><br>';
+  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 cards under $20 for discounted shipping or 3+ for FREE shipping!</strong><br><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a> - For easy access to this store, and periodic discounts on merchandise.<br><br>';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -125,9 +125,15 @@ describe('publish mappers', () => {
     const formatted = formatEbayListingDescription(description);
 
     expect(formatted).toMatch(
-      /^<strong style="color: green; font-size: 1\.1em;">Buy more, save more — combine 2 eligible cards for discounted shipping or 3\+ for FREE shipping!<\/strong><br><a href="https:\/\/www\.ebay\.com\/usr\/mfhbusiness">Follow \/ Save this seller<\/a><br>/
+      /^<strong style="color: green; font-size: 1\.1em;">Buy more, save more — combine 2 cards under \$20 for discounted shipping or 3\+ for FREE shipping!<\/strong><br><br><a href="https:\/\/www\.ebay\.com\/usr\/mfhbusiness">Follow \/ Save this seller<\/a> - For easy access to this store, and periodic discounts on merchandise\.<br><br>/
     );
     expect(formatted.endsWith('Existing description content.&lt;br&gt;')).toBe(true);
+  });
+
+  it('bolds the Item Info label on the generated card segment', () => {
+    expect(formatEbayListingDescription('Item Info: Single raw card with minor wear.')).toBe(
+      `${SHIPPING_PROMOTION_HTML}<strong>Item Info:</strong> Single raw card with minor wear.`
+    );
   });
 
   it('builds a stable publish sku from stored structured sku only', () => {

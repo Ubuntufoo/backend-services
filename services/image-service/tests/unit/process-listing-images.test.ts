@@ -54,6 +54,25 @@ async function createFixtureImages(directory: string) {
   return { jpegPath, pngPath, webpPath };
 }
 
+async function createCropFixture(directory: string, filename: string, contrast: boolean) {
+  const background = contrast ? { r: 245, g: 245, b: 245 } : { r: 150, g: 150, b: 150 };
+  const item = contrast ? { r: 20, g: 30, b: 40 } : { r: 145, g: 145, b: 145 };
+  const itemBuffer = await sharp({
+    create: { width: 280, height: 220, channels: 3, background: item },
+  })
+    .png()
+    .toBuffer();
+  const sourcePath = path.join(directory, filename);
+  await sharp({
+    create: { width: 800, height: 600, channels: 3, background },
+  })
+    .composite([{ input: itemBuffer, left: 260, top: 190 }])
+    .jpeg()
+    .withMetadata({ orientation: 6 })
+    .toFile(sourcePath);
+  return sourcePath;
+}
+
 function createFileSystem(
   overrides: Partial<ImageServiceFileSystem> = {}
 ): ImageServiceFileSystem {
@@ -160,6 +179,45 @@ describe('processListingImages', () => {
       sizeBytes: expect.any(Number),
       processingMode: 'strip_exif',
     });
+  });
+
+  it('enhance_crop accepts a high-contrast item and emits oriented q95 jpeg output', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'crop-accepted.jpg', true);
+
+    const result = await processListingImages({
+      listingId: 'Single-000002A',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputPath = path.join(outputDirectory, 'crop-accepted.jpg');
+    const outputMetadata = await sharp(outputPath).metadata();
+    expect(outputMetadata.format).toBe('jpeg');
+    expect(outputMetadata.orientation).toBeUndefined();
+    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.height).toBeLessThan(800);
+    expect(result.images[0].processingMode).toBe('enhance_crop');
+    expect(result.images[0].filename).toBe('crop-accepted.jpg');
+  });
+
+  it('enhance_crop falls back to uncropped oriented output when detection is ambiguous', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'crop-fallback.jpg', false);
+
+    await processListingImages({
+      listingId: 'Single-000002B',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputMetadata = await sharp(path.join(outputDirectory, 'crop-fallback.jpg')).metadata();
+    expect(outputMetadata.format).toBe('jpeg');
+    expect(outputMetadata.orientation).toBeUndefined();
+    expect(outputMetadata.width).toBe(600);
+    expect(outputMetadata.height).toBe(800);
   });
 
   it('accepts mixed supported extensions', async () => {

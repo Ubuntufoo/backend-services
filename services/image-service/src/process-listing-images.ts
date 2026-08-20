@@ -12,7 +12,7 @@ import {
   type ImageServiceSupportedExtension,
 } from './image-extensions.js';
 
-export type ImageProcessingMode = 'passthrough' | 'strip_exif';
+export type ImageProcessingMode = 'passthrough' | 'strip_exif' | 'enhance_crop';
 
 export interface ProcessListingImagesInput {
   listingId: string;
@@ -58,6 +58,374 @@ interface PreparedListingImage {
   outputPath: string;
   filename: string;
   normalizedExtension: ImageServiceSupportedExtension;
+}
+
+interface AnalysisImage {
+  data: Buffer;
+  width: number;
+  height: number;
+  channels: number;
+}
+
+interface CropCandidate {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  contrast: number;
+  support: number;
+  symmetry: number;
+  areaReduction: number;
+}
+
+interface CropDecision {
+  candidate?: CropCandidate;
+}
+
+const CROP_ANALYSIS_WIDTHS = [320, 480] as const;
+const CROP_PRIMARY_FACTORS = [0.8, 1, 1.2] as const;
+const CROP_GRADIENT_FACTORS = [0.85, 1, 1.25] as const;
+const CROP_MARGIN_RATIO = 0.03;
+const CROP_MIN_MARGIN = 48;
+
+function median(values: readonly number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function percentile(values: readonly number[], fraction: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(fraction * (sorted.length - 1))];
+}
+
+function pixelRgb(image: AnalysisImage, x: number, y: number): [number, number, number] {
+  const index = (y * image.width + x) * image.channels;
+  return [image.data[index] ?? 0, image.data[index + 1] ?? 0, image.data[index + 2] ?? 0];
+}
+
+function luma(rgb: readonly [number, number, number]): number {
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function analysisLuma(image: AnalysisImage): Float64Array {
+  const result = new Float64Array(image.width * image.height);
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      result[y * image.width + x] = luma(pixelRgb(image, x, y));
+    }
+  }
+  return result;
+}
+
+function gradientProfiles(
+  values: Float64Array,
+  width: number,
+  height: number,
+  axis: 'x' | 'y',
+  thresholdFactor: number
+): { positions: number[]; means: number[]; supports: number[] } {
+  const gradients: number[] = [];
+  const positions: number[] = [];
+  const means: number[] = [];
+  const supports: number[] = [];
+  const extent = axis === 'x' ? width : height;
+  const start = Math.max(2, Math.ceil(extent * 0.06));
+  const end = Math.min(extent - 3, Math.floor(extent * 0.94));
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const gx = 0.5 * Math.abs(values[y * width + x + 1] - values[y * width + x - 1]);
+      const gy = 0.5 * Math.abs(values[(y + 1) * width + x] - values[(y - 1) * width + x]);
+      gradients.push(axis === 'x' ? gx : gy);
+    }
+  }
+
+  const p75 = percentile(gradients, 0.75);
+  const threshold = Math.max(8, p75 * thresholdFactor);
+  for (let position = start; position <= end; position += 1) {
+    const samples: number[] = [];
+    if (axis === 'x') {
+      for (let y = 1; y < height - 1; y += 1) {
+        for (let offset = -1; offset <= 1; offset += 1) {
+          const x = clamp(position + offset, 1, width - 2);
+          samples.push(0.5 * Math.abs(values[y * width + x + 1] - values[y * width + x - 1]));
+        }
+      }
+    } else {
+      for (let x = 1; x < width - 1; x += 1) {
+        for (let offset = -1; offset <= 1; offset += 1) {
+          const y = clamp(position + offset, 1, height - 2);
+          samples.push(0.5 * Math.abs(values[(y + 1) * width + x] - values[(y - 1) * width + x]));
+        }
+      }
+    }
+    const mean = samples.reduce((sum, value) => sum + value, 0) / Math.max(1, samples.length);
+    const support = samples.filter((value) => value > threshold).length / Math.max(1, samples.length);
+    positions.push(position);
+    means.push(mean);
+    supports.push(support);
+  }
+
+  return { positions, means, supports };
+}
+
+function gradientCandidate(image: AnalysisImage, factor: number): [number, number, number, number] | undefined {
+  const values = analysisLuma(image);
+  const vertical = gradientProfiles(values, image.width, image.height, 'x', factor);
+  const horizontal = gradientProfiles(values, image.width, image.height, 'y', factor);
+  const peaks = (profile: { positions: number[]; means: number[]; supports: number[] }, dimension: number) => {
+    const selected: Array<{ position: number; mean: number; support: number; score: number; index: number }> = [];
+    for (let index = 2; index < profile.positions.length - 2; index += 1) {
+      const score = profile.means[index] * (0.55 + profile.supports[index]);
+      if (
+        score >= profile.means[index - 1] * (0.55 + profile.supports[index - 1]) &&
+        score >= profile.means[index + 1] * (0.55 + profile.supports[index + 1])
+      ) {
+        selected.push({
+          position: profile.positions[index],
+          mean: profile.means[index],
+          support: profile.supports[index],
+          score,
+          index,
+        });
+      }
+    }
+    selected.sort((a, b) => b.score - a.score || a.index - b.index);
+    const kept: typeof selected = [];
+    const minimumDistance = Math.max(8, Math.round(dimension * 0.04));
+    for (const peak of selected) {
+      if (kept.every((existing) => Math.abs(existing.position - peak.position) >= minimumDistance)) {
+        kept.push(peak);
+      }
+      if (kept.length === 8) break;
+    }
+    return kept;
+  };
+  const xPeaks = peaks({
+    ...vertical,
+    means: vertical.means.map((value) => value),
+    supports: vertical.supports.map((value) => value),
+  }, image.width);
+  const yPeaks = peaks({
+    ...horizontal,
+    means: horizontal.means.map((value) => value),
+    supports: horizontal.supports.map((value) => value),
+  }, image.height);
+  const pairs: Array<{ left: number; top: number; right: number; bottom: number; score: number }> = [];
+  for (const left of xPeaks) {
+    for (const right of xPeaks) {
+      if (right.position <= left.position || right.position - left.position < image.width * 0.2) continue;
+      if (left.position < image.width * 0.04 || right.position > image.width * 0.96) continue;
+      for (const top of yPeaks) {
+        for (const bottom of yPeaks) {
+          if (bottom.position <= top.position || bottom.position - top.position < image.height * 0.2) continue;
+          if (top.position < image.height * 0.04 || bottom.position > image.height * 0.96) continue;
+          pairs.push({
+            left: left.position,
+            top: top.position,
+            right: right.position,
+            bottom: bottom.position,
+            score: Math.min(left.support, right.support, top.support, bottom.support) * 120 +
+              (left.support + right.support + top.support + bottom.support) * 20 +
+              Math.min(left.mean, right.mean, top.mean, bottom.mean) * 0.8 +
+              (left.mean + right.mean + top.mean + bottom.mean) * 0.08,
+          });
+        }
+      }
+    }
+  }
+  pairs.sort((a, b) => b.score - a.score);
+  const result = pairs[0];
+  return result ? [result.left, result.top, result.right, result.bottom] : undefined;
+}
+
+function primaryCandidate(image: AnalysisImage, thresholdFactor: number): [number, number, number, number] | undefined {
+  const border = Math.max(3, Math.round(0.05 * Math.min(image.width, image.height)));
+  const borderPixels: Array<[number, number, number]> = [];
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      if (x < border || x >= image.width - border || y < border || y >= image.height - border) {
+        borderPixels.push(pixelRgb(image, x, y));
+      }
+    }
+  }
+  const background: [number, number, number] = [
+    median(borderPixels.map((value) => value[0])),
+    median(borderPixels.map((value) => value[1])),
+    median(borderPixels.map((value) => value[2])),
+  ];
+  const distances = borderPixels.map((value) =>
+    Math.hypot(value[0] - background[0], value[1] - background[1], value[2] - background[2])
+  );
+  const p90 = percentile(distances, 0.9);
+  const threshold = Math.max(20, 1.15 * p90 * thresholdFactor + 10);
+  const rowCounts = new Array<number>(image.height).fill(0);
+  const columnCounts = new Array<number>(image.width).fill(0);
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      const rgb = pixelRgb(image, x, y);
+      const distance = Math.hypot(rgb[0] - background[0], rgb[1] - background[1], rgb[2] - background[2]);
+      if (distance >= threshold) {
+        rowCounts[y] += 1;
+        columnCounts[x] += 1;
+      }
+    }
+  }
+  const rows = rowCounts.map((count, index) => (count > 0.15 * image.width ? index : -1)).filter((index) => index >= 0);
+  const columns = columnCounts.map((count, index) => (count > 0.15 * image.height ? index : -1)).filter((index) => index >= 0);
+  if (rows.length === 0 || columns.length === 0) return undefined;
+  return [columns[0], rows[0], columns[columns.length - 1] + 1, rows[rows.length - 1] + 1];
+}
+
+function edgeMetrics(image: AnalysisImage, candidate: [number, number, number, number]) {
+  const values = analysisLuma(image);
+  const gradients: number[] = [];
+  for (let y = 1; y < image.height - 1; y += 1) {
+    for (let x = 1; x < image.width - 1; x += 1) {
+      gradients.push(
+        0.5 * Math.abs(values[y * image.width + x + 1] - values[y * image.width + x - 1]),
+        0.5 * Math.abs(values[(y + 1) * image.width + x] - values[(y - 1) * image.width + x])
+      );
+    }
+  }
+  const threshold = Math.max(8, percentile(gradients, 0.75) * 1.05);
+  const [left, top, right, bottom] = candidate;
+  const strengths: number[] = [];
+  const supports: number[] = [];
+  const contrasts: number[] = [];
+  const sampleEdge = (axis: 'x' | 'y', position: number, start: number, end: number, direction: 1 | -1) => {
+    const valuesAtEdge: number[] = [];
+    const edgeSamples: number[] = [];
+    for (let offset = Math.ceil((end - start) * 0.12); offset <= Math.floor((end - start) * 0.88); offset += 2) {
+      const along = start + offset;
+      const coordinate = clamp(position - (direction === -1 ? 1 : 0), 1, (axis === 'x' ? image.width : image.height) - 2);
+      const gradient = axis === 'x'
+        ? 0.5 * Math.abs(values[along * image.width + coordinate + 1] - values[along * image.width + coordinate - 1])
+        : 0.5 * Math.abs(values[(coordinate + 1) * image.width + along] - values[(coordinate - 1) * image.width + along]);
+      edgeSamples.push(gradient);
+      const insideStart = clamp(position + direction * 5, 0, (axis === 'x' ? image.width : image.height) - 1);
+      const insideEnd = clamp(position + direction * 10, 0, (axis === 'x' ? image.width : image.height) - 1);
+      const outsideStart = clamp(position - direction * 5, 0, (axis === 'x' ? image.width : image.height) - 1);
+      const outsideEnd = clamp(position - direction * 10, 0, (axis === 'x' ? image.width : image.height) - 1);
+      const inside: number[] = [];
+      const outside: number[] = [];
+      for (let strip = Math.min(insideStart, insideEnd); strip <= Math.max(insideStart, insideEnd); strip += 4) {
+        if (axis === 'x') inside.push(values[along * image.width + strip]);
+        else inside.push(values[strip * image.width + along]);
+      }
+      for (let strip = Math.min(outsideStart, outsideEnd); strip <= Math.max(outsideStart, outsideEnd); strip += 4) {
+        if (axis === 'x') outside.push(values[along * image.width + strip]);
+        else outside.push(values[strip * image.width + along]);
+      }
+      valuesAtEdge.push(Math.abs(median(inside) - median(outside)));
+    }
+    strengths.push(edgeSamples.reduce((sum, value) => sum + value, 0) / Math.max(1, edgeSamples.length));
+    supports.push(edgeSamples.filter((value) => value > threshold).length / Math.max(1, edgeSamples.length));
+    contrasts.push(median(valuesAtEdge));
+  };
+  sampleEdge('x', left, top, bottom, 1);
+  sampleEdge('x', right, top, bottom, -1);
+  sampleEdge('y', top, left, right, 1);
+  sampleEdge('y', bottom, left, right, -1);
+  return {
+    contrast: Math.min(...contrasts),
+    support: Math.min(...supports),
+    symmetry: (Math.min(strengths[0], strengths[1]) / Math.max(strengths[0], strengths[1], 0.01)) *
+      (Math.min(strengths[2], strengths[3]) / Math.max(strengths[2], strengths[3], 0.01)),
+  };
+}
+
+function decideCrop(
+  images: readonly AnalysisImage[],
+  sourceWidth: number,
+  sourceHeight: number
+): CropDecision {
+  const candidates: Array<{ candidate: CropCandidate; imageIndex: number }> = [];
+  for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
+    const image = images[imageIndex];
+    const primaryFactor = CROP_PRIMARY_FACTORS[imageIndex % CROP_PRIMARY_FACTORS.length];
+    const gradientFactor = CROP_GRADIENT_FACTORS[imageIndex % CROP_GRADIENT_FACTORS.length];
+    const box = primaryCandidate(image, primaryFactor) ?? gradientCandidate(image, gradientFactor);
+    if (!box) return {};
+    const metrics = edgeMetrics(image, box);
+    const [left, top, right, bottom] = box;
+    const normalized: [number, number, number, number] = [left / image.width, top / image.height, right / image.width, bottom / image.height];
+    const marginX = Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN);
+    const marginY = Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN);
+    const available = normalized[0] * sourceWidth > 1.1 * marginX &&
+      (1 - normalized[2]) * sourceWidth > 1.1 * marginX &&
+      normalized[1] * sourceHeight > 1.1 * marginY &&
+      (1 - normalized[3]) * sourceHeight > 1.1 * marginY;
+    const cropWidth = clamp(normalized[2] * sourceWidth + marginX, 0, sourceWidth) - clamp(normalized[0] * sourceWidth - marginX, 0, sourceWidth);
+    const cropHeight = clamp(normalized[3] * sourceHeight + marginY, 0, sourceHeight) - clamp(normalized[1] * sourceHeight - marginY, 0, sourceHeight);
+    const areaReduction = 1 - (cropWidth * cropHeight) / (sourceWidth * sourceHeight);
+    if (!available || metrics.contrast < 10 || metrics.support < 0.28 || metrics.symmetry < 0.3 ||
+      right - left < image.width * 0.2 || bottom - top < image.height * 0.2 || areaReduction < 0.08 || areaReduction > 0.82) {
+      return {};
+    }
+    candidates.push({ candidate: { left: normalized[0], top: normalized[1], right: normalized[2], bottom: normalized[3], ...metrics, areaReduction }, imageIndex });
+  }
+  if (candidates.length !== 6) return {};
+  const disagreement = Math.max(...['left', 'top', 'right', 'bottom'].map((key) => {
+    const values = candidates.map(({ candidate }) => candidate[key as keyof CropCandidate] as number);
+    return Math.max(...values) - Math.min(...values);
+  }));
+  if (disagreement > 0.025) return {};
+  const selected = candidates.find(({ imageIndex }) => imageIndex === 4)?.candidate ?? candidates[0].candidate;
+  return { candidate: selected };
+}
+
+async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promise<void> {
+  const oriented = sharp(sourcePath).rotate();
+  const orientedRaw = await oriented.clone().removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const sourceWidth = orientedRaw.info.width;
+  const sourceHeight = orientedRaw.info.height;
+  const analysisImages: AnalysisImage[] = [];
+
+  for (const analysisWidth of CROP_ANALYSIS_WIDTHS) {
+    for (let factorIndex = 0; factorIndex < CROP_PRIMARY_FACTORS.length; factorIndex += 1) {
+      const analysis = await oriented
+        .clone()
+        .resize({ width: analysisWidth, fit: 'inside' })
+        .blur(0.8)
+        .removeAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      analysisImages.push({
+        data: analysis.data,
+        width: analysis.info.width,
+        height: analysis.info.height,
+        channels: analysis.info.channels,
+      });
+    }
+  }
+
+  const decision = decideCrop(analysisImages, sourceWidth, sourceHeight);
+  const output = decision.candidate
+    ? oriented.extract({
+        left: Math.max(0, Math.floor(decision.candidate.left * sourceWidth - Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN))),
+        top: Math.max(0, Math.floor(decision.candidate.top * sourceHeight - Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN))),
+        width: Math.min(sourceWidth, Math.ceil(decision.candidate.right * sourceWidth + Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN))) -
+          Math.max(0, Math.floor(decision.candidate.left * sourceWidth - Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN))),
+        height: Math.min(sourceHeight, Math.ceil(decision.candidate.bottom * sourceHeight + Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN))) -
+          Math.max(0, Math.floor(decision.candidate.top * sourceHeight - Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN))),
+      })
+    : oriented;
+
+  await output.jpeg({ quality: 95, chromaSubsampling: '4:2:0' }).toFile(tempPath);
 }
 
 const DEFAULT_IMAGE_SERVICE_FILE_SYSTEM: ImageServiceFileSystem = {
@@ -360,6 +728,17 @@ export async function processListingImages(
           throw createListingImageError(
             listingId,
             `Passthrough copy failed for ${image.sourcePath} -> ${tempOutputPath}. ${getErrorMessage(
+              error
+            )}`
+          );
+        }
+      } else if (input.processingMode === 'enhance_crop') {
+        try {
+          await enhanceAndCropImage(image.sourcePath, tempOutputPath);
+        } catch (error) {
+          throw createListingImageError(
+            listingId,
+            `Enhance-and-crop processing failed for ${image.sourcePath} -> ${tempOutputPath}. ${getErrorMessage(
               error
             )}`
           );
