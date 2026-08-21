@@ -184,10 +184,12 @@ describe('processListingImages', () => {
   it('enhance_crop accepts a high-contrast item and emits oriented q95 jpeg output', async () => {
     const { sourceDirectory, outputDirectory } = await createTempLayout();
     const sourcePath = await createCropFixture(sourceDirectory, 'crop-accepted.jpg', true);
+    const secondSourcePath = await createCropFixture(sourceDirectory, 'crop-accepted-2.jpg', true);
+    const sourceBytes = await fsPromises.readFile(sourcePath);
 
     const result = await processListingImages({
       listingId: 'Single-000002A',
-      inputImagePaths: [sourcePath],
+      inputImagePaths: [sourcePath, secondSourcePath],
       outputDirectory,
       processingMode: 'enhance_crop',
     });
@@ -195,9 +197,25 @@ describe('processListingImages', () => {
     const outputPath = path.join(outputDirectory, 'crop-accepted.jpg');
     const outputMetadata = await sharp(outputPath).metadata();
     expect(outputMetadata.format).toBe('jpeg');
+    expect(outputMetadata.chromaSubsampling).toBe('4:2:0');
     expect(outputMetadata.orientation).toBeUndefined();
+    expect(outputMetadata.exif).toBeUndefined();
     expect(outputMetadata.width).toBeLessThan(600);
     expect(outputMetadata.height).toBeLessThan(800);
+    expect((await fsPromises.readFile(sourcePath)).equals(sourceBytes)).toBe(true);
+
+    const outputPixels = await sharp(outputPath).raw().toBuffer({ resolveWithObject: true });
+    const cornerValues = [
+      [0, 0],
+      [outputPixels.info.width - 1, 0],
+      [0, outputPixels.info.height - 1],
+      [outputPixels.info.width - 1, outputPixels.info.height - 1],
+    ].map(([x, y]) => {
+      const offset = (y * outputPixels.info.width + x) * outputPixels.info.channels;
+      return [outputPixels.data[offset] ?? 0, outputPixels.data[offset + 1] ?? 0, outputPixels.data[offset + 2] ?? 0];
+    });
+    expect(cornerValues.flat().every((value) => value > 180)).toBe(true);
+    expect(result.images.map((image) => image.filename)).toEqual(['crop-accepted.jpg', 'crop-accepted-2.jpg']);
     expect(result.images[0].processingMode).toBe('enhance_crop');
     expect(result.images[0].filename).toBe('crop-accepted.jpg');
   });
@@ -236,6 +254,22 @@ describe('processListingImages', () => {
       'second-image.png',
       'third-image.webp',
     ]);
+  });
+
+  it('rejects non-JPEG enhance_crop inputs before writing output', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const { pngPath } = await createFixtureImages(sourceDirectory);
+
+    await expect(
+      processListingImages({
+        listingId: 'Single-000002C',
+        inputImagePaths: [pngPath],
+        outputDirectory,
+        processingMode: 'enhance_crop',
+      })
+    ).rejects.toThrow(`enhance_crop requires JPEG input (.jpg or .jpeg): ${pngPath}.`);
+
+    await expect(fsPromises.access(outputDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('creates missing output directories during preflight', async () => {

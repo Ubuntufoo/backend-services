@@ -23,7 +23,8 @@ pnpm --filter @ebay-inventory/image-service typecheck
 ## Scope
 
 - Processes local files only.
-- Supports `passthrough` and `strip_exif` modes.
+- Supports `passthrough`, `strip_exif`, and opt-in `enhance_crop` modes.
+- `enhance_crop` auto-orients before deterministic multi-scale crop analysis, crops only when every conservative safety gate passes, otherwise emits the uncropped oriented image, and encodes both paths as JPEG quality 95 with 4:2:0 chroma subsampling.
 - Preserves watcher-assigned filenames.
 - Writes processed copies into a distinct output directory.
 
@@ -31,4 +32,4 @@ pnpm --filter @ebay-inventory/image-service typecheck
 
 - No R2 uploads.
 - No Supabase image URL updates.
-- No resizing, compression, or derivative generation in this phase.
+- Does not switch watcher-managed processing; existing mode remains until explicitly wired.

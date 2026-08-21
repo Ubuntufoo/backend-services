@@ -53,7 +53,7 @@ const DESCRIPTION_LABEL_PATTERN = DESCRIPTION_LABELS.map((label) => label.replac
   .sort((a, b) => b.length - a.length)
   .join('|');
 const SHIPPING_PROMOTION_HTML =
-  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 cards under $20 for discounted shipping or 3+ for FREE shipping!</strong><br><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a> - For easy access to this store, and periodic discounts on merchandise.<br><br>';
+  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 cards under $20 for 1/2 price shipping or 3+ for FREE shipping!</strong><br><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a> - For easy access to this store, and periodic discounts on merchandise.<br><br>';
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];

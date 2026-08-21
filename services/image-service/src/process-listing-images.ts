@@ -130,6 +130,19 @@ function analysisLuma(image: AnalysisImage): Float64Array {
   return result;
 }
 
+function edgeGradientThreshold(values: Float64Array, width: number, height: number): number {
+  const gradients: number[] = [];
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      gradients.push(
+        0.5 * Math.abs(values[y * width + x + 1] - values[y * width + x - 1]),
+        0.5 * Math.abs(values[(y + 1) * width + x] - values[(y - 1) * width + x])
+      );
+    }
+  }
+  return Math.max(8, percentile(gradients, 0.75) * 1.05);
+}
+
 function gradientProfiles(
   values: Float64Array,
   width: number,
@@ -159,17 +172,21 @@ function gradientProfiles(
     const samples: number[] = [];
     if (axis === 'x') {
       for (let y = 1; y < height - 1; y += 1) {
+        let sum = 0;
         for (let offset = -1; offset <= 1; offset += 1) {
           const x = clamp(position + offset, 1, width - 2);
-          samples.push(0.5 * Math.abs(values[y * width + x + 1] - values[y * width + x - 1]));
+          sum += 0.5 * Math.abs(values[y * width + x + 1] - values[y * width + x - 1]);
         }
+        samples.push(sum / 3);
       }
     } else {
       for (let x = 1; x < width - 1; x += 1) {
+        let sum = 0;
         for (let offset = -1; offset <= 1; offset += 1) {
           const y = clamp(position + offset, 1, height - 2);
-          samples.push(0.5 * Math.abs(values[(y + 1) * width + x] - values[(y - 1) * width + x]));
+          sum += 0.5 * Math.abs(values[(y + 1) * width + x] - values[(y - 1) * width + x]);
         }
+        samples.push(sum / 3);
       }
     }
     const mean = samples.reduce((sum, value) => sum + value, 0) / Math.max(1, samples.length);
@@ -186,9 +203,10 @@ function gradientCandidate(image: AnalysisImage, factor: number): [number, numbe
   const values = analysisLuma(image);
   const vertical = gradientProfiles(values, image.width, image.height, 'x', factor);
   const horizontal = gradientProfiles(values, image.width, image.height, 'y', factor);
+  const pairEdgeThreshold = edgeGradientThreshold(values, image.width, image.height);
   const peaks = (profile: { positions: number[]; means: number[]; supports: number[] }, dimension: number) => {
     const selected: Array<{ position: number; mean: number; support: number; score: number; index: number }> = [];
-    for (let index = 2; index < profile.positions.length - 2; index += 1) {
+    for (let index = 3; index < profile.positions.length - 3; index += 1) {
       const score = profile.means[index] * (0.55 + profile.supports[index]);
       if (
         score >= profile.means[index - 1] * (0.55 + profile.supports[index - 1]) &&
@@ -224,7 +242,8 @@ function gradientCandidate(image: AnalysisImage, factor: number): [number, numbe
     means: horizontal.means.map((value) => value),
     supports: horizontal.supports.map((value) => value),
   }, image.height);
-  const pairs: Array<{ left: number; top: number; right: number; bottom: number; score: number }> = [];
+  const pairs: Array<{ left: number; top: number; right: number; bottom: number; score: number; order: number }> = [];
+  let pairOrder = 0;
   for (const left of xPeaks) {
     for (const right of xPeaks) {
       if (right.position <= left.position || right.position - left.position < image.width * 0.2) continue;
@@ -233,21 +252,28 @@ function gradientCandidate(image: AnalysisImage, factor: number): [number, numbe
         for (const bottom of yPeaks) {
           if (bottom.position <= top.position || bottom.position - top.position < image.height * 0.2) continue;
           if (top.position < image.height * 0.04 || bottom.position > image.height * 0.96) continue;
+          const pairMetrics = edgeMetrics(
+            image,
+            [left.position, top.position, right.position, bottom.position],
+            values,
+            pairEdgeThreshold
+          );
           pairs.push({
             left: left.position,
             top: top.position,
             right: right.position,
             bottom: bottom.position,
+            order: pairOrder++,
             score: Math.min(left.support, right.support, top.support, bottom.support) * 120 +
               (left.support + right.support + top.support + bottom.support) * 20 +
-              Math.min(left.mean, right.mean, top.mean, bottom.mean) * 0.8 +
+              pairMetrics.contrast * 0.8 +
               (left.mean + right.mean + top.mean + bottom.mean) * 0.08,
           });
         }
       }
     }
   }
-  pairs.sort((a, b) => b.score - a.score);
+  pairs.sort((a, b) => b.score - a.score || a.order - b.order);
   const result = pairs[0];
   return result ? [result.left, result.top, result.right, result.bottom] : undefined;
 }
@@ -290,51 +316,53 @@ function primaryCandidate(image: AnalysisImage, thresholdFactor: number): [numbe
   return [columns[0], rows[0], columns[columns.length - 1] + 1, rows[rows.length - 1] + 1];
 }
 
-function edgeMetrics(image: AnalysisImage, candidate: [number, number, number, number]) {
-  const values = analysisLuma(image);
-  const gradients: number[] = [];
-  for (let y = 1; y < image.height - 1; y += 1) {
-    for (let x = 1; x < image.width - 1; x += 1) {
-      gradients.push(
-        0.5 * Math.abs(values[y * image.width + x + 1] - values[y * image.width + x - 1]),
-        0.5 * Math.abs(values[(y + 1) * image.width + x] - values[(y - 1) * image.width + x])
-      );
-    }
-  }
-  const threshold = Math.max(8, percentile(gradients, 0.75) * 1.05);
+function edgeMetrics(
+  image: AnalysisImage,
+  candidate: [number, number, number, number],
+  precomputedValues?: Float64Array,
+  precomputedThreshold?: number
+) {
+  const values = precomputedValues ?? analysisLuma(image);
+  const threshold = precomputedThreshold ?? edgeGradientThreshold(values, image.width, image.height);
   const [left, top, right, bottom] = candidate;
   const strengths: number[] = [];
   const supports: number[] = [];
   const contrasts: number[] = [];
   const sampleEdge = (axis: 'x' | 'y', position: number, start: number, end: number, direction: 1 | -1) => {
-    const valuesAtEdge: number[] = [];
+    const insideValues: number[] = [];
+    const outsideValues: number[] = [];
     const edgeSamples: number[] = [];
     for (let offset = Math.ceil((end - start) * 0.12); offset <= Math.floor((end - start) * 0.88); offset += 2) {
       const along = start + offset;
       const coordinate = clamp(position - (direction === -1 ? 1 : 0), 1, (axis === 'x' ? image.width : image.height) - 2);
-      const gradient = axis === 'x'
-        ? 0.5 * Math.abs(values[along * image.width + coordinate + 1] - values[along * image.width + coordinate - 1])
-        : 0.5 * Math.abs(values[(coordinate + 1) * image.width + along] - values[(coordinate - 1) * image.width + along]);
-      edgeSamples.push(gradient);
+      let gradient = 0;
+      for (let normalOffset = -1; normalOffset <= 1; normalOffset += 1) {
+        const normalCoordinate = clamp(
+          coordinate + normalOffset,
+          1,
+          (axis === 'x' ? image.width : image.height) - 2
+        );
+        gradient += axis === 'x'
+          ? 0.5 * Math.abs(values[along * image.width + normalCoordinate + 1] - values[along * image.width + normalCoordinate - 1])
+          : 0.5 * Math.abs(values[(normalCoordinate + 1) * image.width + along] - values[(normalCoordinate - 1) * image.width + along]);
+      }
+      edgeSamples.push(gradient / 3);
       const insideStart = clamp(position + direction * 5, 0, (axis === 'x' ? image.width : image.height) - 1);
       const insideEnd = clamp(position + direction * 10, 0, (axis === 'x' ? image.width : image.height) - 1);
       const outsideStart = clamp(position - direction * 5, 0, (axis === 'x' ? image.width : image.height) - 1);
       const outsideEnd = clamp(position - direction * 10, 0, (axis === 'x' ? image.width : image.height) - 1);
-      const inside: number[] = [];
-      const outside: number[] = [];
       for (let strip = Math.min(insideStart, insideEnd); strip <= Math.max(insideStart, insideEnd); strip += 4) {
-        if (axis === 'x') inside.push(values[along * image.width + strip]);
-        else inside.push(values[strip * image.width + along]);
+        if (axis === 'x') insideValues.push(values[along * image.width + strip]);
+        else insideValues.push(values[strip * image.width + along]);
       }
       for (let strip = Math.min(outsideStart, outsideEnd); strip <= Math.max(outsideStart, outsideEnd); strip += 4) {
-        if (axis === 'x') outside.push(values[along * image.width + strip]);
-        else outside.push(values[strip * image.width + along]);
+        if (axis === 'x') outsideValues.push(values[along * image.width + strip]);
+        else outsideValues.push(values[strip * image.width + along]);
       }
-      valuesAtEdge.push(Math.abs(median(inside) - median(outside)));
     }
     strengths.push(edgeSamples.reduce((sum, value) => sum + value, 0) / Math.max(1, edgeSamples.length));
     supports.push(edgeSamples.filter((value) => value > threshold).length / Math.max(1, edgeSamples.length));
-    contrasts.push(median(valuesAtEdge));
+    contrasts.push(Math.abs(median(insideValues) - median(outsideValues)));
   };
   sampleEdge('x', left, top, bottom, 1);
   sampleEdge('x', right, top, bottom, -1);
@@ -396,6 +424,7 @@ async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promis
   const analysisImages: AnalysisImage[] = [];
 
   for (const analysisWidth of CROP_ANALYSIS_WIDTHS) {
+    // Reuse identical oriented pixels for each threshold-factor decision.
     for (let factorIndex = 0; factorIndex < CROP_PRIMARY_FACTORS.length; factorIndex += 1) {
       const analysis = await oriented
         .clone()
@@ -606,6 +635,17 @@ function prepareListingImages(
         throw createListingImageError(
           listingId,
           `Unsupported image extension for ${sourcePath}. Supported: .jpg, .jpeg, .png, .webp.`
+        );
+      }
+
+      if (
+        input.processingMode === 'enhance_crop' &&
+        normalizedExtension !== '.jpg' &&
+        normalizedExtension !== '.jpeg'
+      ) {
+        throw createListingImageError(
+          listingId,
+          `enhance_crop requires JPEG input (.jpg or .jpeg): ${sourcePath}.`
         );
       }
 
