@@ -121,7 +121,7 @@ describe('parseGeneratedDraft', () => {
       { authorizedYear: '1974', imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Willie Stargell 1974 Topps #100');
+    expect(draft.title).toBe('1974 Topps Willie Stargell #100');
     expect(draft.aspects).toMatchObject({
       'Card Number': '100',
       Manufacturer: 'Topps',
@@ -150,7 +150,7 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 2 }
     );
 
-    expect(draft.title).toBe('Phil Rizzuto Topps #1951');
+    expect(draft.title).toBe('Topps Phil Rizzuto #1951');
     expect(draft.aspects).toEqual({
       Player: 'Phil Rizzuto',
       Manufacturer: 'Topps',
@@ -186,7 +186,7 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Ed Stanky Topps #191');
+    expect(draft.title).toBe('Topps Ed Stanky #191');
     expect(draft.aspects).toEqual({
       Player: 'Ed Stanky',
       Manufacturer: 'Topps',
@@ -220,7 +220,7 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Phil Rizzuto Bowman #17');
+    expect(draft.title).toBe('Bowman Phil Rizzuto #17');
     expect(draft.aspects.Set).toBe('Bowman');
     expect(draft.yearEvidence).toBeNull();
     expect(draft.warnings).toContain(
@@ -310,7 +310,118 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 2 }
     );
 
-    expect(draft.title).toBe('Ryne Sandberg 1993 Fleer Team Leaders #6 of 10');
+    expect(draft.title).toBe('1993 Fleer Ryne Sandberg #6 of 10');
+  });
+
+  it('builds the canonical vintage title order from validated aspects', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Smoky Burgess 1953 Topps #10',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Smoky Burgess',
+          Manufacturer: 'Topps',
+          Set: '1953 Topps',
+          'Card Number': '10',
+        },
+        yearEvidence: {
+          year: '1953',
+          sourceType: 'copyright_line',
+          visibleText: '© 1953 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-canonical-smoky-burgess' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('1953 Topps Smoky Burgess #10');
+  });
+
+  it('preserves season range, named insert, and evidenced team in canonical order', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1997-98 Skybox Metal Universe Planet Metal Marcus Camby #6 Toronto Raptors',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Marcus Camby',
+          Manufacturer: 'Skybox',
+          Set: '1997-98 Skybox Metal Universe',
+          'Insert Set': 'Planet Metal',
+          'Card Number': '6',
+          Franchise: 'Toronto Raptors',
+        },
+        yearEvidence: {
+          year: '1997',
+          sourceType: 'copyright_line',
+          visibleText: '© 1997 Skybox',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-canonical-marcus-camby' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe(
+      '1997-98 Skybox Metal Universe Planet Metal Marcus Camby #6 Toronto Raptors'
+    );
+  });
+
+  it.each(['1997-99', '1997/98'])('canonicalizes an unsupported season range %s to the validated year', (range) => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: `${range} Topps Player #1`,
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          'Card Number': '1',
+        },
+        yearEvidence: {
+          year: '1997',
+          sourceType: 'copyright_line',
+          visibleText: '© 1997 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: `raw-response-unsupported-range-${range}` },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('1997 Topps Player #1');
+  });
+
+  it('appends an authoritative Franchise aspect after the card number', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1997-98 Skybox Metal Universe Planet Metal Marcus Camby #6',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Marcus Camby',
+          Manufacturer: 'Skybox',
+          Set: '1997-98 Skybox Metal Universe',
+          'Insert Set': 'Planet Metal',
+          'Card Number': '6',
+          Franchise: 'Toronto Raptors',
+        },
+        yearEvidence: {
+          year: '1997',
+          sourceType: 'copyright_line',
+          visibleText: '© 1997 Skybox',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-franchise-aspect-only' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe(
+      '1997-98 Skybox Metal Universe Planet Metal Marcus Camby #6 Toronto Raptors'
+    );
   });
 
   it.each([
@@ -318,7 +429,7 @@ describe('parseGeneratedDraft', () => {
       'after the player when manufacturer is unavailable',
       'Ryne Sandberg Team Leaders #6 of 10',
       { Player: 'Ryne Sandberg' },
-      'Ryne Sandberg 1993 Team Leaders #6 of 10',
+      '1993 Ryne Sandberg #6 of 10',
     ],
     [
       'at the start when player and manufacturer are unavailable',
@@ -348,7 +459,7 @@ describe('parseGeneratedDraft', () => {
     expect(draft.title).toBe(expectedTitle);
   });
 
-  it('combines canonical year insertion with one NM+ suffix for near-mint-or-better cards', () => {
+  it('keeps condition assessment out of titles for near-mint-or-better cards', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
         title: 'Ryne Sandberg Fleer Team Leaders #6 of 10 NM+ NM+',
@@ -371,7 +482,7 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 2 }
     );
 
-    expect(draft.title).toBe('Ryne Sandberg 1993 Fleer Team Leaders #6 of 10 NM+');
+    expect(draft.title).toBe('1993 Fleer Ryne Sandberg #6 of 10');
   });
 
   it('fails closed instead of compacting semantic title content over 80 characters', () => {
@@ -469,9 +580,353 @@ describe('parseGeneratedDraft', () => {
         { imageCount: 2 }
       );
 
-      expect(draft.title).toBe('Ryne Sandberg Fleer Team Leaders #6 of 10');
+      expect(draft.title).toBe('Fleer Ryne Sandberg #6 of 10');
     }
   );
+
+  it('defensively removes condition and grading wording without touching card numbers', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '2023 Topps Victor Wembanyama Rookie Card #136 PSA 10 Near Mint Good Fair Low Grade',
+        description: 'Single card.',
+        cardConditionToken: 'NEAR_MINT_OR_BETTER',
+        aspects: {
+          Player: 'Victor Wembanyama',
+          Manufacturer: 'Topps',
+          Features: ['Rookie Card'],
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-title-condition-language' }
+    );
+
+    expect(draft.title).toBe('Topps Rookie Card Victor Wembanyama #136');
+    expect(draft.aspects['Card Number']).toBe('136');
+    expect(draft.cardConditionToken).toBe('NEAR_MINT_OR_BETTER');
+  });
+
+  it('preserves condition-like words when they are part of recognized set or insert names', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1997 Topps Mint Collection Excellent Adventure Player #10',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Set: 'Mint Collection',
+          'Insert Set': 'Excellent Adventure',
+        },
+        yearEvidence: {
+          year: '1997',
+          sourceType: 'copyright_line',
+          visibleText: '© 1997 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-protected-condition-words' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('1997 Topps Mint Collection Excellent Adventure Player #10');
+  });
+
+  it('does not strip legitimate initials that resemble condition shorthand', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'G Chipper Jones Topps #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'G Chipper Jones',
+          Manufacturer: 'Topps',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-initial-title' }
+    );
+
+    expect(draft.title).toBe('Topps G Chipper Jones #1');
+  });
+
+  it('preserves bare numeric title content while retaining card and serial identifiers', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '2023 Topps Player #10 10 9.5 10/25',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          'Card Number': '10',
+          Features: ['Serial Numbered'],
+        },
+        yearEvidence: {
+          year: '2023',
+          sourceType: 'copyright_line',
+          visibleText: '© 2023 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-numeric-grade' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('2023 Topps Serial Numbered 10/25 Player #10 10 9.5');
+  });
+
+  it('preserves a bare number before the protected card-number marker', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '10 Topps Player #10',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          'Card Number': '10',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-grade-before-card-number' }
+    );
+
+    expect(draft.title).toBe('Topps 10 Player #10');
+  });
+
+  it.each(['Series 2', 'Insert 5'])('preserves legitimate numeric content in %s', (numericPart) => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: `Topps ${numericPart} Player #1`,
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Features: numericPart === 'Insert 5' ? ['Insert 5'] : undefined,
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: `raw-response-${numericPart.replace(/\s+/gu, '-').toLocaleLowerCase()}` }
+    );
+
+    expect(draft.title).toBe(`Topps ${numericPart} Player #1`);
+  });
+
+  it('does not let malformed condition Features protect prohibited title wording', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '2023 Topps Player Near Mint #10',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Features: ['Near Mint'],
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-condition-feature' }
+    );
+
+    expect(draft.title).toBe('Topps Player #10');
+  });
+
+  it('does not reintroduce condition-only structured components after title sanitation', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Player #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Set: 'PSA 10',
+          'Insert Set': 'Near Mint',
+          'Parallel/Variety': 'EX',
+          Franchise: 'Poor',
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-condition-aspect-reintroduction' }
+    );
+
+    expect(draft.title).toBe('Topps Player #1');
+  });
+
+  it('strips a condition-only Set phrase even when no Player aspect triggers canonical rebuilding', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Near Mint #1',
+        description: 'Single card.',
+        aspects: {
+          Manufacturer: 'Topps',
+          Set: 'Near Mint',
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-condition-set-no-player' }
+    );
+
+    expect(draft.title).toBe('Topps #1');
+  });
+
+  it('dedupes overlapping Set and Insert Set phrases across canonical slots', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Skybox Metal Universe Metal Universe Planet Metal Player #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Skybox',
+          Set: 'Metal Universe',
+          'Insert Set': 'Metal Universe Planet Metal',
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-overlapping-components' }
+    );
+
+    expect(draft.title).toBe('Skybox Metal Universe Planet Metal Player #1');
+  });
+
+  it('strips mixed condition prefixes from structured named components', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Heroes Gold Player #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          'Insert Set': 'Near Mint Heroes',
+          'Parallel/Variety': 'NM+ Gold',
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-mixed-condition-components' }
+    );
+
+    expect(draft.title).toBe('Topps Heroes Gold Player #1');
+  });
+
+  it('does not preserve nested grade language in larger named components', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Adventure Collection Player #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          'Insert Set': 'Excellent NM+ Adventure',
+          'Parallel/Variety': 'Mint PSA 10 Collection',
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-nested-condition-components' }
+    );
+
+    expect(draft.title).toBe('Topps Adventure Collection Player #1');
+  });
+
+  it('keeps a recognized Feature while removing mixed condition wording', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '2023 Topps Player Near Mint Rookie Card #10',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Features: ['Near Mint Rookie Card'],
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-mixed-condition-feature' }
+    );
+
+    expect(draft.title).toBe('Topps Rookie Card Player #10');
+  });
+
+  it('preserves the complete visible Rookie Card characteristic for a shorthand Feature', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Player Rookie Card #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Features: ['Rookie'],
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-rookie-feature-shorthand' }
+    );
+
+    expect(draft.title).toBe('Topps Rookie Card Player #1');
+  });
+
+  it('preserves a serial identifier authorized by a Serial Numbered Feature', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Player #1 10/25',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Features: ['Serial Numbered'],
+          'Card Number': '1',
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-serial-feature' }
+    );
+
+    expect(draft.title).toBe('Topps Serial Numbered 10/25 Player #1');
+  });
+
+  it('preserves an official Set occurrence while stripping a later condition occurrence', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps Mint Player #1 Near Mint',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Set: 'Mint',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-repeated-set-word' }
+    );
+
+    expect(draft.title).toBe('Topps Mint Player #1');
+  });
+
+  it('skips an earlier condition occurrence when selecting the official Set phrase', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Near Mint Topps Mint Player #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Set: 'Mint',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-set-after-condition' }
+    );
+
+    expect(draft.title).toBe('Topps Mint Player #1');
+  });
 
   it('does not duplicate an existing canonical title year or protected four-digit card number', () => {
     const draft = parseGeneratedDraft(
@@ -495,7 +950,7 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('Phil Rizzuto 1951 Topps #1951');
+    expect(draft.title).toBe('1951 Topps Phil Rizzuto #1951');
   });
 
   it('sanitizes array-valued Set entries individually', () => {
@@ -609,14 +1064,14 @@ describe('parseGeneratedDraft', () => {
   });
 
   it.each([
-    ['#1951', 'Phil Rizzuto Topps #1951'],
-    ['No. 1951', 'Phil Rizzuto Topps No. 1951'],
-    ['No 1951', 'Phil Rizzuto Topps No 1951'],
-    ['Card 1951', 'Phil Rizzuto Topps Card 1951'],
-    ['Card #1951', 'Phil Rizzuto Topps Card #1951'],
-    ['Card No. 1951', 'Phil Rizzuto Topps Card No. 1951'],
-    ['Card No 1951', 'Phil Rizzuto Topps Card No 1951'],
-    ['Card Number 1951', 'Phil Rizzuto Topps Card Number 1951'],
+    ['#1951', 'Topps Phil Rizzuto #1951'],
+    ['No. 1951', 'Topps Phil Rizzuto #1951'],
+    ['No 1951', 'Topps Phil Rizzuto #1951'],
+    ['Card 1951', 'Topps Phil Rizzuto #1951'],
+    ['Card #1951', 'Topps Phil Rizzuto #1951'],
+    ['Card No. 1951', 'Topps Phil Rizzuto #1951'],
+    ['Card No 1951', 'Topps Phil Rizzuto #1951'],
+    ['Card Number 1951', 'Topps Phil Rizzuto #1951'],
   ])('preserves protected four-digit card-number form %s while stripping unsupported year', (cardForm, expectedTitle) => {
     const draft = parseGeneratedDraft(
       JSON.stringify({

@@ -33,8 +33,6 @@ const TITLE_CARD_NUMBER_PATTERNS = [
   new RegExp(`\\bCard\\s+No\\.?\\s*#?\\s*${CARD_NUMBER_TOKEN_PATTERN}\\b`, 'giu'),
   new RegExp(`\\bCard\\s+Number\\s+${CARD_NUMBER_TOKEN_PATTERN}\\b`, 'giu'),
 ] as const;
-const MANUFACTURER_ASPECT_KEYS = ['Manufacturer', 'Card Manufacturer'] as const;
-const PLAYER_ASPECT_KEYS = ['Player', 'Player/Athlete', 'Athlete'] as const;
 
 function trimToNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -123,58 +121,30 @@ function isProtectedTitleSpan(
   });
 }
 
-function isWordCharacter(value: string | undefined): boolean {
-  return value !== undefined && /[\p{L}\p{N}]/u.test(value);
-}
-
-function findTitlePhrase(
-  title: string,
-  phrase: string
-): { end: number; start: number } | null {
-  const normalizedPhrase = trimToNull(phrase);
-  if (!normalizedPhrase) {
-    return null;
+function isValidatedLeadingYearRange(match: RegExpExecArray | null, canonicalYear: string): boolean {
+  if (!match || match[1] !== '-' || match[2]?.length !== 2) {
+    return false;
   }
 
-  const lowerTitle = title.toLocaleLowerCase();
-  const lowerPhrase = normalizedPhrase.toLocaleLowerCase();
-  let start = lowerTitle.indexOf(lowerPhrase);
-
-  while (start >= 0) {
-    const end = start + normalizedPhrase.length;
-    if (!isWordCharacter(title[start - 1]) && !isWordCharacter(title[end])) {
-      return { end, start };
-    }
-
-    start = lowerTitle.indexOf(lowerPhrase, start + 1);
-  }
-
-  return null;
+  const expectedSuffix = String((Number(canonicalYear) + 1) % 100).padStart(2, '0');
+  return match[2] === expectedSuffix;
 }
 
-function findAspectTitlePhrase(
-  title: string,
-  aspects: AspectRecord,
-  aspectKeys: readonly string[]
-): { end: number; start: number } | null {
-  let earliestMatch: { end: number; start: number } | null = null;
-
-  for (const key of aspectKeys) {
-    for (const value of getAspectStringValues(aspects[key])) {
-      const match = findTitlePhrase(title, value);
-      if (match && (!earliestMatch || match.start < earliestMatch.start)) {
-        earliestMatch = match;
-      }
-    }
-  }
-
-  return earliestMatch;
-}
-
-function ensureCanonicalTitleYear(title: string, canonicalYear: string, aspects: AspectRecord): string {
+function ensureCanonicalTitleYear(title: string, canonicalYear: string): string {
   const protectedSpans = getProtectedTitleSpans(title);
+  const leadingRangeMatch = new RegExp(
+    `^\\s*${canonicalYear}\\s*([-/]?)\\s*(\\d{2}|\\d{4})\\b`,
+    'u'
+  ).exec(title);
+  const leadingRangeStart = leadingRangeMatch?.index ?? -1;
+  const leadingRangeEnd = leadingRangeMatch
+    ? leadingRangeStart + leadingRangeMatch[0].length
+    : -1;
+  const preserveLeadingRange =
+    isValidatedLeadingYearRange(leadingRangeMatch, canonicalYear) &&
+    !isProtectedTitleSpan(leadingRangeStart, leadingRangeEnd, protectedSpans);
   let foundCanonicalYear = false;
-  let changed = false;
+  let preservedLeadingRange = false;
   let result = '';
   let lastIndex = 0;
 
@@ -191,38 +161,25 @@ function ensureCanonicalTitleYear(title: string, canonicalYear: string, aspects:
       continue;
     }
 
-    if (!foundCanonicalYear) {
+    if (preserveLeadingRange && start === leadingRangeStart && !preservedLeadingRange) {
       foundCanonicalYear = true;
+      preservedLeadingRange = true;
       continue;
     }
 
     result += title.slice(lastIndex, start);
     result += ' ';
     lastIndex = end;
-    changed = true;
+    foundCanonicalYear = true;
   }
 
   if (foundCanonicalYear) {
-    if (!changed) {
-      return title;
-    }
-
     result += title.slice(lastIndex);
-    return normalizeWhitespace(result);
-  }
-
-  const manufacturerMatch = findAspectTitlePhrase(title, aspects, MANUFACTURER_ASPECT_KEYS);
-  if (manufacturerMatch) {
-    return normalizeWhitespace(
-      `${title.slice(0, manufacturerMatch.start)}${canonicalYear} ${title.slice(manufacturerMatch.start)}`
-    );
-  }
-
-  const playerMatch = findAspectTitlePhrase(title, aspects, PLAYER_ASPECT_KEYS);
-  if (playerMatch) {
-    return normalizeWhitespace(
-      `${title.slice(0, playerMatch.end)} ${canonicalYear}${title.slice(playerMatch.end)}`
-    );
+    const withoutCanonicalYear = normalizeWhitespace(result);
+    if (preserveLeadingRange) {
+      return withoutCanonicalYear;
+    }
+    return normalizeWhitespace(`${canonicalYear} ${withoutCanonicalYear}`);
   }
 
   return normalizeWhitespace(`${canonicalYear} ${title}`);
@@ -310,6 +267,16 @@ export function sanitizeTitleYearClaims(
     }
 
     if (allowedYear && year === allowedYear && rangeEnd) {
+      const leadingRangeMatch = new RegExp(
+        `^\\s*${allowedYear}\\s*([-/]?)\\s*(\\d{2}|\\d{4})\\b`,
+        'u'
+      ).exec(title);
+      if (
+        title.slice(0, start).trim().length === 0 &&
+        isValidatedLeadingYearRange(leadingRangeMatch, allowedYear)
+      ) {
+        continue;
+      }
       replacement = allowedYear;
     }
 
@@ -406,7 +373,7 @@ export function normalizeGeneratedDraftYearFields(
     }
 
     title = sanitizeTitleYearClaims(title, { allowedYear: canonicalYear });
-    title = ensureCanonicalTitleYear(title, canonicalYear, aspects);
+    title = ensureCanonicalTitleYear(title, canonicalYear);
 
     if (originalYearValues.some((value) => value !== canonicalYear)) {
       warnings.push(

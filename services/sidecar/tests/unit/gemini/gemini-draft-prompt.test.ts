@@ -51,7 +51,8 @@ describe('buildGenerateListingDraftPrompt', () => {
   it('explicitly prohibits team in titles', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
-    expect(prompt).toMatch(/team/);
+    expect(prompt).toMatch(/team may appear last only when positively evidenced/i);
+    expect(prompt).toMatch(/never infer a team from player identity/i);
   });
 
   it('explicitly prohibits franchise in titles', () => {
@@ -186,21 +187,23 @@ describe('buildGenerateListingDraftPrompt', () => {
 
     expect(prompt).toMatch(/include that exact canonical year in the title exactly once/i);
     expect(prompt).toMatch(/never return valid yearEvidence while omitting its year from the title/i);
-    expect(prompt).toMatch(/between the player name and manufacturer or set name/i);
+    expect(prompt).toMatch(/at the very start of the title/i);
   });
 
-  it('does not instruct Gemini to emit backend-owned NM+ title suffixes', () => {
+  it('forbids card-condition and grading language in titles', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
-    expect(prompt).not.toMatch(/NM\+/);
-    expect(prompt).not.toMatch(/reserve space.*condition suffix/i);
+    expect(prompt).toMatch(/Do not include card-condition or grading language in titles/i);
+    expect(prompt).toMatch(/NM\+/);
+    expect(prompt).toMatch(/Near Mint/);
+    expect(prompt).toMatch(/numeric grades/);
   });
 
-  it('limits Gemini titles to 76 characters before backend additions', () => {
+  it('allows Gemini titles to use the full 80-character backend limit', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
-    expect(prompt).toMatch(/Listing title must be <= 76 characters/);
-    expect(prompt).not.toMatch(/Listing title must be < 80 characters/);
+    expect(prompt).toMatch(/Listing title must be <= 80 characters/);
+    expect(prompt).not.toMatch(/Listing title must be <= 76 characters/);
   });
 
   it('forbids Year and Season item specifics from the model', () => {

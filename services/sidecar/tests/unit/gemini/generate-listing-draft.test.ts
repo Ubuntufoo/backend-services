@@ -233,12 +233,13 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain(
       'Do not return collector shorthand such as NM-MT, EX-MT, VG-EX, MT, NM, EX, VG, FR, or PR.'
     );
-    expect(request.prompt).toContain('Include a Franchise aspect when the team, franchise, or IP is identifiable');
+    expect(request.prompt).toContain('canonical order: [validated year] [set]');
     expect(request.prompt).toContain(
-      'Emit non-year canonical trading-card pricing aspects when visible or strongly inferable'
+      'A team may appear last only when positively evidenced by a visible team name, logo, or wordmark'
     );
+    expect(request.prompt).toContain('Do not include card-condition or grading language in titles');
     expect(request.prompt).toContain(
-      'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98"'
+      'Extract visible card-number forms such as "#98" or "Card #98" into the Card Number aspect'
     );
     expect(request.prompt).toContain('"Manufacturer": "string"');
     expect(request.prompt).toContain('"Set": "string"');
@@ -259,7 +260,7 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain('"title": "string"');
 
     expect(result).toEqual({
-      title: 'Fleer Michael Jordan RC',
+      title: 'Fleer Michael Jordan Utah Jazz',
       description: 'Visible front and back images suggest an ungraded single card.',
       categorySuggestion: 'Sports Trading Cards',
       cardConditionNote: 'Soft corners visible; condition estimated from photos.',
@@ -312,7 +313,7 @@ describe('generateListingDraft', () => {
       },
     });
 
-    expect(draft.title).toBe('Willie Stargell 1974 Topps #100');
+    expect(draft.title).toBe('1974 Topps Willie Stargell #100');
     expect(draft.aspects.Year).toBe('1974');
     expect(draft.yearEvidence).toBeNull();
   });
@@ -400,13 +401,13 @@ describe('generateListingDraft', () => {
     });
 
     expect(result.aspects).toMatchObject({
-      Athlete: 'Johnny Riddle',
       Player: 'Johnny Riddle',
       Manufacturer: 'Topps',
       'Card Number': '98',
-      Team: 'St. Louis Cardinals',
     });
-    expect(result.title).toBe('Johnny Riddle Topps #98 St. Louis Cardinals Coach');
+    expect(result.aspects).not.toHaveProperty('Athlete');
+    expect(result.aspects).not.toHaveProperty('Team');
+    expect(result.title).toBe('Topps Johnny Riddle #98');
   });
 
   it('preserves verified details while dropping guessed canonical year data for vintage cards', async () => {
@@ -435,7 +436,7 @@ describe('generateListingDraft', () => {
       Manufacturer: 'Topps',
       'Card Number': '191',
     });
-    expect(result.title).toBe('Ed Stanky Topps #191');
+    expect(result.title).toBe('Topps Ed Stanky #191');
     expect(result.yearEvidence).toBeNull();
   });
 
@@ -696,13 +697,10 @@ describe('generateListingDraft', () => {
 
     expect(result.aspects).toEqual({
       Player: 'Michael Jordan',
-      Teams: ['Bulls', 'USA Basketball'],
     });
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        'Gemini response aspect "Teams" contained invalid values and was filtered.',
-        'Gemini response aspect "Grade" was invalid and was discarded.',
-        'Gemini response aspect "EmptyList" contained invalid values and was filtered.',
+        'Gemini response aspects discarded unexpected keys: "Teams", "Grade", "EmptyList".',
       ])
     );
   });
