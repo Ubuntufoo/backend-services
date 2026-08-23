@@ -32,4 +32,4 @@ pnpm --filter @ebay-inventory/image-service typecheck
 
 - No R2 uploads.
 - No Supabase image URL updates.
-- Does not switch watcher-managed processing; existing mode remains until explicitly wired.
+- Watcher-managed `record_created` listings use `enhance_crop` when every local source is JPEG; mixed or non-JPEG inputs retain the `strip_exif` compatibility path.
