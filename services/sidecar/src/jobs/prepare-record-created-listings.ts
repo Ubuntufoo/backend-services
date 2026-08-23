@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, resolve } from 'node:path';
 
 import type { ListingRow, ListingUpdate } from '@ebay-inventory/data';
 import {
@@ -19,7 +19,6 @@ import {
 const RECORD_CREATED_STATUS = 'record_created';
 const ASSETS_READY_STATUS = 'assets_ready';
 const READY_TO_GENERATE_SUB_STATUS = 'ready_to_generate';
-const DEFAULT_IMAGE_PROCESSING_MODE: ProcessListingImagesInput['processingMode'] = 'strip_exif';
 const IMAGE_SERVICE_OUTPUT_DIRECTORY_NAME = '.image-service-output';
 const DEFAULT_BATCH_SIZE = 25;
 
@@ -471,11 +470,18 @@ async function prepareListingAssets(
   let processedImages: ProcessListingImagesResult;
 
   try {
+    const processingMode: ProcessListingImagesInput['processingMode'] = sourceImagePaths.every((pathValue) => {
+      const extension = extname(pathValue).toLowerCase();
+      return extension === '.jpg' || extension === '.jpeg';
+    })
+      ? 'enhance_crop'
+      : 'strip_exif';
+
     processedImages = await options.imageProcessor({
       listingId: listing.listing_id,
       inputImagePaths: sourceImagePaths,
       outputDirectory,
-      processingMode: DEFAULT_IMAGE_PROCESSING_MODE,
+      processingMode,
     });
   } catch (error) {
     throw toListingAssetPreparationError(

@@ -163,25 +163,34 @@ function createDataAccess(
   };
 }
 
-function createProcessedImagesResult(listingId = 'LIST-001'): ProcessListingImagesResult {
+function createProcessedImagesResult(
+  listingId = 'LIST-001',
+  options: {
+    extension?: '.jpg' | '.png';
+    processingMode?: ProcessListingImagesResult['processingMode'];
+  } = {}
+): ProcessListingImagesResult {
+  const extension = options.extension ?? '.jpg';
+  const processingMode = options.processingMode ?? 'enhance_crop';
+
   return {
     listingId,
     outputDirectory: `/processed/${listingId}/.image-service-output/run-001`,
-    processingMode: 'strip_exif' as const,
+    processingMode,
     images: [
       {
-        sourcePath: `/processed/${listingId}/${listingId}_01.jpg`,
-        outputPath: `/processed/${listingId}/.image-service-output/run-001/${listingId}_01.jpg`,
-        filename: `${listingId}_01.jpg`,
+        sourcePath: `/processed/${listingId}/${listingId}_01${extension}`,
+        outputPath: `/processed/${listingId}/.image-service-output/run-001/${listingId}_01${extension}`,
+        filename: `${listingId}_01${extension}`,
         sizeBytes: 101,
-        processingMode: 'strip_exif' as const,
+        processingMode,
       },
       {
-        sourcePath: `/processed/${listingId}/${listingId}_02.jpg`,
-        outputPath: `/processed/${listingId}/.image-service-output/run-001/${listingId}_02.jpg`,
-        filename: `${listingId}_02.jpg`,
+        sourcePath: `/processed/${listingId}/${listingId}_02${extension}`,
+        outputPath: `/processed/${listingId}/.image-service-output/run-001/${listingId}_02${extension}`,
+        filename: `${listingId}_02${extension}`,
         sizeBytes: 102,
-        processingMode: 'strip_exif' as const,
+        processingMode,
       },
     ],
   };
@@ -242,6 +251,30 @@ describe('prepareRecordCreatedListings', () => {
     expect(result.exhaustedCandidates).toBe(true);
     expect(result.processed).toHaveLength(1);
     expect(result.processed[0]?.status).toBe('assets_ready');
+    expect(imageProcessor).toHaveBeenCalledWith({
+      listingId: 'LIST-001',
+      inputImagePaths: [
+        '/processed/LIST-001/LIST-001_01.jpg',
+        '/processed/LIST-001/LIST-001_02.jpg',
+      ],
+      outputDirectory: '/processed/LIST-001/.image-service-output/run-001',
+      processingMode: 'enhance_crop',
+    });
+    expect(imageUploader.uploadListingImages).toHaveBeenCalledWith({
+      listingId: 'LIST-001',
+      images: [
+        {
+          filename: 'LIST-001_01.jpg',
+          localPath:
+            '/processed/LIST-001/.image-service-output/run-001/LIST-001_01.jpg',
+        },
+        {
+          filename: 'LIST-001_02.jpg',
+          localPath:
+            '/processed/LIST-001/.image-service-output/run-001/LIST-001_02.jpg',
+        },
+      ],
+    });
     expect(listingStates.get('LIST-001')?.status).toBe('assets_ready');
     expect(listingsUpdate).toHaveBeenCalledWith(
       'LIST-001',
@@ -253,6 +286,85 @@ describe('prepareRecordCreatedListings', () => {
         r2_object_keys: [
           'listings/list-001/list-001_01.jpg',
           'listings/list-001/list-001_02.jpg',
+        ],
+        status: 'assets_ready',
+        sub_status: 'ready_to_generate',
+      })
+    );
+  });
+
+  it('uses strip_exif compatibility mode for watcher PNG sources and preserves ordered assets', async () => {
+    const listing = createListingRow({
+      image_urls: [
+        '/processed/LIST-PNG/LIST-PNG_01.png',
+        '/processed/LIST-PNG/LIST-PNG_02.png',
+      ],
+      listing_id: 'LIST-PNG',
+      sku: 'SKU-PNG',
+    });
+    const { dataAccess, listingStates, listingsUpdate } = createDataAccess([listing]);
+    const imageProcessor = vi.fn(async () =>
+      createProcessedImagesResult('LIST-PNG', {
+        extension: '.png',
+        processingMode: 'strip_exif',
+      })
+    );
+    const imageUploader: R2ImageUploader = {
+      uploadListingImages: vi.fn(async ({ listingId, images }) =>
+        images
+          .map((image) => ({
+            filename: image.filename,
+            objectKey: `listings/${listingId.toLowerCase()}/${image.filename.toLowerCase()}`,
+            publicUrl: `https://images.murphyfamilyhobby.dev/listings/${listingId.toLowerCase()}/${image.filename.toLowerCase()}`,
+          }))
+          .reverse()
+      ),
+    };
+
+    const result = await runStep({
+      dataAccess,
+      imageProcessor,
+      imageUploader,
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(result.processed).toHaveLength(1);
+    expect(imageProcessor).toHaveBeenCalledWith({
+      listingId: 'LIST-PNG',
+      inputImagePaths: [
+        '/processed/LIST-PNG/LIST-PNG_01.png',
+        '/processed/LIST-PNG/LIST-PNG_02.png',
+      ],
+      outputDirectory: '/processed/LIST-PNG/.image-service-output/run-001',
+      processingMode: 'strip_exif',
+    });
+    expect(imageUploader.uploadListingImages).toHaveBeenCalledWith({
+      listingId: 'LIST-PNG',
+      images: [
+        {
+          filename: 'LIST-PNG_01.png',
+          localPath:
+            '/processed/LIST-PNG/.image-service-output/run-001/LIST-PNG_01.png',
+        },
+        {
+          filename: 'LIST-PNG_02.png',
+          localPath:
+            '/processed/LIST-PNG/.image-service-output/run-001/LIST-PNG_02.png',
+        },
+      ],
+    });
+    expect(listingStates.get('LIST-PNG')?.status).toBe('assets_ready');
+    expect(listingsUpdate).toHaveBeenCalledWith(
+      'LIST-PNG',
+      expect.objectContaining({
+        image_urls: [
+          'https://images.murphyfamilyhobby.dev/listings/list-png/list-png_01.png',
+          'https://images.murphyfamilyhobby.dev/listings/list-png/list-png_02.png',
+        ],
+        r2_object_keys: [
+          'listings/list-png/list-png_01.png',
+          'listings/list-png/list-png_02.png',
         ],
         status: 'assets_ready',
         sub_status: 'ready_to_generate',
