@@ -40,7 +40,8 @@ const TITLE_CARD_NUMBER_PATTERNS = [
 const TITLE_CHARACTERISTIC_ASPECT_KEYS = ['Set', 'Parallel/Variety', 'Insert Set'] as const;
 const TITLE_CARD_NUMBER_RANGE_PATTERN =
   /(?:^|[\s([{])(?:#\s*[A-Za-z0-9-]+|Card\s+(?:(?:No\.?|Number)\s*)?[A-Za-z0-9-]+)\s+of\s+\d{1,4}\b/giu;
-const POSITIVE_FEATURE_PATTERN = /\b(?:rookie(?:\s+card)?|refractor|insert|parallel(?:\/variety)?|serial(?:[-\s]+numbered)?)\b/iu;
+const POSITIVE_FEATURE_PATTERN =
+  /\b(?:rookie(?:\s+card)?|refractor|insert|parallel(?:\/variety)?|serial(?:[-\s]+numbered)?)\b/iu;
 const PROHIBITED_TITLE_CONDITION_PATTERNS = [
   /\b(?:low\s+grade|near\s+mint(?:\s+or\s+better)?|very\s+good|good|fair)\b/giu,
   /(?<![\p{L}\p{N}])(?:NM(?:\+|-MT)?|EX-MT|VG-EX|EX|VG|MT|FR|PR)(?![\p{L}\p{N}])/giu,
@@ -360,9 +361,7 @@ function getTitleCardSpans(title: string): Array<[number, number]> {
     return [];
   }
 
-  const firstCluster = sorted.filter(
-    ([start, end]) => start < firstSpan[1] && end > firstSpan[0]
-  );
+  const firstCluster = sorted.filter(([start, end]) => start < firstSpan[1] && end > firstSpan[0]);
   const rangeSpan = firstCluster
     .filter(([start, end]) => /\bof\s+\d{1,4}\b/iu.test(title.slice(start, end)))
     .sort((left, right) => right[1] - right[0] - (left[1] - left[0]))[0];
@@ -415,8 +414,12 @@ function getSafeCanonicalComponent(value: string | null, title = ''): string | n
   // Keep known larger named phrases whose condition-like word is part of the
   // official identity; strip explicit condition prefixes from mixed values.
   const namedPrefixMatch = /^(mint|excellent)\s+(.+)$/iu.exec(normalized);
-  if (namedPrefixMatch && sanitized &&
-      normalizeTitleWhitespace(namedPrefixMatch[2]).toLocaleLowerCase() === sanitized.toLocaleLowerCase()) {
+  if (
+    namedPrefixMatch &&
+    sanitized &&
+    normalizeTitleWhitespace(namedPrefixMatch[2]).toLocaleLowerCase() ===
+      sanitized.toLocaleLowerCase()
+  ) {
     return normalized;
   }
 
@@ -449,16 +452,16 @@ function getCanonicalYearTitlePart(title: string, aspects: AspectRecord): string
     return null;
   }
 
-  const leadingRange = new RegExp(
-    `^\\s*${year}\\s*[-/]\\s*(?:\\d{2}|\\d{4})\\b`,
-    'u'
-  ).exec(title);
+  const leadingRange = new RegExp(`^\\s*${year}\\s*[-/]\\s*(?:\\d{2}|\\d{4})\\b`, 'u').exec(title);
   return leadingRange?.[0]?.trim() ?? year;
 }
 
 function getCanonicalSetParts(aspects: AspectRecord, title = ''): string[] {
   const set = getSafeCanonicalComponent(getFirstAspectValue(aspects, 'Set'), title);
-  const manufacturer = getSafeCanonicalComponent(trimToNull(getAspectString(aspects, 'Manufacturer')), title);
+  const manufacturer = getSafeCanonicalComponent(
+    trimToNull(getAspectString(aspects, 'Manufacturer')),
+    title
+  );
 
   if (!set) {
     return manufacturer ? [manufacturer] : [];
@@ -566,7 +569,21 @@ function getCanonicalCardPart(title: string, cardNumber: string | null): string 
   return normalized ? `#${normalized}` : null;
 }
 
-function getTrailingNumericParts(title: string, cardSpan: [number, number] | null): string[] {
+function isBareCardNumberDuplicate(part: string, cardNumber: string | null): boolean {
+  const normalizedCardNumber = normalizeCardNumberValue(cardNumber ?? '');
+  if (!normalizedCardNumber) {
+    return false;
+  }
+
+  const normalizedPart = part.trim();
+  return /^\d+$/u.test(normalizedPart) && normalizedPart === normalizedCardNumber;
+}
+
+function getTrailingNumericParts(
+  title: string,
+  cardSpan: [number, number] | null,
+  cardNumber: string | null
+): string[] {
   if (!cardSpan) {
     return [];
   }
@@ -574,10 +591,12 @@ function getTrailingNumericParts(title: string, cardSpan: [number, number] | nul
   const parts: string[] = [];
   const tailStart = cardSpan[1];
   const tail = title.slice(tailStart);
-  const serialSpans = [...tail.matchAll(/\b\d{1,4}\s*\/\s*\d{1,4}\b/gu)].map((match) => {
-    const start = match.index ?? -1;
-    return start >= 0 ? [start, start + match[0].length] as [number, number] : null;
-  }).filter((span): span is [number, number] => span !== null);
+  const serialSpans = [...tail.matchAll(/\b\d{1,4}\s*\/\s*\d{1,4}\b/gu)]
+    .map((match) => {
+      const start = match.index ?? -1;
+      return start >= 0 ? ([start, start + match[0].length] as [number, number]) : null;
+    })
+    .filter((span): span is [number, number] => span !== null);
 
   for (const match of tail.matchAll(/(?<![\p{L}\p{N}])\d{1,2}(?:\.\d+)?(?![\p{L}\p{N}])/gu)) {
     const start = match.index ?? -1;
@@ -585,7 +604,9 @@ function getTrailingNumericParts(title: string, cardSpan: [number, number] | nul
     if (serialSpans.some(([serialStart, serialEnd]) => start >= serialStart && end <= serialEnd)) {
       continue;
     }
-    parts.push(match[0]);
+    if (!isBareCardNumberDuplicate(match[0], cardNumber)) {
+      parts.push(match[0]);
+    }
   }
 
   return dedupeTitleParts(parts);
@@ -595,7 +616,8 @@ function getNumericTitleParts(
   title: string,
   aspects: AspectRecord,
   playerSpan: [number, number] | null,
-  cardSpan: [number, number] | null
+  cardSpan: [number, number] | null,
+  cardNumber: string | null
 ): string[] {
   if (!playerSpan) {
     return [];
@@ -618,9 +640,11 @@ function getNumericTitleParts(
   const parts: string[] = [];
   for (const slice of slices) {
     const remainder = removeTitlePhrases(slice, knownPhrases);
-    for (const match of remainder.matchAll(/\b(?:Series|Insert)\s+\d{1,2}\b|(?<![\p{L}\p{N}])\d{1,2}(?:\.\d+)?(?![\p{L}\p{N}])/giu)) {
+    for (const match of remainder.matchAll(
+      /\b(?:Series|Insert)\s+\d{1,2}\b|(?<![\p{L}\p{N}])\d{1,2}(?:\.\d+)?(?![\p{L}\p{N}])/giu
+    )) {
       const part = match[0].trim();
-      if (!isCardLabelRemainder(part)) {
+      if (!isCardLabelRemainder(part) && !isBareCardNumberDuplicate(part, cardNumber)) {
         parts.push(part);
       }
     }
@@ -634,10 +658,6 @@ function normalizeCanonicalTitleOrder(title: string, aspects: AspectRecord): str
     return title;
   }
 
-  if (title.length > MAX_GENERATED_TITLE_LENGTH) {
-    return title;
-  }
-
   const setParts = getCanonicalSetParts(aspects, title);
   const characteristicParts = getCanonicalCharacteristicParts(title, aspects);
   const cardNumber = trimToNull(getAspectString(aspects, 'Card Number'));
@@ -646,17 +666,23 @@ function normalizeCanonicalTitleOrder(title: string, aspects: AspectRecord): str
 
   // With no canonical component beyond the player, retain the model's
   // unstructured title verbatim so semantic title length remains fail-closed.
-  if (!yearPart && setParts.length === 0 && characteristicParts.length === 0 && !cardNumber && !team) {
+  if (
+    !yearPart &&
+    setParts.length === 0 &&
+    characteristicParts.length === 0 &&
+    !cardNumber &&
+    !team
+  ) {
     return title;
   }
 
   const playerSpan = findFirstTitlePhraseSpan(title, player);
   const cardSpan = getTitleCardSpans(title)[0] ?? null;
-  const numericTitleParts = getNumericTitleParts(title, aspects, playerSpan, cardSpan);
+  const numericTitleParts = getNumericTitleParts(title, aspects, playerSpan, cardSpan, cardNumber);
   const canonicalSetParts = dedupeTitleParts([...setParts, ...numericTitleParts]);
   const canonicalCharacteristicParts = characteristicParts;
   const cardPart = getCanonicalCardPart(title, cardNumber);
-  const trailingNumericParts = getTrailingNumericParts(title, cardSpan);
+  const trailingNumericParts = getTrailingNumericParts(title, cardSpan, cardNumber);
   const orderedParts = [
     getCanonicalYearTitlePart(title, aspects),
     ...canonicalSetParts,
@@ -867,7 +893,9 @@ function normalizeYearEvidence(
   }
 
   if (value.visibleText !== undefined && visibleText === null) {
-    warnings.push('Gemini response field "yearEvidence.visibleText" was invalid and was discarded.');
+    warnings.push(
+      'Gemini response field "yearEvidence.visibleText" was invalid and was discarded.'
+    );
   }
 
   if (value.imageIndex !== undefined && imageIndex === undefined) {
@@ -931,7 +959,12 @@ function normalizeConfidence(
   for (const key of CONFIDENCE_KEYS) {
     const rawValue = value[key];
 
-    if (typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue >= 0 && rawValue <= 1) {
+    if (
+      typeof rawValue === 'number' &&
+      Number.isFinite(rawValue) &&
+      rawValue >= 0 &&
+      rawValue <= 1
+    ) {
       confidence[key] = rawValue;
       continue;
     }
@@ -964,9 +997,15 @@ export function parseGeneratedDraft(
   const description = normalizeRequiredString(parsed.description, 'description', serviceWarnings);
   const categorySuggestion = normalizeNullableString(parsed.categorySuggestion);
   const cardConditionNote = normalizeNullableString(parsed.cardConditionNote);
-  const cardConditionToken = normalizeCardConditionToken(parsed.cardConditionToken, serviceWarnings);
+  const cardConditionToken = normalizeCardConditionToken(
+    parsed.cardConditionToken,
+    serviceWarnings
+  );
   const conditionSuggestion = normalizeNullableString(parsed.conditionSuggestion);
-  const skuCategoryCode = normalizeSkuCategoryCodeSuggestion(parsed.skuCategoryCode, serviceWarnings);
+  const skuCategoryCode = normalizeSkuCategoryCodeSuggestion(
+    parsed.skuCategoryCode,
+    serviceWarnings
+  );
   const aspects = normalizeAspects(parsed.aspects, serviceWarnings);
   const yearEvidence = normalizeYearEvidence(parsed.yearEvidence, serviceWarnings);
   const priceSuggestion = normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings);

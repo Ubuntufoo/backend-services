@@ -112,8 +112,12 @@ describe('buildGenerateListingDraftPrompt', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(/For sports singles, candidate fields are: Player, Sport/);
-    expect(prompt).toMatch(/For non-sport singles, candidate fields are: Franchise, Character, Card Name/);
-    expect(prompt).toMatch(/For CCG singles, candidate fields are: Game, Card Name, Character, Rarity/);
+    expect(prompt).toMatch(
+      /For non-sport singles, candidate fields are: Franchise, Character, Card Name/
+    );
+    expect(prompt).toMatch(
+      /For CCG singles, candidate fields are: Game, Card Name, Character, Rarity/
+    );
     expect(prompt).toMatch(/omit any candidate that is not positively identified/i);
     expect(prompt).toMatch(/Never invent Base Set or absence-based feature values/);
     expect(prompt).not.toMatch(/strongly inferable: Player, verified Year/i);
@@ -126,7 +130,9 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/visible team name, team logo, or team wordmark/);
     expect(prompt).toMatch(/Do not infer Franchise from player identity, career or roster history/);
     expect(prompt).toMatch(/general model knowledge alone/);
-    expect(prompt).toMatch(/Keep this generated field named Franchise; do not emit the eBay Team field/);
+    expect(prompt).toMatch(
+      /Keep this generated field named Franchise; do not emit the eBay Team field/
+    );
   });
 
   it('does not request deferred or speculative item specifics', () => {
@@ -145,7 +151,9 @@ describe('buildGenerateListingDraftPrompt', () => {
       /Return yearEvidence only when visible card text explicitly states the production or release year/
     );
     expect(prompt).toMatch(/Statistics, biography dates, career dates, card numbers/i);
-    expect(prompt).toMatch(/unstructured user hints, and general model knowledge are not year evidence/i);
+    expect(prompt).toMatch(
+      /unstructured user hints, and general model knowledge are not year evidence/i
+    );
     expect(prompt).toMatch(/"yearEvidence"/);
     expect(prompt).not.toMatch(/"warningCode"/);
     expect(prompt).not.toMatch(/likelyYear/);
@@ -168,7 +176,9 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).not.toMatch(/"Year": "string;/);
     expect(prompt).not.toMatch(/"Season": "string;/);
     expect(prompt).toMatch(/"yearEvidence": null,/);
-    expect(prompt).toMatch(/If qualifying visible year evidence exists, replace "yearEvidence": null with:/);
+    expect(prompt).toMatch(
+      /If qualifying visible year evidence exists, replace "yearEvidence": null with:/
+    );
     expect(prompt).toMatch(/"sourceType": "copyright_line"/);
     expect(prompt).toMatch(/production_line/);
   });
@@ -177,7 +187,9 @@ describe('buildGenerateListingDraftPrompt', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(/copy the exact supporting text into yearEvidence\.visibleText/i);
-    expect(prompt).toMatch(/return the zero-based image index containing that text in yearEvidence\.imageIndex/i);
+    expect(prompt).toMatch(
+      /return the zero-based image index containing that text in yearEvidence\.imageIndex/i
+    );
     expect(prompt).toMatch(/copy the exact four-digit year into yearEvidence\.year/i);
     expect(prompt).toMatch(/return yearEvidence: null/i);
   });
@@ -186,7 +198,9 @@ describe('buildGenerateListingDraftPrompt', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
     expect(prompt).toMatch(/include that exact canonical year in the title exactly once/i);
-    expect(prompt).toMatch(/never return valid yearEvidence while omitting its year from the title/i);
+    expect(prompt).toMatch(
+      /never return valid yearEvidence while omitting its year from the title/i
+    );
     expect(prompt).toMatch(/at the very start of the title/i);
   });
 
@@ -204,6 +218,29 @@ describe('buildGenerateListingDraftPrompt', () => {
 
     expect(prompt).toMatch(/Listing title must be <= 80 characters/);
     expect(prompt).not.toMatch(/Listing title must be <= 76 characters/);
+  });
+
+  it('requires a complete final title counted at most 80 characters', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/Count the complete final title/);
+    expect(prompt).toMatch(/at most 80 characters total/);
+  });
+
+  it('requires exactly one Card Number in # form without a bare-number repeat', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/Include the Card Number exactly once/);
+    expect(prompt).toMatch(/always in # form/);
+    expect(prompt).toMatch(/Never repeat the Card Number as a bare number/);
+  });
+
+  it('requires full four-digit years or season ranges, never two-digit shorthand', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/full four-digit form/);
+    expect(prompt).toMatch(/supported season range such as 1997-98/);
+    expect(prompt).toMatch(/Never use two-digit year shorthand/);
   });
 
   it('forbids Year and Season item specifics from the model', () => {
@@ -230,7 +267,9 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/"Year": "2020"/);
     expect(prompt).toMatch(/"title": "A card title"/);
     expect(prompt).toMatch(/"notes": "Some notes"/);
-    expect(prompt).toMatch(/existing item specifics, unstructured user hints, and general model knowledge are not year evidence/i);
+    expect(prompt).toMatch(
+      /existing item specifics, unstructured user hints, and general model knowledge are not year evidence/i
+    );
   });
 
   it('strips price from userHints in listing context when explicitly present', () => {

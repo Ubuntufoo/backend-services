@@ -194,8 +194,12 @@ describe('parseGeneratedDraft', () => {
       'Card Number': '191',
     });
     expect(draft.yearEvidence).toBeNull();
-    expect(draft.warnings).toContain('Gemini response field "yearEvidence.sourceType" was invalid and was discarded.');
-    expect(draft.warnings).toContain('Gemini response field "yearEvidence" was incomplete and was discarded.');
+    expect(draft.warnings).toContain(
+      'Gemini response field "yearEvidence.sourceType" was invalid and was discarded.'
+    );
+    expect(draft.warnings).toContain(
+      'Gemini response field "yearEvidence" was incomplete and was discarded.'
+    );
   });
 
   it('rejects mismatched visible text years', () => {
@@ -369,30 +373,33 @@ describe('parseGeneratedDraft', () => {
     );
   });
 
-  it.each(['1997-99', '1997/98'])('canonicalizes an unsupported season range %s to the validated year', (range) => {
-    const draft = parseGeneratedDraft(
-      JSON.stringify({
-        title: `${range} Topps Player #1`,
-        description: 'Single card.',
-        aspects: {
-          Player: 'Player',
-          Manufacturer: 'Topps',
-          'Card Number': '1',
-        },
-        yearEvidence: {
-          year: '1997',
-          sourceType: 'copyright_line',
-          visibleText: '© 1997 TOPPS',
-          imageIndex: 0,
-        },
-        warnings: [],
-      }),
-      { id: `raw-response-unsupported-range-${range}` },
-      { imageCount: 1 }
-    );
+  it.each(['1997-99', '1997/98'])(
+    'canonicalizes an unsupported season range %s to the validated year',
+    (range) => {
+      const draft = parseGeneratedDraft(
+        JSON.stringify({
+          title: `${range} Topps Player #1`,
+          description: 'Single card.',
+          aspects: {
+            Player: 'Player',
+            Manufacturer: 'Topps',
+            'Card Number': '1',
+          },
+          yearEvidence: {
+            year: '1997',
+            sourceType: 'copyright_line',
+            visibleText: '© 1997 TOPPS',
+            imageIndex: 0,
+          },
+          warnings: [],
+        }),
+        { id: `raw-response-unsupported-range-${range}` },
+        { imageCount: 1 }
+      );
 
-    expect(draft.title).toBe('1997 Topps Player #1');
-  });
+      expect(draft.title).toBe('1997 Topps Player #1');
+    }
+  );
 
   it('appends an authoritative Franchise aspect after the card number', () => {
     const draft = parseGeneratedDraft(
@@ -485,33 +492,60 @@ describe('parseGeneratedDraft', () => {
     expect(draft.title).toBe('1993 Fleer Ryne Sandberg #6 of 10');
   });
 
-  it('fails closed instead of compacting semantic title content over 80 characters', () => {
+  it('reconstructs an overlength raw title from validated canonical fields', () => {
     const title =
       'Ryne Sandberg Fleer Team Leaders Limited Edition Premium Collector Parallel Insert #6';
+    expect(title.length).toBeGreaterThan(80);
 
-    expect(() =>
-      parseGeneratedDraft(
-        JSON.stringify({
-          title,
-          description: 'Single card.',
-          cardConditionToken: 'NEAR_MINT_OR_BETTER',
-          aspects: {
-            Player: 'Ryne Sandberg',
-            Manufacturer: 'Fleer',
-            'Card Number': '6',
-          },
-          yearEvidence: {
-            year: '1993',
-            sourceType: 'copyright_line',
-            visibleText: '© 1993 FLEER CORP.',
-            imageIndex: 1,
-          },
-          warnings: [],
-        }),
-        { id: 'raw-response-overlong-semantic-title' },
-        { imageCount: 2 }
-      )
-    ).toThrow('Generated listing title exceeds 80 characters after backend normalization.');
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title,
+        description: 'Single card.',
+        cardConditionToken: 'NEAR_MINT_OR_BETTER',
+        aspects: {
+          Player: 'Ryne Sandberg',
+          Manufacturer: 'Fleer',
+          'Card Number': '6',
+        },
+        yearEvidence: {
+          year: '1993',
+          sourceType: 'copyright_line',
+          visibleText: '© 1993 FLEER CORP.',
+          imageIndex: 1,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-overlong-semantic-title' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe('1993 Fleer Ryne Sandberg #6');
+  });
+
+  it('removes a bare card-number duplicate and reconstructs the validated Bert Blyleven title', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Topps 98 Bert Blyleven #98 Minnesota Twins',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Bert Blyleven',
+          Set: 'Topps',
+          'Card Number': '98',
+          Franchise: 'Minnesota Twins',
+        },
+        yearEvidence: {
+          year: '1974',
+          sourceType: 'copyright_line',
+          visibleText: '© 1974 THE TOPPS COMPANY, INC.',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-bert-blyleven-duplicate-number' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('1974 Topps Bert Blyleven #98 Minnesota Twins');
   });
 
   it('returns an exactly 80-character normalized title unchanged', () => {
@@ -650,7 +684,7 @@ describe('parseGeneratedDraft', () => {
     expect(draft.title).toBe('Topps G Chipper Jones #1');
   });
 
-  it('preserves bare numeric title content while retaining card and serial identifiers', () => {
+  it('removes a bare card-number duplicate while retaining nonmatching numeric and serial identifiers', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
         title: '2023 Topps Player #10 10 9.5 10/25',
@@ -673,10 +707,10 @@ describe('parseGeneratedDraft', () => {
       { imageCount: 1 }
     );
 
-    expect(draft.title).toBe('2023 Topps Serial Numbered 10/25 Player #10 10 9.5');
+    expect(draft.title).toBe('2023 Topps Serial Numbered 10/25 Player #10 9.5');
   });
 
-  it('preserves a bare number before the protected card-number marker', () => {
+  it('removes a bare number duplicating the canonical card number before the protected marker', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({
         title: '10 Topps Player #10',
@@ -692,7 +726,7 @@ describe('parseGeneratedDraft', () => {
       { id: 'raw-response-grade-before-card-number' }
     );
 
-    expect(draft.title).toBe('Topps 10 Player #10');
+    expect(draft.title).toBe('Topps Player #10');
   });
 
   it.each(['Series 2', 'Insert 5'])('preserves legitimate numeric content in %s', (numericPart) => {
@@ -1060,7 +1094,9 @@ describe('parseGeneratedDraft', () => {
       'Card Number': '57',
     });
     expect(draft.yearEvidence).toBeNull();
-    expect(draft.warnings).toContain('Gemini response field "yearEvidence" was incomplete and was discarded.');
+    expect(draft.warnings).toContain(
+      'Gemini response field "yearEvidence" was incomplete and was discarded.'
+    );
   });
 
   it.each([
@@ -1072,24 +1108,27 @@ describe('parseGeneratedDraft', () => {
     ['Card No. 1951', 'Topps Phil Rizzuto #1951'],
     ['Card No 1951', 'Topps Phil Rizzuto #1951'],
     ['Card Number 1951', 'Topps Phil Rizzuto #1951'],
-  ])('preserves protected four-digit card-number form %s while stripping unsupported year', (cardForm, expectedTitle) => {
-    const draft = parseGeneratedDraft(
-      JSON.stringify({
-        title: `Phil Rizzuto 1951 Topps ${cardForm}`,
-        description: 'Single card.',
-        aspects: {
-          Player: 'Phil Rizzuto',
-          Manufacturer: 'Topps',
-          Set: '1951 Topps',
-        },
-        yearEvidence: null,
-        warnings: [],
-      }),
-      { id: `raw-response-${cardForm}` },
-      { imageCount: 1 }
-    );
+  ])(
+    'preserves protected four-digit card-number form %s while stripping unsupported year',
+    (cardForm, expectedTitle) => {
+      const draft = parseGeneratedDraft(
+        JSON.stringify({
+          title: `Phil Rizzuto 1951 Topps ${cardForm}`,
+          description: 'Single card.',
+          aspects: {
+            Player: 'Phil Rizzuto',
+            Manufacturer: 'Topps',
+            Set: '1951 Topps',
+          },
+          yearEvidence: null,
+          warnings: [],
+        }),
+        { id: `raw-response-${cardForm}` },
+        { imageCount: 1 }
+      );
 
-    expect(draft.title).toBe(expectedTitle);
-    expect(draft.aspects.Set).toBe('Topps');
-  });
+      expect(draft.title).toBe(expectedTitle);
+      expect(draft.aspects.Set).toBe('Topps');
+    }
+  );
 });
