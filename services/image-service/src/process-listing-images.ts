@@ -5,6 +5,8 @@ import { basename, dirname, normalize, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
+import { selectCropConsensus } from './internal/crop-consensus.js';
+
 import {
   isSupportedImageServiceExtension,
   isSupportedImageServicePath,
@@ -406,13 +408,8 @@ function decideCrop(
     }
     candidates.push({ candidate: { left: normalized[0], top: normalized[1], right: normalized[2], bottom: normalized[3], ...metrics, areaReduction }, imageIndex });
   }
-  if (candidates.length !== 6) return {};
-  const disagreement = Math.max(...['left', 'top', 'right', 'bottom'].map((key) => {
-    const values = candidates.map(({ candidate }) => candidate[key as keyof CropCandidate] as number);
-    return Math.max(...values) - Math.min(...values);
-  }));
-  if (disagreement > 0.025) return {};
-  const selected = candidates.find(({ imageIndex }) => imageIndex === 4)?.candidate ?? candidates[0].candidate;
+  const selected = selectCropConsensus(candidates.map(({ candidate }) => candidate));
+  if (!selected) return {};
   return { candidate: selected };
 }
 
