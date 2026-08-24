@@ -123,6 +123,40 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).not.toMatch(/strongly inferable: Player, verified Year/i);
   });
 
+  it('gates sports League, Language, and Card Name on positive evidence', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/For sports singles, candidate fields are: Player, Sport, League, Language, Card Name/);
+    expect(prompt).toMatch(/League may be returned only when a league name is positively visible/);
+    expect(prompt).toMatch(/Never infer League from player identity, team history, roster history/);
+    expect(prompt).toMatch(/Card Name may be returned only when a distinct card name is positively visible/);
+    expect(prompt).toMatch(/Language may be returned only when confidently supported by visible text/);
+  });
+
+  it('requires structured serial evidence and denominator-only Print Run derivation', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/"serialEvidence": null/);
+    expect(prompt).toMatch(/Never return Print Run as a free-form aspect/);
+    expect(prompt).toMatch(/positive numerator, and positive denominator/);
+    expect(prompt).toMatch(/037\/199/);
+    expect(prompt).toMatch(/Card #10 of 25/);
+  });
+
+  it('explicitly excludes every autograph item-specific key', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    for (const key of [
+      'Autographed',
+      'Signed By',
+      'Autograph Format',
+      'Autograph Authentication',
+      'Autograph Authentication Number',
+    ]) {
+      expect(prompt).toMatch(new RegExp(key));
+    }
+  });
+
   it('requires positive team evidence for the internal sports Franchise field', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
@@ -138,7 +172,7 @@ describe('buildGenerateListingDraftPrompt', () => {
   it('does not request deferred or speculative item specifics', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 
-    expect(prompt).toMatch(/Do not generate Season, League, Autographed/);
+    expect(prompt).toMatch(/Do not generate Season, Autographed/);
     expect(prompt).toMatch(/Original\/Licensed Reprint, Vintage, Illustrator/);
     expect(prompt).toMatch(/MPN, UPC, or generic Graded item specifics/);
   });

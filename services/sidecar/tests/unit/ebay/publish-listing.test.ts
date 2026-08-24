@@ -1245,6 +1245,132 @@ describe('publishListing', () => {
     );
   });
 
+  it('publishes sports expansion fields and omits autograph aspects', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          'Card Name': 'All-Star',
+          Features: ['Serial Numbered'],
+          Language: 'English',
+          League: 'NBA',
+          'Print Run': '199',
+          Player: 'Michael Jordan',
+          Season: '2005-06',
+          'Signed By': 'Printed signature',
+          Autographed: 'No',
+          Year: '2005',
+          __draft_metadata: {
+            year: {
+              image_index: null,
+              source_type: 'seller_hint',
+              visible_text: null,
+              year: '2005',
+            },
+          },
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }])
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'League',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'MULTI' },
+        },
+        {
+          localizedAspectName: 'Card Name',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Language',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Print Run',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Features',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'MULTI' },
+        },
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Sports Trading Card' }],
+        },
+        {
+          localizedAspectName: 'Autographed',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+        {
+          localizedAspectName: 'Signed By',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'MULTI' },
+        },
+        {
+          localizedAspectName: 'Card Condition',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        product: expect.objectContaining({
+          aspects: {
+            'Card Name': ['All-Star'],
+            Features: ['Serial Numbered'],
+            Language: ['English'],
+            League: ['NBA'],
+            'Player/Athlete': ['Michael Jordan'],
+            'Print Run': ['199'],
+            Season: ['2005-06'],
+            Type: ['Sports Trading Card'],
+            Vintage: ['Yes'],
+            'Year Manufactured': ['2005'],
+          },
+        }),
+      })
+    );
+  });
+
   it('publishes supported CCG candidates without synthesizing Type, Season, or year', async () => {
     const dependencies = createDependencies({
       listing: createListing({

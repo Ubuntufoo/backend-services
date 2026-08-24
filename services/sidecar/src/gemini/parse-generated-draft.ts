@@ -17,6 +17,7 @@ type ConfidenceKey = 'title' | 'category' | 'price' | 'aspects';
 type AspectRecord = Record<string, string | string[]>;
 type AspectValue = string | string[] | null | undefined;
 type YearEvidenceSourceType = (typeof GENERATED_YEAR_EVIDENCE_SOURCE_TYPES)[number];
+type SerialEvidence = NonNullable<GeneratedListingDraft['serialEvidence']>;
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const CONFIDENCE_KEYS: ConfidenceKey[] = ['title', 'category', 'price', 'aspects'];
@@ -113,6 +114,10 @@ function normalizeNullableString(value: unknown): string | null {
 
 function normalizeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+function isValidImageIndex(imageIndex: number, imageCount?: number): boolean {
+  return imageIndex >= 0 && (imageCount === undefined || imageIndex < imageCount);
 }
 
 function trimToNull(value: string | null | undefined): string | null {
@@ -458,20 +463,21 @@ function getCanonicalYearTitlePart(title: string, aspects: AspectRecord): string
 
 function getCanonicalSetParts(aspects: AspectRecord, title = ''): string[] {
   const set = getSafeCanonicalComponent(getFirstAspectValue(aspects, 'Set'), title);
+  const titleSet = set?.replace(/^(?:19|20)\d{2}\s*[-/]\s*(?:\d{2}|\d{4})(?=\s|$)\s*/u, '') || null;
   const manufacturer = getSafeCanonicalComponent(
     trimToNull(getAspectString(aspects, 'Manufacturer')),
     title
   );
 
-  if (!set) {
+  if (!titleSet) {
     return manufacturer ? [manufacturer] : [];
   }
 
-  if (!manufacturer || containsWholePhrase(set, manufacturer)) {
-    return [set];
+  if (!manufacturer || containsWholePhrase(titleSet, manufacturer)) {
+    return [titleSet];
   }
 
-  return [manufacturer, set];
+  return [manufacturer, titleSet];
 }
 
 function removeConditionLanguageFromCharacteristic(value: string): string | null {
@@ -862,6 +868,82 @@ export function normalizeGeneratedDraft(
   };
 }
 
+function normalizeSerialEvidence(
+  value: unknown,
+  warnings: string[],
+  imageCount?: number,
+  title?: string
+): SerialEvidence | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    warnings.push('Gemini response field "serialEvidence" was invalid and was discarded.');
+    return null;
+  }
+
+  const visibleText = trimToNull(normalizeNullableString(value.visibleText));
+  const imageIndex = normalizeInteger(value.imageIndex);
+  const numerator = normalizeInteger(value.numerator);
+  const denominator = normalizeInteger(value.denominator);
+
+  if (!visibleText || imageIndex === undefined || numerator === undefined || denominator === undefined) {
+    warnings.push('Gemini response field "serialEvidence" was incomplete and was discarded.');
+    return null;
+  }
+
+  if (
+    numerator <= 0 ||
+    denominator <= 0 ||
+    numerator > denominator ||
+    !isValidImageIndex(imageIndex, imageCount)
+  ) {
+    warnings.push('Gemini response field "serialEvidence" failed positive integer or image validation and was discarded.');
+    return null;
+  }
+
+  const fractionPattern = /(?<![\p{L}\p{N}#])\d{1,6}\s*\/\s*\d{1,6}(?![\p{L}\p{N}])/gu;
+  const fractions = [...visibleText.matchAll(fractionPattern)].map((match) => match[0]);
+  const expectedPattern = new RegExp(
+    `(?<![\\p{L}\\p{N}#])0*${numerator}\\s*\\/\\s*0*${denominator}(?![\\p{L}\\p{N}])`,
+    'u'
+  );
+  const hasCardNumberContext =
+    /(?:#\s*\d+|\bcard(?:\s+(?:number|no\.?))?\s*#?\s*\d+\s+of\s+\d+)/iu.test(
+      visibleText
+    );
+  const isTitleOnlyClaim =
+    title !== undefined && normalizeTitleWhitespace(visibleText).toLocaleLowerCase() === normalizeTitleWhitespace(title).toLocaleLowerCase();
+
+  if (
+    fractions.length !== 1 ||
+    !expectedPattern.test(visibleText) ||
+    hasCardNumberContext ||
+    isTitleOnlyClaim
+  ) {
+    warnings.push('Gemini response field "serialEvidence" was ambiguous or inconsistent and was discarded.');
+    return null;
+  }
+
+  return { visibleText, imageIndex, numerator, denominator };
+}
+
+function applySerialEvidenceToAspects(
+  aspects: Record<string, string | string[]>,
+  serialEvidence: SerialEvidence | null
+): void {
+  if (!serialEvidence) {
+    return;
+  }
+
+  aspects['Print Run'] = String(serialEvidence.denominator);
+  const features = getAspectStringValues(aspects.Features);
+  if (!features.some((feature) => /\bserial(?:[-\s]+numbered)?\b/iu.test(feature))) {
+    aspects.Features = [...features, 'Serial Numbered'];
+  }
+}
+
 function normalizeYearEvidence(
   value: unknown,
   warnings: string[]
@@ -1008,6 +1090,12 @@ export function parseGeneratedDraft(
   );
   const aspects = normalizeAspects(parsed.aspects, serviceWarnings);
   const yearEvidence = normalizeYearEvidence(parsed.yearEvidence, serviceWarnings);
+  const serialEvidence = normalizeSerialEvidence(
+    parsed.serialEvidence,
+    serviceWarnings,
+    options.imageCount,
+    title
+  );
   const priceSuggestion = normalizePriceSuggestion(parsed.priceSuggestion, serviceWarnings);
   const confidence = normalizeConfidence(parsed.confidence, serviceWarnings);
 
@@ -1021,6 +1109,7 @@ export function parseGeneratedDraft(
     options
   );
   const finalTitle = assertGeneratedTitleLength(normalizedDraft.title);
+  applySerialEvidenceToAspects(normalizedDraft.aspects, serialEvidence);
 
   return generatedListingDraftSchema.parse({
     title: finalTitle,
@@ -1032,6 +1121,7 @@ export function parseGeneratedDraft(
     skuCategoryCode,
     aspects: normalizedDraft.aspects,
     yearEvidence: normalizedDraft.yearEvidence,
+    serialEvidence,
     priceSuggestion,
     confidence,
     warnings: normalizedDraft.warnings,

@@ -30,6 +30,13 @@ const SPORT_BY_SKU_CATEGORY_CODE: Record<string, string> = {
   BSKBL: 'Basketball',
 };
 const YEAR_ASPECT_NAMES = ['year manufactured', 'year'] as const;
+const AUTOGRAPH_ITEM_SPECIFIC_KEYS = new Set([
+  'autographed',
+  'signed by',
+  'autograph format',
+  'autograph authentication',
+  'autograph authentication number',
+]);
 
 type TaxonomyAspectMode = 'FREE_TEXT' | 'SELECTION_ONLY';
 type TaxonomyAspectUsage = 'OPTIONAL' | 'RECOMMENDED';
@@ -343,6 +350,35 @@ function normalizeAuthorizedSportsSetValue(value: string, authorizedYear: string
     : null;
 }
 
+function normalizeAuthorizedSportsSeasonValue(value: unknown, authorizedYear: string): string | null {
+  const values = typeof value === 'string' ? [value] : value;
+  if (
+    !Array.isArray(values) ||
+    values.length !== 1 ||
+    typeof values[0] !== 'string'
+  ) {
+    return null;
+  }
+
+  const storedSeason = values[0].trim();
+  if (!storedSeason) {
+    return null;
+  }
+
+  if (storedSeason === authorizedYear) {
+    return storedSeason;
+  }
+
+  const range = /^((?:19|20)\d{2})\s*[-/]\s*(\d{2}|\d{4})$/u.exec(storedSeason);
+  if (!range || range[1] !== authorizedYear) {
+    return null;
+  }
+
+  const expectedFullEnd = String(Number(authorizedYear) + 1);
+  const expectedShortEnd = expectedFullEnd.slice(-2);
+  return range[2] === expectedFullEnd || range[2] === expectedShortEnd ? storedSeason : null;
+}
+
 function isCanonicalSingleCardListing(
   listing: Pick<ListingRow, 'capture_mode' | 'category_id'>
 ): boolean {
@@ -358,10 +394,12 @@ export function normalizeSingleCardOutboundItemSpecifics({
   conditionDescriptorsPresent,
   listing,
   taxonomyAspects,
+  now,
 }: {
   conditionDescriptorsPresent: boolean;
   listing: ListingRow;
   taxonomyAspects: readonly TaxonomyAspectMetadata[];
+  now: () => Date;
 }): NormalizedOutboundItemSpecifics | null {
   if (!isCanonicalSingleCardListing(listing)) {
     return null;
@@ -386,6 +424,8 @@ export function normalizeSingleCardOutboundItemSpecifics({
   const sportAspect =
     categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Sport']) : undefined;
   const yearAspect = getTaxonomyAspectByName(aspectsByName, YEAR_ASPECT_NAMES);
+  const seasonAspect = categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Season']) : undefined;
+  const vintageAspect = categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Vintage']) : undefined;
   const authorizedYear = readAuthorizedGeneratedDraftYearMetadata(itemSpecifics)?.year.trim();
   const outbound: NormalizedOutboundItemSpecifics = {};
 
@@ -394,6 +434,9 @@ export function normalizeSingleCardOutboundItemSpecifics({
     if (
       INTERNAL_ITEM_SPECIFIC_KEYS.has(normalizedKey) ||
       normalizedKey === 'year' ||
+      (categoryId === '261328' && normalizedKey === 'season') ||
+      (categoryId === '261328' && normalizedKey === 'vintage') ||
+      (categoryId === '261328' && AUTOGRAPH_ITEM_SPECIFIC_KEYS.has(normalizedKey)) ||
       (conditionDescriptorsPresent &&
         normalizedKey === normalizeAspectKey(TRADING_CARD_CONDITION_ASPECT_KEY)) ||
       (playerAspect && normalizedKey === 'player') ||
@@ -472,6 +515,31 @@ export function normalizeSingleCardOutboundItemSpecifics({
     const normalizedValue = normalizeOutboundAspectValue(authorizedYear, yearAspect);
     if (normalizedValue) {
       outbound[yearAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (seasonAspect && authorizedYear) {
+    const safeSeason = normalizeAuthorizedSportsSeasonValue(
+      getPersistedAspectValue(itemSpecifics, 'Season'),
+      authorizedYear
+    );
+    const normalizedValue = normalizeOutboundAspectValue(
+      safeSeason ?? authorizedYear,
+      seasonAspect
+    );
+    if (normalizedValue) {
+      outbound[seasonAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (vintageAspect && authorizedYear) {
+    const currentYear = now().getUTCFullYear();
+    if (Number.isInteger(currentYear)) {
+      const vintageValue = currentYear - Number(authorizedYear) > 20 ? 'Yes' : 'No';
+      const normalizedValue = normalizeOutboundAspectValue(vintageValue, vintageAspect);
+      if (normalizedValue) {
+        outbound[vintageAspect.localizedName] = normalizedValue;
+      }
     }
   }
 

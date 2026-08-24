@@ -28,6 +28,7 @@ import {
   type PreparedGenerateListingDraftExecutionResult,
 } from '@/gemini/index.js';
 import {
+  deriveAuthorizedSportsSeasonFromSet,
   sanitizeSetAspectValue,
   sanitizeTitleYearClaims,
 } from '@/gemini/year-normalization.js';
@@ -231,12 +232,32 @@ function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHin
 
 function buildGeneratedListingAspects(
   draft: Awaited<ReturnType<typeof generateListingDraft>>,
-  authorizedYear?: string
+  authorizedYear?: string,
+  categoryId?: string
 ): NonNullable<ListingUpdate['item_specifics']> {
   const draftMetadata = buildGeneratedDraftMetadata(draft.yearEvidence, authorizedYear);
+  const canonicalYear = authorizedYear ?? draft.yearEvidence?.year;
+  const draftAspects = { ...draft.aspects };
+  delete (draftAspects as Record<string, unknown>).Season;
+  const safeDraftSeason = (() => {
+    if (categoryId !== '261328' || !canonicalYear) {
+      return null;
+    }
+
+    const value = draftAspects.Set;
+    const raw = typeof value === 'string' ? value.trim() : null;
+    if (!raw) {
+      return null;
+    }
+
+    return deriveAuthorizedSportsSeasonFromSet(raw, canonicalYear);
+  })();
 
   const itemSpecifics: Record<string, unknown> = {
-    ...draft.aspects,
+    ...draftAspects,
+    ...(categoryId === '261328' && canonicalYear
+      ? { Season: safeDraftSeason ?? canonicalYear }
+      : {}),
     ...(draftMetadata ? { [GENERATED_DRAFT_METADATA_KEY]: draftMetadata } : {}),
     ...(draft.cardConditionToken
       ? { [TRADING_CARD_CONDITION_ASPECT_KEY]: draft.cardConditionToken }
@@ -313,7 +334,11 @@ function buildGeneratedListingReviewUpdate(
     condition_notes: draft.cardConditionNote ?? null,
     description: appendGeneratedDescriptionNotice(draft.description),
     ese_eligible: eseEligible,
-    item_specifics: buildGeneratedListingAspects(draft, authorizedYear),
+    item_specifics: buildGeneratedListingAspects(
+      draft,
+      authorizedYear,
+      resolvedIds.category_id ?? undefined,
+    ),
     last_error_at: null,
     last_error_code: null,
     last_error_context: {},

@@ -319,6 +319,57 @@ export function sanitizeSetAspectValue(value: AspectValue): string | string[] | 
   return values.length === 1 ? values[0] : values;
 }
 
+export function deriveAuthorizedSportsSeasonFromSet(
+  value: unknown,
+  authorizedYear: string
+): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = normalizeWhitespace(value);
+  const range = /^((?:19|20)\d{2})\s*[-/]\s*(\d{2}|\d{4})(?=\s|$)/u.exec(normalized);
+  if (!range || range[1] !== authorizedYear) {
+    return null;
+  }
+
+  const expectedFullEnd = String(Number(authorizedYear) + 1);
+  const remainingSetName = normalized.slice(range[0].length).trim();
+  if (
+    (range[2] !== expectedFullEnd && range[2] !== expectedFullEnd.slice(-2)) ||
+    !/[\p{L}\p{N}]/u.test(remainingSetName) ||
+    /\b\d{4}\b/u.test(remainingSetName) ||
+    /^[-/]\s*\d{2,4}\b/u.test(remainingSetName)
+  ) {
+    return null;
+  }
+
+  return `${range[1]}-${range[2]}`;
+}
+
+function sanitizeAuthorizedSetAspectValue(
+  value: AspectValue,
+  authorizedYear: string
+): string | string[] | undefined {
+  const values = dedupeNormalizedValues(
+    getAspectStringValues(value).flatMap((entry) => {
+      const normalized = normalizeWhitespace(entry);
+      if (deriveAuthorizedSportsSeasonFromSet(normalized, authorizedYear)) {
+        return [normalized];
+      }
+
+      const sanitized = sanitizeSetYearClaims(normalized)?.replace(/^[-/]\s*\d{2,4}\b/u, '').trim();
+      return sanitized ? [sanitized] : [];
+    })
+  );
+
+  if (values.length === 0) {
+    return undefined;
+  }
+
+  return values.length === 1 ? values[0] : values;
+}
+
 function isValidImageIndex(imageIndex: number, imageCount?: number): boolean {
   return imageIndex >= 0 && (imageCount === undefined || imageIndex < imageCount);
 }
@@ -384,7 +435,7 @@ export function normalizeGeneratedDraftYearFields(
     aspects.Year = canonicalYear;
     deleteSeason(aspects);
 
-    const sanitizedSet = sanitizeSetAspectValue(originalSetValue);
+    const sanitizedSet = sanitizeAuthorizedSetAspectValue(originalSetValue, canonicalYear);
     if (sanitizedSet === undefined) {
       delete aspects.Set;
     } else {

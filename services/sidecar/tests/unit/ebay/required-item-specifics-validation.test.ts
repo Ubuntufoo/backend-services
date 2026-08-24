@@ -56,6 +56,8 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   };
 }
 
+const NORMALIZE_NOW = () => new Date('2026-08-24T00:00:00.000Z');
+
 describe('required item specifics validation', () => {
   it('parses the default category tree id', () => {
     expect(getCategoryTreeIdFromTaxonomyResponse({ categoryTreeId: ' 0 ' })).toBe('0');
@@ -177,6 +179,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: true,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({
       'Player/Athlete': ['Michael Jordan'],
@@ -185,6 +188,194 @@ describe('required item specifics validation', () => {
       'Year Manufactured': ['1991'],
       Type: ['Sports Trading Card'],
     });
+  });
+
+  it.each([
+    ['2005', 'Yes'],
+    ['2006', 'No'],
+  ])('derives dynamic Vintage boundary and safe Season for authorized year %s', (year, vintage) => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Year: year,
+        Season: `${year}-${String(Number(year) + 1).slice(-2)}`,
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year,
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({
+      Season: [`${year}-${String(Number(year) + 1).slice(-2)}`],
+      Vintage: [vintage],
+    });
+  });
+
+  it('omits deterministic Vintage and Season when canonical year authorization is absent', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { Season: '2000-01', Year: '2000' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({});
+  });
+
+  it('omits Vintage and Season for stale conflicting year metadata', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Year: '2006',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '2005',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({});
+  });
+
+  it('does not trust mixed or invalid Season arrays', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Season: [123, '2005'],
+        Year: '2005',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '2005',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Season: ['2005'] });
+  });
+
+  it('never forwards autograph item specifics even when live taxonomy exposes them', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Autographed: 'No',
+        'Signed By': 'Printed signature',
+        'Autograph Format': 'Hard Signed',
+        'Autograph Authentication': 'None',
+        'Autograph Authentication Number': '123',
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        ...[
+          'Autographed',
+          'Signed By',
+          'Autograph Format',
+          'Autograph Authentication',
+          'Autograph Authentication Number',
+        ].map((localizedAspectName) => ({
+          localizedAspectName,
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        })),
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({});
   });
 
   it.each([
@@ -217,6 +408,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({ Sport: [sport] });
   });
@@ -240,6 +432,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({});
   });
@@ -342,6 +535,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual(expected ? { Set: [expected] } : {});
     expect(listing.item_specifics).toBe(itemSpecifics);
@@ -367,6 +561,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({ Set: ['Topps'] });
   });
@@ -401,6 +596,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({ Set: ['Base Set'] });
   });
@@ -451,6 +647,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({
       Season: ['1999'],
@@ -482,6 +679,7 @@ describe('required item specifics validation', () => {
         conditionDescriptorsPresent: false,
         listing,
         taxonomyAspects,
+        now: NORMALIZE_NOW,
       })
     ).toEqual({ Game: ['Pokémon TCG'] });
   });

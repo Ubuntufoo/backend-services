@@ -705,6 +705,7 @@ export async function publishListing(
     conditionDescriptorsPresent,
     listing,
     taxonomyAspects,
+    now: resolvedDependencies.now,
   });
   validateRequiredItemSpecificsForCategory({
     listing,

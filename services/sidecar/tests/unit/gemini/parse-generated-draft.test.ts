@@ -9,6 +9,7 @@ describe('parseGeneratedDraft', () => {
         description: 'Single card.',
         aspects: {
           Game: 'Pokémon TCG',
+          Sport: 'Baseball',
           'Card Name': 'Charizard',
           Character: 'Charizard',
           Rarity: 'Rare Holo',
@@ -21,6 +22,10 @@ describe('parseGeneratedDraft', () => {
           Features: ['Holo', 'Rare'],
           League: 'Pokémon League',
           Autographed: 'No',
+          'Signed By': 'Printed signature',
+          'Autograph Format': 'Hard Signed',
+          'Autograph Authentication': 'None',
+          'Autograph Authentication Number': '123',
           Vintage: 'Yes',
           Type: 'Collectible Card Game',
           'Arbitrary Key': ['syntactically', 'valid'],
@@ -49,13 +54,13 @@ describe('parseGeneratedDraft', () => {
     });
     expect(draft.aspects).not.toHaveProperty('Year');
     expect(draft.aspects).not.toHaveProperty('Season');
-    expect(draft.aspects).not.toHaveProperty('League');
+    expect(draft.aspects).toHaveProperty('League', 'Pokémon League');
     expect(draft.aspects).not.toHaveProperty('Autographed');
     expect(draft.aspects).not.toHaveProperty('Vintage');
     expect(draft.aspects).not.toHaveProperty('Type');
     expect(draft.aspects).not.toHaveProperty('Arbitrary Key');
     expect(draft.warnings).toContain(
-      'Gemini response aspects discarded unexpected keys: "League", "Autographed", "Vintage", "Type", "Arbitrary Key".'
+      'Gemini response aspects discarded unexpected keys: "Autographed", "Signed By", "Autograph Format", "Autograph Authentication", "Autograph Authentication Number", "Vintage", "Type", "Arbitrary Key".'
     );
   });
 
@@ -400,6 +405,33 @@ describe('parseGeneratedDraft', () => {
       expect(draft.title).toBe('1997 Topps Player #1');
     }
   );
+
+  it('rejects a multi-range Set claim instead of deriving Season from it', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1997-98/99 Topps Player #1',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Set: '1997-98/99 Topps',
+          Manufacturer: 'Topps',
+          'Card Number': '1',
+        },
+        yearEvidence: {
+          year: '1997',
+          sourceType: 'copyright_line',
+          visibleText: '© 1997 TOPPS',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-unsafe-set-range' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.aspects.Set).toBe('Topps');
+    expect(draft.aspects).not.toHaveProperty('Season');
+  });
 
   it('appends an authoritative Franchise aspect after the card number', () => {
     const draft = parseGeneratedDraft(
@@ -1097,6 +1129,136 @@ describe('parseGeneratedDraft', () => {
     expect(draft.warnings).toContain(
       'Gemini response field "yearEvidence" was incomplete and was discarded.'
     );
+  });
+
+  it('derives Print Run and Serial Numbered from validated visible serial evidence', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '1997 Topps Derek Jeter #10 037/199',
+        description: 'Serial numbered single card.',
+        aspects: {
+          Player: 'Derek Jeter',
+          Manufacturer: 'Topps',
+          Features: ['Rookie'],
+        },
+        serialEvidence: {
+          visibleText: 'Serial Numbered 037/199',
+          imageIndex: 1,
+          numerator: 37,
+          denominator: 199,
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-serial-evidence' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.serialEvidence).toEqual({
+      visibleText: 'Serial Numbered 037/199',
+      imageIndex: 1,
+      numerator: 37,
+      denominator: 199,
+    });
+    expect(draft.aspects).toMatchObject({
+      'Print Run': '199',
+      Features: ['Rookie', 'Serial Numbered'],
+    });
+  });
+
+  it('rejects direct free-form Print Run output without serial evidence', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Derek Jeter #10',
+        description: 'Single card.',
+        aspects: { Player: 'Derek Jeter', 'Print Run': '199' },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-direct-print-run' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.aspects).not.toHaveProperty('Print Run');
+    expect(draft.warnings).toContain(
+      'Gemini response aspects discarded unexpected keys: "Print Run".'
+    );
+  });
+
+  it.each([
+    { visibleText: '#25', numerator: 2, denominator: 5 },
+    { visibleText: 'Card #10 of 25', numerator: 10, denominator: 25 },
+    { visibleText: '037/200', numerator: 37, denominator: 199 },
+    { visibleText: '037/199 and 010/025', numerator: 37, denominator: 199 },
+  ])('fails closed for ambiguous or inconsistent serial evidence %#', (serialEvidence) => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Derek Jeter #10',
+        description: 'Single card.',
+        aspects: { Player: 'Derek Jeter' },
+        serialEvidence,
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-invalid-serial' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.serialEvidence).toBeNull();
+    expect(draft.aspects).not.toHaveProperty('Print Run');
+    expect(draft.aspects).not.toHaveProperty('Features');
+    expect(draft.warnings.some((warning) => warning.includes('serialEvidence'))).toBe(true);
+  });
+
+  it('rejects serial evidence that merely repeats the generated title', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Derek Jeter 037/199',
+        description: 'Single card.',
+        aspects: { Player: 'Derek Jeter' },
+        serialEvidence: {
+          visibleText: 'Derek Jeter 037/199',
+          imageIndex: 0,
+          numerator: 37,
+          denominator: 199,
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-title-only-serial' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.serialEvidence).toBeNull();
+    expect(draft.aspects).not.toHaveProperty('Print Run');
+  });
+
+  it.each([
+    ['zero numerator', { visibleText: '000/199', numerator: 0, denominator: 199, imageIndex: 0 }],
+    ['zero denominator', { visibleText: '037/000', numerator: 37, denominator: 0, imageIndex: 0 }],
+    ['negative numerator', { visibleText: '037/199', numerator: -37, denominator: 199, imageIndex: 0 }],
+    ['negative denominator', { visibleText: '037/199', numerator: 37, denominator: -199, imageIndex: 0 }],
+    ['non-integer numerator', { visibleText: '037/199', numerator: 37.5, denominator: 199, imageIndex: 0 }],
+    ['non-number denominator', { visibleText: '037/199', numerator: 37, denominator: '199', imageIndex: 0 }],
+    ['numerator exceeds denominator', { visibleText: '199/037', numerator: 199, denominator: 37, imageIndex: 0 }],
+    ['image index outside supplied images', { visibleText: '037/199', numerator: 37, denominator: 199, imageIndex: 1 }],
+  ])('fails closed for serialEvidence %s', (_label, serialEvidence) => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Derek Jeter #10',
+        description: 'Single card.',
+        aspects: { Player: 'Derek Jeter' },
+        serialEvidence,
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-invalid-serial-contract' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.serialEvidence).toBeNull();
+    expect(draft.aspects).not.toHaveProperty('Print Run');
+    expect(draft.warnings.some((warning) => warning.includes('serialEvidence'))).toBe(true);
   });
 
   it.each([

@@ -281,6 +281,7 @@ describe('generateListingDraft', () => {
         aspects: 0.84,
       },
       yearEvidence: null,
+      serialEvidence: null,
       warnings: [
         'Condition cannot be confirmed from photos alone.',
         'Gemini exact year discarded: missing qualifying visible year evidence.',
@@ -511,6 +512,7 @@ describe('generateListingDraft', () => {
         Sport: 'Baseball',
       },
       yearEvidence: null,
+      serialEvidence: null,
       priceSuggestion: null,
       confidence: {},
       warnings: [],

@@ -23,6 +23,7 @@ export const aspectValueSchema = z.union([z.string(), z.array(z.string())]);
 export const GENERATED_LISTING_ASPECT_KEYS = [
   'Player',
   'Sport',
+  'League',
   'Franchise',
   'Character',
   'Card Name',
@@ -42,6 +43,10 @@ const generatedListingAspectKeySchema = z.enum(GENERATED_LISTING_ASPECT_KEYS);
 const normalizedGeneratedListingAspectKeySchema = z.union([
   generatedListingAspectKeySchema,
   z.literal('Year'),
+  // Print Run is backend-derived from validated serialEvidence; it is not a
+  // direct Gemini-authored aspect and therefore stays out of the allowlist
+  // above.
+  z.literal('Print Run'),
 ]);
 const rawCardConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
 
@@ -69,6 +74,38 @@ const generatedDraftYearEvidenceSchema = z.object({
   imageIndex: z.number().int().min(0),
 });
 
+const generatedDraftSerialEvidenceSchema = z
+  .object({
+    visibleText: z.string().trim().min(1),
+    imageIndex: z.number().int().min(0),
+    numerator: z.number().int().positive(),
+    denominator: z.number().int().positive(),
+  })
+  .superRefine((value, context) => {
+    if (value.numerator > value.denominator) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'numerator must not exceed denominator',
+        path: ['numerator'],
+      });
+    }
+
+    const fractions = value.visibleText.match(
+      /(?<![\p{L}\p{N}#])\d{1,6}\s*\/\s*\d{1,6}(?![\p{L}\p{N}])/gu
+    );
+    const expectedPattern = new RegExp(
+      `(?<![\\p{L}\\p{N}#])0*${value.numerator}\\s*\\/\\s*0*${value.denominator}(?![\\p{L}\\p{N}])`,
+      'u'
+    );
+    if (!fractions || fractions.length !== 1 || !expectedPattern.test(value.visibleText)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'visibleText must contain exactly the validated serial fraction',
+        path: ['visibleText'],
+      });
+    }
+  });
+
 const skuCategoryCodeSchema = z.enum(SKU_CATEGORY_CODES);
 
 export const generateListingDraftInputSchema = z.object({
@@ -92,6 +129,7 @@ export const generatedListingDraftSchema = z.object({
   skuCategoryCode: skuCategoryCodeSchema.optional(),
   aspects: z.record(normalizedGeneratedListingAspectKeySchema, aspectValueSchema),
   yearEvidence: generatedDraftYearEvidenceSchema.nullable().optional(),
+  serialEvidence: generatedDraftSerialEvidenceSchema.nullable().optional(),
   priceSuggestion: z.number().finite().nullable().optional(),
   confidence: confidenceSchema.optional(),
   warnings: z.array(z.string()),

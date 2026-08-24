@@ -1336,6 +1336,7 @@ describe('runSidecarJob', () => {
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
+          Season: '1991',
           __draft_metadata: {
             year: {
               image_index: 1,
@@ -1740,6 +1741,45 @@ describe('runSidecarJob', () => {
       );
     }
   );
+
+  it('persists canonical sports Season and preserves only a safe adjacent Set range', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-SEASON-PERSIST',
+      },
+      listing: createListingRow({
+        category_id: '261328',
+        item_specifics: { Season: '1998-99' },
+        listing_id: 'LIST-SEASON-PERSIST',
+        seller_hints: 'year:1997',
+        sku: 'LIST-SEASON-PERSIST',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        aspects: { Player: 'Test Player', Manufacturer: 'Topps', Set: '1997-98 Topps' },
+        categorySuggestion: 'Sports Trading Cards',
+        description: 'Sports single.',
+        title: 'Topps Test Player',
+        skuCategoryCode: 'BSBL',
+        yearEvidence: null,
+      })
+    );
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-SEASON-PERSIST',
+      expect.objectContaining({
+        item_specifics: expect.objectContaining({ Season: '1997-98' }),
+      })
+    );
+  });
 
   it('fails closed on conflicting seller year hints before a Gemini provider call', async () => {
     const dataAccess = createDataAccess({
