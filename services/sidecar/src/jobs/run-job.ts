@@ -239,7 +239,7 @@ function buildGeneratedListingAspects(
   const canonicalYear = authorizedYear ?? draft.yearEvidence?.year;
   const draftAspects = { ...draft.aspects };
   delete (draftAspects as Record<string, unknown>).Season;
-  const safeDraftSeason = (() => {
+  const safeDraftSeason = draft.seasonEvidence?.season ?? (() => {
     if (categoryId !== '261328' || !canonicalYear) {
       return null;
     }
@@ -255,7 +255,7 @@ function buildGeneratedListingAspects(
 
   const itemSpecifics: Record<string, unknown> = {
     ...draftAspects,
-    ...(categoryId === '261328' && canonicalYear
+    ...(categoryId === '261328' && (safeDraftSeason || canonicalYear)
       ? { Season: safeDraftSeason ?? canonicalYear }
       : {}),
     ...(draftMetadata ? { [GENERATED_DRAFT_METADATA_KEY]: draftMetadata } : {}),

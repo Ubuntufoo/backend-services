@@ -10,6 +10,7 @@ import { isRawCardConditionToken } from '@/listings/trading-card-conditions.js';
 import {
   GENERATED_YEAR_EVIDENCE_SOURCE_TYPES,
   normalizeGeneratedDraftYearFields,
+  normalizeSportsSeasonRange,
   type NormalizeGeneratedDraftYearFieldsOptions,
 } from './year-normalization.js';
 
@@ -19,6 +20,7 @@ type AspectRecord = Record<string, string | string[]>;
 type AspectValue = string | string[] | null | undefined;
 type YearEvidenceSourceType = (typeof GENERATED_YEAR_EVIDENCE_SOURCE_TYPES)[number];
 type SerialEvidence = NonNullable<GeneratedListingDraft['serialEvidence']>;
+type SeasonEvidence = NonNullable<GeneratedListingDraft['seasonEvidence']>;
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
 const CONFIDENCE_KEYS: ConfidenceKey[] = ['title', 'category', 'price', 'aspects'];
@@ -456,6 +458,12 @@ function dedupeTitleParts(parts: string[]): string[] {
 }
 
 function getCanonicalYearTitlePart(title: string, aspects: AspectRecord): string | null {
+  const season = trimToNull(getAspectString(aspects, 'Season'));
+  const normalizedSeason = season ? normalizeSportsSeasonRange(season) : null;
+  if (normalizedSeason) {
+    return normalizedSeason;
+  }
+
   const year = trimToNull(getAspectString(aspects, 'Year'));
   if (!year) {
     return null;
@@ -781,8 +789,11 @@ function compactNormalizedTitle(
   const preCompactionTitle = title;
   const components = getCanonicalTitleComponents(title, aspects, protectedSerialFraction);
   if (!components) {
+    const protectedSeason = normalizeSportsSeasonRange(
+      trimToNull(getAspectString(aspects, 'Season'))
+    );
     const protectedComponents = dedupeTitleParts(
-      [protectedSerialFraction, trimToNull(getAspectString(aspects, 'Player'))].filter(
+      [protectedSeason, protectedSerialFraction, trimToNull(getAspectString(aspects, 'Player'))].filter(
         (component): component is string => component !== null
       )
     );
@@ -977,15 +988,16 @@ function extractCardNumberFromTitle(title: string): string | null {
 
 export function normalizeGeneratedDraft(
   draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> &
-    Partial<Pick<GeneratedListingDraft, 'serialEvidence'>>,
+    Partial<Pick<GeneratedListingDraft, 'serialEvidence' | 'seasonEvidence'>>,
   options: NormalizeGeneratedDraftYearFieldsOptions = {}
-): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> {
+): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence' | 'seasonEvidence'> {
   const yearNormalized = normalizeGeneratedDraftYearFields(
     {
       aspects: draft.aspects,
       title: draft.title,
       warnings: draft.warnings,
       yearEvidence: draft.yearEvidence,
+      seasonEvidence: draft.seasonEvidence ?? null,
     },
     options
   );
@@ -1061,6 +1073,7 @@ export function normalizeGeneratedDraft(
     aspects,
     warnings,
     yearEvidence: yearNormalized.yearEvidence ?? null,
+    seasonEvidence: yearNormalized.seasonEvidence ?? null,
   };
 }
 
@@ -1194,6 +1207,47 @@ function normalizeYearEvidence(
   };
 }
 
+function normalizeSeasonEvidence(
+  value: unknown,
+  warnings: string[],
+  imageCount?: number
+): SeasonEvidence | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    warnings.push('Gemini response field "seasonEvidence" was invalid and was discarded.');
+    return null;
+  }
+
+  const season = trimToNull(normalizeNullableString(value.season));
+  const visibleText = trimToNull(normalizeNullableString(value.visibleText));
+  const imageIndex = normalizeInteger(value.imageIndex);
+  const normalizedSeason = season ? normalizeSportsSeasonRange(season) : null;
+
+  if (!normalizedSeason || !visibleText || imageIndex === undefined) {
+    warnings.push('Gemini response field "seasonEvidence" was incomplete or malformed and was discarded.');
+    return null;
+  }
+
+  if (!isValidImageIndex(imageIndex, imageCount)) {
+    warnings.push('Gemini response field "seasonEvidence.imageIndex" was invalid and was discarded.');
+    return null;
+  }
+
+  const seasonClaims = [...visibleText.matchAll(/\b(?:19|20)\d{2}\s*[-/]\s*(?:\d{2}|\d{4})\b/gu)];
+  const matchingClaims = seasonClaims
+    .map((match) => normalizeSportsSeasonRange(match[0]))
+    .filter((claim): claim is string => claim !== null);
+  if (seasonClaims.length !== 1 || matchingClaims[0] !== normalizedSeason) {
+    warnings.push('Gemini response field "seasonEvidence" was ambiguous or inconsistent and was discarded.');
+    return null;
+  }
+
+  return { season: normalizedSeason, visibleText, imageIndex };
+}
+
 function normalizePriceSuggestion(value: unknown, warnings: string[]): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -1285,6 +1339,11 @@ export function parseGeneratedDraft(
   );
   const aspects = normalizeAspects(parsed.aspects, serviceWarnings);
   const yearEvidence = normalizeYearEvidence(parsed.yearEvidence, serviceWarnings);
+  const seasonEvidence = normalizeSeasonEvidence(
+    parsed.seasonEvidence,
+    serviceWarnings,
+    options.imageCount
+  );
   const serialEvidence = normalizeSerialEvidence(
     parsed.serialEvidence,
     serviceWarnings,
@@ -1300,6 +1359,7 @@ export function parseGeneratedDraft(
       aspects,
       warnings: [...modelWarnings, ...serviceWarnings],
       yearEvidence,
+      seasonEvidence,
       serialEvidence,
     },
     options
@@ -1317,6 +1377,7 @@ export function parseGeneratedDraft(
     skuCategoryCode,
     aspects: normalizedDraft.aspects,
     yearEvidence: normalizedDraft.yearEvidence,
+    seasonEvidence: normalizedDraft.seasonEvidence,
     serialEvidence,
     priceSuggestion,
     confidence,

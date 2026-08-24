@@ -239,11 +239,55 @@ describe('required item specifics validation', () => {
     });
   });
 
-  it('omits deterministic Vintage and Season when canonical year authorization is absent', () => {
+  it('uses a valid manually persisted Vintage value ahead of deterministic fallback', () => {
     const listing = createListing({
       category_id: '261328',
-      item_specifics: { Season: '2000-01', Year: '2000' },
+      item_specifics: {
+        Vintage: 'No',
+        Year: '2005',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '2005',
+          },
+        },
+      },
     });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Vintage: ['No'] });
+  });
+
+  it('publishes manual Season without canonical year and omits deterministic Vintage', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { Season: '2000-01' },
+    });
+
+    expect(listing.item_specifics).toEqual({ Season: '2000-01' });
+    expect(listing.item_specifics).not.toHaveProperty('Year');
+    expect(listing.item_specifics).not.toHaveProperty('__draft_metadata');
+
     const taxonomyAspects = getTaxonomyAspectMetadata({
       aspects: [
         {
@@ -265,7 +309,7 @@ describe('required item specifics validation', () => {
         taxonomyAspects,
         now: NORMALIZE_NOW,
       })
-    ).toEqual({});
+    ).toEqual({ Season: ['2000-01'] });
   });
 
   it('omits Vintage and Season for stale conflicting year metadata', () => {
@@ -342,7 +386,7 @@ describe('required item specifics validation', () => {
     ).toEqual({ Season: ['2005'] });
   });
 
-  it('never forwards autograph item specifics even when live taxonomy exposes them', () => {
+  it('publishes manually persisted autograph item specifics when taxonomy exposes them', () => {
     const listing = createListing({
       category_id: '261328',
       item_specifics: {
@@ -375,7 +419,13 @@ describe('required item specifics validation', () => {
         taxonomyAspects,
         now: NORMALIZE_NOW,
       })
-    ).toEqual({});
+    ).toEqual({
+      Autographed: ['No'],
+      'Signed By': ['Printed signature'],
+      'Autograph Format': ['Hard Signed'],
+      'Autograph Authentication': ['None'],
+      'Autograph Authentication Number': ['123'],
+    });
   });
 
   it.each([

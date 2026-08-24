@@ -28,6 +28,7 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
     "Features": ["string"]
   },
   "yearEvidence": null,
+  "seasonEvidence": null,
   "serialEvidence": null,
   "confidence": {
     "title": 0.0,
@@ -44,6 +45,16 @@ If qualifying visible year evidence exists, replace "yearEvidence": null with:
     "sourceType": "copyright_line",
     "visibleText": "© 1954 THE TOPPS COMPANY, INC.",
     "imageIndex": 1
+  }
+}
+
+If an exact adjacent sports season range is visibly printed on the card, replace
+"seasonEvidence": null with:
+{
+  "seasonEvidence": {
+    "season": "2024-25",
+    "visibleText": "2024-25 PANINI - REVOLUTION BASKETBALL",
+    "imageIndex": 0
   }
 }`;
 
@@ -63,10 +74,11 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Generate an eBay listing draft for a trading card or card lot.',
     'Use visible image evidence first.',
     'If provided, user hints are canonical proof.',
-    'Listing title must be <= 80 characters. When the data exists, use this canonical order: [validated year] [set] [recognized characteristic] [player] [#card number] [team if evidenced]. Recognized characteristics are positively identified insert, parallel/variety, Rookie Card, Refractor, or serial-numbered identifiers. Use the exact set or manufacturer name, preserve the # marker (for example, #138), and omit any missing component.',
+    'Listing title must be <= 80 characters. When the data exists, use this canonical order: [validated year or season prefix] [set] [recognized characteristic] [player] [#card number] [team if evidenced]. Recognized characteristics are positively identified insert, parallel/variety, Rookie Card, Refractor, or serial-numbered identifiers. Use the exact set or manufacturer name, preserve the # marker (for example, #138), and omit any missing component.',
     'Count the complete final title including every word, number, and space, and keep it at most 80 characters total.',
     'Include the Card Number exactly once in the title, always in # form (for example, #138). Never repeat the Card Number as a bare number elsewhere in the title.',
     'Render the validated year in full four-digit form (for example, 1974) or a supported season range such as 1997-98. Never use two-digit year shorthand.',
+    'When an exact adjacent sports season range is visibly printed on the card, place that validated season range at the very start of the sports-card title. Normalize 2024/25 and 2024-2025 to 2024-25. Do not infer a season from player, team, set, release knowledge, or description text.',
     'Do not include card-condition or grading language in titles, including NM+, NM, Near Mint, Mint, EX, Excellent, VG, Very Good, Good, Fair, Poor, Low Grade, numeric grades, or similar shorthand. Condition assessment remains in cardConditionToken, cardConditionNote, and conditionSuggestion only.',
     'Do NOT include inferred filler in titles: sport, league, franchise, position, role e.g. "coach", "3rd base", or similar — unless those words are genuinely part of an official set name, insert type, or parallel name printed on the card. A team may appear last only when positively evidenced by a visible team name, logo, or wordmark, or by an explicit operator hint; never infer a team from player identity, roster history, or general knowledge.',
     'Do not remove or omit positively identified Rookie Card, Refractor, parallel/variety, insert names/types (e.g. "Grand Slammers" or "Legends"), or serial-numbered identifiers from the title.',
@@ -74,17 +86,19 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Do not invent grades, certification status, serial numbers, autographs, relics, or rare variants unless they are visible in the images or explicitly provided in the user hints.',
     'Year handling is strict.',
     'Never infer or guess the card year.',
-    'When userHints.explicitYear is present, it is canonical operator-provided proof: use that exact year once in the title even when no qualifying year text is visible in the images.',
+    'When userHints.explicitYear is present and seasonEvidence is absent, it is canonical operator-provided proof: use that exact year once in the title even when no qualifying year text is visible in the images.',
     'A structured explicitYear takes precedence over any conflicting model-produced year claim.',
     'Do not create yearEvidence for explicitYear; yearEvidence remains reserved for qualifying visible image text.',
     'Return yearEvidence only when visible card text explicitly states the production or release year in a copyright line, manufacture line, production line, or explicit release-year line.',
     'Statistics, biography dates, career dates, card numbers, design recognition, set knowledge, player history, existing listing text, existing item specifics, unstructured user hints, and general model knowledge are not year evidence.',
     'If explicitYear is absent and the images do not show qualifying text, return yearEvidence: null and omit exact years from the title and generated item specifics.',
     'When qualifying text exists, copy the exact supporting text into yearEvidence.visibleText, copy the exact four-digit year into yearEvidence.year, and return the zero-based image index containing that text in yearEvidence.imageIndex.',
-    'When returning valid yearEvidence, include that exact canonical year in the title exactly once; never return valid yearEvidence while omitting its year from the title.',
-    'Place the canonical validated title year at the very start of the title, exactly once.',
+    'When returning valid yearEvidence without seasonEvidence, include that exact canonical year in the title exactly once; never return valid yearEvidence while omitting its year from the title.',
+    'When valid seasonEvidence coexists with yearEvidence or explicitYear, use the validated season as the sole human-facing title prefix and do not also place the canonical four-digit year in the title. Canonical Year remains internal and supplies Year Manufactured, Vintage, and pricing/year authority.',
+    'When no valid seasonEvidence exists, place the canonical validated title year at the very start of the title, exactly once.',
     'Use only these yearEvidence.sourceType values: "copyright_line", "manufacture_line", "production_line", "explicit_release_year".',
     'If you are unsure whether visible text directly identifies the card production or release year, return yearEvidence: null.',
+    'Season handling is independent from year handling. Return seasonEvidence only for an exact visibly printed adjacent sports season range such as 2024-25, 2024/25, or 2024-2025; copy the supporting visibleText and zero-based imageIndex. seasonEvidence never authorizes canonical Year, Year Manufactured, Vintage, or pricing year metadata.',
     'Inspect visible card condition and choose the closest supported raw card condition token when the item appears ungraded.',
     'Supported raw card condition tokens: NEAR_MINT_OR_BETTER, EXCELLENT, VERY_GOOD, POOR.',
     'Do not return PSA/BGS/SGC-style numeric grades.',
@@ -103,12 +117,13 @@ export function buildGenerateListingDraftPrompt(input: GenerateListingDraftInput
     'Do not return free-form category labels for skuCategoryCode such as Basketball, Baseball, MLB, NBA, TCG, or Pokemon.',
     'Generate item-specific candidates only for a single card, and omit any candidate that is not positively identified from visible evidence or canonical user hints.',
     'For sports singles, candidate fields are: Player, Sport, League, Language, Card Name, Manufacturer, Set, Card Number, Parallel/Variety, Insert Set, Franchise, Features.',
+    'Set must contain only the base product/set identity. Do not append an insert name/type or parallel/variety to Set when that characteristic belongs in Insert Set or Parallel/Variety. Example: for a Topps Chrome Expansion Draft insert, return Set="Topps Chrome" and Insert Set="Expansion Draft", not Set="Topps Chrome Expansion Draft".',
     'For non-sport singles, candidate fields are: Franchise, Character, Card Name, Manufacturer, Set, Card Number, Parallel/Variety, Insert Set, Features.',
     'For CCG singles, candidate fields are: Game, Card Name, Character, Rarity, Language, Card Type, Finish, Manufacturer, Set, Card Number, Features.',
     'Features may contain only positively identified characteristics such as Insert, Parallel/Variety, Rookie, or Serial Numbered. Never invent Base Set or absence-based feature values.',
-    'Do not generate Season, Autographed, Original/Licensed Reprint, Vintage, Illustrator, Featured Person/Artist, Movie, TV Show, Genre, HP, Stage, Attribute, MTG Color, Card Size, Material, Country of Origin, Age Level, Card Thickness, MPN, UPC, or generic Graded item specifics.',
+    'Do not generate Season, Autographed, Original/Licensed Reprint, Vintage, Illustrator, Featured Person/Artist, Movie, TV Show, Genre, HP, Stage, Attribute, MTG Color, Card Size, Material, Country of Origin, Age Level, Card Thickness, MPN, UPC, or generic Graded item specifics. Use seasonEvidence for a visibly printed sports season range instead of a free-form Season aspect.',
     'Never generate Autographed, Signed By, Autograph Format, Autograph Authentication, or Autograph Authentication Number item specifics, including for printed or facsimile signatures.',
-    'Do not generate Year or Season item specifics. The backend derives canonical Year from structured explicitYear or validated yearEvidence.',
+    'Do not generate Year or Season item specifics. The backend derives canonical Year from structured explicitYear or validated yearEvidence. Season is derived only from validated seasonEvidence (or its trusted canonical-year fallback), never from a free-form model aspect.',
     'Use Manufacturer as the canonical manufacturer field. Do not emit duplicate manufacturer aliases unless strictly necessary.',
     'For sports singles, include the internal Franchise aspect whenever the team or franchise is positively identifiable from visible card evidence or canonical user hints.',
     'A visible team name, team logo, or team wordmark is positive team evidence.',

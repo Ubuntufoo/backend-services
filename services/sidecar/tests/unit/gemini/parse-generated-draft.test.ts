@@ -6,6 +6,205 @@ import {
 } from '@/gemini/index.js';
 
 describe('parseGeneratedDraft', () => {
+  it('keeps visible sports season and independent canonical year evidence separate', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Panini Revolution Legends Insert Yao Ming #170 Houston Rockets',
+        description: 'Single card.',
+        aspects: {
+          Manufacturer: 'Panini',
+          Set: 'Revolution',
+          'Insert Set': 'Legends',
+          Features: ['Insert'],
+          Player: 'Yao Ming',
+          'Card Number': '170',
+          Franchise: 'Houston Rockets',
+        },
+        yearEvidence: {
+          year: '2025',
+          sourceType: 'copyright_line',
+          visibleText: '© 2025 Panini America, Inc.',
+          imageIndex: 1,
+        },
+        seasonEvidence: {
+          season: '2024-25',
+          visibleText: '2024-25 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'yao-season-year' },
+      { imageCount: 2 }
+    );
+
+    expect(draft.title).toBe(
+      '2024-25 Panini Revolution Legends Insert Yao Ming #170 Houston Rockets'
+    );
+    expect(draft.title.length).toBeLessThanOrEqual(80);
+    expect(draft.aspects).toMatchObject({ Season: '2024-25', Year: '2025' });
+    expect(draft.seasonEvidence).toMatchObject({ season: '2024-25', imageIndex: 0 });
+    expect(draft.yearEvidence).toMatchObject({ year: '2025', imageIndex: 1 });
+  });
+
+  it('allows visible season evidence without creating canonical year metadata', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Panini Revolution Legends Yao Ming #170',
+        description: 'Single card.',
+        aspects: {
+          Manufacturer: 'Panini',
+          Set: 'Revolution',
+          'Insert Set': 'Legends',
+          Player: 'Yao Ming',
+          'Card Number': '170',
+        },
+        yearEvidence: null,
+        seasonEvidence: {
+          season: '2024/25',
+          visibleText: '2024/25 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'season-only' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toMatch(/^2024-25\b/u);
+    expect(draft.aspects).toMatchObject({ Season: '2024-25' });
+    expect(draft.aspects).not.toHaveProperty('Year');
+    expect(draft.yearEvidence).toBeNull();
+    expect(draft.warnings.join('\n')).not.toContain('missing qualifying visible year evidence');
+  });
+
+  it('normalizes a full-end visible season range to the preferred short-end form', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Panini Revolution Yao Ming #170',
+        description: 'Single card.',
+        aspects: { Manufacturer: 'Panini', Set: 'Revolution', Player: 'Yao Ming', 'Card Number': '170' },
+        yearEvidence: null,
+        seasonEvidence: {
+          season: '2024-2025',
+          visibleText: '2024-2025 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'season-full-end' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.seasonEvidence).toMatchObject({ season: '2024-25' });
+    expect(draft.aspects).toMatchObject({ Season: '2024-25' });
+    expect(draft.title).toMatch(/^2024-25\b/u);
+  });
+
+  it('rejects a season evidence image index outside supplied images', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Panini Revolution Yao Ming #170',
+        description: 'Single card.',
+        aspects: { Manufacturer: 'Panini', Set: 'Revolution', Player: 'Yao Ming', 'Card Number': '170' },
+        yearEvidence: null,
+        seasonEvidence: {
+          season: '2024-25',
+          visibleText: '2024-25 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 1,
+        },
+        warnings: [],
+      }),
+      { id: 'season-image-index' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.seasonEvidence).toBeNull();
+    expect(draft.aspects).not.toHaveProperty('Season');
+    expect(draft.warnings).toContain(
+      'Gemini response field "seasonEvidence.imageIndex" was invalid and was discarded.'
+    );
+  });
+
+  it('keeps the validated season prefix while compacting a long title to 80 characters', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title:
+          'Panini Revolution Legends Insert Yao Ming Houston Rockets Championship Edition Refractor Parallel #170',
+        description: 'Single card.',
+        aspects: {
+          Manufacturer: 'Panini',
+          Set: 'Revolution',
+          'Insert Set': 'Legends',
+          Features: ['Insert', 'Refractor', 'Parallel'],
+          Player: 'Yao Ming',
+          Franchise: 'Houston Rockets',
+          'Card Number': '170',
+        },
+        yearEvidence: null,
+        seasonEvidence: {
+          season: '2024-25',
+          visibleText: '2024-25 PANINI REVOLUTION',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'season-compaction' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toMatch(/^2024-25\b/u);
+    expect(draft.title.length).toBeLessThanOrEqual(80);
+    expect(draft.title).toContain('#170');
+  });
+
+  it('retains a validated season in the protected fallback when no Player is available', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title:
+          '2024-25 Panini Revolution Legends Insert Championship Edition Refractor Parallel Basketball Trading Card',
+        description: 'Single card.',
+        aspects: { Manufacturer: 'Panini', Set: 'Revolution' },
+        yearEvidence: null,
+        seasonEvidence: {
+          season: '2024-25',
+          visibleText: '2024-25 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'season-no-player' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe('2024-25');
+    expect(draft.title.length).toBeLessThanOrEqual(80);
+    expect(draft.aspects).toMatchObject({ Season: '2024-25' });
+    expect(draft.warnings.join('\n')).not.toContain('missing qualifying visible year evidence');
+  });
+
+  it.each(['2024-26', '2024-25 and 2025-26'])('rejects malformed or ambiguous season evidence: %s', (season) => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: 'Panini Revolution Yao Ming #170',
+        description: 'Single card.',
+        aspects: { Manufacturer: 'Panini', Set: 'Revolution', Player: 'Yao Ming', 'Card Number': '170' },
+        yearEvidence: null,
+        seasonEvidence: {
+          season: season === '2024-25 and 2025-26' ? '2024-25' : season,
+          visibleText: '2024-25 and 2025-26 PANINI REVOLUTION',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: `invalid-season-${season}` },
+      { imageCount: 1 }
+    );
+
+    expect(draft.seasonEvidence).toBeNull();
+    expect(draft.aspects).not.toHaveProperty('Season');
+    expect(draft.title).not.toMatch(/^2024-25\b/u);
+  });
+
   it('preserves expanded category-specific candidates while rejecting direct Year and Season', () => {
     const draft = parseGeneratedDraft(
       JSON.stringify({

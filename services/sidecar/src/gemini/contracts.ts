@@ -43,6 +43,9 @@ const generatedListingAspectKeySchema = z.enum(GENERATED_LISTING_ASPECT_KEYS);
 const normalizedGeneratedListingAspectKeySchema = z.union([
   generatedListingAspectKeySchema,
   z.literal('Year'),
+  // Season is backend-normalized from validated visible season evidence; it
+  // is never accepted as a free-form Gemini-authored aspect.
+  z.literal('Season'),
   // Print Run is backend-derived from validated serialEvidence; it is not a
   // direct Gemini-authored aspect and therefore stays out of the allowlist
   // above.
@@ -73,6 +76,68 @@ const generatedDraftYearEvidenceSchema = z.object({
   visibleText: z.string().trim().min(1),
   imageIndex: z.number().int().min(0),
 });
+
+const generatedDraftSeasonEvidenceSchema = z
+  .object({
+    season: z.string().trim().min(1),
+    visibleText: z.string().trim().min(1),
+    imageIndex: z.number().int().min(0),
+  })
+  .superRefine((value, context) => {
+    const seasonMatch = /^(19\d{2}|20\d{2})\s*[-/]\s*(\d{2}|\d{4})$/u.exec(value.season);
+    if (!seasonMatch) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'season must be an adjacent sports season range',
+        path: ['season'],
+      });
+      return;
+    }
+
+    const expectedFullEnd = String(Number(seasonMatch[1]) + 1);
+    const expectedShortEnd = expectedFullEnd.slice(-2);
+    if (seasonMatch[2] !== expectedFullEnd && seasonMatch[2] !== expectedShortEnd) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'season must be adjacent',
+        path: ['season'],
+      });
+    }
+
+    const visibleClaims = value.visibleText.match(
+      /\b(?:19|20)\d{2}\s*[-/]\s*(?:\d{2}|\d{4})\b/gu
+    );
+    if (!visibleClaims || visibleClaims.length !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'visibleText must contain exactly one season range',
+        path: ['visibleText'],
+      });
+    } else {
+      const claimMatch = /^(19\d{2}|20\d{2})\s*[-/]\s*(\d{2}|\d{4})$/u.exec(
+        visibleClaims[0]!
+      );
+      const claimEnd = claimMatch?.[2];
+      const claimStart = claimMatch?.[1];
+      const claimExpectedFullEnd = claimStart ? String(Number(claimStart) + 1) : null;
+      const claimExpectedShortEnd = claimExpectedFullEnd?.slice(-2);
+      const claimNormalized =
+        claimMatch &&
+        claimStart &&
+        claimEnd &&
+        (claimEnd === claimExpectedFullEnd || claimEnd === claimExpectedShortEnd)
+          ? `${claimStart}-${String(Number(claimStart) + 1).slice(-2)}`
+          : null;
+      const expectedNormalized = `${seasonMatch[1]}-${expectedShortEnd}`;
+      if (claimNormalized !== expectedNormalized) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'visibleText must contain the validated season',
+          path: ['visibleText'],
+        });
+      }
+    }
+  });
 
 const generatedDraftSerialEvidenceSchema = z
   .object({
@@ -129,6 +194,7 @@ export const generatedListingDraftSchema = z.object({
   skuCategoryCode: skuCategoryCodeSchema.optional(),
   aspects: z.record(normalizedGeneratedListingAspectKeySchema, aspectValueSchema),
   yearEvidence: generatedDraftYearEvidenceSchema.nullable().optional(),
+  seasonEvidence: generatedDraftSeasonEvidenceSchema.nullable().optional(),
   serialEvidence: generatedDraftSerialEvidenceSchema.nullable().optional(),
   priceSuggestion: z.number().finite().nullable().optional(),
   confidence: confidenceSchema.optional(),

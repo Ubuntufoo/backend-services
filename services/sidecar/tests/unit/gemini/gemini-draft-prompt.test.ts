@@ -238,6 +238,24 @@ describe('buildGenerateListingDraftPrompt', () => {
     expect(prompt).toMatch(/at the very start of the title/i);
   });
 
+  it('gives dual season/year evidence season-only title precedence', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/valid seasonEvidence coexists with yearEvidence or explicitYear/i);
+    expect(prompt).toMatch(/season as the sole human-facing title prefix/i);
+    expect(prompt).toMatch(/do not also place the canonical four-digit year in the title/i);
+    expect(prompt).toMatch(/Canonical Year remains internal/i);
+    expect(prompt).toMatch(/Year Manufactured, Vintage, and pricing\/year authority/i);
+  });
+
+  it('keeps Set limited to base identity and separates insert/parallel characteristics', () => {
+    const prompt = buildGenerateListingDraftPrompt(createInput());
+
+    expect(prompt).toMatch(/Set must contain only the base product\/set identity/i);
+    expect(prompt).toMatch(/belongs in Insert Set or Parallel\/Variety/i);
+    expect(prompt).toMatch(/Set="Topps Chrome" and Insert Set="Expansion Draft"/i);
+  });
+
   it('forbids card-condition and grading language in titles', () => {
     const prompt = buildGenerateListingDraftPrompt(createInput());
 

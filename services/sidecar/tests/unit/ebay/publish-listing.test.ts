@@ -1245,7 +1245,7 @@ describe('publishListing', () => {
     );
   });
 
-  it('publishes sports expansion fields and omits autograph aspects', async () => {
+  it('publishes sports expansion fields and manually persisted autograph aspects', async () => {
     const dependencies = createDependencies({
       listing: createListing({
         category_id: '261328',
@@ -1356,12 +1356,14 @@ describe('publishListing', () => {
         product: expect.objectContaining({
           aspects: {
             'Card Name': ['All-Star'],
+            Autographed: ['No'],
             Features: ['Serial Numbered'],
             Language: ['English'],
             League: ['NBA'],
             'Player/Athlete': ['Michael Jordan'],
             'Print Run': ['199'],
             Season: ['2005-06'],
+            'Signed By': ['Printed signature'],
             Type: ['Sports Trading Card'],
             Vintage: ['Yes'],
             'Year Manufactured': ['2005'],

@@ -30,13 +30,6 @@ const SPORT_BY_SKU_CATEGORY_CODE: Record<string, string> = {
   BSKBL: 'Basketball',
 };
 const YEAR_ASPECT_NAMES = ['year manufactured', 'year'] as const;
-const AUTOGRAPH_ITEM_SPECIFIC_KEYS = new Set([
-  'autographed',
-  'signed by',
-  'autograph format',
-  'autograph authentication',
-  'autograph authentication number',
-]);
 
 type TaxonomyAspectMode = 'FREE_TEXT' | 'SELECTION_ONLY';
 type TaxonomyAspectUsage = 'OPTIONAL' | 'RECOMMENDED';
@@ -434,9 +427,6 @@ export function normalizeSingleCardOutboundItemSpecifics({
     if (
       INTERNAL_ITEM_SPECIFIC_KEYS.has(normalizedKey) ||
       normalizedKey === 'year' ||
-      (categoryId === '261328' && normalizedKey === 'season') ||
-      (categoryId === '261328' && normalizedKey === 'vintage') ||
-      (categoryId === '261328' && AUTOGRAPH_ITEM_SPECIFIC_KEYS.has(normalizedKey)) ||
       (conditionDescriptorsPresent &&
         normalizedKey === normalizeAspectKey(TRADING_CARD_CONDITION_ASPECT_KEY)) ||
       (playerAspect && normalizedKey === 'player') ||
@@ -518,27 +508,43 @@ export function normalizeSingleCardOutboundItemSpecifics({
     }
   }
 
-  if (seasonAspect && authorizedYear) {
-    const safeSeason = normalizeAuthorizedSportsSeasonValue(
+  if (seasonAspect && !outbound[seasonAspect.localizedName]) {
+    const manualSeason = normalizeOutboundAspectValue(
       getPersistedAspectValue(itemSpecifics, 'Season'),
-      authorizedYear
-    );
-    const normalizedValue = normalizeOutboundAspectValue(
-      safeSeason ?? authorizedYear,
       seasonAspect
     );
-    if (normalizedValue) {
-      outbound[seasonAspect.localizedName] = normalizedValue;
+    if (manualSeason) {
+      outbound[seasonAspect.localizedName] = manualSeason;
+    } else if (authorizedYear) {
+      const safeSeason = normalizeAuthorizedSportsSeasonValue(
+        getPersistedAspectValue(itemSpecifics, 'Season'),
+        authorizedYear
+      );
+      const normalizedValue = normalizeOutboundAspectValue(
+        safeSeason ?? authorizedYear,
+        seasonAspect
+      );
+      if (normalizedValue) {
+        outbound[seasonAspect.localizedName] = normalizedValue;
+      }
     }
   }
 
-  if (vintageAspect && authorizedYear) {
-    const currentYear = now().getUTCFullYear();
-    if (Number.isInteger(currentYear)) {
-      const vintageValue = currentYear - Number(authorizedYear) > 20 ? 'Yes' : 'No';
-      const normalizedValue = normalizeOutboundAspectValue(vintageValue, vintageAspect);
-      if (normalizedValue) {
-        outbound[vintageAspect.localizedName] = normalizedValue;
+  if (vintageAspect && !outbound[vintageAspect.localizedName]) {
+    const manualVintage = normalizeOutboundAspectValue(
+      getPersistedAspectValue(itemSpecifics, 'Vintage'),
+      vintageAspect
+    );
+    if (manualVintage) {
+      outbound[vintageAspect.localizedName] = manualVintage;
+    } else if (authorizedYear) {
+      const currentYear = now().getUTCFullYear();
+      if (Number.isInteger(currentYear)) {
+        const vintageValue = currentYear - Number(authorizedYear) > 20 ? 'Yes' : 'No';
+        const normalizedValue = normalizeOutboundAspectValue(vintageValue, vintageAspect);
+        if (normalizedValue) {
+          outbound[vintageAspect.localizedName] = normalizedValue;
+        }
       }
     }
   }

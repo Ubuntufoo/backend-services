@@ -1760,8 +1760,8 @@ describe('runSidecarJob', () => {
     const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
       createGeneratedListingDraft({
         aspects: { Player: 'Test Player', Manufacturer: 'Topps', Set: '1997-98 Topps' },
-        categorySuggestion: 'Sports Trading Cards',
         description: 'Sports single.',
+        categorySuggestion: 'Sports Trading Cards',
         title: 'Topps Test Player',
         skuCategoryCode: 'BSBL',
         yearEvidence: null,
@@ -1778,6 +1778,72 @@ describe('runSidecarJob', () => {
       'LIST-SEASON-PERSIST',
       expect.objectContaining({
         item_specifics: expect.objectContaining({ Season: '1997-98' }),
+      })
+    );
+  });
+
+  it('persists validated season evidence separately from canonical year evidence', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-SEASON-YEAR-DUAL',
+      },
+      listing: createListingRow({
+        category_id: '261328',
+        listing_id: 'LIST-SEASON-YEAR-DUAL',
+        sku: 'LIST-SEASON-YEAR-DUAL',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        aspects: {
+          Manufacturer: 'Panini',
+          Set: 'Revolution',
+          'Insert Set': 'Legends',
+          Player: 'Yao Ming',
+          'Card Number': '170',
+          Franchise: 'Houston Rockets',
+          Year: '2025',
+        },
+        description: 'Sports single.',
+        categorySuggestion: 'Sports Trading Cards',
+        title: '2024-25 Panini Revolution Legends Insert Yao Ming #170 Houston Rockets',
+        seasonEvidence: {
+          season: '2024-25',
+          visibleText: '2024-25 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 0,
+        },
+        yearEvidence: {
+          year: '2025',
+          sourceType: 'copyright_line',
+          visibleText: '© 2025 Panini America, Inc.',
+          imageIndex: 1,
+        },
+      })
+    );
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-SEASON-YEAR-DUAL',
+      expect.objectContaining({
+        item_specifics: expect.objectContaining({
+          Season: '2024-25',
+          Year: '2025',
+          __draft_metadata: {
+            year: {
+              year: '2025',
+              source_type: 'copyright_line',
+              visible_text: '© 2025 Panini America, Inc.',
+              image_index: 1,
+            },
+          },
+        }),
+        title: '2024-25 Panini Revolution Legends Insert Yao Ming #170 Houston Rockets',
       })
     );
   });
