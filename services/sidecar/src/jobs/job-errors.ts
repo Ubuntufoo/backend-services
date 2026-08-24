@@ -8,6 +8,7 @@ import {
 import {
   GeminiDraftServiceError,
   GeminiDraftValidationError,
+  GeminiDraftTitleOverflowError,
 } from '@/gemini/index.js';
 import { PublishListingError } from '@/ebay/publish-validation.js';
 import type { EbayApiError } from '@/types/ebay.js';
@@ -415,6 +416,19 @@ export function classifyJobError(jobType: JobRow['job_type'], error: unknown): S
         {
           ...buildBaseContext(error),
           issues: getGeminiValidationIssues(error),
+        },
+        { cause: error }
+      );
+    }
+
+    if (error instanceof GeminiDraftTitleOverflowError) {
+      return new SidecarJobError(
+        JOB_ERROR_CODES.GENERATE_AI_FAILED,
+        'user_fixable',
+        error.message,
+        {
+          ...buildBaseContext(error),
+          title_overflow: error.context,
         },
         { cause: error }
       );

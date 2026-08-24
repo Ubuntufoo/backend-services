@@ -5,6 +5,7 @@ import {
   type GenerateAiLatencyDiagnostics,
   type GenerateAiPayloadDiagnostics,
   GeminiDraftServiceError,
+  GeminiDraftTitleOverflowError,
   type GenerateListingDraftInput,
   type GeneratedListingDraft,
   validateGenerateListingDraftInput,
@@ -14,6 +15,7 @@ import { buildGenerateListingDraftPrompt } from './prompt.js';
 
 export {
   GeminiDraftServiceError,
+  GeminiDraftTitleOverflowError,
   GeminiDraftValidationError,
   type GenerateAiAttemptDiagnostics,
   type GenerateAiLatencyDiagnostics,

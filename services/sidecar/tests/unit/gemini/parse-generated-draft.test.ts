@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseGeneratedDraft } from '@/gemini/index.js';
+import {
+  GeminiDraftTitleOverflowError,
+  normalizeGeneratedDraft,
+  parseGeneratedDraft,
+} from '@/gemini/index.js';
 
 describe('parseGeneratedDraft', () => {
   it('preserves expanded category-specific candidates while rejecting direct Year and Season', () => {
@@ -602,7 +606,8 @@ describe('parseGeneratedDraft', () => {
   it('fails closed when normalized title content cannot fit within 80 characters', () => {
     const player = 'A'.repeat(72);
 
-    expect(() =>
+    let thrown: unknown;
+    try {
       parseGeneratedDraft(
         JSON.stringify({
           title: `${player} Fleer #1951`,
@@ -624,7 +629,15 @@ describe('parseGeneratedDraft', () => {
         { id: 'raw-response-required-title-too-long' },
         { imageCount: 1 }
       )
-    ).toThrow('Generated listing title exceeds 80 characters after backend normalization.');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(GeminiDraftTitleOverflowError);
+    expect((thrown as GeminiDraftTitleOverflowError).context).toMatchObject({
+      finalLength: 83,
+      protectedComponents: ['1993', player, '#1951'],
+    });
   });
 
   it.each(['EXCELLENT', 'VERY_GOOD', 'POOR', null])(
@@ -1293,4 +1306,217 @@ describe('parseGeneratedDraft', () => {
       expect(draft.aspects.Set).toBe('Topps');
     }
   );
+
+  it('compacts long preferred characteristics as whole phrases while retaining identity', () => {
+    const longParallel = 'Supercalifragilisticexpi Parallel Variety';
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title:
+          '2023 Topps Chrome Supercalifragilisticexpi Parallel Variety Extremely Long Insert Name Player #1 Boston Celtics',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Player',
+          Manufacturer: 'Topps',
+          Set: 'Chrome',
+          'Parallel/Variety': longParallel,
+          'Card Number': '1',
+          Franchise: 'Boston Celtics',
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-long-characteristic' }
+    );
+
+    expect(draft.title.length).toBeLessThanOrEqual(80);
+    expect(draft.title).toContain('Player #1');
+    expect(draft.title.includes(longParallel) || !draft.title.includes('Supercalifragilisticexpi')).toBe(
+      true
+    );
+  });
+
+  it('compacts the Shelden Williams overflow shape and reports semantic diagnostics', () => {
+    const preCompactionTitle =
+      '2006 Topps Chrome Refractor Parallel Variation Rookie Card Serial Numbered 12/99 Shelden Williams #123 Boston Celtics';
+    const compactedTitle = '2006 Rookie Card Serial Numbered 12/99 Shelden Williams #123';
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title:
+          'Shelden Williams 2006-07 Topps Chrome Refractor Rookie Card Parallel Variation Boston Celtics #123 12/99',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Shelden Williams',
+          Manufacturer: 'Topps',
+          Set: 'Chrome',
+          'Parallel/Variety': 'Refractor Parallel Variation',
+          Features: ['Rookie Card', 'Serial Numbered'],
+          'Card Number': '123',
+          Franchise: 'Boston Celtics',
+        },
+        yearEvidence: {
+          year: '2006',
+          sourceType: 'copyright_line',
+          visibleText: '2006',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-shelden-williams-overflow' }
+    );
+
+    expect(draft.title).toBe(compactedTitle);
+    expect(draft.title).toHaveLength(60);
+    expect(draft.title).toContain('2006');
+    expect(draft.title).toContain('Shelden Williams');
+    expect(draft.title).toContain('#123');
+    expect(draft.title).toContain('12/99');
+    expect(draft.title).toContain('Rookie Card');
+    expect(draft.title).toContain('Serial Numbered');
+    expect(draft.title).not.toContain('Boston Celtics');
+    const warning = draft.warnings.find((entry) => entry.startsWith('Generated listing title compacted'));
+    expect(warning).toContain('from 117 to 60 characters');
+    expect(warning).toContain(`pre="${preCompactionTitle}"`);
+    expect(warning).toContain(`final="${compactedTitle}"`);
+    expect(warning).toContain('omitted=');
+  });
+
+  it('retains validated serial fraction through semantic compaction', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: '2023 Topps Chrome Refractor Player #1 Boston Celtics',
+        description: 'Single card.',
+        aspects: { Player: 'Player', Manufacturer: 'Topps', Set: 'Chrome', 'Card Number': '1' },
+        serialEvidence: {
+          visibleText: 'Serial Number 012345/999999',
+          imageIndex: 0,
+          numerator: 12345,
+          denominator: 999999,
+        },
+        yearEvidence: null,
+        warnings: [],
+      }),
+      { id: 'raw-response-serial-compaction' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toContain('012345/999999');
+    expect(draft.title.length).toBeLessThanOrEqual(80);
+  });
+
+  it('preserves leading-zero serial formatting through overflow compaction', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title:
+          'Shelden Williams 2006-07 Topps Chrome Refractor Rookie Card Parallel Variation Boston Celtics #123 37/199',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Shelden Williams',
+          Manufacturer: 'Topps',
+          Set: 'Chrome',
+          'Parallel/Variety': 'Refractor Parallel Variation',
+          Features: ['Rookie Card', 'Serial Numbered'],
+          'Card Number': '123',
+          Franchise: 'Boston Celtics',
+        },
+        serialEvidence: {
+          visibleText: 'Serial Number 037/199',
+          imageIndex: 0,
+          numerator: 37,
+          denominator: 199,
+        },
+        yearEvidence: {
+          year: '2006',
+          sourceType: 'copyright_line',
+          visibleText: '2006',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-leading-zero-serial-overflow' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title.length).toBeLessThanOrEqual(80);
+    expect(draft.title).toContain('2006');
+    expect(draft.title).toContain('Shelden Williams');
+    expect(draft.title).toContain('#123');
+    expect(draft.title).toContain('037/199');
+    expect(draft.title).not.toMatch(/(?<!0)37\/199/u);
+  });
+
+  it('uses the protected-only fallback for an 81+ character Player-only title', () => {
+    const player = 'Shelden Williams';
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: `${player} ${'Unstructured filler '.repeat(4)}`.trim(),
+        description: 'Single card.',
+        aspects: { Player: player },
+        warnings: [],
+      }),
+      { id: 'raw-response-player-only-overflow' }
+    );
+
+    expect(draft.title).toBe(player);
+    expect(draft.warnings.at(-1)).toContain('omitted=unstructured-title-content');
+  });
+
+  it('keeps validated serial evidence before Player in the protected-only fallback', () => {
+    const player = 'Shelden Williams';
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title: `${player} ${'Unstructured filler '.repeat(4)}`.trim(),
+        description: 'Single card.',
+        aspects: { Player: player },
+        serialEvidence: {
+          visibleText: '12345/999999',
+          imageIndex: 0,
+          numerator: 12345,
+          denominator: 999999,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-player-serial-only-overflow' },
+      { imageCount: 1 }
+    );
+
+    expect(draft.title).toBe(`12345/999999 ${player}`);
+  });
+
+  it('is idempotent after semantic compaction', () => {
+    const draft = parseGeneratedDraft(
+      JSON.stringify({
+        title:
+          'Shelden Williams 2006-07 Topps Chrome Refractor Rookie Card Parallel Variation Boston Celtics #123 12/99',
+        description: 'Single card.',
+        aspects: {
+          Player: 'Shelden Williams',
+          Manufacturer: 'Topps',
+          Set: 'Chrome',
+          'Parallel/Variety': 'Refractor Parallel Variation',
+          Features: ['Rookie Card', 'Serial Numbered'],
+          'Card Number': '123',
+          Franchise: 'Boston Celtics',
+        },
+        yearEvidence: {
+          year: '2006',
+          sourceType: 'copyright_line',
+          visibleText: '2006',
+          imageIndex: 0,
+        },
+        warnings: [],
+      }),
+      { id: 'raw-response-idempotent' }
+    );
+    expect(draft.warnings.some((warning) => warning.startsWith('Generated listing title compacted'))).toBe(
+      true
+    );
+    const again = normalizeGeneratedDraft({
+      title: draft.title,
+      aspects: draft.aspects,
+      warnings: draft.warnings,
+      yearEvidence: draft.yearEvidence,
+    });
+    expect(again.title).toBe(draft.title);
+    expect(again.warnings).toEqual(draft.warnings);
+  });
 });

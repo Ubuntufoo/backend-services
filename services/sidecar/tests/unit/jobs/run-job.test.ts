@@ -63,6 +63,7 @@ import {
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import type { GeneratedListingDraft } from '@/gemini/contracts.js';
 import { runSidecarJob, type RunSidecarJobOptions } from '@/jobs/index.js';
+import { GeminiDraftTitleOverflowError } from '@/gemini/index.js';
 import {
   ApifyPricingProviderError,
   FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
@@ -2373,6 +2374,35 @@ describe('runSidecarJob', () => {
     });
     expect(result.listing?.sku).toBe('Single-000001');
     expect(result.listing?.listing_id).toBe('Single-000001');
+  });
+
+  it('does not retry or requeue deterministic protected title overflow', async () => {
+    const primaryRoute = createResolvedAiModelRoute({ routeOrder: 1 });
+    const fallbackRoute = createResolvedAiModelRoute({ routeOrder: 2, modelName: 'gemini-fallback' });
+    const dataAccess = createDataAccess({ aiModelRoutes: [primaryRoute, fallbackRoute] });
+    const overflow = new GeminiDraftTitleOverflowError({
+      preCompactionTitle: 'x'.repeat(81),
+      preCompactionLength: 81,
+      finalTitle: 'x'.repeat(81),
+      finalLength: 81,
+      protectedComponents: ['Player'],
+      omittedComponents: [],
+    });
+    const generateListingDraftMock = vi.fn().mockRejectedValue(overflow);
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.listing?.last_error_context).toEqual(
+      expect.objectContaining({ category: 'user_fixable', title_overflow: expect.any(Object) })
+    );
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
   });
 
   it('falls through the four configured Gemini routes and records every attempt', async () => {

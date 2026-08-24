@@ -1,6 +1,7 @@
 import {
   GENERATED_LISTING_ASPECT_KEYS,
   GeminiDraftServiceError,
+  GeminiDraftTitleOverflowError,
   type GeneratedListingDraft,
   generatedListingDraftSchema,
 } from './contracts.js';
@@ -41,6 +42,9 @@ const TITLE_CARD_NUMBER_PATTERNS = [
 const TITLE_CHARACTERISTIC_ASPECT_KEYS = ['Set', 'Parallel/Variety', 'Insert Set'] as const;
 const TITLE_CARD_NUMBER_RANGE_PATTERN =
   /(?:^|[\s([{])(?:#\s*[A-Za-z0-9-]+|Card\s+(?:(?:No\.?|Number)\s*)?[A-Za-z0-9-]+)\s+of\s+\d{1,4}\b/giu;
+const SERIAL_FRACTION_PATTERN_SOURCE =
+  String.raw`(?<![\p{L}\p{N}#])\d{1,6}\s*\/\s*\d{1,6}(?![\p{L}\p{N}])`;
+const SERIAL_FRACTION_PATTERN = new RegExp(SERIAL_FRACTION_PATTERN_SOURCE, 'gu');
 const POSITIVE_FEATURE_PATTERN =
   /\b(?:rookie(?:\s+card)?|refractor|insert|parallel(?:\/variety)?|serial(?:[-\s]+numbered)?)\b/iu;
 const PROHIBITED_TITLE_CONDITION_PATTERNS = [
@@ -528,7 +532,7 @@ function getCanonicalCharacteristicParts(title: string, aspects: AspectRecord): 
     // generic Features value. Keep that exact identifier in the characteristic
     // slot while still retaining the positive "Serial Numbered" evidence.
     if (/serial(?:[-\s]+numbered)?/iu.test(sanitizedValue)) {
-      const serialSpan = /\b\d{1,4}\s*\/\s*\d{1,4}\b/iu.exec(title);
+      const serialSpan = /\b\d{1,6}\s*\/\s*\d{1,6}\b/iu.exec(title);
       if (serialSpan) {
         parts.push(serialSpan[0]);
       }
@@ -597,7 +601,7 @@ function getTrailingNumericParts(
   const parts: string[] = [];
   const tailStart = cardSpan[1];
   const tail = title.slice(tailStart);
-  const serialSpans = [...tail.matchAll(/\b\d{1,4}\s*\/\s*\d{1,4}\b/gu)]
+  const serialSpans = [...tail.matchAll(/\b\d{1,6}\s*\/\s*\d{1,6}\b/gu)]
     .map((match) => {
       const start = match.index ?? -1;
       return start >= 0 ? ([start, start + match[0].length] as [number, number]) : null;
@@ -658,10 +662,21 @@ function getNumericTitleParts(
   return dedupeTitleParts(parts);
 }
 
-function normalizeCanonicalTitleOrder(title: string, aspects: AspectRecord): string {
+type CanonicalTitleComponent = {
+  kind: 'year' | 'manufacturer' | 'set' | 'characteristic' | 'player' | 'card' | 'numeric' | 'team';
+  value: string;
+  protected: boolean;
+  preferred?: boolean;
+};
+
+function getCanonicalTitleComponents(
+  title: string,
+  aspects: AspectRecord,
+  protectedSerialFraction: string | null = null
+): CanonicalTitleComponent[] | null {
   const player = trimToNull(getAspectString(aspects, 'Player'));
   if (!player) {
-    return title;
+    return null;
   }
 
   const setParts = getCanonicalSetParts(aspects, title);
@@ -677,9 +692,10 @@ function normalizeCanonicalTitleOrder(title: string, aspects: AspectRecord): str
     setParts.length === 0 &&
     characteristicParts.length === 0 &&
     !cardNumber &&
-    !team
+    !team &&
+    !protectedSerialFraction
   ) {
-    return title;
+    return null;
   }
 
   const playerSpan = findFirstTitlePhraseSpan(title, player);
@@ -689,17 +705,180 @@ function normalizeCanonicalTitleOrder(title: string, aspects: AspectRecord): str
   const canonicalCharacteristicParts = characteristicParts;
   const cardPart = getCanonicalCardPart(title, cardNumber);
   const trailingNumericParts = getTrailingNumericParts(title, cardSpan, cardNumber);
-  const orderedParts = [
-    getCanonicalYearTitlePart(title, aspects),
-    ...canonicalSetParts,
-    ...canonicalCharacteristicParts,
-    player,
-    cardPart,
-    ...trailingNumericParts,
-    team,
-  ].filter((part): part is string => Boolean(part));
+  if (
+    !yearPart &&
+    canonicalSetParts.length === 0 &&
+    canonicalCharacteristicParts.length === 0 &&
+    !cardPart &&
+    !team &&
+    !protectedSerialFraction
+  ) {
+    return null;
+  }
+  const components: CanonicalTitleComponent[] = [];
+  const year = getCanonicalYearTitlePart(title, aspects);
+  if (year) components.push({ kind: 'year', value: year, protected: true });
+  for (const [index, part] of canonicalSetParts.entries()) {
+    components.push({
+      kind: index === 0 && setParts.length > 1 ? 'manufacturer' : index < setParts.length ? 'set' : 'numeric',
+      value: part,
+      protected: false,
+    });
+  }
+  for (const part of canonicalCharacteristicParts) {
+    components.push({
+      kind: 'characteristic',
+      value: part,
+      protected: /\b\d{1,6}\s*\/\s*\d{1,6}\b/iu.test(part),
+      preferred: POSITIVE_FEATURE_PATTERN.test(part),
+    });
+  }
+  components.push({ kind: 'player', value: player, protected: true });
+  if (cardPart) components.push({ kind: 'card', value: cardPart, protected: true });
+  for (const part of trailingNumericParts) {
+    components.push({ kind: 'numeric', value: part, protected: false });
+  }
+  if (team) components.push({ kind: 'team', value: team, protected: false });
 
-  return normalizeTitleWhitespace(dedupeTitleParts(orderedParts).join(' '));
+  // A validated serial fraction may be present in the title even when the
+  // model omitted the corresponding Features aspect. Keep it as an exact,
+  // indivisible characteristic during compaction.
+  const hasSerialNumberedFeature = getAspectStringValues(aspects.Features).some((feature) =>
+    /\bserial(?:[-\s]+numbered)?\b/iu.test(feature)
+  );
+  const serialFraction =
+    protectedSerialFraction ??
+    (hasSerialNumberedFeature ? title.match(/\b\d{1,6}\s*\/\s*\d{1,6}\b/iu)?.[0] : undefined);
+  if (
+    serialFraction &&
+    !components.some((component) => /\b\d{1,6}\s*\/\s*\d{1,6}\b/iu.test(component.value))
+  ) {
+    const playerIndex = components.findIndex((component) => component.kind === 'player');
+    components.splice(Math.max(0, playerIndex), 0, {
+      kind: 'characteristic',
+      value: serialFraction,
+      protected: true,
+    });
+  }
+
+  const seen = new Set<string>();
+  return components.filter((component) => {
+    const key = component.value.toLocaleLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function compactNormalizedTitle(
+  title: string,
+  aspects: AspectRecord,
+  warnings: string[],
+  protectedSerialFraction: string | null = null
+): string {
+  if (title.length <= MAX_GENERATED_TITLE_LENGTH) return title;
+
+  const preCompactionTitle = title;
+  const components = getCanonicalTitleComponents(title, aspects, protectedSerialFraction);
+  if (!components) {
+    const protectedComponents = dedupeTitleParts(
+      [protectedSerialFraction, trimToNull(getAspectString(aspects, 'Player'))].filter(
+        (component): component is string => component !== null
+      )
+    );
+    const finalTitle = normalizeTitleWhitespace(protectedComponents.join(' '));
+    if (finalTitle.length > 0 && finalTitle.length <= MAX_GENERATED_TITLE_LENGTH) {
+      const omittedComponents = ['unstructured-title-content'];
+      warnings.push(
+        `Generated listing title compacted from ${preCompactionTitle.length} to ${finalTitle.length} characters; ` +
+          `pre="${preCompactionTitle}"; final="${finalTitle}"; omitted=${omittedComponents.join(', ')}.`
+      );
+      return finalTitle;
+    }
+
+    throw new GeminiDraftTitleOverflowError({
+      preCompactionTitle,
+      preCompactionLength: preCompactionTitle.length,
+      finalTitle: finalTitle || title,
+      finalLength: (finalTitle || title).length,
+      protectedComponents,
+      omittedComponents: [],
+    });
+  }
+
+  const omittedComponents: string[] = [];
+  let kept = [...components];
+  const render = () => normalizeTitleWhitespace(kept.map(({ value }) => value).join(' '));
+  const omitFirst = (predicate: (component: CanonicalTitleComponent) => boolean): boolean => {
+    const index = kept.findIndex(predicate);
+    if (index < 0) return false;
+    omittedComponents.push(`${kept[index].kind}:${kept[index].value}`);
+    kept.splice(index, 1);
+    return true;
+  };
+
+  // Canonical omission order: evidenced team, redundant manufacturer, filler
+  // numerics, then set text. Recognized characteristics are retained until
+  // only protected identity/evidence can fit.
+  const omissionPredicates = [
+    (component: CanonicalTitleComponent) => component.kind === 'team',
+    (component: CanonicalTitleComponent) => component.kind === 'manufacturer',
+    (component: CanonicalTitleComponent) => component.kind === 'numeric' && !component.protected,
+    (component: CanonicalTitleComponent) => component.kind === 'set',
+    (component: CanonicalTitleComponent) =>
+      component.kind === 'characteristic' && !component.protected && !component.preferred,
+    (component: CanonicalTitleComponent) =>
+      component.kind === 'characteristic' && !component.protected,
+  ];
+
+  for (const predicate of omissionPredicates) {
+    while (render().length > MAX_GENERATED_TITLE_LENGTH && omitFirst(predicate)) {
+      // Keep dropping complete semantic components of the current class.
+    }
+    if (render().length <= MAX_GENERATED_TITLE_LENGTH) break;
+  }
+
+  if (render().length > MAX_GENERATED_TITLE_LENGTH) {
+    // Final semantic fallback: protected identity/evidence only.
+    kept = kept.filter((component) => component.protected);
+    const compacted = render();
+    if (compacted.length > MAX_GENERATED_TITLE_LENGTH) {
+      throw new GeminiDraftTitleOverflowError({
+        preCompactionTitle,
+        preCompactionLength: preCompactionTitle.length,
+        finalTitle: compacted,
+        finalLength: compacted.length,
+        protectedComponents: kept.filter((component) => component.protected).map(({ value }) => value),
+        omittedComponents,
+      });
+    }
+  }
+
+  const finalTitle = render();
+  if (finalTitle !== preCompactionTitle) {
+    const warningPrefix = 'Generated listing title compacted';
+    if (!warnings.some((warning) => warning.startsWith(warningPrefix))) {
+      warnings.push(
+        `${warningPrefix} from ${preCompactionTitle.length} to ${finalTitle.length} characters; ` +
+          `pre="${preCompactionTitle}"; final="${finalTitle}"; omitted=${omittedComponents.join(', ') || 'none'}.`
+      );
+    }
+  }
+  return finalTitle;
+}
+
+function normalizeCanonicalTitleOrder(
+  title: string,
+  aspects: AspectRecord,
+  protectedSerialFraction: string | null = null
+): string {
+  const components = getCanonicalTitleComponents(title, aspects, protectedSerialFraction);
+  if (!components) return title;
+  return normalizeTitleWhitespace(components.map(({ value }) => value).join(' '));
+}
+
+function extractValidatedSerialFraction(visibleText: string): string | null {
+  return new RegExp(SERIAL_FRACTION_PATTERN_SOURCE, 'u').exec(visibleText)?.[0] ?? null;
 }
 
 function normalizeAspects(value: unknown, warnings: string[]): Record<string, string | string[]> {
@@ -797,7 +976,8 @@ function extractCardNumberFromTitle(title: string): string | null {
 }
 
 export function normalizeGeneratedDraft(
-  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'>,
+  draft: Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> &
+    Partial<Pick<GeneratedListingDraft, 'serialEvidence'>>,
   options: NormalizeGeneratedDraftYearFieldsOptions = {}
 ): Pick<GeneratedListingDraft, 'title' | 'aspects' | 'warnings' | 'yearEvidence'> {
   const yearNormalized = normalizeGeneratedDraftYearFields(
@@ -813,6 +993,21 @@ export function normalizeGeneratedDraft(
   const aspects: AspectRecord = { ...yearNormalized.aspects };
   const warnings = [...yearNormalized.warnings];
   let title = yearNormalized.title;
+
+  const serialFraction = draft.serialEvidence
+    ? extractValidatedSerialFraction(draft.serialEvidence.visibleText)
+    : null;
+  if (serialFraction && draft.serialEvidence) {
+    const equivalentFractionPattern = new RegExp(
+      `(?<![\\p{L}\\p{N}#])0*${draft.serialEvidence.numerator}\\s*/\\s*0*${draft.serialEvidence.denominator}(?![\\p{L}\\p{N}])`,
+      'u'
+    );
+    if (equivalentFractionPattern.test(title)) {
+      title = title.replace(equivalentFractionPattern, serialFraction);
+    } else {
+      title = normalizeTitleWhitespace(`${title} ${serialFraction}`);
+    }
+  }
 
   const manufacturer = trimToNull(getAspectString(aspects, 'Manufacturer'));
   const cardManufacturer = trimToNull(getAspectString(aspects, 'Card Manufacturer'));
@@ -858,7 +1053,8 @@ export function normalizeGeneratedDraft(
   }
 
   title = sanitizeGeneratedTitleConditionLanguage(title, aspects);
-  title = normalizeCanonicalTitleOrder(title, aspects);
+  title = normalizeCanonicalTitleOrder(title, aspects, serialFraction);
+  title = compactNormalizedTitle(title, aspects, warnings, serialFraction);
 
   return {
     title,
@@ -903,8 +1099,7 @@ function normalizeSerialEvidence(
     return null;
   }
 
-  const fractionPattern = /(?<![\p{L}\p{N}#])\d{1,6}\s*\/\s*\d{1,6}(?![\p{L}\p{N}])/gu;
-  const fractions = [...visibleText.matchAll(fractionPattern)].map((match) => match[0]);
+  const fractions = [...visibleText.matchAll(SERIAL_FRACTION_PATTERN)].map((match) => match[0]);
   const expectedPattern = new RegExp(
     `(?<![\\p{L}\\p{N}#])0*${numerator}\\s*\\/\\s*0*${denominator}(?![\\p{L}\\p{N}])`,
     'u'
@@ -1105,6 +1300,7 @@ export function parseGeneratedDraft(
       aspects,
       warnings: [...modelWarnings, ...serviceWarnings],
       yearEvidence,
+      serialEvidence,
     },
     options
   );

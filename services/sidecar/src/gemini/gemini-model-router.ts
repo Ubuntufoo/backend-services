@@ -1,6 +1,10 @@
 import { ApiError } from '@google/genai';
 import type { ResolvedAiModelRoute } from '@ebay-inventory/data';
-import { GeminiDraftServiceError, GeminiDraftValidationError } from './contracts.js';
+import {
+  GeminiDraftServiceError,
+  GeminiDraftTitleOverflowError,
+  GeminiDraftValidationError,
+} from './contracts.js';
 
 export type GeminiFallbackKind = 'rate_limit' | 'quota_exceeded' | 'unavailable' | 'none';
 
@@ -157,7 +161,7 @@ function isGeminiApiKeyError(error: GeminiDraftServiceError): boolean {
 }
 
 export function classifyGeminiFallbackKind(error: unknown): GeminiFallbackKind {
-  if (error instanceof GeminiDraftValidationError) {
+  if (error instanceof GeminiDraftValidationError || error instanceof GeminiDraftTitleOverflowError) {
     return 'none';
   }
 

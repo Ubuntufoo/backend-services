@@ -171,6 +171,27 @@ export class GeminiDraftServiceError extends Error {
   }
 }
 
+/** Deterministic backend title invariant failure; never retry the model. */
+export class GeminiDraftTitleOverflowError extends GeminiDraftServiceError {
+  readonly code = 'TITLE_OVERFLOW' as const;
+  readonly context: {
+    preCompactionTitle: string;
+    preCompactionLength: number;
+    finalTitle: string;
+    finalLength: number;
+    protectedComponents: string[];
+    omittedComponents: string[];
+  };
+
+  constructor(context: GeminiDraftTitleOverflowError['context']) {
+    super(
+      `Generated listing title exceeds 80 characters after backend normalization. Semantic compaction could not fit protected components (${context.finalLength} characters).`,
+    );
+    this.name = 'GeminiDraftTitleOverflowError';
+    this.context = context;
+  }
+}
+
 export class GeminiDraftValidationError extends GeminiDraftServiceError {
   readonly issues: ZodIssue[];
 
