@@ -40,6 +40,16 @@ Optional overrides:
 # WATCHER_PROCESSED_DIR=./watcher/processed
 ```
 
+## Capture Guidance
+
+- All-JPEG watcher groups use `enhance_crop` downstream. The finalized profile is JPEG q95,
+  4:2:0 chroma subsampling, and no sharpening; a conservative uncropped fallback is valid.
+- Use fixed overhead/square framing, a smooth uniform matte white or black high-contrast
+  backdrop, even diffused light, minimal glare/shadow, full item edges, and generous clean
+  margin.
+- Textured or linty backgrounds can reduce crop acceptance; never weaken safety gates to force
+  a crop.
+
 ## Runtime Behavior
 
 - Watches only the configured incoming directory.
