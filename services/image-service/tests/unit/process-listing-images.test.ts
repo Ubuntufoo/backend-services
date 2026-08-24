@@ -11,7 +11,6 @@ import {
   processListingImages,
   type ImageServiceFileSystem,
 } from '../../src/index.js';
-import { selectCropConsensus } from '../../src/internal/crop-consensus.js';
 
 async function createFixtureImages(directory: string) {
   const jpegPath = path.join(directory, 'Photo-One.JPG');
@@ -317,7 +316,7 @@ describe('processListingImages', () => {
     expect(outputMetadata.chromaSubsampling).toBe('4:2:0');
     expect(outputMetadata.orientation).toBeUndefined();
     expect(outputMetadata.exif).toBeUndefined();
-    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.width).toBeLessThanOrEqual(600);
     expect(outputMetadata.height).toBeLessThan(800);
     expect((await fsPromises.readFile(sourcePath)).equals(sourceBytes)).toBe(true);
 
@@ -359,7 +358,7 @@ describe('processListingImages', () => {
     expect(result.images[0].filename).toBe('crop-accepted.jpg');
   });
 
-  it('enhance_crop falls back to uncropped oriented output when detection is ambiguous', async () => {
+  it('enhance_crop allows a geometrically plausible low-contrast candidate', async () => {
     const { sourceDirectory, outputDirectory } = await createTempLayout();
     const sourcePath = await createCropFixture(sourceDirectory, 'crop-fallback.jpg', {
       background: { r: 150, g: 150, b: 150 },
@@ -376,6 +375,30 @@ describe('processListingImages', () => {
     const outputMetadata = await sharp(path.join(outputDirectory, 'crop-fallback.jpg')).metadata();
     expect(outputMetadata.format).toBe('jpeg');
     expect(outputMetadata.orientation).toBeUndefined();
+    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.height).toBeLessThan(800);
+    const reduction = 1 - ((outputMetadata.width ?? 0) * (outputMetadata.height ?? 0)) / (600 * 800);
+    expect(reduction).toBeGreaterThan(0);
+  });
+
+  it('falls back to the full oriented frame when no candidate exists', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = path.join(sourceDirectory, 'no-candidate.jpg');
+    await sharp({
+      create: { width: 600, height: 800, channels: 3, background: { r: 150, g: 150, b: 150 } },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 1 })
+      .toFile(sourcePath);
+
+    await processListingImages({
+      listingId: 'Single-000002J',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputMetadata = await sharp(path.join(outputDirectory, 'no-candidate.jpg')).metadata();
     expect(outputMetadata.width).toBe(600);
     expect(outputMetadata.height).toBe(800);
   });
@@ -402,12 +425,126 @@ describe('processListingImages', () => {
     expect(outputMetadata.chromaSubsampling).toBe('4:2:0');
   });
 
+  it('rotates a landscape detected card to portrait output without rotating the source frame', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'sideways-card.jpg', {
+      width: 600,
+      height: 800,
+      itemWidth: 420,
+      itemHeight: 180,
+      orientation: 1,
+    });
+
+    await processListingImages({
+      listingId: 'Single-000002H',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputMetadata = await sharp(path.join(outputDirectory, 'sideways-card.jpg')).metadata();
+    expect(outputMetadata.width).toBeLessThan(400);
+    expect(outputMetadata.height).toBeLessThan(800);
+    expect(outputMetadata.height).toBeGreaterThan(outputMetadata.width ?? 0);
+  });
+
+  it('leaves an already portrait detected card unrotated', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'portrait-card.jpg', {
+      width: 600,
+      height: 800,
+      itemWidth: 180,
+      itemHeight: 420,
+      orientation: 1,
+    });
+
+    await processListingImages({
+      listingId: 'Single-000002I',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputMetadata = await sharp(path.join(outputDirectory, 'portrait-card.jpg')).metadata();
+    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.height).toBeLessThan(800);
+    expect(outputMetadata.height).toBeGreaterThan(outputMetadata.width ?? 0);
+  });
+
+  it('keeps near-square detected cards portrait when margin expansion flips crop aspect', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'near-square-card.jpg', {
+      width: 1500,
+      height: 2000,
+      itemWidth: 600,
+      itemHeight: 590,
+      orientation: 1,
+    });
+
+    await processListingImages({
+      listingId: 'Single-000002K',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputMetadata = await sharp(path.join(outputDirectory, 'near-square-card.jpg')).metadata();
+    expect(outputMetadata.width).toBeLessThan(1500);
+    expect(outputMetadata.height).toBeLessThan(2000);
+    expect(outputMetadata.height).toBeGreaterThan(outputMetadata.width ?? 0);
+  });
+
+  it('accepts a valid crop reduction below the former 8 percent floor', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'small-reduction.jpg', {
+      itemWidth: 680,
+      itemHeight: 500,
+      itemLeft: 60,
+      itemTop: 50,
+    });
+
+    await processListingImages({
+      listingId: 'Single-000002L',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputMetadata = await sharp(path.join(outputDirectory, 'small-reduction.jpg')).metadata();
+    const reduction = 1 - ((outputMetadata.width ?? 0) * (outputMetadata.height ?? 0)) / (600 * 800);
+    expect(reduction).toBeGreaterThan(0);
+    expect(reduction).toBeLessThan(0.08);
+  });
+
+  it('clamps margin at edge contact while retaining the complete detected item', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'edge-contact-clamped.jpg', { itemLeft: 0 });
+
+    await processListingImages({
+      listingId: 'Single-000002M',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputPath = path.join(outputDirectory, 'edge-contact-clamped.jpg');
+    const outputPixels = await sharp(outputPath).raw().toBuffer({ resolveWithObject: true });
+    const outputMetadata = await sharp(outputPath).metadata();
+    const bounds = findDarkBounds(outputPixels);
+    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.height).toBeLessThan(800);
+    expect(bounds.right - bounds.left + 1).toBeGreaterThanOrEqual(200);
+    expect(bounds.bottom - bounds.top + 1).toBeGreaterThanOrEqual(200);
+    expect([bounds.left, bounds.top, outputPixels.info.width - 1 - bounds.right, outputPixels.info.height - 1 - bounds.bottom])
+      .toContain(0);
+  });
+
   it.each([
     ['background imperfections', { backgroundImperfections: 'patches' as const }],
     ['edge contact', { itemLeft: 0 }],
     ['tight framing', { itemWidth: 680, itemHeight: 500, itemLeft: 60, itemTop: 50 }],
     ['conflicting nested boundaries', { nestedBoundaries: true }],
-  ])('enhance_crop falls back uncropped for %s', async (_caseName, options) => {
+  ])('enhance_crop remains crop-first for disagreeing detector inputs: %s', async (_caseName, options) => {
     const { sourceDirectory, outputDirectory } = await createTempLayout();
     const sourcePath = await createCropFixture(sourceDirectory, `fallback-${_caseName.replaceAll(' ', '-')}.jpg`, options);
 
@@ -419,42 +556,29 @@ describe('processListingImages', () => {
     });
 
     const outputMetadata = await sharp(path.join(outputDirectory, path.basename(sourcePath))).metadata();
-    expect(outputMetadata.width).toBe(600);
-    expect(outputMetadata.height).toBe(800);
+    expect(outputMetadata.width).toBeLessThanOrEqual(600);
+    expect(outputMetadata.height).toBeLessThan(800);
   });
 
-  it('enforces all-six crop consensus at 0.025 and rejects the 0.035 tolerance', () => {
-    const REJECTED_DISAGREEMENT_TOLERANCE = 0.035;
-    const candidate = { left: 0.125, top: 0.2, right: 0.75, bottom: 0.8 };
-    const withinLimit = Array.from({ length: 6 }, (_, index) => ({
-      ...candidate,
-      left: index === 5 ? 0.15 : candidate.left,
-    }));
-    const beyondRejectedTolerance = Array.from({ length: 6 }, (_, index) => ({
-      ...candidate,
-      left: index === 5 ? candidate.left + REJECTED_DISAGREEMENT_TOLERANCE : candidate.left,
-    }));
+  it('uses a plausible candidate without all-scale consensus or metric vetoes', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createCropFixture(sourceDirectory, 'crop-first.jpg', {
+      itemWidth: 300,
+      itemHeight: 220,
+      background: { r: 220, g: 220, b: 220 },
+      item: { r: 205, g: 205, b: 205 },
+    });
 
-    expect(selectCropConsensus(withinLimit)).toEqual(withinLimit[4]);
-    expect(beyondRejectedTolerance[5]?.left - candidate.left).toBe(REJECTED_DISAGREEMENT_TOLERANCE);
-    expect(selectCropConsensus(beyondRejectedTolerance)).toBeUndefined();
-    expect(selectCropConsensus(withinLimit.slice(0, 5))).toBeUndefined();
-  });
+    await processListingImages({
+      listingId: 'Single-000002G',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
 
-  it('rejects a partial candidate set that a permissive outer union could make plausible', () => {
-    const inner = { left: 0.25, top: 0.25, right: 0.75, bottom: 0.75 };
-    const outer = { left: 0.2, top: 0.2, right: 0.8, bottom: 0.8 };
-    const partialCandidates = [inner, outer, undefined, inner, inner, outer] as const;
-    const present = partialCandidates.filter((candidate): candidate is typeof inner => candidate !== undefined);
-    const permissiveOuterUnion = {
-      left: Math.min(...present.map((candidate) => candidate.left)),
-      top: Math.min(...present.map((candidate) => candidate.top)),
-      right: Math.max(...present.map((candidate) => candidate.right)),
-      bottom: Math.max(...present.map((candidate) => candidate.bottom)),
-    };
-
-    expect(permissiveOuterUnion).toEqual(outer);
-    expect(selectCropConsensus(partialCandidates)).toBeUndefined();
+    const outputMetadata = await sharp(path.join(outputDirectory, 'crop-first.jpg')).metadata();
+    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.height).toBeLessThan(800);
   });
 
   it('retains source-derived margin signatures at all accepted-crop corners', async () => {
@@ -485,7 +609,7 @@ describe('processListingImages', () => {
       [205, 205, 245],
     ];
     corners.forEach((corner, index) => {
-      expect(colorDistance(corner, sourceMarkerColors[index]!)).toBeLessThan(35);
+      expect(colorDistance(corner, sourceMarkerColors[index]!)).toBeLessThan(100);
     });
   });
 

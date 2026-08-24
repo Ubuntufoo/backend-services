@@ -5,8 +5,6 @@ import { basename, dirname, normalize, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
-import { selectCropConsensus } from './internal/crop-consensus.js';
-
 import {
   isSupportedImageServiceExtension,
   isSupportedImageServicePath,
@@ -78,6 +76,7 @@ interface CropCandidate {
   support: number;
   symmetry: number;
   areaReduction: number;
+  primary: boolean;
 }
 
 interface CropDecision {
@@ -89,6 +88,10 @@ const CROP_PRIMARY_FACTORS = [0.8, 1, 1.2] as const;
 const CROP_GRADIENT_FACTORS = [0.85, 1, 1.25] as const;
 const CROP_MARGIN_RATIO = 0.03;
 const CROP_MIN_MARGIN = 48;
+// Deliberately loose sanity bounds. Operator review is the final quality gate;
+// only empty/tiny or destructive detector output is rejected automatically.
+const CROP_MIN_DIMENSION_RATIO = 0.08;
+const CROP_MIN_AREA_RATIO = 0.08;
 
 function median(values: readonly number[]): number {
   if (values.length === 0) {
@@ -157,8 +160,8 @@ function gradientProfiles(
   const means: number[] = [];
   const supports: number[] = [];
   const extent = axis === 'x' ? width : height;
-  const start = Math.max(2, Math.ceil(extent * 0.06));
-  const end = Math.min(extent - 3, Math.floor(extent * 0.94));
+  const start = Math.max(2, Math.ceil(extent * 0.02));
+  const end = Math.min(extent - 3, Math.floor(extent * 0.98));
 
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = 1; x < width - 1; x += 1) {
@@ -248,12 +251,12 @@ function gradientCandidate(image: AnalysisImage, factor: number): [number, numbe
   let pairOrder = 0;
   for (const left of xPeaks) {
     for (const right of xPeaks) {
-      if (right.position <= left.position || right.position - left.position < image.width * 0.2) continue;
-      if (left.position < image.width * 0.04 || right.position > image.width * 0.96) continue;
+      if (right.position <= left.position || right.position - left.position < image.width * CROP_MIN_DIMENSION_RATIO) continue;
+      if (left.position < image.width * 0.01 || right.position > image.width * 0.99) continue;
       for (const top of yPeaks) {
         for (const bottom of yPeaks) {
-          if (bottom.position <= top.position || bottom.position - top.position < image.height * 0.2) continue;
-          if (top.position < image.height * 0.04 || bottom.position > image.height * 0.96) continue;
+          if (bottom.position <= top.position || bottom.position - top.position < image.height * CROP_MIN_DIMENSION_RATIO) continue;
+          if (top.position < image.height * 0.01 || bottom.position > image.height * 0.99) continue;
           const pairMetrics = edgeMetrics(
             image,
             [left.position, top.position, right.position, bottom.position],
@@ -312,8 +315,8 @@ function primaryCandidate(image: AnalysisImage, thresholdFactor: number): [numbe
       }
     }
   }
-  const rows = rowCounts.map((count, index) => (count > 0.15 * image.width ? index : -1)).filter((index) => index >= 0);
-  const columns = columnCounts.map((count, index) => (count > 0.15 * image.height ? index : -1)).filter((index) => index >= 0);
+  const rows = rowCounts.map((count, index) => (count > 0.05 * image.width ? index : -1)).filter((index) => index >= 0);
+  const columns = columnCounts.map((count, index) => (count > 0.05 * image.height ? index : -1)).filter((index) => index >= 0);
   if (rows.length === 0 || columns.length === 0) return undefined;
   return [columns[0], rows[0], columns[columns.length - 1] + 1, rows[rows.length - 1] + 1];
 }
@@ -388,29 +391,60 @@ function decideCrop(
     const image = images[imageIndex];
     const primaryFactor = CROP_PRIMARY_FACTORS[imageIndex % CROP_PRIMARY_FACTORS.length];
     const gradientFactor = CROP_GRADIENT_FACTORS[imageIndex % CROP_GRADIENT_FACTORS.length];
-    const box = primaryCandidate(image, primaryFactor) ?? gradientCandidate(image, gradientFactor);
-    if (!box) return {};
+    const primaryBox = primaryCandidate(image, primaryFactor);
+    const isPlausibleBox = (value: [number, number, number, number] | undefined) => value !== undefined &&
+      value.every(Number.isFinite) && value[0] >= 0 && value[1] >= 0 && value[2] <= image.width && value[3] <= image.height &&
+      value[2] > value[0] && value[3] > value[1] && value[2] - value[0] >= image.width * CROP_MIN_DIMENSION_RATIO &&
+      value[3] - value[1] >= image.height * CROP_MIN_DIMENSION_RATIO;
+    const usesPrimary = isPlausibleBox(primaryBox);
+    const box = usesPrimary ? primaryBox : gradientCandidate(image, gradientFactor);
+    if (!box) continue;
     const metrics = edgeMetrics(image, box);
     const [left, top, right, bottom] = box;
     const normalized: [number, number, number, number] = [left / image.width, top / image.height, right / image.width, bottom / image.height];
     const marginX = Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN);
     const marginY = Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN);
-    const available = normalized[0] * sourceWidth > 1.1 * marginX &&
-      (1 - normalized[2]) * sourceWidth > 1.1 * marginX &&
-      normalized[1] * sourceHeight > 1.1 * marginY &&
-      (1 - normalized[3]) * sourceHeight > 1.1 * marginY;
     const cropWidth = clamp(normalized[2] * sourceWidth + marginX, 0, sourceWidth) - clamp(normalized[0] * sourceWidth - marginX, 0, sourceWidth);
     const cropHeight = clamp(normalized[3] * sourceHeight + marginY, 0, sourceHeight) - clamp(normalized[1] * sourceHeight - marginY, 0, sourceHeight);
     const areaReduction = 1 - (cropWidth * cropHeight) / (sourceWidth * sourceHeight);
-    if (!available || metrics.contrast < 10 || metrics.support < 0.28 || metrics.symmetry < 0.3 ||
-      right - left < image.width * 0.2 || bottom - top < image.height * 0.2 || areaReduction < 0.08 || areaReduction > 0.82) {
-      return {};
+    const widthRatio = normalized[2] - normalized[0];
+    const heightRatio = normalized[3] - normalized[1];
+    const finiteAndContained = [normalized[0], normalized[1], normalized[2], normalized[3]].every(Number.isFinite) &&
+      normalized[0] >= 0 && normalized[1] >= 0 && normalized[2] <= 1 && normalized[3] <= 1 &&
+      normalized[2] > normalized[0] && normalized[3] > normalized[1];
+    if (!finiteAndContained || widthRatio < CROP_MIN_DIMENSION_RATIO || heightRatio < CROP_MIN_DIMENSION_RATIO ||
+      (widthRatio * heightRatio) < CROP_MIN_AREA_RATIO || cropWidth <= 0 || cropHeight <= 0) {
+      continue;
     }
-    candidates.push({ candidate: { left: normalized[0], top: normalized[1], right: normalized[2], bottom: normalized[3], ...metrics, areaReduction }, imageIndex });
+    candidates.push({ candidate: {
+      left: normalized[0], top: normalized[1], right: normalized[2], bottom: normalized[3],
+      ...metrics, areaReduction, primary: usesPrimary,
+    }, imageIndex });
   }
-  const selected = selectCropConsensus(candidates.map(({ candidate }) => candidate));
-  if (!selected) return {};
-  return { candidate: selected };
+  if (candidates.length === 0) return {};
+  // Stable quality ordering: primary detector wins ties, then stronger geometry
+  // signals, then the first analysis image. Metrics rank candidates but never
+  // veto otherwise-sane geometry.
+  candidates.sort((left, right) => {
+    const a = left.candidate;
+    const b = right.candidate;
+    const detectedAreaA = (a.right - a.left) * (a.bottom - a.top);
+    const detectedAreaB = (b.right - b.left) * (b.bottom - b.top);
+    const scoreA = (a.primary ? 1_000 : 0) + detectedAreaA * 100 + a.support * 10 + a.symmetry * 2 + a.contrast * 0.01;
+    const scoreB = (b.primary ? 1_000 : 0) + detectedAreaB * 100 + b.support * 10 + b.symmetry * 2 + b.contrast * 0.01;
+    return scoreB - scoreA || left.imageIndex - right.imageIndex;
+  });
+  return { candidate: candidates[0]?.candidate };
+}
+
+function cropBounds(candidate: CropCandidate, sourceWidth: number, sourceHeight: number) {
+  const marginX = Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN);
+  const marginY = Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN);
+  const left = Math.max(0, Math.floor(candidate.left * sourceWidth - marginX));
+  const top = Math.max(0, Math.floor(candidate.top * sourceHeight - marginY));
+  const right = Math.min(sourceWidth, Math.ceil(candidate.right * sourceWidth + marginX));
+  const bottom = Math.min(sourceHeight, Math.ceil(candidate.bottom * sourceHeight + marginY));
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promise<void> {
@@ -440,16 +474,18 @@ async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promis
   }
 
   const decision = decideCrop(analysisImages, sourceWidth, sourceHeight);
-  const output = decision.candidate
-    ? oriented.extract({
-        left: Math.max(0, Math.floor(decision.candidate.left * sourceWidth - Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN))),
-        top: Math.max(0, Math.floor(decision.candidate.top * sourceHeight - Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN))),
-        width: Math.min(sourceWidth, Math.ceil(decision.candidate.right * sourceWidth + Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN))) -
-          Math.max(0, Math.floor(decision.candidate.left * sourceWidth - Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN))),
-        height: Math.min(sourceHeight, Math.ceil(decision.candidate.bottom * sourceHeight + Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN))) -
-          Math.max(0, Math.floor(decision.candidate.top * sourceHeight - Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN))),
-      })
-    : oriented;
+  let output = oriented;
+  if (decision.candidate) {
+    const bounds = cropBounds(decision.candidate, sourceWidth, sourceHeight);
+    const cropped = oriented.extract(bounds);
+    // Captures are portrait-frame after EXIF orientation. Normalize only a
+    // detected sideways card; never rotate a no-candidate full-frame fallback.
+    const detectedLandscape = (decision.candidate.right - decision.candidate.left) * sourceWidth >
+      (decision.candidate.bottom - decision.candidate.top) * sourceHeight;
+    output = detectedLandscape && bounds.width > bounds.height
+      ? cropped.rotate(90)
+      : cropped;
+  }
 
   await output.jpeg({ quality: 95, chromaSubsampling: '4:2:0' }).toFile(tempPath);
 }
