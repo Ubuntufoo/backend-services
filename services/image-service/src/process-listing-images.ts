@@ -83,6 +83,20 @@ interface CropDecision {
   candidate?: CropCandidate;
 }
 
+interface DeskewLine {
+  slope: number;
+  position: number;
+  support: number;
+  residual: number;
+  residualRatio: number;
+}
+
+interface DeskewEstimate {
+  /** Physical card angle in image coordinates; positive slopes down to the right. */
+  angleDegrees: number;
+  confidence: number;
+}
+
 const CROP_ANALYSIS_WIDTHS = [320, 480] as const;
 const CROP_PRIMARY_FACTORS = [0.8, 1, 1.2] as const;
 const CROP_GRADIENT_FACTORS = [0.85, 1, 1.25] as const;
@@ -92,6 +106,14 @@ const CROP_MIN_MARGIN = 48;
 // only empty/tiny or destructive detector output is rejected automatically.
 const CROP_MIN_DIMENSION_RATIO = 0.08;
 const CROP_MIN_AREA_RATIO = 0.08;
+const DESKEW_ANALYSIS_WIDTH = 960;
+const DESKEW_MAX_ANGLE_DEGREES = 8;
+const DESKEW_MIN_ANGLE_DEGREES = 0.2;
+const DESKEW_MAX_LINE_DISAGREEMENT_DEGREES = 2;
+const POST_DESKEW_BACKGROUND_DISTANCE = 42;
+const POST_DESKEW_FOREGROUND_FRACTION = 0.55;
+const POST_DESKEW_TRANSITION_RUN = 3;
+const POST_DESKEW_SAMPLE_TRIM_RATIO = 0.12;
 
 function median(values: readonly number[]): number {
   if (values.length === 0) {
@@ -381,6 +403,149 @@ function edgeMetrics(
   };
 }
 
+function fitDeskewLine(points: readonly { along: number; position: number; weight: number }[], extent: number): DeskewLine | undefined {
+  if (points.length < 12) return undefined;
+
+  const totalWeight = points.reduce((sum, point) => sum + point.weight, 0);
+  if (totalWeight <= 0) return undefined;
+  const meanAlong = points.reduce((sum, point) => sum + point.along * point.weight, 0) / totalWeight;
+  const meanPosition = points.reduce((sum, point) => sum + point.position * point.weight, 0) / totalWeight;
+  const denominator = points.reduce((sum, point) => sum + (point.along - meanAlong) ** 2 * point.weight, 0);
+  if (denominator <= 0) return undefined;
+
+  const slope = points.reduce(
+    (sum, point) => sum + (point.along - meanAlong) * (point.position - meanPosition) * point.weight,
+    0
+  ) / denominator;
+  const residual = Math.sqrt(
+    points.reduce((sum, point) => sum + (point.position - (meanPosition + slope * (point.along - meanAlong))) ** 2, 0) /
+      points.length
+  );
+  return {
+    slope,
+    position: meanPosition,
+    support: Math.min(1, points.length / Math.max(24, Math.min(240, Math.floor(extent / 2)))),
+    residual,
+    residualRatio: residual / Math.max(1, extent),
+  };
+}
+
+function deskewBackgroundEdgeLine(
+  image: AnalysisImage,
+  candidate: CropCandidate,
+  edge: 'top' | 'bottom' | 'left' | 'right',
+  background: RgbColor
+): DeskewLine | undefined {
+  const horizontal = edge === 'top' || edge === 'bottom';
+  const alongStart = horizontal ? candidate.left * image.width : candidate.top * image.height;
+  const alongEnd = horizontal ? candidate.right * image.width : candidate.bottom * image.height;
+  const target = edge === 'top'
+    ? candidate.top * image.height
+    : edge === 'bottom'
+      ? candidate.bottom * image.height
+      : edge === 'left'
+        ? candidate.left * image.width
+        : candidate.right * image.width;
+  const alongExtent = Math.max(1, alongEnd - alongStart);
+  const normalExtent = horizontal ? image.height : image.width;
+  const searchRadius = Math.max(8, Math.round(normalExtent * 0.1));
+  const alongPadding = Math.max(4, Math.round(alongExtent * 0.1));
+  const firstAlong = Math.ceil(alongStart + alongPadding);
+  const lastAlong = Math.floor(alongEnd - alongPadding);
+  const alongStep = Math.max(1, Math.round(alongExtent / 180));
+  const firstPosition = clamp(Math.floor(target - searchRadius), 1, normalExtent - 2);
+  const lastPosition = clamp(Math.ceil(target + searchRadius), 1, normalExtent - 2);
+  const forward = edge === 'left' || edge === 'top';
+  const points: Array<{ along: number; position: number; weight: number }> = [];
+
+  for (let along = firstAlong; along <= lastAlong; along += alongStep) {
+    let runStart: number | undefined;
+    let runLength = 0;
+    let runWeight = 0;
+    for (
+      let position = forward ? firstPosition : lastPosition;
+      forward ? position <= lastPosition : position >= firstPosition;
+      position += forward ? 1 : -1
+    ) {
+      const x = horizontal ? clamp(Math.round(along), 1, image.width - 2) : position;
+      const y = horizontal ? position : clamp(Math.round(along), 1, image.height - 2);
+      const distance = backgroundColorDistance(pixelRgb(image, x, y), background);
+      if (distance >= POST_DESKEW_BACKGROUND_DISTANCE) {
+        if (runLength === 0) {
+          runStart = position;
+          runWeight = 0;
+        }
+        runLength += 1;
+        runWeight += distance;
+        if (runLength >= POST_DESKEW_TRANSITION_RUN && runStart !== undefined) {
+          points.push({
+            along,
+            position: runStart,
+            weight: Math.max(1, runWeight / runLength),
+          });
+          break;
+        }
+      } else {
+        runStart = undefined;
+        runLength = 0;
+        runWeight = 0;
+      }
+    }
+  }
+
+  return fitDeskewLine(points, alongExtent);
+}
+
+function estimateDeskew(
+  image: AnalysisImage,
+  candidate: CropCandidate,
+  background: RgbColor
+): DeskewEstimate | undefined {
+  const edges = ['top', 'bottom', 'left', 'right'] as const;
+  const reliable = edges.flatMap((edge) => {
+    const line = deskewBackgroundEdgeLine(image, candidate, edge, background);
+    if (!line || line.residualRatio > 0.02) return [];
+    const angleDegrees = edge === 'top' || edge === 'bottom'
+      ? Math.atan(line.slope) * 180 / Math.PI
+      : -Math.atan(line.slope) * 180 / Math.PI;
+    return [{ edge, line, angleDegrees }];
+  });
+  if (reliable.length < 2) return undefined;
+
+  // Use the largest mutually consistent cluster of physical-edge angles.
+  // This avoids the previous top/bottom-first behavior, where one accidental
+  // near-horizontal pair could suppress stronger skew evidence elsewhere.
+  const sorted = [...reliable].sort((a, b) => a.angleDegrees - b.angleDegrees);
+  let selected: typeof reliable = [];
+  for (let start = 0; start < sorted.length; start += 1) {
+    const cluster = [sorted[start]];
+    for (let index = start + 1; index < sorted.length; index += 1) {
+      if (sorted[index].angleDegrees - cluster[0].angleDegrees > DESKEW_MAX_LINE_DISAGREEMENT_DEGREES) break;
+      cluster.push(sorted[index]);
+    }
+    if (cluster.length > selected.length) {
+      selected = cluster;
+    } else if (cluster.length === selected.length && cluster.length > 0) {
+      const clusterResidual = Math.max(...cluster.map((entry) => entry.line.residualRatio));
+      const selectedResidual = Math.max(...selected.map((entry) => entry.line.residualRatio));
+      if (clusterResidual < selectedResidual) selected = cluster;
+    }
+  }
+  if (selected.length < 2) return undefined;
+
+  const angles = selected.map((entry) => entry.angleDegrees);
+  const angleDegrees = median(angles);
+  const disagreement = Math.max(...angles) - Math.min(...angles);
+  const quality = Math.min(...selected.map((entry) => entry.line.support)) *
+    Math.min(1, 0.02 / Math.max(0.001, Math.max(...selected.map((entry) => entry.line.residualRatio))));
+  if (!Number.isFinite(angleDegrees) || Math.abs(angleDegrees) > DESKEW_MAX_ANGLE_DEGREES ||
+    Math.abs(angleDegrees) < DESKEW_MIN_ANGLE_DEGREES ||
+    disagreement > DESKEW_MAX_LINE_DISAGREEMENT_DEGREES || quality < 0.25) {
+    return undefined;
+  }
+  return { angleDegrees, confidence: quality };
+}
+
 function decideCrop(
   images: readonly AnalysisImage[],
   sourceWidth: number,
@@ -447,47 +612,344 @@ function cropBounds(candidate: CropCandidate, sourceWidth: number, sourceHeight:
   return { left, top, width: right - left, height: bottom - top };
 }
 
+type SharpPipeline = ReturnType<typeof sharp>;
+type RgbColor = { r: number; g: number; b: number };
+
+async function createAnalysisImage(
+  image: SharpPipeline,
+  width: number,
+  flattenBackground?: RgbColor
+): Promise<AnalysisImage> {
+  let pipeline = image.clone();
+  if (flattenBackground) pipeline = pipeline.flatten({ background: flattenBackground });
+  const analysis = await pipeline
+    .resize({ width, fit: 'inside' })
+    .blur(0.8)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return {
+    data: analysis.data,
+    width: analysis.info.width,
+    height: analysis.info.height,
+    channels: analysis.info.channels,
+  };
+}
+
+async function createAnalysisImages(image: SharpPipeline, flattenBackground?: RgbColor): Promise<AnalysisImage[]> {
+  const analysisImages: AnalysisImage[] = [];
+  for (const analysisWidth of CROP_ANALYSIS_WIDTHS) {
+    // Reuse identical oriented pixels for each threshold-factor decision.
+    for (let factorIndex = 0; factorIndex < CROP_PRIMARY_FACTORS.length; factorIndex += 1) {
+      analysisImages.push(await createAnalysisImage(image, analysisWidth, flattenBackground));
+    }
+  }
+  return analysisImages;
+}
+
+function estimateBorderBackground(image: AnalysisImage): RgbColor {
+  const border = Math.max(2, Math.round(Math.min(image.width, image.height) * 0.05));
+  const red: number[] = [];
+  const green: number[] = [];
+  const blue: number[] = [];
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      if (x < border || x >= image.width - border || y < border || y >= image.height - border) {
+        const rgb = pixelRgb(image, x, y);
+        red.push(rgb[0]);
+        green.push(rgb[1]);
+        blue.push(rgb[2]);
+      }
+    }
+  }
+  return { r: Math.round(median(red)), g: Math.round(median(green)), b: Math.round(median(blue)) };
+}
+
+interface CropBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function detectedCardBounds(candidate: CropCandidate, sourceWidth: number, sourceHeight: number): CropBounds {
+  const left = clamp(Math.floor(candidate.left * sourceWidth), 0, sourceWidth - 1);
+  const top = clamp(Math.floor(candidate.top * sourceHeight), 0, sourceHeight - 1);
+  const right = clamp(Math.ceil(candidate.right * sourceWidth) - 1, left, sourceWidth - 1);
+  const bottom = clamp(Math.ceil(candidate.bottom * sourceHeight) - 1, top, sourceHeight - 1);
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+function cropBoundsFromCardBounds(cardBounds: CropBounds, sourceWidth: number, sourceHeight: number): CropBounds {
+  const marginX = Math.max(CROP_MARGIN_RATIO * sourceWidth, CROP_MIN_MARGIN);
+  const marginY = Math.max(CROP_MARGIN_RATIO * sourceHeight, CROP_MIN_MARGIN);
+  const cardRight = cardBounds.left + cardBounds.width - 1;
+  const cardBottom = cardBounds.top + cardBounds.height - 1;
+  const left = Math.max(0, Math.floor(cardBounds.left - marginX));
+  const top = Math.max(0, Math.floor(cardBounds.top - marginY));
+  const right = Math.min(sourceWidth - 1, Math.ceil(cardRight + marginX));
+  const bottom = Math.min(sourceHeight - 1, Math.ceil(cardBottom + marginY));
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+function backgroundColorDistance(rgb: readonly [number, number, number], background: RgbColor): number {
+  return Math.hypot(rgb[0] - background.r, rgb[1] - background.g, rgb[2] - background.b);
+}
+
+function findPostDeskewBackgroundTransition(
+  image: AnalysisImage,
+  candidate: CropCandidate,
+  edge: 'top' | 'bottom' | 'left' | 'right',
+  background: RgbColor
+): number | undefined {
+  const verticalEdge = edge === 'left' || edge === 'right';
+  const normalExtent = verticalEdge ? image.width : image.height;
+  const alongStart = verticalEdge ? candidate.top * image.height : candidate.left * image.width;
+  const alongEnd = verticalEdge ? candidate.bottom * image.height : candidate.right * image.width;
+  // Scan the full normal axis from the actual image boundary inward. The
+  // rough detector is only used to define the along-edge sampling span; it
+  // must not limit how far inward the true physical edge can be found.
+  const firstPosition = 1;
+  const lastPosition = normalExtent - 2;
+  const alongExtent = Math.max(1, alongEnd - alongStart);
+  const alongPadding = Math.max(4, Math.round(alongExtent * POST_DESKEW_SAMPLE_TRIM_RATIO));
+  const firstAlong = Math.ceil(alongStart + alongPadding);
+  const lastAlong = Math.floor(alongEnd - alongPadding);
+  const alongStep = Math.max(1, Math.round(alongExtent / 180));
+  if (lastAlong <= firstAlong) return undefined;
+
+  const foregroundFractionAt = (position: number): number => {
+    let foreground = 0;
+    let samples = 0;
+    for (let along = firstAlong; along <= lastAlong; along += alongStep) {
+      const x = verticalEdge ? position : clamp(Math.round(along), 1, image.width - 2);
+      const y = verticalEdge ? clamp(Math.round(along), 1, image.height - 2) : position;
+      if (backgroundColorDistance(pixelRgb(image, x, y), background) >= POST_DESKEW_BACKGROUND_DISTANCE) {
+        foreground += 1;
+      }
+      samples += 1;
+    }
+    return samples > 0 ? foreground / samples : 0;
+  };
+
+  const forward = edge === 'left' || edge === 'top';
+  let runStart: number | undefined;
+  let runLength = 0;
+  for (
+    let position = forward ? firstPosition : lastPosition;
+    forward ? position <= lastPosition : position >= firstPosition;
+    position += forward ? 1 : -1
+  ) {
+    if (foregroundFractionAt(position) >= POST_DESKEW_FOREGROUND_FRACTION) {
+      if (runLength === 0) runStart = position;
+      runLength += 1;
+      if (runLength >= POST_DESKEW_TRANSITION_RUN) return runStart;
+    } else {
+      runStart = undefined;
+      runLength = 0;
+    }
+  }
+  return undefined;
+}
+
+function refinePostDeskewCardBounds(
+  image: AnalysisImage,
+  candidate: CropCandidate,
+  sourceWidth: number,
+  sourceHeight: number,
+  background: RgbColor
+): CropBounds {
+  const rough = detectedCardBounds(candidate, sourceWidth, sourceHeight);
+  const roughRight = rough.left + rough.width - 1;
+  const roughBottom = rough.top + rough.height - 1;
+  let left = rough.left;
+  let right = roughRight;
+  let top = rough.top;
+  let bottom = roughBottom;
+
+  // After deskew, refine the physical rectangle from the known backdrop inward.
+  // This deliberately does not choose the strongest nearby gradient: shadows
+  // and internal card artwork can be stronger than the true outer card edge.
+  const transitions = {
+    left: findPostDeskewBackgroundTransition(image, candidate, 'left', background),
+    right: findPostDeskewBackgroundTransition(image, candidate, 'right', background),
+    top: findPostDeskewBackgroundTransition(image, candidate, 'top', background),
+    bottom: findPostDeskewBackgroundTransition(image, candidate, 'bottom', background),
+  };
+
+  const candidateLeft = transitions.left === undefined
+    ? rough.left
+    : Math.round((transitions.left / image.width) * sourceWidth);
+  const candidateRight = transitions.right === undefined
+    ? roughRight
+    : Math.round((transitions.right / image.width) * sourceWidth);
+  const candidateWidth = candidateRight - candidateLeft + 1;
+  if (
+    candidateRight > candidateLeft &&
+    candidateWidth >= rough.width * 0.85 &&
+    candidateWidth <= rough.width * 1.15
+  ) {
+    left = clamp(candidateLeft, 0, sourceWidth - 1);
+    right = clamp(candidateRight, left, sourceWidth - 1);
+  }
+
+  const candidateTop = transitions.top === undefined
+    ? rough.top
+    : Math.round((transitions.top / image.height) * sourceHeight);
+  const candidateBottom = transitions.bottom === undefined
+    ? roughBottom
+    : Math.round((transitions.bottom / image.height) * sourceHeight);
+  const candidateHeight = candidateBottom - candidateTop + 1;
+  if (
+    candidateBottom > candidateTop &&
+    candidateHeight >= rough.height * 0.85 &&
+    candidateHeight <= rough.height * 1.15
+  ) {
+    top = clamp(candidateTop, 0, sourceHeight - 1);
+    bottom = clamp(candidateBottom, top, sourceHeight - 1);
+  }
+
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+/**
+ * Sharp's arbitrary-angle rotate expands the canvas and fills the corners.
+ * Keep the final rectangle inside the fully opaque source polygon without
+ * independently shaving one side. Opposing natural margins remain paired:
+ * left/right use one shared margin and top/bottom use one shared margin.
+ * If even the detected-card rectangle itself is not source-safe, fall back.
+ */
+async function sourceSafeCropBounds(
+  image: SharpPipeline,
+  bounds: CropBounds,
+  cardBounds: CropBounds
+): Promise<CropBounds | undefined> {
+  const alpha = await image.clone().ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const imageRight = alpha.info.width - 1;
+  const imageBottom = alpha.info.height - 1;
+  const alphaAt = (x: number, y: number): number => alpha.data[(y * alpha.info.width + x) * alpha.info.channels + 3] ?? 0;
+
+  const cardLeft = clamp(cardBounds.left, 0, imageRight);
+  const cardTop = clamp(cardBounds.top, 0, imageBottom);
+  const cardRight = clamp(cardBounds.left + cardBounds.width - 1, cardLeft, imageRight);
+  const cardBottom = clamp(cardBounds.top + cardBounds.height - 1, cardTop, imageBottom);
+  if (cardRight <= cardLeft || cardBottom <= cardTop) return undefined;
+
+  const requestedLeft = clamp(bounds.left, 0, cardLeft);
+  const requestedTop = clamp(bounds.top, 0, cardTop);
+  const requestedRight = clamp(bounds.left + bounds.width - 1, cardRight, imageRight);
+  const requestedBottom = clamp(bounds.top + bounds.height - 1, cardBottom, imageBottom);
+  const maxMarginX = Math.max(0, Math.min(cardLeft - requestedLeft, requestedRight - cardRight));
+  const maxMarginY = Math.max(0, Math.min(cardTop - requestedTop, requestedBottom - cardBottom));
+
+  let best: CropBounds | undefined;
+  let bestArea = -1;
+  for (let marginX = maxMarginX; marginX >= 0; marginX -= 1) {
+    const left = cardLeft - marginX;
+    const cropRight = cardRight + marginX;
+    for (let marginY = maxMarginY; marginY >= 0; marginY -= 1) {
+      const top = cardTop - marginY;
+      const cropBottom = cardBottom + marginY;
+      const area = (cropRight - left + 1) * (cropBottom - top + 1);
+      if (area <= bestArea) continue;
+      const corners = [
+        alphaAt(left, top),
+        alphaAt(cropRight, top),
+        alphaAt(left, cropBottom),
+        alphaAt(cropRight, cropBottom),
+      ];
+      if (corners.every((value) => value >= 255)) {
+        best = { left, top, width: cropRight - left + 1, height: cropBottom - top + 1 };
+        bestArea = area;
+      }
+    }
+  }
+  return best;
+}
+
 async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promise<void> {
   const oriented = sharp(sourcePath).rotate();
   const orientedRaw = await oriented.clone().removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const sourceWidth = orientedRaw.info.width;
   const sourceHeight = orientedRaw.info.height;
-  const analysisImages: AnalysisImage[] = [];
 
-  for (const analysisWidth of CROP_ANALYSIS_WIDTHS) {
-    // Reuse identical oriented pixels for each threshold-factor decision.
-    for (let factorIndex = 0; factorIndex < CROP_PRIMARY_FACTORS.length; factorIndex += 1) {
-      const analysis = await oriented
-        .clone()
-        .resize({ width: analysisWidth, fit: 'inside' })
-        .blur(0.8)
-        .removeAlpha()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-      analysisImages.push({
-        data: analysis.data,
-        width: analysis.info.width,
-        height: analysis.info.height,
-        channels: analysis.info.channels,
+  const orientedAnalysis = await createAnalysisImages(oriented);
+  const preDeskewDecision = decideCrop(orientedAnalysis, sourceWidth, sourceHeight);
+  let processingImage = oriented;
+  let processingWidth = sourceWidth;
+  let processingHeight = sourceHeight;
+  let fillSafeCrop = false;
+  let analysisBackground: RgbColor | undefined;
+  if (preDeskewDecision.candidate) {
+    const deskewAnalysis = await createAnalysisImage(oriented, DESKEW_ANALYSIS_WIDTH);
+    analysisBackground = estimateBorderBackground(deskewAnalysis);
+    const deskewEstimate = estimateDeskew(
+      deskewAnalysis,
+      preDeskewDecision.candidate,
+      analysisBackground
+    );
+    if (deskewEstimate) {
+      const deskewed = oriented.clone().rotate(-deskewEstimate.angleDegrees, {
+        background: { r: 255, g: 255, b: 255, alpha: 0 },
       });
+      const deskewedRaw = await deskewed.clone().removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      processingImage = deskewed;
+      processingWidth = deskewedRaw.info.width;
+      processingHeight = deskewedRaw.info.height;
+      fillSafeCrop = true;
     }
   }
 
-  const decision = decideCrop(analysisImages, sourceWidth, sourceHeight);
+  const analysisImages = processingImage === oriented
+    ? orientedAnalysis
+    : await createAnalysisImages(processingImage, analysisBackground);
+  const decision = decideCrop(analysisImages, processingWidth, processingHeight);
   let output = oriented;
+  let hasCrop = false;
   if (decision.candidate) {
-    const bounds = cropBounds(decision.candidate, sourceWidth, sourceHeight);
-    const cropped = oriented.extract(bounds);
+    let cardBounds = detectedCardBounds(decision.candidate, processingWidth, processingHeight);
+    let bounds = cropBounds(decision.candidate, processingWidth, processingHeight);
+    if (fillSafeCrop) {
+      const refinementAnalysis = await createAnalysisImage(
+        processingImage,
+        DESKEW_ANALYSIS_WIDTH,
+        analysisBackground
+      );
+      const refinementBackground = analysisBackground ?? estimateBorderBackground(refinementAnalysis);
+      cardBounds = refinePostDeskewCardBounds(
+        refinementAnalysis,
+        decision.candidate,
+        processingWidth,
+        processingHeight,
+        refinementBackground
+      );
+      bounds = cropBoundsFromCardBounds(cardBounds, processingWidth, processingHeight);
+      const safeBounds = await sourceSafeCropBounds(
+        processingImage,
+        bounds,
+        cardBounds
+      );
+      if (!safeBounds) {
+        // If rotation produced no safe crop, preserve the original oriented
+        // source rather than returning a frame containing synthetic pixels.
+        output = oriented;
+      } else {
+        bounds = safeBounds;
+        output = processingImage.extract(bounds).removeAlpha();
+        hasCrop = true;
+      }
+    } else {
+      output = processingImage.extract(bounds).removeAlpha();
+      hasCrop = true;
+    }
     // Captures are portrait-frame after EXIF orientation. Normalize only a
     // detected sideways card; never rotate a no-candidate full-frame fallback.
-    const detectedLandscape = (decision.candidate.right - decision.candidate.left) * sourceWidth >
-      (decision.candidate.bottom - decision.candidate.top) * sourceHeight;
-    output = detectedLandscape && bounds.width > bounds.height
-      ? cropped.rotate(90)
-      : cropped;
+    const detectedLandscape = (decision.candidate.right - decision.candidate.left) * processingWidth >
+      (decision.candidate.bottom - decision.candidate.top) * processingHeight;
+    if (hasCrop && detectedLandscape && bounds.width > bounds.height) output = output.rotate(90);
   }
 
-  await output.jpeg({ quality: 95, chromaSubsampling: '4:2:0' }).toFile(tempPath);
+  await output.removeAlpha().jpeg({ quality: 95, chromaSubsampling: '4:2:0' }).toFile(tempPath);
 }
 
 const DEFAULT_IMAGE_SERVICE_FILE_SYSTEM: ImageServiceFileSystem = {

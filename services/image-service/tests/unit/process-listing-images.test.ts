@@ -129,6 +129,26 @@ async function createCropFixture(directory: string, filename: string, options: C
   return sourcePath;
 }
 
+async function createRotatedCropFixture(
+  directory: string,
+  filename: string,
+  angle: number,
+  options: CropFixtureOptions = {}
+) {
+  const basePath = await createCropFixture(directory, `.${filename}.base.jpg`, {
+    ...options,
+    orientation: 1,
+  });
+  const sourcePath = path.join(directory, filename);
+  const rotationBackground = options.background ?? { r: 245, g: 245, b: 245 };
+  await sharp(basePath)
+    .rotate(angle, { background: rotationBackground })
+    .jpeg()
+    .toFile(sourcePath);
+  rmSync(basePath, { force: true });
+  return sourcePath;
+}
+
 function createFileSystem(
   overrides: Partial<ImageServiceFileSystem> = {}
 ): ImageServiceFileSystem {
@@ -162,6 +182,46 @@ function findDarkBounds(image: { data: Buffer; info: { width: number; height: nu
     }
   }
   return { left, top, right, bottom };
+}
+
+function findDarkHorizontalEdgeSlope(
+  image: { data: Buffer; info: { width: number; height: number; channels: number } },
+  edge: 'top' | 'bottom'
+): number {
+  const bounds = findDarkBounds(image);
+  const isDark = (x: number, y: number): boolean => {
+    const offset = (y * image.info.width + x) * image.info.channels;
+    return (image.data[offset] ?? 255) < 100 &&
+      (image.data[offset + 1] ?? 255) < 110 &&
+      (image.data[offset + 2] ?? 255) < 120;
+  };
+  const points: Array<[number, number]> = [];
+  const xStart = bounds.left + Math.round((bounds.right - bounds.left) * 0.1);
+  const xEnd = bounds.right - Math.round((bounds.right - bounds.left) * 0.1);
+  for (let x = xStart; x <= xEnd; x += 2) {
+    let position = -1;
+    if (edge === 'top') {
+      for (let y = Math.max(0, bounds.top - 10); y <= Math.min(image.info.height - 1, bounds.top + 60); y += 1) {
+        if (isDark(x, y)) {
+          position = y;
+          break;
+        }
+      }
+    } else {
+      for (let y = Math.min(image.info.height - 1, bounds.bottom + 10); y >= Math.max(0, bounds.bottom - 60); y -= 1) {
+        if (isDark(x, y)) {
+          position = y;
+          break;
+        }
+      }
+    }
+    if (position >= 0) points.push([x, position]);
+  }
+  if (points.length < 20) return Number.NaN;
+  const meanX = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+  const meanY = points.reduce((sum, point) => sum + point[1], 0) / points.length;
+  const denominator = points.reduce((sum, point) => sum + (point[0] - meanX) ** 2, 0);
+  return points.reduce((sum, point) => sum + (point[0] - meanX) * (point[1] - meanY), 0) / denominator;
 }
 
 function readJpegQuantizationTables(bytes: Buffer): number[][] {
@@ -356,6 +416,65 @@ describe('processListingImages', () => {
     expect(result.images.map((image) => image.filename)).toEqual(['crop-accepted.jpg', 'crop-accepted-2.jpg']);
     expect(result.images[0].processingMode).toBe('enhance_crop');
     expect(result.images[0].filename).toBe('crop-accepted.jpg');
+  });
+
+  it('deskews a bounded small-angle frame before recropping and excludes rotation fill', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createRotatedCropFixture(sourceDirectory, 'deskewed-card.jpg', 3, {
+      width: 800,
+      height: 1000,
+      itemWidth: 360,
+      itemHeight: 620,
+      itemLeft: 220,
+      itemTop: 190,
+      background: { r: 190, g: 200, b: 210 },
+      item: { r: 20, g: 30, b: 40 },
+    });
+
+    await processListingImages({
+      listingId: 'Single-000002N',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputPath = path.join(outputDirectory, 'deskewed-card.jpg');
+    const outputPixels = await sharp(outputPath).raw().toBuffer({ resolveWithObject: true });
+    const outputMetadata = await sharp(outputPath).metadata();
+    const sourceMetadata = await sharp(sourcePath).metadata();
+    const itemBounds = findDarkBounds(outputPixels);
+    const margins = {
+      left: itemBounds.left,
+      top: itemBounds.top,
+      right: outputPixels.info.width - 1 - itemBounds.right,
+      bottom: outputPixels.info.height - 1 - itemBounds.bottom,
+    };
+
+    expect(outputMetadata.orientation).toBeUndefined();
+    expect(outputMetadata.chromaSubsampling).toBe('4:2:0');
+    const sourceArea = (sourceMetadata.width ?? 0) * (sourceMetadata.height ?? 0);
+    const outputArea = (outputMetadata.width ?? 0) * (outputMetadata.height ?? 0);
+    expect(outputArea).toBeLessThan(sourceArea * 0.95);
+    expect(outputMetadata.width).toBeLessThan(600);
+    expect(outputMetadata.height).toBeLessThan(800);
+    // Source-safe trimming after arbitrary-angle rotation must preserve paired
+    // opposing margins rather than shaving whichever side hits fill first.
+    expect(Math.abs(margins.left - margins.right)).toBeLessThanOrEqual(4);
+    expect(Math.abs(margins.top - margins.bottom)).toBeLessThanOrEqual(4);
+    expect(Math.abs(findDarkHorizontalEdgeSlope(outputPixels, 'top'))).toBeLessThan(0.01);
+    expect(Math.abs(findDarkHorizontalEdgeSlope(outputPixels, 'bottom'))).toBeLessThan(0.01);
+    // The source background is blue-gray; white corners would indicate that
+    // arbitrary-angle rotation fill leaked through the final crop.
+    const cornerValues = [
+      [0, 0],
+      [outputPixels.info.width - 1, 0],
+      [0, outputPixels.info.height - 1],
+      [outputPixels.info.width - 1, outputPixels.info.height - 1],
+    ].map(([x, y]) => {
+      const offset = (y * outputPixels.info.width + x) * outputPixels.info.channels;
+      return [outputPixels.data[offset] ?? 0, outputPixels.data[offset + 1] ?? 0, outputPixels.data[offset + 2] ?? 0];
+    });
+    expect(cornerValues.every(([r, g, b]) => r < 225 && g < 230 && b < 235)).toBe(true);
   });
 
   it('enhance_crop allows a geometrically plausible low-contrast candidate', async () => {
