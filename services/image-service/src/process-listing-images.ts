@@ -324,7 +324,12 @@ function primaryCandidate(image: AnalysisImage, thresholdFactor: number): [numbe
     Math.hypot(value[0] - background[0], value[1] - background[1], value[2] - background[2])
   );
   const p90 = percentile(distances, 0.9);
-  const threshold = Math.max(20, 1.15 * p90 * thresholdFactor + 10);
+  const calibratedThreshold = estimateBackgroundDistanceThreshold(
+    image,
+    { r: background[0], g: background[1], b: background[2] },
+    20
+  );
+  const threshold = Math.max(20, 1.15 * p90 * thresholdFactor + 10, calibratedThreshold);
   const rowCounts = new Array<number>(image.height).fill(0);
   const columnCounts = new Array<number>(image.width).fill(0);
   for (let y = 0; y < image.height; y += 1) {
@@ -434,27 +439,23 @@ function deskewBackgroundEdgeLine(
   image: AnalysisImage,
   candidate: CropCandidate,
   edge: 'top' | 'bottom' | 'left' | 'right',
-  background: RgbColor
+  background: RgbColor,
+  backgroundDistanceThreshold: number
 ): DeskewLine | undefined {
   const horizontal = edge === 'top' || edge === 'bottom';
   const alongStart = horizontal ? candidate.left * image.width : candidate.top * image.height;
   const alongEnd = horizontal ? candidate.right * image.width : candidate.bottom * image.height;
-  const target = edge === 'top'
-    ? candidate.top * image.height
-    : edge === 'bottom'
-      ? candidate.bottom * image.height
-      : edge === 'left'
-        ? candidate.left * image.width
-        : candidate.right * image.width;
   const alongExtent = Math.max(1, alongEnd - alongStart);
   const normalExtent = horizontal ? image.height : image.width;
-  const searchRadius = Math.max(8, Math.round(normalExtent * 0.1));
   const alongPadding = Math.max(4, Math.round(alongExtent * 0.1));
   const firstAlong = Math.ceil(alongStart + alongPadding);
   const lastAlong = Math.floor(alongEnd - alongPadding);
   const alongStep = Math.max(1, Math.round(alongExtent / 180));
-  const firstPosition = clamp(Math.floor(target - searchRadius), 1, normalExtent - 2);
-  const lastPosition = clamp(Math.ceil(target + searchRadius), 1, normalExtent - 2);
+  // The rough crop candidate can follow an inner printed border or a backdrop
+  // shadow. Search from the actual image boundary so it cannot hide the true
+  // outer card edge from deskew estimation.
+  const firstPosition = 1;
+  const lastPosition = normalExtent - 2;
   const forward = edge === 'left' || edge === 'top';
   const points: Array<{ along: number; position: number; weight: number }> = [];
 
@@ -470,7 +471,7 @@ function deskewBackgroundEdgeLine(
       const x = horizontal ? clamp(Math.round(along), 1, image.width - 2) : position;
       const y = horizontal ? position : clamp(Math.round(along), 1, image.height - 2);
       const distance = backgroundColorDistance(pixelRgb(image, x, y), background);
-      if (distance >= POST_DESKEW_BACKGROUND_DISTANCE) {
+      if (distance >= backgroundDistanceThreshold) {
         if (runLength === 0) {
           runStart = position;
           runWeight = 0;
@@ -499,11 +500,18 @@ function deskewBackgroundEdgeLine(
 function estimateDeskew(
   image: AnalysisImage,
   candidate: CropCandidate,
-  background: RgbColor
+  background: RgbColor,
+  backgroundDistanceThreshold: number
 ): DeskewEstimate | undefined {
   const edges = ['top', 'bottom', 'left', 'right'] as const;
   const reliable = edges.flatMap((edge) => {
-    const line = deskewBackgroundEdgeLine(image, candidate, edge, background);
+    const line = deskewBackgroundEdgeLine(
+      image,
+      candidate,
+      edge,
+      background,
+      backgroundDistanceThreshold
+    );
     if (!line || line.residualRatio > 0.02) return [];
     const angleDegrees = edge === 'top' || edge === 'bottom'
       ? Math.atan(line.slope) * 180 / Math.PI
@@ -665,6 +673,36 @@ function estimateBorderBackground(image: AnalysisImage): RgbColor {
   return { r: Math.round(median(red)), g: Math.round(median(green)), b: Math.round(median(blue)) };
 }
 
+function estimateBackgroundDistanceThreshold(
+  image: AnalysisImage,
+  background: RgbColor,
+  minimum = POST_DESKEW_BACKGROUND_DISTANCE
+): number {
+  const cornerSize = Math.max(2, Math.round(Math.min(image.width, image.height) * 0.08));
+  const cornerStarts = [
+    [0, 0],
+    [image.width - cornerSize, 0],
+    [0, image.height - cornerSize],
+    [image.width - cornerSize, image.height - cornerSize],
+  ] as const;
+  const cornerDistances = cornerStarts.map(([startX, startY]) => {
+    const distances: number[] = [];
+    for (let y = startY; y < startY + cornerSize; y += 1) {
+      for (let x = startX; x < startX + cornerSize; x += 1) {
+        distances.push(backgroundColorDistance(pixelRgb(image, x, y), background));
+      }
+    }
+    return distances;
+  });
+
+  // Exclude the noisiest corner so a card touching one corner cannot inflate
+  // the threshold. The remaining three corners capture real backdrop texture
+  // and illumination changes that the fixed minimum alone cannot distinguish.
+  cornerDistances.sort((left, right) => percentile(left, 0.9) - percentile(right, 0.9));
+  const representativeDistances = cornerDistances.slice(0, 3).flat();
+  return Math.max(minimum, percentile(representativeDistances, 0.99) + 8);
+}
+
 interface CropBounds {
   left: number;
   top: number;
@@ -700,7 +738,8 @@ function findPostDeskewBackgroundTransition(
   image: AnalysisImage,
   candidate: CropCandidate,
   edge: 'top' | 'bottom' | 'left' | 'right',
-  background: RgbColor
+  background: RgbColor,
+  backgroundDistanceThreshold: number
 ): number | undefined {
   const verticalEdge = edge === 'left' || edge === 'right';
   const normalExtent = verticalEdge ? image.width : image.height;
@@ -724,7 +763,7 @@ function findPostDeskewBackgroundTransition(
     for (let along = firstAlong; along <= lastAlong; along += alongStep) {
       const x = verticalEdge ? position : clamp(Math.round(along), 1, image.width - 2);
       const y = verticalEdge ? clamp(Math.round(along), 1, image.height - 2) : position;
-      if (backgroundColorDistance(pixelRgb(image, x, y), background) >= POST_DESKEW_BACKGROUND_DISTANCE) {
+      if (backgroundColorDistance(pixelRgb(image, x, y), background) >= backgroundDistanceThreshold) {
         foreground += 1;
       }
       samples += 1;
@@ -757,7 +796,8 @@ function refinePostDeskewCardBounds(
   candidate: CropCandidate,
   sourceWidth: number,
   sourceHeight: number,
-  background: RgbColor
+  background: RgbColor,
+  backgroundDistanceThreshold: number
 ): CropBounds {
   const rough = detectedCardBounds(candidate, sourceWidth, sourceHeight);
   const roughRight = rough.left + rough.width - 1;
@@ -771,10 +811,34 @@ function refinePostDeskewCardBounds(
   // This deliberately does not choose the strongest nearby gradient: shadows
   // and internal card artwork can be stronger than the true outer card edge.
   const transitions = {
-    left: findPostDeskewBackgroundTransition(image, candidate, 'left', background),
-    right: findPostDeskewBackgroundTransition(image, candidate, 'right', background),
-    top: findPostDeskewBackgroundTransition(image, candidate, 'top', background),
-    bottom: findPostDeskewBackgroundTransition(image, candidate, 'bottom', background),
+    left: findPostDeskewBackgroundTransition(
+      image,
+      candidate,
+      'left',
+      background,
+      backgroundDistanceThreshold
+    ),
+    right: findPostDeskewBackgroundTransition(
+      image,
+      candidate,
+      'right',
+      background,
+      backgroundDistanceThreshold
+    ),
+    top: findPostDeskewBackgroundTransition(
+      image,
+      candidate,
+      'top',
+      background,
+      backgroundDistanceThreshold
+    ),
+    bottom: findPostDeskewBackgroundTransition(
+      image,
+      candidate,
+      'bottom',
+      background,
+      backgroundDistanceThreshold
+    ),
   };
 
   const candidateLeft = transitions.left === undefined
@@ -880,13 +944,19 @@ async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promis
   let processingHeight = sourceHeight;
   let fillSafeCrop = false;
   let analysisBackground: RgbColor | undefined;
+  let analysisBackgroundDistanceThreshold = POST_DESKEW_BACKGROUND_DISTANCE;
   if (preDeskewDecision.candidate) {
     const deskewAnalysis = await createAnalysisImage(oriented, DESKEW_ANALYSIS_WIDTH);
     analysisBackground = estimateBorderBackground(deskewAnalysis);
+    analysisBackgroundDistanceThreshold = estimateBackgroundDistanceThreshold(
+      deskewAnalysis,
+      analysisBackground
+    );
     const deskewEstimate = estimateDeskew(
       deskewAnalysis,
       preDeskewDecision.candidate,
-      analysisBackground
+      analysisBackground,
+      analysisBackgroundDistanceThreshold
     );
     if (deskewEstimate) {
       const deskewed = oriented.clone().rotate(-deskewEstimate.angleDegrees, {
@@ -916,12 +986,17 @@ async function enhanceAndCropImage(sourcePath: string, tempPath: string): Promis
         analysisBackground
       );
       const refinementBackground = analysisBackground ?? estimateBorderBackground(refinementAnalysis);
+      const refinementBackgroundDistanceThreshold = Math.max(
+        analysisBackgroundDistanceThreshold,
+        estimateBackgroundDistanceThreshold(refinementAnalysis, refinementBackground)
+      );
       cardBounds = refinePostDeskewCardBounds(
         refinementAnalysis,
         decision.candidate,
         processingWidth,
         processingHeight,
-        refinementBackground
+        refinementBackground,
+        refinementBackgroundDistanceThreshold
       );
       bounds = cropBoundsFromCardBounds(cardBounds, processingWidth, processingHeight);
       const safeBounds = await sourceSafeCropBounds(

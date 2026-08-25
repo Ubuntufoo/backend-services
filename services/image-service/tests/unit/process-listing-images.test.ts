@@ -67,6 +67,8 @@ interface CropFixtureOptions {
   backgroundImperfections?: 'none' | 'patches';
   nestedBoundaries?: boolean;
   marginMarkers?: boolean;
+  texturedBackdrop?: boolean;
+  itemBorderWidth?: number;
 }
 
 async function createCropFixture(directory: string, filename: string, options: CropFixtureOptions = {}) {
@@ -78,12 +80,42 @@ async function createCropFixture(directory: string, filename: string, options: C
   const itemHeight = options.itemHeight ?? 220;
   const itemLeft = options.itemLeft ?? Math.round((width - itemWidth) / 2);
   const itemTop = options.itemTop ?? Math.round((height - itemHeight) / 2);
-  const itemBuffer = await sharp({
-    create: { width: itemWidth, height: itemHeight, channels: 3, background: item },
-  })
-    .png()
-    .toBuffer();
-  const composites: sharp.OverlayOptions[] = [{ input: itemBuffer, left: itemLeft, top: itemTop }];
+  const itemBorderWidth = options.itemBorderWidth ?? 0;
+  let itemImage = sharp({
+    create: {
+      width: itemWidth,
+      height: itemHeight,
+      channels: 3,
+      background: itemBorderWidth > 0 ? { r: 238, g: 238, b: 235 } : item,
+    },
+  });
+  if (itemBorderWidth > 0) {
+    const innerWidth = itemWidth - itemBorderWidth * 2;
+    const innerHeight = itemHeight - itemBorderWidth * 2;
+    const inner = await sharp({
+      create: { width: innerWidth, height: innerHeight, channels: 3, background: item },
+    }).png().toBuffer();
+    itemImage = itemImage.composite([{ input: inner, left: itemBorderWidth, top: itemBorderWidth }]);
+  }
+  const itemBuffer = await itemImage.png().toBuffer();
+  const composites: sharp.OverlayOptions[] = [];
+  if (options.texturedBackdrop) {
+    const texture = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const variation = (Math.floor(x / 18) + Math.floor(y / 14)) % 2 === 0 ? -18 : 34;
+        const offset = (y * width + x) * 3;
+        texture[offset] = Math.max(0, Math.min(255, background.r + variation));
+        texture[offset + 1] = Math.max(0, Math.min(255, background.g + variation));
+        texture[offset + 2] = Math.max(0, Math.min(255, background.b + variation));
+      }
+    }
+    const textureBuffer = await sharp(texture, {
+      raw: { width, height, channels: 3 },
+    }).png().toBuffer();
+    composites.push({ input: textureBuffer, left: 0, top: 0 });
+  }
+  composites.push({ input: itemBuffer, left: itemLeft, top: itemTop });
   if (options.backgroundImperfections === 'patches') {
     const patch = await sharp({
       create: { width: Math.max(24, Math.round(width * 0.2)), height, channels: 3, background: { r: 0, g: 0, b: 0 } },
@@ -475,6 +507,49 @@ describe('processListingImages', () => {
       return [outputPixels.data[offset] ?? 0, outputPixels.data[offset + 1] ?? 0, outputPixels.data[offset + 2] ?? 0];
     });
     expect(cornerValues.every(([r, g, b]) => r < 225 && g < 230 && b < 235)).toBe(true);
+  });
+
+  it('deskews and centers a white-border card on a high-variance textured backdrop', async () => {
+    const { sourceDirectory, outputDirectory } = await createTempLayout();
+    const sourcePath = await createRotatedCropFixture(sourceDirectory, 'textured-deskewed-card.jpg', -2.4, {
+      width: 800,
+      height: 1000,
+      itemWidth: 650,
+      itemHeight: 850,
+      itemLeft: 75,
+      itemTop: 75,
+      background: { r: 82, g: 78, b: 88 },
+      item: { r: 20, g: 30, b: 40 },
+      itemBorderWidth: 28,
+      texturedBackdrop: true,
+    });
+
+    await processListingImages({
+      listingId: 'Single-000002O',
+      inputImagePaths: [sourcePath],
+      outputDirectory,
+      processingMode: 'enhance_crop',
+    });
+
+    const outputPath = path.join(outputDirectory, 'textured-deskewed-card.jpg');
+    const outputPixels = await sharp(outputPath).raw().toBuffer({ resolveWithObject: true });
+    const sourceMetadata = await sharp(sourcePath).metadata();
+    const outputMetadata = await sharp(outputPath).metadata();
+    const itemBounds = findDarkBounds(outputPixels);
+    const margins = {
+      left: itemBounds.left,
+      top: itemBounds.top,
+      right: outputPixels.info.width - 1 - itemBounds.right,
+      bottom: outputPixels.info.height - 1 - itemBounds.bottom,
+    };
+
+    expect((outputMetadata.width ?? 0) * (outputMetadata.height ?? 0)).toBeLessThan(
+      (sourceMetadata.width ?? 0) * (sourceMetadata.height ?? 0) * 0.95
+    );
+    expect(Math.abs(findDarkHorizontalEdgeSlope(outputPixels, 'top'))).toBeLessThan(0.01);
+    expect(Math.abs(findDarkHorizontalEdgeSlope(outputPixels, 'bottom'))).toBeLessThan(0.01);
+    expect(Math.abs(margins.left - margins.right)).toBeLessThanOrEqual(6);
+    expect(Math.abs(margins.top - margins.bottom)).toBeLessThanOrEqual(6);
   });
 
   it('enhance_crop allows a geometrically plausible low-contrast candidate', async () => {
