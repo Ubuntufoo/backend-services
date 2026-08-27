@@ -40,14 +40,18 @@ the pilot runbook and must not create, revise, end, or relist these resources.
 
 ### Group, child, and content ownership
 
-- The group owns buyer-facing title and description, shared aspects, selector definition,
-  category, marketplace, merchant location, business policies, and one shared condition contract.
+- The group owns buyer-facing title and description, a derived common-aspect projection, selector
+  definition, category, marketplace, merchant location, business policies, and one shared
+  condition contract.
 - Child inventory-item product payloads omit title and description. Child offers omit
   `listingDescription`; group content remains buyer-facing.
 - Each child owns one immutable SKU, one unique selector value, one inventory item, one offer,
   one price, one quantity, and one ordered image pair.
 - Every child repeats the same compatible condition tier and descriptors. A card requiring a
   different condition belongs in another group.
+- Child-owned operational fields (price, quantity, images, and remote histories) may differ. Each
+  child also retains application metadata for its card-specific facts; those facts may differ and
+  are not automatically emitted as eBay child aspects.
 
 ### Selector order and remote reconciliation
 
@@ -99,7 +103,7 @@ YouPickGroup
   groupId
   orderedChildren[]
   selectorName
-  content { title, description, sharedAspects }
+  content { title, description, derivedCommonEbayAspects }
   invariants { categoryId, marketplaceId, format, merchantLocationKey,
                fulfillmentPolicyId, paymentPolicyId, returnPolicyId, condition }
   remote { inventoryItemGroupKey, publicationHistory[], currentEvidence }
@@ -109,11 +113,16 @@ YouPickChild
   position
   sku
   selectorValue
+  childMetadata { player, team, yearOrSeason, set, cardNumber, parallelOrInsert, ... }
   price
   quantity
   images { front, back }
   remote { mediaByRole, offerHistory[], currentEvidence }
 ```
+
+The pseudocode names are ownership boundaries for later DTO/persistence work, not a YP2.1
+schema. `childMetadata` is application-owned source data. `derivedCommonEbayAspects` is rebuilt
+from the complete child set and is the only taxonomy-aspect projection sent in the group payload.
 
 - `groupId` and `childId` are application identities: canonical UUIDs generated once, globally
   unique, immutable, and never reused. They remain the primary identities after withdrawal or
@@ -169,10 +178,72 @@ Every aggregate mutation and complete group payload must validate all of these t
 - one shared category, marketplace, fixed-price format, merchant location, fulfillment/payment/
   return policies, and condition tier/descriptors for the whole group; fields repeated on child
   items/offers must equal the group invariant exactly;
-- group-owned title, description, and shared aspects appear only in their documented group
-  placement; child product/offer content cannot override them;
+- group-owned title, description, and derived common eBay aspects appear only in their documented
+  group placement; child product/offer content cannot override them;
+- every child retains application `childMetadata` without requiring equality to another child;
+  metadata is never erased or rewritten merely to make a group aspect appear common;
+- `derivedCommonEbayAspects` contains only normalized values truthfully common to every child. An
+  optional/recommended heterogeneous aspect is omitted; a required aspect with no truthful common
+  value/set blocks publication or requires regrouping. MULTI values use intersection, never union;
 - each child owns its price, quantity, exact front/back image roles, Media records, inventory item,
   and offer history. A child field may vary without weakening the shared invariants.
+
+## Category 261328 item-specific ownership (YP1.4)
+
+The current category contract is recorded in the sanitized
+[`item-specific-ownership.md`](item-specific-ownership.md) evidence note. It is based on
+read-only Sandbox Taxonomy/Metadata calls observed 2026-08-27 for `EBAY_US`, category tree `0`,
+category `261328`; it is not production metadata. `ListingStructurePolicy` reported
+`variationsSupported=true`. All requested named sports-card fields reported
+`aspectEnabledForVariations=false`; across all 30 returned aspects, taxonomy `Customized` was
+the sole `true` row.
+
+The Inventory API ownership rule is deliberately narrower than taxonomy applicability and has
+three layers:
+
+1. **Application child metadata:** each child persists Gemini-derived/reviewed card-specific facts
+   such as Player/Athlete, Team, Year/Season, Set, Card Number, Parallel/Insert, League,
+   Manufacturer, autograph facts, and other evidence. These values may differ freely and remain
+   available to persistence, UI, review, and selector construction even when omitted from eBay.
+2. **eBay common group aspects:** `InventoryItemGroup.aspects` is a derived projection containing
+   only normalized values truthfully common to every child. Optional/recommended heterogeneous or
+   unknown values are omitted; no value is unioned, falsified, or removed from child metadata to
+   fabricate commonality. A required aspect with no truthful common value/set blocks publication or
+   requires regrouping. `ITEM` versus `PRODUCT` from `AspectApplicableToEnum` is classification
+   metadata, not permission to vary child aspects.
+3. **Single eBay child variation:** only the canonical application-owned custom `Card` selector
+   varies per child. Its exact singleton appears in each child `product.aspects`, in group
+   `variesBy.specifications` with persisted selector order, and in
+   `variesBy.aspectsImageVariesBy`. Existing Sandbox proof in [`sandbox-pilot.md`](sandbox-pilot.md)
+   establishes this buyer-visible selector/image behavior; it does not generalize to arbitrary
+   custom aspects.
+
+Taxonomy `Customized` is not the card selector and is never a second pivot absent a separately
+reviewed truthful buyer need. No extra child product aspects may act as hidden metadata channels,
+and no Player, Team, Card Number, Year, Set, Parallel/Variety, or other buyer-facing dimension is
+invented. A merchandising theme may define group membership when required/common projection and
+the single-`Card` selector contracts pass. Thus Tracy McGrady mixed cards, 2003 Topps Basketball
+across different players/card numbers, and 1995 Fleer Ultra Gold Medallion inserts across
+different players/card numbers are valid heterogeneous groups.
+
+For SINGLE aspects, project one value only when every child has that value. For MULTI aspects,
+project the intersection of values present on every child, never a union. A difference or
+present-vs-absent optional/recommended value does not split a group; it is omitted from the eBay
+projection while retained in child metadata. Required absence or lack of a common truthful value
+is fail-closed (block or regroup).
+
+Evidence levels are explicit: eBay Inventory/Taxonomy/Metadata documentation establishes field
+placement and variation constraints; the 2026-08-27 read-only Sandbox metadata establishes the
+category values and flags; the existing Sandbox pilot establishes only the custom `Card` selector
+plus `aspectsImageVariesBy` buyer proof; and the common-projection/heterogeneous-group rules are
+this application's derived contract.
+
+Official contract references: [Inventory item groups](https://developer.ebay.com/api-docs/sell/static/inventory/inventory-item-groups.html),
+[Listing Creation](https://developer.ebay.com/develop/guides/sell/listing-creation),
+[Inventory API error details](https://developer.ebay.com/api-docs/sell/static/inventory/inventory-error-details.html),
+[AspectConstraint](https://developer.ebay.com/api-docs/sell/taxonomy/types/txn%3AAspectConstraint),
+[AspectApplicableToEnum](https://developer.ebay.com/api-docs/sell/taxonomy/types/txn%3AAspectApplicableToEnum),
+and [ListingStructurePolicy](https://developer.ebay.com/api-docs/sell/metadata/types/sel%3AListingStructurePolicy).
 
 ## Remote identity and evidence model
 
@@ -374,8 +445,9 @@ platform maximum.
 | Application group ID | Group | Canonical UUID; aggregate identity, never reused |
 | Group key | Group remote key | `YP-G-<GROUP_UUID_HEX>` Inventory URI identity; retain historically after cleanup |
 | Title, description | Group | Group fields; omitted from child product and offer description payloads |
-| Shared aspects | Group | `InventoryItemGroup.aspects` |
-| Selector name and ordered values | Group/application | `variesBy.specifications`; canonical display and mapping order |
+| Child-specific card metadata | Child/application | Gemini-derived or reviewed facts retained per child; may differ and may be omitted from eBay |
+| Common eBay aspects | Derived group projection | `InventoryItemGroup.aspects`; only normalized values truthful/common to every child; optional/recommended heterogeneous values omitted; required no-common value blocks/regroups |
+| Selector name and ordered values | Group/application | Canonical custom `Card` only; `variesBy.specifications`; display/mapping order |
 | Complete child membership | Group | `variantSKUs`; exact set reconciliation, not remote response order |
 | Image-pivot selector | Group | `variesBy.aspectsImageVariesBy` |
 | Group images | None for MVP | Omit group-level `imageUrls` |
@@ -384,7 +456,7 @@ platform maximum.
 | Application child ID | Child | Canonical UUID; child and selector identity, independent of position |
 | Position | Group ordered collection | Unique contiguous application order; never reconstructed remotely |
 | Child SKU | Child remote key | `YP-C-<CHILD_UUID_HEX>` inventory identity and offer `sku`; immutable |
-| Selector value | Child | Exact singleton `product.aspects[selectorName]`; unique and immutable within group |
+| Selector value | Child | Exact singleton custom-`Card` `product.aspects[selectorName]`; unique and immutable within group |
 | Front/back images | Child | Seller EPS URLs in exact `product.imageUrls: [front, back]` order |
 | Media identity and expiry | Prepublication support resource | Opaque eBay identity; separate from Inventory cleanup |
 | Quantity | Child | Inventory availability and offer allocation |

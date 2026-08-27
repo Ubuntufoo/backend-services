@@ -7,7 +7,9 @@ This roadmap is intentionally separate from `ROADMAP.md`. You Pick is a dedicate
 - One buyer-facing eBay listing is represented by one `InventoryItemGroup` plus the complete set of child inventory items and offers. Application-owned selector order is authoritative; Sandbox reads proved that eBay may return group `variantSKUs` in a different order, so remote reconciliation requires exact membership rather than response-order equality.
 - One aggregate is identified by an immutable application UUID and owns ordered children, each with its own immutable application UUID. Remote group keys/SKUs are deterministic namespaced projections of those IDs and remain distinct from offer, listing, and opaque Media identities.
 - Each selectable card owns an immutable child SKU, one inventory item, one offer, one immutable canonical selector value, one price, one quantity, and one ordered front/back image pair.
-- The group owns title, description, category, marketplace, merchant location, business policies, shared aspects, selector definition, and one shared condition tier/descriptors.
+- The group owns title, description, category, marketplace, merchant location, business policies,
+  the derived common eBay-aspect projection, selector definition, and one shared condition
+  tier/descriptors. Each child also retains application-owned card metadata.
 - Every child in a group must satisfy the same selected condition contract. A card needing another condition belongs in another group.
 - The selector aspect/value is repeated consistently between group `variesBy` and child `product.aspects`. The Sandbox-proven MVP image arrangement uses seller-owned EPS URLs on each child `product.imageUrls` as ordered `[front, back]`, keeps `aspectsImageVariesBy` on the selector, and omits group-level `imageUrls`; group pivots produced unbound duplicate buyer images.
 - External source images must be ingested through the current eBay Media API before publication. Media resource IDs are opaque eBay identifiers and must not be constrained by a locally invented character alphabet; trust comes from exact HTTPS eBay host/path and URI safety checks.
@@ -19,6 +21,15 @@ This roadmap is intentionally separate from `ROADMAP.md`. You Pick is a dedicate
 - Manifest publication/listing/offer identities are durable historical ownership facts after cleanup; current remote absence is represented separately by cleanup state, terminal absence evidence, and lifecycle reconciliation.
 - The observed reference listing exposed 87 selector values, but this does not establish a universal API or operational limit. The initial application-service admission cap is configurable to 2 or 3 children (default 2) until recorded scale evidence justifies expansion.
 - The frontend requires a separate You Pick workspace. It must not reuse the singular Single/Lot listing state machine or capture selector.
+- The frontend must expose You Pick as a clear alternate listing mode/workspace so the user deliberately enters a distinct workflow rather than treating it as a variation of the standard Single/Lot editor.
+- You Pick pricing is fully manual. Each child card is assigned exactly one of four fixed price baskets: `$0.99`, `$1.49`, `$1.99`, or `$2.49`. The workflow must optimize for fast repeated intake through one-click/low-friction tier selection.
+- You Pick must not call SoldComps or the eBay Browse API for pricing or market discovery. Gemini is the only AI/model provider used by the You Pick generation pathway; pricing remains operator-selected and deterministic.
+- Category `261328` item-specific ownership follows the corrected YP1.4 contract: child-specific
+  Gemini/reviewed metadata may differ; `InventoryItemGroup.aspects` contains only a derived,
+  truthful value/set common to every child; and only the proven custom `Card` selector varies per
+  child. Optional/recommended heterogeneous aspects are omitted from eBay, required no-common
+  aspects block or require regrouping, and arbitrary extra child aspects remain forbidden as
+  hidden metadata or additional pivots.
 - No production write is authorized by implementation, tests, or Sandbox success alone.
 - No You Pick database migration, schema change, repository, or database write has occurred. Current pilot state is stored only in ignored `.local/you-pick-sandbox/**` manifests.
 - The You Pick worktree and canonical `backend-services` use the same hosted Supabase database; Git/worktree isolation does not isolate database state.
@@ -68,9 +79,9 @@ A Luna task must not invent a new architecture, widen the product scope, change 
 | YP1.1 | Complete         | Luna            | Convert the Sandbox result into explicit architecture decisions        | Durable architecture docs record the Sandbox-proven child-only EPS image contract, authoritative selector order vs unordered remote group membership, opaque Media identities/lifecycle, quantity-zero buyer behavior, cleanup-from-zero behavior, historical-vs-current remote state semantics, shared condition/content ownership, and the limits still requiring later scale/production proof—without copying raw `.local` evidence. |
 | YP1.2 | Complete         | Sol             | Finalize the group aggregate, identities, field ownership, and MVP cap | Stable group/variant IDs, SKU rules, selector immutability/order ownership, shared invariants, opaque remote Media/Inventory identities, exact-membership reconciliation rules, and a configurable initial operational cap are defined. |
 | YP1.3 | Complete         | Sol             | Finalize lifecycle, error, recovery, and deletion contracts            | Aggregate and child states, action preconditions, sold protections, fail-closed recovery classes, operation checkpoints, withdrawal/abandonment, cleanup-from-zero, historical identity retention, Media separation, and exact final absence are defined. |
+| YP1.4 | Complete         | Sol             | Resolve sports-card item-specific ownership for You Pick               | Current category `261328` Taxonomy/Metadata evidence and the sanitized ownership note record all 30 required/recommended/optional aspects and `aspectEnabledForVariations` behavior. The corrected three-layer contract preserves differing child metadata, derives only truthful common group aspects (omitting heterogeneous optional/recommended values and failing closed for required no-common values), permits only the proven custom `Card` selector to vary per child, and forbids hidden extra pivots. |
 
-**Phase 1 complete.** Aggregate identity, ownership, lifecycle, recovery, and terminal-state
-contracts are fixed for persistence and orchestration design without implementing either layer.
+**Phase 1 complete.** YP1.1–YP1.4 fix aggregate identity, lifecycle, recovery, and the category-261328 item-specific ownership contract needed for persistence design.
 
 ## Shared database boundary — practical commitment point
 
@@ -92,7 +103,7 @@ After YP2.4, database changes remain separately reviewed and authorized. A featu
 
 | ID    | Status                                            | Suggested model       | Atomic task                                                                            | Done when                                                                                                                                                                                                                  |
 | ----- | ------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YP2.1 | Ready                                             | Sol                   | Finalize the additive persistence design without writing the database                  | Exact `you_pick_*` tables, keys, constraints, ownership, ordering, image references, RLS intent, generated-type impact, and Single/Lot compatibility are documented. No migration is applied.                              |
+| YP2.1 | Ready                                             | Sol                   | Finalize the additive persistence design without writing the database                  | Exact `you_pick_*` tables, keys, constraints, ownership, ordering, image references, separate child-specific metadata plus the derived common eBay group-aspect projection, manual price-tier representation, RLS intent, generated-type impact, and Single/Lot compatibility are documented. No migration is applied. |
 | YP2.2 | Blocked by YP2.1                                  | Luna + Sol review     | Author the initial group/variant migration and focused database tests                  | Migration SQL, rollback or compensating SQL, schema tests, and empty-database recreation are complete in the repo, but no hosted database command is run.                                                                  |
 | YP2.3 | Blocked by YP2.2                                  | Sol                   | Review the initial migration against the canonical backend and shared Supabase project | Exact project identity, current migration history, additive-only behavior, RLS/triggers/functions, generated types, canonical compatibility, and recovery procedure are approved. No database write occurs.                |
 | YP2.4 | Blocked by YP2.3; explicit authorization required | Operator + Sol review | Apply the initial additive migration through the canonical migration workflow          | **First shared database write / practical commitment point.** The migration is applied exactly once, recorded in canonical migration history, and post-apply checks prove existing Single/Lot behavior remains compatible. |
@@ -105,17 +116,17 @@ After YP2.4, database changes remain separately reviewed and authorized. A featu
 
 | ID    | Status           | Suggested model | Atomic task                                                      | Done when                                                                                                                                                               |
 | ----- | ---------------- | --------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YP3.1 | Blocked by YP2.7 | Luna            | Define the You Pick intake request/manifest schema               | The contract requires group metadata, ordered children, stable selector values, exactly front/back image roles, and no adjacency-based inference.                       |
-| YP3.2 | Blocked by YP3.1 | Luna            | Implement intake validation and image-storage ownership          | Duplicate identities, ordering errors, missing image roles, mixed condition inputs, and unsafe paths fail before persistence; storage paths remain group/variant owned. |
-| YP3.3 | Blocked by YP3.2 | Luna            | Persist an intake aggregate through a dedicated service/API seam | A valid intake creates the group, ordered variants, and image references atomically without invoking Single/Lot watcher grouping.                                       |
+| YP3.1 | Blocked by YP2.7 | Luna            | Define the You Pick intake request/manifest schema               | The contract requires group metadata, ordered children, stable selector values, exactly front/back image roles, one explicit manual price tier per child, and no adjacency-based inference.                       |
+| YP3.2 | Blocked by YP3.1 | Luna            | Implement intake validation and image-storage ownership          | Duplicate identities, ordering errors, missing image roles, mixed condition inputs, unsafe paths, and any price outside the four allowed `$0.99`/`$1.49`/`$1.99`/`$2.49` baskets fail before persistence; storage paths remain group/variant owned. |
+| YP3.3 | Blocked by YP3.2 | Luna            | Persist an intake aggregate through a dedicated service/API seam | A valid intake creates the group, ordered variants, image references, and explicit manual child price tiers atomically without invoking Single/Lot watcher grouping.                                       |
 
-## Phase 4 — AI generation and per-card pricing
+## Phase 4 — Gemini generation and manual per-card pricing
 
 | ID    | Status           | Suggested model | Atomic task                                                     | Done when                                                                                                                                                              |
 | ----- | ---------------- | --------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YP4.1 | Blocked by YP3.3 | Luna            | Add per-child identity and review-draft generation              | Each child receives deterministic identity fields and review notes while preserving source-image evidence and avoiding unsupported year/card guesses.                  |
-| YP4.2 | Blocked by YP4.1 | Sol             | Add shared group-content generation and condition compatibility | Group title/description/shared aspects are generated once; every child must pass the selected shared condition tier before the group can advance.                      |
-| YP4.3 | Blocked by YP4.1 | Luna            | Add per-child SoldComps pricing and controlled repricing        | Pricing runs independently by child SKU, stores evidence/modifiers, supports targeted retry, and does not overwrite reviewed manual values without an explicit action. |
+| YP4.1 | Blocked by YP3.3 | Luna            | Add Gemini per-child identity and review-draft generation       | Each child receives deterministic identity fields and review notes from the You Pick Gemini pathway while preserving source-image evidence and avoiding unsupported year/card guesses. No SoldComps or Browse API call is made. |
+| YP4.2 | Blocked by YP4.1 | Sol             | Add Gemini shared group-content generation and condition compatibility | Group title/description/shared aspects are generated once through Gemini; every child must pass the selected shared condition tier before the group can advance. No market-pricing provider is invoked. |
+| YP4.3 | Blocked by YP3.3 | Luna            | Implement manual four-tier per-child pricing                    | Every child has an explicit operator-selected price of exactly `$0.99`, `$1.49`, `$1.99`, or `$2.49`; selection is editable through the allowed lifecycle, maps directly to child offer pricing, and never invokes SoldComps, Browse API pricing, or automatic repricing. |
 
 ## Phase 5 — Inventory API publishing and recovery
 
@@ -130,16 +141,16 @@ After YP2.4, database changes remain separately reviewed and authorized. A featu
 
 | ID    | Status                             | Suggested model   | Atomic task                                                             | Done when                                                                                                                                                   |
 | ----- | ---------------------------------- | ----------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YP6.1 | Blocked by YP2.7, YP3.3, and YP4.3 | Luna              | Expose dedicated group/variant read, create, and edit contracts         | Typed DTOs and routes expose aggregate state, ordered children, validation, pricing evidence, and operation summaries without modifying `/listings` unions. |
+| YP6.1 | Blocked by YP2.7, YP3.3, and YP4.3 | Luna              | Expose dedicated group/variant read, create, and edit contracts         | Typed DTOs and routes expose aggregate state, ordered children, validation, each child's explicit manual price tier, and operation summaries without modifying `/listings` unions or exposing SoldComps/Browse pricing seams. |
 | YP6.2 | Blocked by YP5.4 and YP6.1         | Luna + Sol review | Expose publish, retry, quantity, withdraw, abandon, and cleanup actions | Action routes enforce lifecycle permissions, return stable error summaries, emit dedicated realtime events, and have focused contract tests.                |
 
 ## Phase 7 — Separate frontend workspace
 
 | ID    | Status                                        | Suggested model   | Atomic task                                                           | Done when                                                                                                                                                 |
 | ----- | --------------------------------------------- | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YP7.1 | Planned; may begin after YP6.1 contract draft | Luna              | Inspect the frontend worktree and add the route/navigation/list shell | `ebay-ui-app-you-pick` has a separate You Pick entry point, group list, API seam, realtime seam, and test harness without reusing singular listing state. |
-| YP7.2 | Blocked by YP7.1 and YP6.1                    | Luna              | Build the group and ordered-variant editor                            | Users can edit group fields, add/remove/reorder unsold children, manage selector values, view front/back images, and see shared-condition compatibility.  |
-| YP7.3 | Blocked by YP6.2 and YP7.2                    | Luna + Sol review | Add pricing, validation, publish, retry, and recovery UX              | The workspace exposes per-child pricing, group blockers, operation progress, actionable failures, withdrawal/cleanup controls, and focused UI tests.      |
+| YP7.1 | Planned; may begin after YP6.1 contract draft | Luna              | Inspect the frontend worktree and add the explicit You Pick mode shell | `ebay-ui-app-you-pick` presents a clear alternate You Pick mode/workspace, group list, API seam, realtime seam, and test harness without reusing singular Single/Lot listing state or making You Pick look like a standard-listing subtype. |
+| YP7.2 | Blocked by YP7.1 and YP6.1                    | Luna              | Build the group and ordered-variant rapid-entry editor                  | Users can edit group fields, add/remove/reorder unsold children, manage selector values, view front/back images, see shared-condition compatibility, and assign each child with a low-friction one-click choice among `$0.99`, `$1.49`, `$1.99`, and `$2.49` for fast repeated card intake. |
+| YP7.3 | Blocked by YP6.2 and YP7.2                    | Luna + Sol review | Add validation, publish, retry, and recovery UX                         | The workspace exposes each child's manual tier, group blockers, operation progress, actionable failures, withdrawal/cleanup controls, and focused UI tests; it contains no SoldComps/Browse pricing workflow. |
 
 ## Phase 8 — Orders and sold-state reconciliation
 
@@ -159,6 +170,15 @@ After YP2.4, database changes remain separately reviewed and authorized. A featu
 ## Permanent constraints
 
 - One shared eBay condition contract per group; no mixed-condition publication.
+- You Pick is a deliberately separate application mode/workspace from standard Single/Lot listing creation.
+- Child pricing is fully manual and restricted to the four fixed baskets `$0.99`, `$1.49`, `$1.99`, and `$2.49`; no SoldComps, eBay Browse pricing, market-derived repricing, or automatic pricing call is part of the You Pick pathway.
+- Gemini is the only AI/model provider in the You Pick generation pathway. Gemini may generate identity/review/group content, but it does not choose or alter the manual child price tier.
+- Shared-vs-child item-specific ownership must follow the corrected YP1.4 category `261328`
+  contract: persist child-specific Gemini/reviewed metadata separately; derive
+  `InventoryItemGroup.aspects` only from truthful values common to every child; omit heterogeneous
+  optional/recommended values; block or regroup when required aspects lack a common value/set;
+  and permit only the proven custom `Card` selector as a child eBay variation. No implementation
+  may place arbitrary extra child aspects into Inventory payloads or invent buyer-facing pivots.
 - One immutable application UUID, `YP-C-<CHILD_UUID_HEX>` SKU, and canonical selector identity/value per child; selector labels do not encode stock, price, position, or UI-only suffixes.
 - Group identity is an immutable application UUID; `YP-G-<GROUP_UUID_HEX>` is its distinct remote Inventory key. Offer IDs, listing IDs, and opaque Media IDs/URLs remain separately owned historical identities.
 - Complete group snapshots only; no omission-based group patching.
@@ -180,4 +200,4 @@ After YP2.4, database changes remain separately reviewed and authorized. A featu
 
 ## Current next action
 
-YP1.3 is complete and Phase 1 is complete. [`docs/you-pick/architecture.md`](docs/you-pick/architecture.md) now fixes aggregate-vs-child lifecycle ownership, action preconditions, sold-state protections, fail-closed failure/replay classes, operation checkpoint semantics, withdrawal/abandonment/cleanup boundaries, cleanup from zero, and exact terminal absence while preserving historical identities and separate Media lifecycle. **Current next action: YP2.1 (Ready)** — design the additive persistence contract without writing the database. YP2.2–YP2.3 remain blocked/no-write follow-ons, and YP2.4 remains the separately authorized first shared database write.
+YP1.1–YP1.4 are complete, including aggregate-vs-child lifecycle ownership, action preconditions, sold-state protections, fail-closed recovery, operation checkpoints, withdrawal/abandonment/cleanup boundaries, cleanup from zero, exact terminal absence, and the corrected category `261328` item-specific ownership contract. Product scope remains explicit: You Pick is a separate UI mode, uses Gemini only for generation, and uses operator-selected `$0.99`/`$1.49`/`$1.99`/`$2.49` child price baskets with no SoldComps or Browse API pricing calls. **Current next action: YP2.1 (Ready)** — design the additive persistence contract to store child-specific metadata separately from the derived common eBay group-aspect projection, while retaining the single proven custom `Card` selector; do not write the database. YP2.2–YP2.3 remain no-write follow-ons, and YP2.4 remains the separately authorized first shared database write.
