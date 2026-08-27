@@ -32,6 +32,31 @@ function normalizeConditionDescriptors(conditionDescriptors: unknown) {
   ).conditions[0].conditionDescriptors;
 }
 
+// Semantic snapshots are required on normalized Inventory API responses. Keep
+// these fixtures complete so each test reaches the adapter behavior it asserts.
+const validInventoryItem = {
+  sku: 'C01',
+  availability: { shipToLocationAvailability: { quantity: 1 } },
+  condition: 'USED_VERY_GOOD',
+  conditionDescriptors: [{ name: 'Card Condition', values: ['Very Good'] }],
+  product: { aspects: { Card: ['C01'] } },
+};
+
+const validOffer = {
+  sku: 'C01',
+  marketplaceId: 'EBAY_US',
+  format: 'FIXED_PRICE',
+  categoryId: '261328',
+  merchantLocationKey: 'default-main-location',
+  availableQuantity: 1,
+  pricingSummary: { price: { currency: 'USD', value: '1.11' } },
+  listingPolicies: {
+    fulfillmentPolicyId: 'F1',
+    paymentPolicyId: 'P1',
+    returnPolicyId: 'R1',
+  },
+};
+
 describe('You Pick raw response normalization', () => {
   it('maps every guarded mutation to the intended Inventory wrapper with en-US config', async () => {
     const inventory = {
@@ -257,17 +282,18 @@ describe('You Pick raw response normalization', () => {
     expect(normalizeYouPickGroup({ variantSKUs: ['C01', 'C02'] })).toEqual({
       variantSKUs: ['C01', 'C02'],
     });
-    expect(normalizeYouPickItem({ sku: 'C01', groupIds: ['G1'] })).toEqual({
+    expect(normalizeYouPickItem({ ...validInventoryItem, groupIds: ['G1'] })).toEqual({
       sku: 'C01',
+      quantity: 1,
       groupKeys: ['G1'],
+      semanticSnapshot: validInventoryItem,
     });
     expect(
       normalizeYouPickOffers({
         offers: [
           {
+            ...validOffer,
             offerId: 'O1',
-            sku: 'C01',
-            marketplaceId: 'EBAY_US',
             status: 'PUBLISHED',
             listing: { listingId: 'L1', listingStatus: 'ACTIVE' },
           },
@@ -286,6 +312,8 @@ describe('You Pick raw response normalization', () => {
           publicationObserved: true,
           listingCurrentlyActive: true,
           withdrawRequired: true,
+          availableQuantity: 1,
+          semanticSnapshot: validOffer,
         },
       ],
     });
@@ -322,9 +350,8 @@ describe('You Pick raw response normalization', () => {
         normalizeYouPickOffers({
           offers: [
             {
+              ...validOffer,
               offerId: 'O1',
-              sku: 'C01',
-              marketplaceId: 'EBAY_US',
               status: 'PUBLISHED',
               listing: { listingId: 'L1', listingStatus },
             },
@@ -347,9 +374,8 @@ describe('You Pick raw response normalization', () => {
       normalizeYouPickOffers({
         offers: [
           {
+            ...validOffer,
             offerId: 'O1',
-            sku: 'C01',
-            marketplaceId: 'EBAY_US',
             status: 'PUBLISHED',
             listing: { listingId: 'L1', listingStatus: 'PAUSED' },
           },
@@ -360,9 +386,8 @@ describe('You Pick raw response normalization', () => {
       normalizeYouPickOffers({
         offers: [
           {
+            ...validOffer,
             offerId: 'O1',
-            sku: 'C01',
-            marketplaceId: 'EBAY_US',
             status: 'UNPUBLISHED',
             listing: { listingId: 'L1', listingStatus: 'NOT_LISTED' },
           },
@@ -371,12 +396,16 @@ describe('You Pick raw response normalization', () => {
     ).toThrow(/ambiguous publication and listing identity/);
   });
 
-  it('rejects malformed arrays, duplicate metadata IDs, and ambiguous item associations', () => {
+  it('rejects malformed arrays, duplicate metadata IDs, and conflicting item associations', () => {
     expect(() => normalizeYouPickGroup({ variantSKUs: ['C01', 'C01'] })).toThrow(/duplicate/);
     expect(() => normalizeYouPickOffers({ offers: {} })).toThrow(/must be an array/);
     expect(() =>
-      normalizeYouPickItem({ sku: 'C01', groupIds: ['G1'], inventoryItemGroupKeys: ['G1'] })
-    ).toThrow(/ambiguous/);
+      normalizeYouPickItem({
+        ...validInventoryItem,
+        groupIds: ['G1'],
+        inventoryItemGroupKeys: ['G2'],
+      })
+    ).toThrow(/aliases conflict/);
     expect(() =>
       normalizeYouPickMetadata(
         '261328',
