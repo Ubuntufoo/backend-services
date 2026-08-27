@@ -19,6 +19,10 @@ const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'pricingmodifieroptions',
   'skucategorycode',
 ]);
+const REMOVED_SPORTS_CARD_ITEM_SPECIFIC_KEYS = new Set([
+  'california prop 65 warning',
+  'customized',
+]);
 const requiredItemSpecificsLogger = createLogger('RequiredItemSpecificsValidation');
 const LOT_PLAYER_RULE_BY_CATEGORY_ID: Record<string, string[]> = {
   '183050': ['Player/Athlete', 'Player', 'Athlete'],
@@ -300,6 +304,38 @@ function normalizeOutboundAspectValue(
   return normalizedValues.length > 0 ? normalizedValues : null;
 }
 
+function normalizeTaxonomyDefaultValue(
+  value: string,
+  metadata: TaxonomyAspectMetadata
+): string[] | null {
+  const canonicalValue = metadata.allowedValues.find(
+    (allowedValue) => allowedValue.toLowerCase() === value.toLowerCase()
+  );
+  return canonicalValue ? normalizeOutboundAspectValue(canonicalValue, metadata) : null;
+}
+
+function normalizeManualVintageValue(
+  value: unknown,
+  metadata: TaxonomyAspectMetadata
+): string[] | null {
+  const rawValue =
+    typeof value === 'string'
+      ? value
+      : Array.isArray(value) && value.length === 1 && typeof value[0] === 'string'
+        ? value[0]
+        : null;
+  if (rawValue === null) {
+    return null;
+  }
+
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized !== 'yes' && normalized !== 'no') {
+    return null;
+  }
+
+  return normalizeOutboundAspectValue(normalized === 'yes' ? 'Yes' : 'No', metadata);
+}
+
 function normalizeAuthorizedSportsSetValue(value: string, authorizedYear: string): string | null {
   const storedSet = value.trim();
   if (!storedSet) {
@@ -426,6 +462,8 @@ export function normalizeSingleCardOutboundItemSpecifics({
     const normalizedKey = normalizeAspectKey(key);
     if (
       INTERNAL_ITEM_SPECIFIC_KEYS.has(normalizedKey) ||
+      (categoryId === '261328' && REMOVED_SPORTS_CARD_ITEM_SPECIFIC_KEYS.has(normalizedKey)) ||
+      (categoryId === '261328' && normalizedKey === 'vintage') ||
       normalizedKey === 'year' ||
       (conditionDescriptorsPresent &&
         normalizedKey === normalizeAspectKey(TRADING_CARD_CONDITION_ASPECT_KEY)) ||
@@ -464,6 +502,28 @@ export function normalizeSingleCardOutboundItemSpecifics({
     const normalizedValue = normalizeOutboundAspectValue(valueForNormalization, taxonomyAspect);
     if (normalizedValue) {
       outbound[taxonomyAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (categoryId === '261328') {
+    const defaults: ReadonlyArray<[string, string]> = [
+      ['Material', 'Card Stock'],
+      ['Card Thickness', '20 Pt.'],
+      ['Card Size', 'Standard'],
+      ['Language', 'English'],
+      ['Original/Licensed Reprint', 'Original'],
+      ['Autographed', 'No'],
+    ];
+    for (const [aspectName, defaultValue] of defaults) {
+      const aspect = getTaxonomyAspectByName(aspectsByName, [aspectName]);
+      if (!aspect || outbound[aspect.localizedName]) {
+        continue;
+      }
+
+      const normalizedValue = normalizeTaxonomyDefaultValue(defaultValue, aspect);
+      if (normalizedValue) {
+        outbound[aspect.localizedName] = normalizedValue;
+      }
     }
   }
 
@@ -531,7 +591,7 @@ export function normalizeSingleCardOutboundItemSpecifics({
   }
 
   if (vintageAspect && !outbound[vintageAspect.localizedName]) {
-    const manualVintage = normalizeOutboundAspectValue(
+    const manualVintage = normalizeManualVintageValue(
       getPersistedAspectValue(itemSpecifics, 'Vintage'),
       vintageAspect
     );
@@ -545,6 +605,12 @@ export function normalizeSingleCardOutboundItemSpecifics({
         if (normalizedValue) {
           outbound[vintageAspect.localizedName] = normalizedValue;
         }
+      }
+    }
+    if (!outbound[vintageAspect.localizedName] && !authorizedYear) {
+      const normalizedValue = normalizeTaxonomyDefaultValue('Yes', vintageAspect);
+      if (normalizedValue) {
+        outbound[vintageAspect.localizedName] = normalizedValue;
       }
     }
   }
