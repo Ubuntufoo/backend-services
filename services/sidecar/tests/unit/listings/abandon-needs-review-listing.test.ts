@@ -137,7 +137,6 @@ describe('needs-review listing abandonment', () => {
     'record_created',
     'image_processing_queued',
     'images_processed',
-    'assets_ready',
     'generating',
     'approved_for_export',
     'exported',
@@ -156,6 +155,26 @@ describe('needs-review listing abandonment', () => {
     expect(options.deleteObjects).not.toHaveBeenCalled();
     expect(options.removeDirectory).not.toHaveBeenCalled();
     expect(dataAccess.listings.deleteNeedsReview).not.toHaveBeenCalled();
+  });
+
+  it('allows an assets-ready listing to reach abandonment cleanup', async () => {
+    const assetsReadyListing = {
+      ...listing,
+      generated_at: null,
+      status: 'assets_ready',
+      sub_status: 'ready_to_generate',
+    } as ListingRow;
+    const dataAccess = createDataAccess(assetsReadyListing);
+    const options = createOptions(dataAccess);
+
+    await expect(
+      abandonNeedsReviewListing(assetsReadyListing.listing_id, options)
+    ).resolves.toEqual({ abandoned: true, listingId: 'LIST-001' });
+
+    expect(dataAccess.listings.deleteNeedsReview).toHaveBeenCalledWith({
+      expectedUpdatedAt: assetsReadyListing.updated_at,
+      listingId: assetsReadyListing.listing_id,
+    });
   });
 
   it.each(['queued', 'running'])('rejects an active %s job before cleanup', async (status) => {

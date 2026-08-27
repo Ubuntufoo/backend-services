@@ -23,7 +23,7 @@ describe('computeFinalPriceAdjustment', () => {
       recentAcceptedCompCount: 8,
       salesVelocityTier: 'high',
       salesVelocityDiscountPercent: 0,
-      finalPrice: 111.75,
+      finalPrice: 111.7,
     });
   });
 
@@ -43,7 +43,7 @@ describe('computeFinalPriceAdjustment', () => {
       recentAcceptedCompCount: 3,
       salesVelocityTier: 'medium',
       salesVelocityDiscountPercent: 2.5,
-      finalPrice: 92.63,
+      finalPrice: 92.6,
     });
   });
 
@@ -115,6 +115,25 @@ describe('computeFinalPriceAdjustment', () => {
     expect(() =>
       computeFinalPriceAdjustment({ basePrice: 100, comps: [], currentTime: new Date('invalid') })
     ).toThrow('valid current time');
+  });
+
+  it.each([
+    [3.23, 3.2],
+    [4.14, 3.95],
+    [4.09, 3.95],
+    [15.01, 14.95],
+    [100.1, 99.95],
+    [4.19, 4.15],
+  ])('floors post-modifier price %s to inflection price %s', (rawFinalPrice, expected) => {
+    const result = computeFinalPriceAdjustment({
+      basePrice: rawFinalPrice / 0.95,
+      comps: Array.from({ length: 8 }, (_, index) =>
+        buildComp(`2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`)
+      ),
+      currentTime: CURRENT_TIME,
+    });
+
+    expect(result.finalPrice).toBe(expected);
   });
 });
 

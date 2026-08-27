@@ -67,6 +67,34 @@ export function isEbayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.EBAY_ENABLED !== 'false';
 }
 
+export interface BrowseShippingContext {
+  country: string;
+  postalCode: string;
+}
+
+/**
+ * Resolve the configured eBay Browse shipping context when Browse is requested.
+ * The pair is intentionally optional during ordinary sidecar startup, but
+ * Browse requests must not proceed with a partial or implicit location.
+ */
+export function resolveBrowseShippingContext(
+  env: Partial<Pick<
+    NodeJS.ProcessEnv,
+    'EBAY_BROWSE_CONTEXT_COUNTRY' | 'EBAY_BROWSE_CONTEXT_POSTAL_CODE'
+  >> = process.env
+): BrowseShippingContext {
+  const country = env.EBAY_BROWSE_CONTEXT_COUNTRY?.trim() ?? '';
+  const postalCode = env.EBAY_BROWSE_CONTEXT_POSTAL_CODE?.trim() ?? '';
+
+  if (!country || !postalCode) {
+    throw new Error(
+      'EBAY_BROWSE_CONTEXT_COUNTRY and EBAY_BROWSE_CONTEXT_POSTAL_CODE must both be configured for Browse shipping context'
+    );
+  }
+
+  return { country, postalCode };
+}
+
 // Type for scope JSON structure
 interface ScopeDefinition {
   /* eslint-disable-next-line @typescript-eslint/naming-convention -- scope docs use PascalCase keys */
@@ -81,6 +109,27 @@ const scopeDefinitionSchema = z.array(
     Description: z.string().optional(),
   })
 );
+
+/**
+ * Scopes required by the current production setup workflow.
+ *
+ * Keep this separate from the documentation catalog: that catalog includes
+ * optional and special-access scopes that must not be requested during the
+ * initial user-consent flow.
+ */
+export const PRODUCTION_APP_OAUTH_SCOPES = [
+  'https://api.ebay.com/oauth/api_scope',
+  'https://api.ebay.com/oauth/api_scope/sell.inventory',
+  'https://api.ebay.com/oauth/api_scope/sell.account',
+  'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
+] as const;
+
+/**
+ * Return a mutable copy of the minimal production consent scope set.
+ */
+export function getProductionAppOAuthScopes(): string[] {
+  return [...PRODUCTION_APP_OAUTH_SCOPES];
+}
 
 /**
  * Load and parse production scopes from JSON file
@@ -263,7 +312,7 @@ export function getEbayConfig(): EbayConfig {
   // Only require client credentials - tokens can be optional (generated from refresh token)
   if (isEbayEnabled(process.env) && (clientId === '' || clientSecret === '')) {
     console.error(
-      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env or backend-services/.env.local'
+      'Missing required eBay credentials. Please set:\n1) EBAY_CLIENT_ID\n2) EBAY_CLIENT_SECRET\nin backend-services/.env'
     );
   }
 

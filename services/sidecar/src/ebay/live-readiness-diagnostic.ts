@@ -15,7 +15,6 @@ import type { components as AccountComponents } from '@/types/sell-apps/account-
 import type { components as InventoryComponents } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 
 type PaymentPolicy = AccountComponents['schemas']['PaymentPolicy'];
-type FulfillmentPolicy = AccountComponents['schemas']['FulfillmentPolicy'];
 type ReturnPolicy = AccountComponents['schemas']['ReturnPolicy'];
 type InventoryLocationFull = InventoryComponents['schemas']['InventoryLocationFull'];
 
@@ -626,6 +625,105 @@ async function runPolicyCheck<TPolicy extends { marketplaceId?: string | null; n
   }
 }
 
+async function runFulfillmentPolicyCheck(
+  context: ReportContext,
+  api: LiveReadinessApi,
+  appSettingsState: { error?: unknown; value: AppSettingsRow | null }
+): Promise<LiveReadinessCheck> {
+  if (appSettingsState.error) {
+    return buildCheck(
+      'fulfillment_policy',
+      'fail',
+      'Could not read fulfillment policy IDs from app_settings.default.',
+      serializeError(appSettingsState.error, context.sensitiveValues)
+    );
+  }
+
+  if (!appSettingsState.value) {
+    return buildCheck('fulfillment_policy', 'fail', 'Required app_settings.default row missing.', {
+      appSettingsId: DEFAULT_APP_SETTINGS_ID,
+    });
+  }
+
+  const resolution = resolvePublishConfig(appSettingsState.value, {
+    environment: 'production',
+    runtimeMarketplaceId: context.marketplaceId,
+  });
+  if (!resolution.config) {
+    return buildCheck(
+      'fulfillment_policy',
+      'fail',
+      'Fulfillment policies could not be resolved from production publish config.',
+      { issues: resolution.issues }
+    );
+  }
+
+  const groundFulfillmentPolicyId = normalizeText(resolution.config.groundFulfillmentPolicyId);
+  const combinedFulfillmentPolicyId = normalizeText(resolution.config.combinedFulfillmentPolicyId);
+  if (!groundFulfillmentPolicyId || !combinedFulfillmentPolicyId) {
+    return buildCheck(
+      'fulfillment_policy',
+      'fail',
+      'Both groundFulfillmentPolicyId and combinedFulfillmentPolicyId are required for live publish readiness.',
+      { combinedFulfillmentPolicyId, groundFulfillmentPolicyId }
+    );
+  }
+
+  try {
+    const [groundPolicy, combinedPolicy] = await Promise.all([
+      api.account.getFulfillmentPolicy(groundFulfillmentPolicyId),
+      api.account.getFulfillmentPolicy(combinedFulfillmentPolicyId),
+    ]);
+    const groundMarketplaceId = normalizeText(groundPolicy.marketplaceId);
+    const combinedMarketplaceId = normalizeText(combinedPolicy.marketplaceId);
+
+    if (
+      (groundMarketplaceId && groundMarketplaceId !== context.marketplaceId) ||
+      (combinedMarketplaceId && combinedMarketplaceId !== context.marketplaceId)
+    ) {
+      return buildCheck(
+        'fulfillment_policy',
+        'fail',
+        'Configured fulfillment policy exists but belongs to a different marketplace.',
+        {
+          combinedFulfillmentPolicyId,
+          combinedMarketplaceId,
+          combinedPolicyName: normalizeText(combinedPolicy.name),
+          expectedMarketplaceId: context.marketplaceId,
+          groundFulfillmentPolicyId,
+          groundMarketplaceId,
+          groundPolicyName: normalizeText(groundPolicy.name),
+        }
+      );
+    }
+
+    return buildCheck(
+      'fulfillment_policy',
+      'pass',
+      'Ground-only and combined fulfillment policies exist remotely for configured marketplace.',
+      {
+        combinedFulfillmentPolicyId,
+        combinedMarketplaceId: combinedMarketplaceId ?? context.marketplaceId,
+        combinedPolicyName: normalizeText(combinedPolicy.name),
+        groundFulfillmentPolicyId,
+        groundMarketplaceId: groundMarketplaceId ?? context.marketplaceId,
+        groundPolicyName: normalizeText(groundPolicy.name),
+      }
+    );
+  } catch (error) {
+    return buildCheck(
+      'fulfillment_policy',
+      'fail',
+      'Configured fulfillment policies could not both be verified remotely.',
+      {
+        combinedFulfillmentPolicyId,
+        groundFulfillmentPolicyId,
+        ...serializeError(error, context.sensitiveValues),
+      }
+    );
+  }
+}
+
 async function runInventoryLocationCheck(
   context: ReportContext,
   api: LiveReadinessApi,
@@ -863,15 +961,7 @@ export async function getLiveReadinessDiagnostic({
       idField: 'paymentPolicyId',
       label: 'Payment policy',
     }),
-    runPolicyCheck<FulfillmentPolicy>({
-      apiCall: async (id) => await api.account.getFulfillmentPolicy(id),
-      appSettingsState,
-      checkName: 'fulfillment_policy',
-      context,
-      field: 'fulfillmentPolicyId',
-      idField: 'fulfillmentPolicyId',
-      label: 'Fulfillment policy',
-    }),
+    runFulfillmentPolicyCheck(context, api, appSettingsState),
     runPolicyCheck<ReturnPolicy>({
       apiCall: async (id) => await api.account.getReturnPolicy(id),
       appSettingsState,

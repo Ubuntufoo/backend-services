@@ -505,7 +505,7 @@ describe('Tools Layer', () => {
       const resultObj = result as DisplayCredentialsResult;
 
       // Check that missing tokens are indicated
-      expect(resultObj.tokens.refreshToken).toBe('Not set (in .env.local)');
+      expect(resultObj.tokens.refreshToken).toBe('Not set (in .env)');
       expect(resultObj.tokens.accessToken).toBe('Not available');
       expect(resultObj.tokens.appToken).toBe('Not cached');
       expect(resultObj.status.currentTokenType).toBe('none');

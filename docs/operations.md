@@ -19,7 +19,7 @@
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm setup` | Writes local credential/token config to `.env.local` |
+| `pnpm setup` | Writes local credential/token config to the repo-root `.env` |
 | `pnpm ebay:setup-sandbox` | Creates or reuses sandbox policy/location config |
 | `pnpm ebay:opt-in-selling-policies` | Requests sandbox selling-policy opt-in |
 | `pnpm ebay:cleanup-sandbox -- ... --delete --confirm-sandbox-cleanup` | Permanently deletes eligible sandbox eBay and local listing resources |
@@ -30,7 +30,7 @@
 | Command | Purpose | Safety |
 | --- | --- | --- |
 | `pnpm pricing:diagnose-soldcomps-config` | Validate SoldComps provider mode/env selection | read-only |
-| `pnpm pricing:diagnose-apify-config` | Validate Apify provider mode/env selection | read-only |
+| `pnpm pricing:diagnose-apify-config` | Validate Apify fallback/provider env configuration | read-only |
 | `pnpm pricing:smoke-soldcomps -- --listing-id <listingId>` | Fetch SoldComps pricing for one listing without persistence | read-only |
 | `pnpm pricing:smoke-apify -- --listing-id <listingId>` | Fetch Apify pricing for one listing without persistence | read-only but spends live provider quota |
 | `pnpm pricing:price-one -- --listing-id <listingId>` | Run the real `research_price` path for one listing | writes `listing_price_research` and may update `listings.price` |

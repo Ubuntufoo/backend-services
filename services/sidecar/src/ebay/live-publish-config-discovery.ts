@@ -27,6 +27,13 @@ export interface LivePublishInventoryLocationSummary {
   status: string;
 }
 
+export interface LivePublishDomesticShippingServiceSummary {
+  freeShipping?: boolean;
+  shippingCarrierCode?: string;
+  shippingCost?: { currency?: string; value?: string };
+  shippingServiceCode: string;
+}
+
 export interface LivePublishConfigDiscoveryError {
   family: 'account' | 'inventory' | 'logger' | 'oauth' | 'preflight';
   message: string;
@@ -48,6 +55,7 @@ export interface LivePublishConfigDiscoveryReport {
     fulfillmentPolicyId: string;
     name: string;
     marketplaceId: string;
+    domesticShippingServices?: LivePublishDomesticShippingServiceSummary[];
   }>;
   returnPolicies: Array<{
     returnPolicyId: string;
@@ -59,10 +67,7 @@ export interface LivePublishConfigDiscoveryReport {
 }
 
 export interface LivePublishConfigDiscoveryApi {
-  account: Pick<
-    AccountApi,
-    'getFulfillmentPolicies' | 'getPaymentPolicies' | 'getReturnPolicies'
-  >;
+  account: Pick<AccountApi, 'getFulfillmentPolicies' | 'getPaymentPolicies' | 'getReturnPolicies'>;
   initialize(): Promise<void>;
   inventory: Pick<InventoryApi, 'getInventoryLocations'>;
 }
@@ -276,10 +281,38 @@ function mapFulfillmentPolicies(
         return null;
       }
 
+      const domesticShippingServices = (policy.shippingOptions ?? [])
+        .filter((option) => option.optionType?.trim().toUpperCase() === 'DOMESTIC')
+        .flatMap((option) => option.shippingServices ?? [])
+        .map((service) => {
+          const shippingServiceCode = normalizeText(service.shippingServiceCode);
+          if (!shippingServiceCode) {
+            return null;
+          }
+
+          const shippingCarrierCode = normalizeText(service.shippingCarrierCode);
+          const currency = normalizeText(service.shippingCost?.currency);
+          const value = normalizeText(service.shippingCost?.value);
+          return {
+            ...(typeof service.freeShipping === 'boolean'
+              ? { freeShipping: service.freeShipping }
+              : {}),
+            ...(shippingCarrierCode ? { shippingCarrierCode } : {}),
+            ...(currency || value
+              ? { shippingCost: { ...(currency ? { currency } : {}), ...(value ? { value } : {}) } }
+              : {}),
+            shippingServiceCode,
+          } satisfies LivePublishDomesticShippingServiceSummary;
+        })
+        .filter(
+          (service): service is LivePublishDomesticShippingServiceSummary => service !== null
+        );
+
       return {
         fulfillmentPolicyId,
         name,
         marketplaceId: normalizeText(policy.marketplaceId) ?? marketplaceId,
+        ...(domesticShippingServices.length > 0 ? { domesticShippingServices } : {}),
       };
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -432,10 +465,15 @@ export async function discoverLivePublishConfig({
   validateOAuth: validateOAuthImpl,
 }: LivePublishConfigDiscoveryOptions): Promise<LivePublishConfigDiscoveryReport> {
   const checkedAt = new Date().toISOString();
-  const marketplaceId = normalizeMarketplaceId(runtimeConfig.marketplaceId ?? oauthConfig.marketplaceId);
+  const marketplaceId = normalizeMarketplaceId(
+    runtimeConfig.marketplaceId ?? oauthConfig.marketplaceId
+  );
   const sensitiveValues = getSensitiveValues(runtimeConfig, oauthConfig);
 
-  if (!isProductionEnvironment(runtimeConfig.environment) || !isProductionEnvironment(oauthConfig.environment)) {
+  if (
+    !isProductionEnvironment(runtimeConfig.environment) ||
+    !isProductionEnvironment(oauthConfig.environment)
+  ) {
     return {
       environment: runtimeConfig.environment,
       marketplaceId,
@@ -456,7 +494,10 @@ export async function discoverLivePublishConfig({
     };
   }
 
-  if (oauthConfig.apiBaseUrl !== PRODUCTION_API_BASE_URL || oauthConfig.oauthBaseUrl !== PRODUCTION_OAUTH_BASE_URL) {
+  if (
+    oauthConfig.apiBaseUrl !== PRODUCTION_API_BASE_URL ||
+    oauthConfig.oauthBaseUrl !== PRODUCTION_OAUTH_BASE_URL
+  ) {
     return {
       environment: 'production',
       marketplaceId,
@@ -468,12 +509,16 @@ export async function discoverLivePublishConfig({
       returnPolicies: [],
       inventoryLocations: [],
       errors: [
-        buildError('preflight', 'Production API base URLs required for live publish config discovery.', {
-          apiBaseUrl: oauthConfig.apiBaseUrl,
-          oauthBaseUrl: oauthConfig.oauthBaseUrl,
-          expectedApiBaseUrl: PRODUCTION_API_BASE_URL,
-          expectedOauthBaseUrl: PRODUCTION_OAUTH_BASE_URL,
-        }),
+        buildError(
+          'preflight',
+          'Production API base URLs required for live publish config discovery.',
+          {
+            apiBaseUrl: oauthConfig.apiBaseUrl,
+            oauthBaseUrl: oauthConfig.oauthBaseUrl,
+            expectedApiBaseUrl: PRODUCTION_API_BASE_URL,
+            expectedOauthBaseUrl: PRODUCTION_OAUTH_BASE_URL,
+          }
+        ),
       ],
     };
   }
@@ -494,7 +539,13 @@ export async function discoverLivePublishConfig({
       fulfillmentPolicies: [],
       returnPolicies: [],
       inventoryLocations: [],
-      errors: [buildError('oauth', 'Failed to initialize production OAuth token.', serializeError(error, sensitiveValues))],
+      errors: [
+        buildError(
+          'oauth',
+          'Failed to initialize production OAuth token.',
+          serializeError(error, sensitiveValues)
+        ),
+      ],
     };
   }
 
@@ -511,27 +562,44 @@ export async function discoverLivePublishConfig({
       fulfillmentPolicies: [],
       returnPolicies: [],
       inventoryLocations: [],
-      errors: [buildError('oauth', 'Failed to initialize production eBay API client.', serializeError(error, sensitiveValues))],
+      errors: [
+        buildError(
+          'oauth',
+          'Failed to initialize production eBay API client.',
+          serializeError(error, sensitiveValues)
+        ),
+      ],
     };
   }
 
   const [paymentPoliciesResult, fulfillmentPoliciesResult, returnPoliciesResult, inventoryResult] =
     await Promise.all([
-      runPolicyFamily<PaymentPolicyResponse, LivePublishConfigDiscoveryReport['paymentPolicies'][number]>({
+      runPolicyFamily<
+        PaymentPolicyResponse,
+        LivePublishConfigDiscoveryReport['paymentPolicies'][number]
+      >({
         apiCall: async () => await api.account.getPaymentPolicies(marketplaceId),
         family: 'account',
         mapResponse: (response) => mapPaymentPolicies(response, marketplaceId),
         sensitiveValues,
-        ineligibleMessage: 'User is not eligible for Business Policy. Payment policies unavailable.',
+        ineligibleMessage:
+          'User is not eligible for Business Policy. Payment policies unavailable.',
       }),
-      runPolicyFamily<FulfillmentPolicyResponse, LivePublishConfigDiscoveryReport['fulfillmentPolicies'][number]>({
+      runPolicyFamily<
+        FulfillmentPolicyResponse,
+        LivePublishConfigDiscoveryReport['fulfillmentPolicies'][number]
+      >({
         apiCall: async () => await api.account.getFulfillmentPolicies(marketplaceId),
         family: 'account',
         mapResponse: (response) => mapFulfillmentPolicies(response, marketplaceId),
         sensitiveValues,
-        ineligibleMessage: 'User is not eligible for Business Policy. Fulfillment policies unavailable.',
+        ineligibleMessage:
+          'User is not eligible for Business Policy. Fulfillment policies unavailable.',
       }),
-      runPolicyFamily<ReturnPolicyResponse, LivePublishConfigDiscoveryReport['returnPolicies'][number]>({
+      runPolicyFamily<
+        ReturnPolicyResponse,
+        LivePublishConfigDiscoveryReport['returnPolicies'][number]
+      >({
         apiCall: async () => await api.account.getReturnPolicies(marketplaceId),
         family: 'account',
         mapResponse: (response) => mapReturnPolicies(response, marketplaceId),
@@ -557,7 +625,9 @@ export async function discoverLivePublishConfig({
     inventoryErrors.push(
       buildError(
         'inventory',
-        normalizeErrorMessage(inventoryResult.error).includes('Inventory location listing unavailable')
+        normalizeErrorMessage(inventoryResult.error).includes(
+          'Inventory location listing unavailable'
+        )
           ? normalizeErrorMessage(inventoryResult.error)
           : 'Failed to list inventory locations.',
         serializeError(inventoryResult.error, sensitiveValues)

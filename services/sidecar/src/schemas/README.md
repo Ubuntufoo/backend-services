@@ -184,7 +184,7 @@ Schemas for order management, shipping, refunds, and payment disputes.
 
 Schemas for advertising campaigns, ads, keywords, promotions, and recommendations.
 
-**Endpoints Covered (71 total):**
+**Coverage:**
 
 - Campaign Management (create, update, pause, resume, end campaigns)
 - Ad Operations (single and bulk operations for creating, updating, deleting ads)
@@ -210,7 +210,7 @@ Schemas for advertising campaigns, ads, keywords, promotions, and recommendation
 
 Schemas for marketplace policies and product compatibility.
 
-**Endpoints Covered (23 total):**
+**Coverage:**
 
 - Marketplace Policies (automotive compatibility, category policies, EPR, hazmat labels, item conditions, listing structure, negotiated price, product safety, regulatory, return policy metadata, shipping cost types, classified ads, currencies, listing types, motors, shipping policies, site visibility)
 - Compatibility (by specification, property names/values, multi-property values, product compatibilities)
@@ -228,7 +228,7 @@ Schemas for marketplace policies and product compatibility.
 
 Schemas for reports, metrics, and seller performance tracking.
 
-**Endpoints Covered (4 total):**
+**Coverage:**
 
 - Traffic Reports (analyze listing views and search impressions)
 - Seller Standards Profiles (monitor seller performance)
@@ -244,7 +244,7 @@ Schemas for reports, metrics, and seller performance tracking.
 
 Schemas for category navigation, suggestions, and product aspects.
 
-**Endpoints Covered (4 total):**
+**Coverage:**
 
 - Category Tree (get category hierarchy)
 - Category Suggestions (find appropriate categories for items)
@@ -260,7 +260,7 @@ Schemas for category navigation, suggestions, and product aspects.
 
 Schemas for identity, compliance, VERO, translation, and international shipping.
 
-**Endpoints Covered (40 total):**
+**Coverage:**
 
 - Commerce Identity API (user information)
 - Sell Compliance API (listing violations, suppression)

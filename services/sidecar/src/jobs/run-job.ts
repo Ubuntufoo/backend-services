@@ -16,6 +16,7 @@ import {
   generateListingDraft,
   generateListingDraftWithFallback,
   GeminiDraftServiceError,
+  GeminiDraftValidationError,
   GeminiFallbackExecutionError,
   prepareGenerateListingDraft,
   resolveTradingCardListingIds,
@@ -27,9 +28,11 @@ import {
   type PreparedGenerateListingDraftExecutionResult,
 } from '@/gemini/index.js';
 import {
+  deriveAuthorizedSportsSeasonFromSet,
   sanitizeSetAspectValue,
   sanitizeTitleYearClaims,
 } from '@/gemini/year-normalization.js';
+import { parseAuthorizedSellerYears } from '@/gemini/seller-year-hints.js';
 import { TRADING_CARD_CONDITION_ASPECT_KEY } from '@/listings/trading-card-conditions.js';
 import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
@@ -41,6 +44,7 @@ import {
   type PublishListingDependencies,
   type PublishListingResult,
 } from '@/ebay/publish-listing.js';
+import { isStructurallyEseEligibleListing } from '@/listings/trading-card-conditions.js';
 import { createProductionPricingAnalyst } from '@/pricing/production-llm-pricing-analyst.js';
 import {
   classifyJobError,
@@ -76,6 +80,10 @@ const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
 const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
 const GENERATED_DESCRIPTION_NOTICE =
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value items under $20 ship via eBay Standard Envelope for $0.99. One or two eligible items cost $0.99 total; three or more eligible items receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Items priced at $20 or more, or items not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const PREVIOUS_GENERATED_DESCRIPTION_NOTICE =
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: For cards under $20, I ship securely and free via eBay Standard Envelope, which includes integrated tracking. USPS Ground Advantage is also available at the buyer's expense for an additional $6.49. You can select your preferred shipping option at checkout.\n\nCombined Shipping: Combined shipping is often available for multiple items from my store. Please add items to your eBay cart and message me before payment to request a combined-shipping total.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const LEGACY_GENERATED_DESCRIPTION_NOTICE =
   'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 const jobLogger = createLogger('Job');
 const nowMs = () => performance.now();
@@ -186,6 +194,18 @@ function getListingNotesHint(listing: ListingRow): string | undefined {
 }
 
 function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHints'] | undefined {
+  const explicitYears = parseAuthorizedSellerYears(listing.seller_hints);
+  if (explicitYears.length > 1) {
+    throw new GeminiDraftValidationError([
+      {
+        code: 'custom',
+        message: `Conflicting seller year directives: ${explicitYears.join(', ')}.`,
+        path: ['seller_hints'],
+      },
+    ]);
+  }
+
+  const explicitYear = explicitYears[0];
   const title = (() => {
     const value = asNonEmptyString(listing.title);
     if (!value) {
@@ -198,24 +218,46 @@ function buildUserHints(listing: ListingRow): GenerateListingDraftInput['userHin
   const notes = getListingNotesHint(listing);
   const aspects = getListingAspectHints(listing);
 
-  if (!title && !notes && !aspects) {
+  if (!explicitYear && !title && !notes && !aspects) {
     return undefined;
   }
 
   return {
     aspects,
+    ...(explicitYear ? { explicitYear } : {}),
     notes,
     title,
   };
 }
 
 function buildGeneratedListingAspects(
-  draft: Awaited<ReturnType<typeof generateListingDraft>>
+  draft: Awaited<ReturnType<typeof generateListingDraft>>,
+  authorizedYear?: string,
+  categoryId?: string
 ): NonNullable<ListingUpdate['item_specifics']> {
-  const draftMetadata = buildGeneratedDraftMetadata(draft.yearEvidence);
+  const draftMetadata = buildGeneratedDraftMetadata(draft.yearEvidence, authorizedYear);
+  const canonicalYear = authorizedYear ?? draft.yearEvidence?.year;
+  const draftAspects = { ...draft.aspects };
+  delete (draftAspects as Record<string, unknown>).Season;
+  const safeDraftSeason = draft.seasonEvidence?.season ?? (() => {
+    if (categoryId !== '261328' || !canonicalYear) {
+      return null;
+    }
+
+    const value = draftAspects.Set;
+    const raw = typeof value === 'string' ? value.trim() : null;
+    if (!raw) {
+      return null;
+    }
+
+    return deriveAuthorizedSportsSeasonFromSet(raw, canonicalYear);
+  })();
 
   const itemSpecifics: Record<string, unknown> = {
-    ...draft.aspects,
+    ...draftAspects,
+    ...(categoryId === '261328' && (safeDraftSeason || canonicalYear)
+      ? { Season: safeDraftSeason ?? canonicalYear }
+      : {}),
     ...(draftMetadata ? { [GENERATED_DRAFT_METADATA_KEY]: draftMetadata } : {}),
     ...(draft.cardConditionToken
       ? { [TRADING_CARD_CONDITION_ASPECT_KEY]: draft.cardConditionToken }
@@ -232,36 +274,76 @@ function buildGeneratedListingAspects(
   return itemSpecifics as NonNullable<ListingUpdate['item_specifics']>;
 }
 
+const GENERATED_ITEM_INFO_LABEL = 'Item Info: ';
+
+// Prepends the label for the Gemini-generated card segment so published
+// descriptions read "Item Info: <generated content>". No-op when the segment
+// is empty or already labeled.
+function prefixGeneratedItemInfo(description: string): string {
+  if (description.length === 0 || description.startsWith(GENERATED_ITEM_INFO_LABEL)) {
+    return description;
+  }
+
+  return `${GENERATED_ITEM_INFO_LABEL}${description}`;
+}
+
 function appendGeneratedDescriptionNotice(description: string): string {
   const generatedDescription = description.trimEnd();
 
   if (generatedDescription.endsWith(GENERATED_DESCRIPTION_NOTICE)) {
-    return generatedDescription;
+    const cardSegment = generatedDescription
+      .slice(0, -GENERATED_DESCRIPTION_NOTICE.length)
+      .trimEnd();
+    return cardSegment
+      ? `${prefixGeneratedItemInfo(cardSegment)}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+      : GENERATED_DESCRIPTION_NOTICE;
+  }
+
+  for (const staleNotice of [
+    PREVIOUS_GENERATED_DESCRIPTION_NOTICE,
+    LEGACY_GENERATED_DESCRIPTION_NOTICE,
+  ]) {
+    if (generatedDescription.endsWith(staleNotice)) {
+      const withoutStaleNotice = generatedDescription.slice(0, -staleNotice.length).trimEnd();
+      return withoutStaleNotice
+        ? `${prefixGeneratedItemInfo(withoutStaleNotice)}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+        : GENERATED_DESCRIPTION_NOTICE;
+    }
   }
 
   return generatedDescription
-    ? `${generatedDescription}\n\n${GENERATED_DESCRIPTION_NOTICE}`
+    ? `${prefixGeneratedItemInfo(generatedDescription)}\n\n${GENERATED_DESCRIPTION_NOTICE}`
     : GENERATED_DESCRIPTION_NOTICE;
 }
 
 function buildGeneratedListingReviewUpdate(
   listing: ListingRow,
-  draft: Awaited<ReturnType<typeof generateListingDraft>>
+  draft: Awaited<ReturnType<typeof generateListingDraft>>,
+  authorizedYear?: string
 ): ListingUpdate {
   const resolvedIds = resolveTradingCardListingIds(listing, draft);
+  const eseEligible = isStructurallyEseEligibleListing({
+    category_id: resolvedIds.category_id,
+    condition_id: resolvedIds.condition_id,
+    listing_type: listing.listing_type,
+  });
 
   return {
     category_id: resolvedIds.category_id,
     condition_id: resolvedIds.condition_id,
     condition_notes: draft.cardConditionNote ?? null,
     description: appendGeneratedDescriptionNotice(draft.description),
-    item_specifics: buildGeneratedListingAspects(draft),
+    ese_eligible: eseEligible,
+    item_specifics: buildGeneratedListingAspects(
+      draft,
+      authorizedYear,
+      resolvedIds.category_id ?? undefined,
+    ),
     last_error_at: null,
     last_error_code: null,
     last_error_context: {},
     last_error_message: null,
-    price:
-      listing.auto_pricing_enabled === false ? listing.price : (draft.priceSuggestion ?? null),
+    price: listing.auto_pricing_enabled === false ? listing.price : (draft.priceSuggestion ?? null),
     status: 'needs_review',
     sub_status: 'review_pending',
     title: draft.title,
@@ -760,11 +842,12 @@ async function runGenerateAiJob(
       throw createListingDraftRouteNotFoundError();
     }
 
+    const userHints = buildUserHints(listing);
     const prepareDraftStartedAt = nowMs();
     const preparedDraft = await options.prepareListingDraft({
       imageUrls,
       listingId,
-      userHints: buildUserHints(listing),
+      userHints,
     });
     const prepareDraftMs =
       preparedDraft.diagnostics.latency.prepareDraftMs || elapsedMs(prepareDraftStartedAt);
@@ -780,199 +863,201 @@ async function runGenerateAiJob(
       listingId,
     });
 
-    const routerResult = await generateListingDraftWithFallback<PreparedGenerateListingDraftExecutionResult>({
-      executeRoute: async (route) => await preparedDraft.execute({ model: route.modelName }),
-      incrementDailyUsage: async () => {
-        await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
-      },
-      now: options.now,
-      onAttemptFailed: async (attempt) => {
-        const attemptError = classifyJobError(job.job_type, attempt.error);
-        const aiAttemptContext = {
-          jobId: job.id,
-          listingId,
-          modelName: attempt.route.modelName,
-        };
-        const failedAttempt: GeminiModelAttempt = {
-          attempt_order: attempt.attemptOrder,
-          completed_at: attempt.completedAt,
-          duration_ms: attempt.durationMs,
-          failure_code: attemptError.code,
-          failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
-          model_name: attempt.route.modelName,
-          started_at: attempt.startedAt,
-          status: 'failed',
-        };
+    const routerResult =
+      await generateListingDraftWithFallback<PreparedGenerateListingDraftExecutionResult>({
+        executeRoute: async (route) => await preparedDraft.execute({ model: route.modelName }),
+        incrementDailyUsage: async () => {
+          await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
+        },
+        now: options.now,
+        onAttemptFailed: async (attempt) => {
+          const attemptError = classifyJobError(job.job_type, attempt.error);
+          const aiAttemptContext = {
+            jobId: job.id,
+            listingId,
+            modelName: attempt.route.modelName,
+          };
+          const failedAttempt: GeminiModelAttempt = {
+            attempt_order: attempt.attemptOrder,
+            completed_at: attempt.completedAt,
+            duration_ms: attempt.durationMs,
+            failure_code: attemptError.code,
+            failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
+            model_name: attempt.route.modelName,
+            started_at: attempt.startedAt,
+            status: 'failed',
+          };
 
-        legacyAttempts[attempt.attemptOrder - 1] = failedAttempt;
-        const attemptDiagnostics =
-          getGenerateAiAttemptDiagnostics(attempt.error) ?? { payload: payloadDiagnostics };
+          legacyAttempts[attempt.attemptOrder - 1] = failedAttempt;
+          const attemptDiagnostics = getGenerateAiAttemptDiagnostics(attempt.error) ?? {
+            payload: payloadDiagnostics,
+          };
 
-        const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
-        if (aiModelAttempt) {
-          await markAiModelAttemptRecordFailed(
+          const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
+          if (aiModelAttempt) {
+            await markAiModelAttemptRecordFailed(
+              options.dataAccess,
+              {
+                duration_ms: attempt.durationMs,
+                failure_code: attemptError.code,
+                failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
+                finished_at: attempt.completedAt,
+                id: aiModelAttempt.id,
+                metadata: buildAiModelAttemptMetadata(attemptDiagnostics),
+              },
+              aiAttemptContext,
+              true
+            );
+          }
+
+          await persistGeminiAttemptAudit(
             options.dataAccess,
+            job.id,
             {
-              duration_ms: attempt.durationMs,
-              failure_code: attemptError.code,
-              failure_message: summarizeGeminiAttemptFailureMessage(attemptError.message),
-              finished_at: attempt.completedAt,
-              id: aiModelAttempt.id,
-              metadata: buildAiModelAttemptMetadata(attemptDiagnostics),
+              gemini_attempt_count: legacyAttempts.length,
+              gemini_attempts: [...legacyAttempts],
+              gemini_selected_model: null,
             },
-            aiAttemptContext,
             true
           );
-        }
 
-        await persistGeminiAttemptAudit(
-          options.dataAccess,
-          job.id,
-          {
-            gemini_attempt_count: legacyAttempts.length,
-            gemini_attempts: [...legacyAttempts],
-            gemini_selected_model: null,
-          },
-          true
-        );
-
-        jobLogger.info('Completed generate_ai model attempt.', {
-          event: 'generate_ai_model_attempt_completed',
-          failureCode: attemptError.code,
-          generateAiLatency: attemptDiagnostics.latency,
-          generateAiPayload: attemptDiagnostics.payload,
-          jobId: job.id,
-          listingId,
-          modelName: attempt.route.modelName,
-          status: 'failed',
-          willFallback: attempt.willFallback,
-        });
-      },
-      onAttemptStarted: async (attempt) => {
-        const startedAttempt: GeminiModelAttempt = {
-          attempt_order: attempt.attemptOrder,
-          completed_at: null,
-          duration_ms: null,
-          failure_code: null,
-          failure_message: null,
-          model_name: attempt.route.modelName,
-          started_at: attempt.startedAt,
-          status: 'started',
-        };
-        const aiAttemptContext = {
-          jobId: job.id,
-          listingId,
-          modelName: attempt.route.modelName,
-        };
-
-        if (attempt.attemptOrder === 1) {
-          await options.dataAccess.listings.updateWorkflowState({
+          jobLogger.info('Completed generate_ai model attempt.', {
+            event: 'generate_ai_model_attempt_completed',
+            failureCode: attemptError.code,
+            generateAiLatency: attemptDiagnostics.latency,
+            generateAiPayload: attemptDiagnostics.payload,
+            jobId: job.id,
             listingId,
-            status: 'generating',
-            subStatus: 'ai_call_in_progress',
+            modelName: attempt.route.modelName,
+            status: 'failed',
+            willFallback: attempt.willFallback,
           });
-        }
-
-        legacyAttempts.push(startedAttempt);
-        await persistGeminiAttemptAudit(
-          options.dataAccess,
-          job.id,
-          {
-            gemini_attempt_count: legacyAttempts.length,
-            gemini_attempts: [...legacyAttempts],
-            gemini_selected_model: null,
-          },
-          true
-        );
-
-        const aiModelAttempt = await createAiModelAttemptRecord(
-          options.dataAccess,
-          {
+        },
+        onAttemptStarted: async (attempt) => {
+          const startedAttempt: GeminiModelAttempt = {
             attempt_order: attempt.attemptOrder,
-            job_id: job.id,
-            listing_id: listingId,
+            completed_at: null,
+            duration_ms: null,
+            failure_code: null,
+            failure_message: null,
             model_name: attempt.route.modelName,
-            metadata: buildAiModelAttemptMetadata({
-              payload: payloadDiagnostics,
-            }),
-            provider: AI_PROVIDER_GOOGLE,
-            provider_model_id: attempt.route.modelName,
-            routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
             started_at: attempt.startedAt,
             status: 'started',
-          },
-          aiAttemptContext,
-          true
-        );
+          };
+          const aiAttemptContext = {
+            jobId: job.id,
+            listingId,
+            modelName: attempt.route.modelName,
+          };
 
-        if (aiModelAttempt) {
-          aiModelAttemptRows.set(attempt.attemptOrder, aiModelAttempt);
-        }
-      },
-      onAttemptSucceeded: async (attempt) => {
-        const aiAttemptContext = {
-          jobId: job.id,
-          listingId,
-          modelName: attempt.route.modelName,
-        };
-        const succeededAttempt: GeminiModelAttempt = {
-          attempt_order: attempt.attemptOrder,
-          completed_at: attempt.completedAt,
-          duration_ms: attempt.durationMs,
-          failure_code: null,
-          failure_message: null,
-          model_name: attempt.route.modelName,
-          started_at: attempt.startedAt,
-          status: 'succeeded',
-        };
+          if (attempt.attemptOrder === 1) {
+            await options.dataAccess.listings.updateWorkflowState({
+              listingId,
+              status: 'generating',
+              subStatus: 'ai_call_in_progress',
+            });
+          }
 
-        legacyAttempts[attempt.attemptOrder - 1] = succeededAttempt;
-        const attemptDiagnostics = attempt.draft.diagnostics;
+          legacyAttempts.push(startedAttempt);
+          await persistGeminiAttemptAudit(
+            options.dataAccess,
+            job.id,
+            {
+              gemini_attempt_count: legacyAttempts.length,
+              gemini_attempts: [...legacyAttempts],
+              gemini_selected_model: null,
+            },
+            true
+          );
 
-        const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
-        if (aiModelAttempt) {
-          await markAiModelAttemptRecordSucceeded(
+          const aiModelAttempt = await createAiModelAttemptRecord(
             options.dataAccess,
             {
-              duration_ms: attempt.durationMs,
-              finished_at: attempt.completedAt,
-              id: aiModelAttempt.id,
-              metadata: buildAiModelAttemptMetadata(attemptDiagnostics),
+              attempt_order: attempt.attemptOrder,
+              job_id: job.id,
+              listing_id: listingId,
+              model_name: attempt.route.modelName,
+              metadata: buildAiModelAttemptMetadata({
+                payload: payloadDiagnostics,
+              }),
+              provider: AI_PROVIDER_GOOGLE,
+              provider_model_id: attempt.route.modelName,
+              routing_source: AI_ROUTING_SOURCE_DIRECT_GEMINI,
+              started_at: attempt.startedAt,
+              status: 'started',
             },
             aiAttemptContext,
             true
           );
-        }
 
-        await persistGeminiAttemptAudit(
-          options.dataAccess,
-          job.id,
-          {
-            gemini_attempt_count: legacyAttempts.length,
-            gemini_attempts: [...legacyAttempts],
-            gemini_selected_model: attempt.route.modelName,
-          },
-          true
-        );
+          if (aiModelAttempt) {
+            aiModelAttemptRows.set(attempt.attemptOrder, aiModelAttempt);
+          }
+        },
+        onAttemptSucceeded: async (attempt) => {
+          const aiAttemptContext = {
+            jobId: job.id,
+            listingId,
+            modelName: attempt.route.modelName,
+          };
+          const succeededAttempt: GeminiModelAttempt = {
+            attempt_order: attempt.attemptOrder,
+            completed_at: attempt.completedAt,
+            duration_ms: attempt.durationMs,
+            failure_code: null,
+            failure_message: null,
+            model_name: attempt.route.modelName,
+            started_at: attempt.startedAt,
+            status: 'succeeded',
+          };
 
-        jobLogger.info('Completed generate_ai model attempt.', {
-          event: 'generate_ai_model_attempt_completed',
-          generateAiLatency: attemptDiagnostics.latency,
-          generateAiPayload: attemptDiagnostics.payload,
-          jobId: job.id,
-          listingId,
-          modelName: attempt.route.modelName,
-          status: 'succeeded',
-          willFallback: false,
-        });
-      },
-      routes: resolvedRoutes,
-    });
+          legacyAttempts[attempt.attemptOrder - 1] = succeededAttempt;
+          const attemptDiagnostics = attempt.draft.diagnostics;
+
+          const aiModelAttempt = aiModelAttemptRows.get(attempt.attemptOrder);
+          if (aiModelAttempt) {
+            await markAiModelAttemptRecordSucceeded(
+              options.dataAccess,
+              {
+                duration_ms: attempt.durationMs,
+                finished_at: attempt.completedAt,
+                id: aiModelAttempt.id,
+                metadata: buildAiModelAttemptMetadata(attemptDiagnostics),
+              },
+              aiAttemptContext,
+              true
+            );
+          }
+
+          await persistGeminiAttemptAudit(
+            options.dataAccess,
+            job.id,
+            {
+              gemini_attempt_count: legacyAttempts.length,
+              gemini_attempts: [...legacyAttempts],
+              gemini_selected_model: attempt.route.modelName,
+            },
+            true
+          );
+
+          jobLogger.info('Completed generate_ai model attempt.', {
+            event: 'generate_ai_model_attempt_completed',
+            generateAiLatency: attemptDiagnostics.latency,
+            generateAiPayload: attemptDiagnostics.payload,
+            jobId: job.id,
+            listingId,
+            modelName: attempt.route.modelName,
+            status: 'succeeded',
+            willFallback: false,
+          });
+        },
+        routes: resolvedRoutes,
+      });
 
     const listingUpdateStartedAt = nowMs();
     const reviewListing = await options.dataAccess.listings.update(
       listingId,
-      buildGeneratedListingReviewUpdate(listing, routerResult.draft.draft)
+      buildGeneratedListingReviewUpdate(listing, routerResult.draft.draft, userHints?.explicitYear)
     );
     const listingUpdateMs = elapsedMs(listingUpdateStartedAt);
     const enqueueResearchPriceStartedAt = nowMs();

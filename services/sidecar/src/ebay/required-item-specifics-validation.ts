@@ -3,19 +3,53 @@ import {
   PublishRequiredItemSpecificsValidationError,
   type PublishRequiredItemSpecificIssue,
 } from '@/ebay/publish-validation.js';
+import {
+  getRawCardConditionDisplayLabel,
+  normalizeRawCardConditionToken,
+  TRADING_CARD_CONDITION_ASPECT_KEY,
+} from '@/listings/trading-card-conditions.js';
+import { sanitizeSetYearClaims } from '@/gemini/year-normalization.js';
+import { readAuthorizedGeneratedDraftYearMetadata } from '@/pricing/generated-draft-metadata.js';
 import { createLogger } from '@/utils/logger.js';
 
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
-  'CategorySuggestion',
-  'ConditionSuggestion',
-  'pricingModifierOptions',
-  'skuCategoryCode',
+  '__draft_metadata',
+  'categorysuggestion',
+  'conditionsuggestion',
+  'pricingmodifieroptions',
+  'skucategorycode',
+]);
+const REMOVED_SPORTS_CARD_ITEM_SPECIFIC_KEYS = new Set([
+  'california prop 65 warning',
+  'customized',
 ]);
 const requiredItemSpecificsLogger = createLogger('RequiredItemSpecificsValidation');
 const LOT_PLAYER_RULE_BY_CATEGORY_ID: Record<string, string[]> = {
   '183050': ['Player/Athlete', 'Player', 'Athlete'],
 };
 const LOT_ITEM_SPECIFIC_DEFAULT_VALUE = 'Various';
+const SINGLE_CARD_CATEGORY_IDS = new Set(['183050', '183454', '261328']);
+const SPORT_BY_SKU_CATEGORY_CODE: Record<string, string> = {
+  BSBL: 'Baseball',
+  BSKBL: 'Basketball',
+};
+const YEAR_ASPECT_NAMES = ['year manufactured', 'year'] as const;
+
+type TaxonomyAspectMode = 'FREE_TEXT' | 'SELECTION_ONLY';
+type TaxonomyAspectUsage = 'OPTIONAL' | 'RECOMMENDED';
+type TaxonomyAspectCardinality = 'MULTI' | 'SINGLE';
+
+export interface TaxonomyAspectMetadata {
+  allowedValues: string[];
+  cardinality?: TaxonomyAspectCardinality;
+  dataType?: string;
+  inputMode?: TaxonomyAspectMode;
+  localizedName: string;
+  required: boolean;
+  usage?: TaxonomyAspectUsage;
+}
+
+export type NormalizedOutboundItemSpecifics = Record<string, string[]>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -23,6 +57,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeAspectKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function readOptionalEnum<T extends string>(
+  value: unknown,
+  allowedValues: readonly T[],
+  field: string,
+  aspectName: string
+): T | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === 'string' && allowedValues.includes(value as T)) {
+    return value as T;
+  }
+
+  throw new Error(
+    `Taxonomy item aspects response has invalid ${field} for "${aspectName}".`
+  );
 }
 
 function hasMeaningfulAspectValue(value: Json): boolean {
@@ -49,13 +102,12 @@ export function getCategoryTreeIdFromTaxonomyResponse(response: unknown): string
   return response.categoryTreeId.trim();
 }
 
-export function getRequiredAspectNamesFromTaxonomyResponse(response: unknown): string[] {
+export function getTaxonomyAspectMetadata(response: unknown): TaxonomyAspectMetadata[] {
   if (!isRecord(response) || !Array.isArray(response.aspects)) {
     throw new Error('Taxonomy item aspects response is missing aspects.');
   }
 
-  const requiredAspectNames: string[] = [];
-  const seenNames = new Set<string>();
+  const aspects: TaxonomyAspectMetadata[] = [];
 
   for (const aspect of response.aspects) {
     if (
@@ -72,26 +124,90 @@ export function getRequiredAspectNamesFromTaxonomyResponse(response: unknown): s
       );
     }
 
-    const aspectRequired = aspect.aspectConstraint.aspectRequired;
+    const aspectName = aspect.localizedAspectName.trim();
+    const constraint = aspect.aspectConstraint;
+    const aspectRequired = constraint.aspectRequired;
     if (aspectRequired !== undefined && typeof aspectRequired !== 'boolean') {
       throw new Error(
-        `Taxonomy item aspects response has invalid aspectRequired for "${aspect.localizedAspectName.trim()}".`
+        `Taxonomy item aspects response has invalid aspectRequired for "${aspectName}".`
       );
     }
 
-    if (aspectRequired !== true) {
-      continue;
+    const aspectValues = aspect.aspectValues;
+    if (aspectValues !== undefined && !Array.isArray(aspectValues)) {
+      throw new Error(
+        `Taxonomy item aspects response has invalid aspectValues for "${aspectName}".`
+      );
     }
 
-    const aspectName = aspect.localizedAspectName.trim();
-    const normalizedName = normalizeAspectKey(aspectName);
-    if (!seenNames.has(normalizedName)) {
-      requiredAspectNames.push(aspectName);
+    const allowedValues = (aspectValues ?? []).map((aspectValue) => {
+      if (
+        !isRecord(aspectValue) ||
+        typeof aspectValue.localizedValue !== 'string' ||
+        !aspectValue.localizedValue.trim()
+      ) {
+        throw new Error(
+          `Taxonomy item aspects response contains an invalid allowed value for "${aspectName}".`
+        );
+      }
+
+      return aspectValue.localizedValue.trim();
+    });
+    const dataType = constraint.aspectDataType;
+    if (dataType !== undefined && (typeof dataType !== 'string' || !dataType.trim())) {
+      throw new Error(
+        `Taxonomy item aspects response has invalid aspectDataType for "${aspectName}".`
+      );
+    }
+
+    aspects.push({
+      allowedValues,
+      cardinality: readOptionalEnum(
+        constraint.itemToAspectCardinality,
+        ['MULTI', 'SINGLE'],
+        'itemToAspectCardinality',
+        aspectName
+      ),
+      dataType: typeof dataType === 'string' ? dataType.trim() : undefined,
+      inputMode: readOptionalEnum(
+        constraint.aspectMode,
+        ['FREE_TEXT', 'SELECTION_ONLY'],
+        'aspectMode',
+        aspectName
+      ),
+      localizedName: aspectName,
+      required: aspectRequired === true,
+      usage: readOptionalEnum(
+        constraint.aspectUsage,
+        ['OPTIONAL', 'RECOMMENDED'],
+        'aspectUsage',
+        aspectName
+      ),
+    });
+  }
+
+  return aspects;
+}
+
+export function getRequiredAspectNames(
+  aspects: readonly TaxonomyAspectMetadata[]
+): string[] {
+  const requiredAspectNames: string[] = [];
+  const seenNames = new Set<string>();
+
+  for (const aspect of aspects) {
+    const normalizedName = normalizeAspectKey(aspect.localizedName);
+    if (aspect.required && !seenNames.has(normalizedName)) {
+      requiredAspectNames.push(aspect.localizedName);
       seenNames.add(normalizedName);
     }
   }
 
   return requiredAspectNames;
+}
+
+export function getRequiredAspectNamesFromTaxonomyResponse(response: unknown): string[] {
+  return getRequiredAspectNames(getTaxonomyAspectMetadata(response));
 }
 
 export function hasRequiredAspectValue(
@@ -103,13 +219,13 @@ export function hasRequiredAspectValue(
   }
 
   const normalizedAspectName = normalizeAspectKey(aspectName);
-  if (!normalizedAspectName || INTERNAL_ITEM_SPECIFIC_KEYS.has(aspectName.trim())) {
+  if (!normalizedAspectName || INTERNAL_ITEM_SPECIFIC_KEYS.has(normalizedAspectName)) {
     return false;
   }
 
   for (const [key, value] of Object.entries(itemSpecifics)) {
     if (
-      INTERNAL_ITEM_SPECIFIC_KEYS.has(key.trim()) ||
+      INTERNAL_ITEM_SPECIFIC_KEYS.has(normalizeAspectKey(key)) ||
       normalizeAspectKey(key) !== normalizedAspectName
     ) {
       continue;
@@ -119,6 +235,403 @@ export function hasRequiredAspectValue(
   }
 
   return false;
+}
+
+function getTaxonomyAspectByName(
+  aspectsByName: ReadonlyMap<string, TaxonomyAspectMetadata>,
+  names: readonly string[]
+): TaxonomyAspectMetadata | undefined {
+  for (const name of names) {
+    const aspect = aspectsByName.get(normalizeAspectKey(name));
+    if (aspect) {
+      return aspect;
+    }
+  }
+
+  return undefined;
+}
+
+function getPersistedAspectValue(
+  itemSpecifics: Record<string, unknown>,
+  aspectName: string
+): unknown {
+  const normalizedName = normalizeAspectKey(aspectName);
+  return Object.entries(itemSpecifics).find(
+    ([key]) => normalizeAspectKey(key) === normalizedName
+  )?.[1];
+}
+
+function normalizeOutboundAspectValue(
+  value: unknown,
+  metadata: TaxonomyAspectMetadata
+): string[] | null {
+  const rawValues =
+    typeof value === 'string'
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+  const values: string[] = [];
+  const seenValues = new Set<string>();
+
+  for (const rawValue of rawValues) {
+    const trimmed = rawValue.trim();
+    const normalized = trimmed.toLowerCase();
+    if (trimmed && !seenValues.has(normalized)) {
+      values.push(trimmed);
+      seenValues.add(normalized);
+    }
+  }
+
+  if (values.length === 0 || (metadata.cardinality === 'SINGLE' && values.length !== 1)) {
+    return null;
+  }
+
+  const normalizedValues =
+    metadata.inputMode === 'SELECTION_ONLY'
+      ? (() => {
+          const allowedValues = new Map(
+            metadata.allowedValues.map((allowedValue) => [allowedValue.toLowerCase(), allowedValue])
+          );
+          const matched = values
+            .map((candidate) => allowedValues.get(candidate.toLowerCase()))
+            .filter((candidate): candidate is string => candidate !== undefined);
+
+          return matched.length === values.length ? matched : [];
+        })()
+      : values;
+
+  return normalizedValues.length > 0 ? normalizedValues : null;
+}
+
+function normalizeTaxonomyDefaultValue(
+  value: string,
+  metadata: TaxonomyAspectMetadata
+): string[] | null {
+  const canonicalValue = metadata.allowedValues.find(
+    (allowedValue) => allowedValue.toLowerCase() === value.toLowerCase()
+  );
+  return canonicalValue ? normalizeOutboundAspectValue(canonicalValue, metadata) : null;
+}
+
+function normalizeManualVintageValue(
+  value: unknown,
+  metadata: TaxonomyAspectMetadata
+): string[] | null {
+  const rawValue =
+    typeof value === 'string'
+      ? value
+      : Array.isArray(value) && value.length === 1 && typeof value[0] === 'string'
+        ? value[0]
+        : null;
+  if (rawValue === null) {
+    return null;
+  }
+
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized !== 'yes' && normalized !== 'no') {
+    return null;
+  }
+
+  return normalizeOutboundAspectValue(normalized === 'yes' ? 'Yes' : 'No', metadata);
+}
+
+function normalizeAuthorizedSportsSetValue(value: string, authorizedYear: string): string | null {
+  const storedSet = value.trim();
+  if (!storedSet) {
+    return null;
+  }
+
+  const seasonRange = /^((?:19|20)\d{2})\s*[-/]\s*(\d{2}|\d{4})(?=\s|$)/u.exec(
+    storedSet
+  );
+  if (seasonRange) {
+    const rangeStart = seasonRange[1]!;
+    const rangeEnd = seasonRange[2]!;
+    const expectedRangeEnd = String(Number(authorizedYear) + 1);
+    const remainingSetName = storedSet.slice(seasonRange[0].length).trim();
+
+    if (
+      rangeStart !== authorizedYear ||
+      (rangeEnd !== expectedRangeEnd && rangeEnd !== expectedRangeEnd.slice(-2)) ||
+      !/[\p{L}\p{N}]/u.test(remainingSetName) ||
+      /\b\d{4}\b/u.test(remainingSetName) ||
+      /^[-/]\s*\d{2,4}\b/u.test(remainingSetName)
+    ) {
+      return null;
+    }
+
+    return storedSet;
+  }
+
+  if (/\b\d{4}\s*(?:[-/–—−]|\bto\b)\s*\d{2,4}/iu.test(storedSet)) {
+    return null;
+  }
+
+  const supportedYearClaims = storedSet.match(/\b(?:19|20)\d{2}\b/gu) ?? [];
+  if (supportedYearClaims.length > 1) {
+    return null;
+  }
+
+  const canonicalSet = sanitizeSetYearClaims(storedSet);
+  return canonicalSet && !/\b\d{4}\b/u.test(canonicalSet)
+    ? `${authorizedYear} ${canonicalSet}`
+    : null;
+}
+
+function normalizeAuthorizedSportsSeasonValue(value: unknown, authorizedYear: string): string | null {
+  const values = typeof value === 'string' ? [value] : value;
+  if (
+    !Array.isArray(values) ||
+    values.length !== 1 ||
+    typeof values[0] !== 'string'
+  ) {
+    return null;
+  }
+
+  const storedSeason = values[0].trim();
+  if (!storedSeason) {
+    return null;
+  }
+
+  if (storedSeason === authorizedYear) {
+    return storedSeason;
+  }
+
+  const range = /^((?:19|20)\d{2})\s*[-/]\s*(\d{2}|\d{4})$/u.exec(storedSeason);
+  if (!range || range[1] !== authorizedYear) {
+    return null;
+  }
+
+  const expectedFullEnd = String(Number(authorizedYear) + 1);
+  const expectedShortEnd = expectedFullEnd.slice(-2);
+  return range[2] === expectedFullEnd || range[2] === expectedShortEnd ? storedSeason : null;
+}
+
+function isCanonicalSingleCardListing(
+  listing: Pick<ListingRow, 'capture_mode' | 'category_id'>
+): boolean {
+  const categoryId = listing.category_id?.trim();
+  return (
+    listing.capture_mode !== 'lot_3_image' &&
+    categoryId !== undefined &&
+    SINGLE_CARD_CATEGORY_IDS.has(categoryId)
+  );
+}
+
+export function normalizeSingleCardOutboundItemSpecifics({
+  conditionDescriptorsPresent,
+  listing,
+  taxonomyAspects,
+  now,
+}: {
+  conditionDescriptorsPresent: boolean;
+  listing: ListingRow;
+  taxonomyAspects: readonly TaxonomyAspectMetadata[];
+  now: () => Date;
+}): NormalizedOutboundItemSpecifics | null {
+  if (!isCanonicalSingleCardListing(listing)) {
+    return null;
+  }
+
+  const itemSpecifics = isRecord(listing.item_specifics) ? listing.item_specifics : {};
+  const aspectsByName = new Map<string, TaxonomyAspectMetadata>();
+  for (const aspect of taxonomyAspects) {
+    const normalizedName = normalizeAspectKey(aspect.localizedName);
+    if (!aspectsByName.has(normalizedName)) {
+      aspectsByName.set(normalizedName, aspect);
+    }
+  }
+
+  const categoryId = listing.category_id!.trim();
+  const playerAspect =
+    categoryId === '261328'
+      ? getTaxonomyAspectByName(aspectsByName, ['Player/Athlete'])
+      : undefined;
+  const teamAspect =
+    categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Team']) : undefined;
+  const sportAspect =
+    categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Sport']) : undefined;
+  const yearAspect = getTaxonomyAspectByName(aspectsByName, YEAR_ASPECT_NAMES);
+  const seasonAspect = categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Season']) : undefined;
+  const vintageAspect = categoryId === '261328' ? getTaxonomyAspectByName(aspectsByName, ['Vintage']) : undefined;
+  const authorizedYear = readAuthorizedGeneratedDraftYearMetadata(itemSpecifics)?.year.trim();
+  const outbound: NormalizedOutboundItemSpecifics = {};
+
+  for (const [key, rawValue] of Object.entries(itemSpecifics)) {
+    const normalizedKey = normalizeAspectKey(key);
+    if (
+      INTERNAL_ITEM_SPECIFIC_KEYS.has(normalizedKey) ||
+      (categoryId === '261328' && REMOVED_SPORTS_CARD_ITEM_SPECIFIC_KEYS.has(normalizedKey)) ||
+      (categoryId === '261328' && normalizedKey === 'vintage') ||
+      normalizedKey === 'year' ||
+      (conditionDescriptorsPresent &&
+        normalizedKey === normalizeAspectKey(TRADING_CARD_CONDITION_ASPECT_KEY)) ||
+      (playerAspect && normalizedKey === 'player') ||
+      (teamAspect && normalizedKey === 'franchise')
+    ) {
+      continue;
+    }
+
+    const taxonomyAspect = aspectsByName.get(normalizedKey);
+    if (!taxonomyAspect || outbound[taxonomyAspect.localizedName]) {
+      continue;
+    }
+
+    let valueForNormalization =
+      normalizedKey === normalizeAspectKey(TRADING_CARD_CONDITION_ASPECT_KEY)
+        ? (() => {
+            const token = normalizeRawCardConditionToken(rawValue);
+            return token ? getRawCardConditionDisplayLabel(token) : rawValue;
+          })()
+        : rawValue;
+    if (categoryId === '261328' && normalizedKey === 'set' && authorizedYear) {
+      const storedSetValues =
+        typeof rawValue === 'string'
+          ? [rawValue]
+          : Array.isArray(rawValue)
+            ? rawValue.filter((value): value is string => typeof value === 'string')
+            : [];
+      const canonicalSetValues = storedSetValues.map((storedSetValue) =>
+        normalizeAuthorizedSportsSetValue(storedSetValue, authorizedYear)
+      );
+      valueForNormalization = canonicalSetValues.some((canonicalSet) => canonicalSet === null)
+        ? []
+        : canonicalSetValues;
+    }
+    const normalizedValue = normalizeOutboundAspectValue(valueForNormalization, taxonomyAspect);
+    if (normalizedValue) {
+      outbound[taxonomyAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (categoryId === '261328') {
+    const defaults: ReadonlyArray<[string, string]> = [
+      ['Material', 'Card Stock'],
+      ['Card Thickness', '20 Pt.'],
+      ['Card Size', 'Standard'],
+      ['Language', 'English'],
+      ['Original/Licensed Reprint', 'Original'],
+      ['Autographed', 'No'],
+    ];
+    for (const [aspectName, defaultValue] of defaults) {
+      const aspect = getTaxonomyAspectByName(aspectsByName, [aspectName]);
+      if (!aspect || outbound[aspect.localizedName]) {
+        continue;
+      }
+
+      const normalizedValue = normalizeTaxonomyDefaultValue(defaultValue, aspect);
+      if (normalizedValue) {
+        outbound[aspect.localizedName] = normalizedValue;
+      }
+    }
+  }
+
+  if (playerAspect && !outbound[playerAspect.localizedName]) {
+    const normalizedValue = normalizeOutboundAspectValue(
+      getPersistedAspectValue(itemSpecifics, 'Player'),
+      playerAspect
+    );
+    if (normalizedValue) {
+      outbound[playerAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (teamAspect && !outbound[teamAspect.localizedName]) {
+    const normalizedValue = normalizeOutboundAspectValue(
+      getPersistedAspectValue(itemSpecifics, 'Franchise'),
+      teamAspect
+    );
+    if (normalizedValue) {
+      outbound[teamAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (sportAspect && !outbound[sportAspect.localizedName]) {
+    const skuCategoryCode = getPersistedAspectValue(itemSpecifics, 'skuCategoryCode');
+    const deterministicSport =
+      typeof skuCategoryCode === 'string'
+        ? SPORT_BY_SKU_CATEGORY_CODE[skuCategoryCode.trim().toUpperCase()]
+        : undefined;
+    const normalizedValue = deterministicSport
+      ? normalizeOutboundAspectValue(deterministicSport, sportAspect)
+      : null;
+    if (normalizedValue) {
+      outbound[sportAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (yearAspect && authorizedYear) {
+    const normalizedValue = normalizeOutboundAspectValue(authorizedYear, yearAspect);
+    if (normalizedValue) {
+      outbound[yearAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  if (seasonAspect && !outbound[seasonAspect.localizedName]) {
+    const manualSeason = normalizeOutboundAspectValue(
+      getPersistedAspectValue(itemSpecifics, 'Season'),
+      seasonAspect
+    );
+    if (manualSeason) {
+      outbound[seasonAspect.localizedName] = manualSeason;
+    } else if (authorizedYear) {
+      const safeSeason = normalizeAuthorizedSportsSeasonValue(
+        getPersistedAspectValue(itemSpecifics, 'Season'),
+        authorizedYear
+      );
+      const normalizedValue = normalizeOutboundAspectValue(
+        safeSeason ?? authorizedYear,
+        seasonAspect
+      );
+      if (normalizedValue) {
+        outbound[seasonAspect.localizedName] = normalizedValue;
+      }
+    }
+  }
+
+  if (vintageAspect && !outbound[vintageAspect.localizedName]) {
+    const manualVintage = normalizeManualVintageValue(
+      getPersistedAspectValue(itemSpecifics, 'Vintage'),
+      vintageAspect
+    );
+    if (manualVintage) {
+      outbound[vintageAspect.localizedName] = manualVintage;
+    } else if (authorizedYear) {
+      const currentYear = now().getUTCFullYear();
+      if (Number.isInteger(currentYear)) {
+        const vintageValue = currentYear - Number(authorizedYear) > 20 ? 'Yes' : 'No';
+        const normalizedValue = normalizeOutboundAspectValue(vintageValue, vintageAspect);
+        if (normalizedValue) {
+          outbound[vintageAspect.localizedName] = normalizedValue;
+        }
+      }
+    }
+    if (!outbound[vintageAspect.localizedName] && !authorizedYear) {
+      const normalizedValue = normalizeTaxonomyDefaultValue('Yes', vintageAspect);
+      if (normalizedValue) {
+        outbound[vintageAspect.localizedName] = normalizedValue;
+      }
+    }
+  }
+
+  const deterministicType =
+    categoryId === '261328'
+      ? 'Sports Trading Card'
+      : categoryId === '183050'
+        ? 'Non-Sport Trading Card'
+        : null;
+  const typeAspect = deterministicType
+    ? getTaxonomyAspectByName(aspectsByName, ['Type'])
+    : undefined;
+  if (typeAspect && deterministicType) {
+    const normalizedValue = normalizeOutboundAspectValue(deterministicType, typeAspect);
+    if (normalizedValue) {
+      outbound[typeAspect.localizedName] = normalizedValue;
+    }
+  }
+
+  return outbound;
 }
 
 function hasRequiredAspectValueForKeys(
@@ -161,15 +674,18 @@ function createMissingAspectField(aspectName: string): PublishRequiredItemSpecif
 
 export function validateRequiredItemSpecificsForCategory({
   listing,
+  outboundItemSpecifics,
   requiredAspectNames,
   satisfiedAspectNames = [],
 }: {
   listing: ListingRow;
+  outboundItemSpecifics?: NormalizedOutboundItemSpecifics;
   requiredAspectNames: string[];
   satisfiedAspectNames?: string[];
 }): void {
   const satisfiedNames = new Set(satisfiedAspectNames.map(normalizeAspectKey));
-  const effectiveItemSpecifics = getEffectiveItemSpecificsForCategoryValidation(listing);
+  const effectiveItemSpecifics =
+    outboundItemSpecifics ?? getEffectiveItemSpecificsForCategoryValidation(listing);
   const missingFields = requiredAspectNames
     .filter((aspectName) => {
       const normalizedName = normalizeAspectKey(aspectName);

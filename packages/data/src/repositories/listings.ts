@@ -323,7 +323,7 @@ export async function deleteNeedsReviewListing(
     .from('listings')
     .delete()
     .eq('listing_id', input.listingId)
-    .eq('status', 'needs_review')
+    .in('status', ['assets_ready', 'needs_review'])
     .eq('updated_at', input.expectedUpdatedAt)
     .select()
     .maybeSingle()) as SingleResult<ListingRow>;

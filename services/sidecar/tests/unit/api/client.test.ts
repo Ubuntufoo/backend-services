@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import nock from 'nock';
+import axios, { AxiosError } from 'axios';
 import { EbayApiClient } from '@/api/client.js';
 import { getEbayConfig } from '@/config/environment.js';
 import type { EbayConfig } from '@/types/ebay.js';
@@ -9,6 +10,7 @@ import { apiLogger } from '@/utils/logger.js';
 const mockOAuthClient = {
   hasUserTokens: vi.fn(),
   getAccessToken: vi.fn(),
+  getOrRefreshAppAccessToken: vi.fn(),
   setUserTokens: vi.fn(),
   initialize: vi.fn(),
   getTokenInfo: vi.fn(),
@@ -48,6 +50,7 @@ describe('EbayApiClient Unit Tests', () => {
     // Setup mock OAuth client
     mockOAuthClient.hasUserTokens.mockReturnValue(true);
     mockOAuthClient.getAccessToken.mockResolvedValue('mock_access_token');
+    mockOAuthClient.getOrRefreshAppAccessToken.mockResolvedValue('mock_app_access_token');
     mockOAuthClient.initialize.mockResolvedValue(undefined);
     mockOAuthClient.isAuthenticated.mockReturnValue(true);
     mockOAuthClient.getTokenInfo.mockReturnValue({
@@ -170,6 +173,170 @@ describe('EbayApiClient Unit Tests', () => {
       await expect(apiClient.get('/sell/inventory/v1/test')).rejects.toThrow(
         /eBay API rate limit exceeded.*60 seconds/
       );
+    });
+  });
+
+  describe('Application-token GET', () => {
+    it('uses the Application token even when User credentials are present', async () => {
+      nock('https://api.sandbox.ebay.com', {
+        reqheaders: { authorization: 'Bearer mock_app_access_token' },
+      })
+        .get('/buy/browse/v1/test')
+        .query({ q: 'test card' })
+        .reply(200, { itemSummaries: [] });
+
+      await expect(
+        apiClient.getWithApplicationToken('/buy/browse/v1/test', { q: 'test card' })
+      ).resolves.toEqual({ itemSummaries: [] });
+      expect(mockOAuthClient.getOrRefreshAppAccessToken).toHaveBeenCalledWith();
+      expect(mockOAuthClient.getAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('remints the Application token once after a 401 and retries the GET', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken
+        .mockResolvedValueOnce('expired_app_token')
+        .mockResolvedValueOnce('fresh_app_token');
+
+      nock('https://api.sandbox.ebay.com', {
+        reqheaders: { authorization: 'Bearer expired_app_token' },
+      })
+        .get('/buy/browse/v1/test')
+        .reply(401, { errors: [{ message: 'Invalid access token' }] });
+      nock('https://api.sandbox.ebay.com', {
+        reqheaders: { authorization: 'Bearer fresh_app_token' },
+      })
+        .get('/buy/browse/v1/test')
+        .reply(200, { itemSummaries: [] });
+
+      await expect(apiClient.getWithApplicationToken('/buy/browse/v1/test')).resolves.toEqual({
+        itemSummaries: [],
+      });
+      expect(mockOAuthClient.getOrRefreshAppAccessToken).toHaveBeenNthCalledWith(1);
+      expect(mockOAuthClient.getOrRefreshAppAccessToken).toHaveBeenNthCalledWith(2, true);
+      expect(mockOAuthClient.getAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('stops after one Application-token 401 retry and redacts both tokens', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken
+        .mockResolvedValueOnce('expired_secret_app_token')
+        .mockResolvedValueOnce('fresh_secret_app_token');
+
+      nock('https://api.sandbox.ebay.com')
+        .get('/buy/browse/v1/test')
+        .reply(401, { errors: [{ message: 'expired_secret_app_token rejected' }] });
+      nock('https://api.sandbox.ebay.com')
+        .get('/buy/browse/v1/test')
+        .reply(401, { errors: [{ message: 'fresh_secret_app_token rejected' }] });
+
+      const error = await apiClient
+        .getWithApplicationToken('/buy/browse/v1/test')
+        .catch((caught: unknown) => caught);
+
+      expect(mockOAuthClient.getOrRefreshAppAccessToken).toHaveBeenCalledTimes(2);
+      expect(String(error)).not.toContain('expired_secret_app_token');
+      expect(JSON.stringify(error)).not.toContain('fresh_secret_app_token');
+      expect(error).not.toMatchObject({ config: expect.anything(), request: expect.anything() });
+    });
+
+    it('does not expose the Application token in request errors', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken.mockResolvedValue('secret_app_token');
+      nock('https://api.sandbox.ebay.com')
+        .get('/buy/browse/v1/test')
+        .reply(400, { errors: [{ message: 'Invalid request' }] });
+
+      const error = await apiClient
+        .getWithApplicationToken('/buy/browse/v1/test')
+        .catch((caught: unknown) => caught);
+
+      expect(String(error)).not.toContain('secret_app_token');
+      expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    });
+
+    it('sanitizes timeout failures without retaining Axios request metadata', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken.mockResolvedValue('timeout_secret_app_token');
+      nock('https://api.sandbox.ebay.com')
+        .get('/buy/browse/v1/test')
+        .delayConnection(50)
+        .reply(200, { itemSummaries: [] });
+
+      const error = await apiClient
+        .getWithApplicationToken('/buy/browse/v1/test', undefined, { timeout: 5 })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('ECONNABORTED');
+      expect(String(error)).not.toContain('timeout_secret_app_token');
+      expect(error).not.toMatchObject({
+        config: expect.anything(),
+        request: expect.anything(),
+        headers: expect.anything(),
+        cause: expect.anything(),
+      });
+      expect(JSON.stringify(error)).not.toContain('timeout_secret_app_token');
+    });
+
+    it('sanitizes generic network failures without retaining Axios request metadata', async () => {
+      mockOAuthClient.getOrRefreshAppAccessToken.mockResolvedValue('network_secret_app_token');
+      const axiosGet = vi
+        .spyOn(axios, 'get')
+        .mockRejectedValueOnce(
+          new AxiosError(
+            'socket hang up',
+            'ECONNRESET',
+            { headers: { Authorization: 'Bearer network_secret_app_token' } } as never,
+            { authorization: 'Bearer network_secret_app_token' }
+          )
+        );
+
+      const error = await apiClient
+        .getWithApplicationToken('/buy/browse/v1/test')
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('ECONNRESET');
+      expect(String(error)).toContain('socket hang up');
+      expect(String(error)).not.toContain('network_secret_app_token');
+      expect(error).not.toMatchObject({
+        config: expect.anything(),
+        request: expect.anything(),
+        headers: expect.anything(),
+        cause: expect.anything(),
+      });
+      expect(JSON.stringify(error)).not.toContain('network_secret_app_token');
+      axiosGet.mockRestore();
+    });
+
+    it('keeps the default seller GET on the User-token-preferred path after a 401', async () => {
+      mockOAuthClient.getAccessToken
+        .mockResolvedValueOnce('expired_user_token')
+        .mockResolvedValue('fresh_user_token');
+
+      nock('https://api.sandbox.ebay.com', {
+        reqheaders: { authorization: 'Bearer expired_user_token' },
+      })
+        .get('/sell/inventory/v1/test')
+        .reply(401, { errors: [{ message: 'Invalid access token' }] });
+      nock('https://api.sandbox.ebay.com', {
+        reqheaders: { authorization: 'Bearer fresh_user_token' },
+      })
+        .get('/sell/inventory/v1/test')
+        .reply(200, { success: true });
+
+      await expect(apiClient.get('/sell/inventory/v1/test')).resolves.toEqual({ success: true });
+      expect(mockOAuthClient.getAccessToken).toHaveBeenCalledTimes(3);
+      expect(mockOAuthClient.getOrRefreshAppAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('keeps a successful default seller GET on the User-token-preferred path', async () => {
+      nock('https://api.sandbox.ebay.com', {
+        reqheaders: { authorization: 'Bearer mock_access_token' },
+      })
+        .get('/sell/inventory/v1/test')
+        .reply(200, { success: true });
+
+      await expect(apiClient.get('/sell/inventory/v1/test')).resolves.toEqual({ success: true });
+      expect(mockOAuthClient.getAccessToken).toHaveBeenCalled();
+      expect(mockOAuthClient.getOrRefreshAppAccessToken).not.toHaveBeenCalled();
     });
   });
 

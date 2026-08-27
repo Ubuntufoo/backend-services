@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -10,6 +10,7 @@ import type { EbayConfig } from '@/types/ebay.js';
 
 const STRUCTURED_SINGLE_SKU = 'BSKBL-Single-000001';
 const STRUCTURED_LOT_SKU = 'BSBL-Lot-000002';
+const originalPublishEnabled = process.env.EBAY_PUBLISH_ENABLED;
 
 function createTradingCardConditionPoliciesResponse(
   values: { id: string; name: string }[],
@@ -43,14 +44,25 @@ function createTradingCardConditionPoliciesResponse(
   };
 }
 
-function createTaxonomyAspectsResponse(requiredAspectNames: string[]) {
+function createTaxonomyAspectsResponse(
+  requiredAspectNames: string[],
+  optionalAspectNames: string[] = []
+) {
   return {
-    aspects: requiredAspectNames.map((localizedAspectName) => ({
-      localizedAspectName,
-      aspectConstraint: {
-        aspectRequired: true,
-      },
-    })),
+    aspects: [
+      ...requiredAspectNames.map((localizedAspectName) => ({
+        localizedAspectName,
+        aspectConstraint: {
+          aspectRequired: true,
+        },
+      })),
+      ...optionalAspectNames.map((localizedAspectName) => ({
+        localizedAspectName,
+        aspectConstraint: {
+          aspectRequired: false,
+        },
+      })),
+    ],
   };
 }
 
@@ -133,14 +145,18 @@ function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettings
   if (appSettings.ebay_publish_config == null) {
     appSettings.ebay_publish_config = {
       production: {
+        combinedFulfillmentPolicyId: 'LIVE-COMBINED-1',
         fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+        groundFulfillmentPolicyId: 'LIVE-GROUND-1',
         marketplaceId: 'EBAY_US',
         merchantLocationKey: 'live-warehouse-1',
         paymentPolicyId: 'LIVE-PAYMENT-1',
         returnPolicyId: 'LIVE-RETURN-1',
       },
       sandbox: {
+        combinedFulfillmentPolicyId: 'SANDBOX-COMBINED-1',
         fulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
+        groundFulfillmentPolicyId: appSettings.default_fulfillment_policy_id,
         marketplaceId: appSettings.ebay_marketplace_id,
         merchantLocationKey: appSettings.merchant_location_key,
         paymentPolicyId: appSettings.default_payment_policy_id,
@@ -452,6 +468,45 @@ function createDependencies({
 }
 
 describe('publishListing', () => {
+  beforeEach(() => {
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    if (originalPublishEnabled === undefined) {
+      delete process.env.EBAY_PUBLISH_ENABLED;
+      return;
+    }
+
+    process.env.EBAY_PUBLISH_ENABLED = originalPublishEnabled;
+  });
+
+  it.each([undefined, 'false'])(
+    'blocks publish before dependencies or eBay APIs when EBAY_PUBLISH_ENABLED=%s',
+    async (publishEnabled) => {
+      const dependencies = createDependencies();
+
+      if (publishEnabled === undefined) {
+        delete process.env.EBAY_PUBLISH_ENABLED;
+      } else {
+        process.env.EBAY_PUBLISH_ENABLED = publishEnabled;
+      }
+
+      await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+        code: 'PUBLISH_DISABLED',
+        context: {
+          listingId: 'LIST-001',
+          stage: 'validate',
+        },
+      } satisfies Partial<PublishListingError>);
+      expect(dependencies.dataAccess.listings.getByListingId).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.getInventoryLocation).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+      expect(dependencies.inventoryApi.publishOffer).not.toHaveBeenCalled();
+    }
+  );
+
   it('runs happy path orchestration and persists exported state', async () => {
     const dependencies = createDependencies();
 
@@ -537,7 +592,6 @@ describe('publishListing', () => {
         sku: STRUCTURED_SINGLE_SKU,
       }),
     });
-
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
@@ -686,7 +740,7 @@ describe('publishListing', () => {
     expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
       expect.objectContaining({
         listingPolicies: {
-          fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+          fulfillmentPolicyId: 'LIVE-GROUND-1',
           paymentPolicyId: 'LIVE-PAYMENT-1',
           returnPolicyId: 'LIVE-RETURN-1',
         },
@@ -696,19 +750,57 @@ describe('publishListing', () => {
     );
   });
 
+  it('uses the combined policy for an explicitly eSE-eligible listing under $20', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        ese_eligible: true,
+        item_specifics: {
+          'Card Condition': 'VERY_GOOD',
+          Player: 'Michael Jordan',
+        },
+        listing_type: 'single',
+        price: 19.99,
+      }),
+      runtimeConfig: {
+        environment: 'production',
+        marketplaceId: 'EBAY_US',
+      },
+    });
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listingPolicies: {
+          fulfillmentPolicyId: 'LIVE-COMBINED-1',
+          paymentPolicyId: 'LIVE-PAYMENT-1',
+          returnPolicyId: 'LIVE-RETURN-1',
+        },
+        marketplaceId: 'EBAY_US',
+        merchantLocationKey: 'live-warehouse-1',
+      })
+    );
+  });
+
   it('fails before createOffer when sandbox location key cannot be verified', async () => {
     const dependencies = createDependencies({
       appSettings: createAppSettings({
         ebay_publish_config: {
           production: {
+            combinedFulfillmentPolicyId: 'LIVE-COMBINED-1',
             fulfillmentPolicyId: 'LIVE-FULFILLMENT-1',
+            groundFulfillmentPolicyId: 'LIVE-GROUND-1',
             marketplaceId: 'EBAY_US',
             merchantLocationKey: 'live-warehouse-1',
             paymentPolicyId: 'LIVE-PAYMENT-1',
             returnPolicyId: 'LIVE-RETURN-1',
           },
           sandbox: {
+            combinedFulfillmentPolicyId: 'SANDBOX-COMBINED-1',
             fulfillmentPolicyId: 'SANDBOX-FULFILLMENT-1',
+            groundFulfillmentPolicyId: 'SANDBOX-GROUND-1',
             marketplaceId: 'EBAY_US',
             merchantLocationKey: 'prod-location-key-in-sandbox',
             paymentPolicyId: 'SANDBOX-PAYMENT-1',
@@ -747,6 +839,9 @@ describe('publishListing', () => {
         },
       }),
     });
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse([], ['Player'])
+    );
 
     await publishListing('LIST-001', dependencies);
 
@@ -869,6 +964,9 @@ describe('publishListing', () => {
           categoryId: '183050',
         }
       )
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
+      createTaxonomyAspectsResponse([], ['Manufacturer', 'Player'])
     );
 
     await publishListing('LIST-001', dependencies);
@@ -1022,9 +1120,27 @@ describe('publishListing', () => {
         categoryId: '183050',
       })
     );
-    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () =>
-      createTaxonomyAspectsResponse(['Card Condition', 'Franchise'])
-    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => {
+      const response = createTaxonomyAspectsResponse(
+        ['Card Condition', 'Franchise'],
+        ['Manufacturer', 'Player']
+      );
+
+      return {
+        aspects: [
+          ...response.aspects,
+          {
+            localizedAspectName: 'Type',
+            aspectConstraint: {
+              aspectMode: 'SELECTION_ONLY',
+              aspectRequired: false,
+              itemToAspectCardinality: 'SINGLE',
+            },
+            aspectValues: [{ localizedValue: 'Non-Sport Trading Card' }],
+          },
+        ],
+      };
+    });
     await publishListing('LIST-001', dependencies);
 
     expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
@@ -1035,6 +1151,7 @@ describe('publishListing', () => {
             Franchise: ['Utah Jazz'],
             Manufacturer: ['Upper Deck'],
             Player: ['Karl Malone'],
+            Type: ['Non-Sport Trading Card'],
           },
         }),
       })
@@ -1046,6 +1163,287 @@ describe('publishListing', () => {
       dependencies.taxonomyApi.getItemAspectsForCategory.mock.invocationCallOrder[0]
     ).toBeLessThan(
       dependencies.inventoryApi.createOrReplaceInventoryItem.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('publishes canonical sports aliases, authorized year, and deterministic Type only', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          Franchise: 'Chicago Bulls',
+          Player: 'Michael Jordan',
+          Set: 'Upper Deck',
+          Unsupported: 'must not leak',
+          Year: '1991',
+          __draft_metadata: {
+            year: {
+              image_index: 1,
+              source_type: 'copyright_line',
+              visible_text: '© 1991 UPPER DECK COMPANY',
+              year: '1991',
+            },
+          },
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }])
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Team',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Sports Trading Card' }],
+        },
+        {
+          localizedAspectName: 'Card Condition',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        conditionDescriptors: [{ name: '40001', values: ['400010'] }],
+        product: expect.objectContaining({
+          aspects: {
+            'Player/Athlete': ['Michael Jordan'],
+            Set: ['1991 Upper Deck'],
+            Team: ['Chicago Bulls'],
+            Type: ['Sports Trading Card'],
+            'Year Manufactured': ['1991'],
+          },
+        }),
+      })
+    );
+  });
+
+  it('publishes sports expansion fields and manually persisted autograph aspects', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '261328',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          'Card Name': 'All-Star',
+          Features: ['Serial Numbered'],
+          Language: 'English',
+          League: 'NBA',
+          'Print Run': '199',
+          Player: 'Michael Jordan',
+          Season: '2005-06',
+          'Signed By': 'Printed signature',
+          Autographed: 'No',
+          Year: '2005',
+          __draft_metadata: {
+            year: {
+              image_index: null,
+              source_type: 'seller_hint',
+              visible_text: null,
+              year: '2005',
+            },
+          },
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }])
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'League',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'MULTI' },
+        },
+        {
+          localizedAspectName: 'Card Name',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Language',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Print Run',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Features',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'MULTI' },
+        },
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Sports Trading Card' }],
+        },
+        {
+          localizedAspectName: 'Autographed',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+        {
+          localizedAspectName: 'Signed By',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'MULTI' },
+        },
+        {
+          localizedAspectName: 'Card Condition',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        product: expect.objectContaining({
+          aspects: {
+            'Card Name': ['All-Star'],
+            Autographed: ['No'],
+            Features: ['Serial Numbered'],
+            Language: ['English'],
+            League: ['NBA'],
+            'Player/Athlete': ['Michael Jordan'],
+            'Print Run': ['199'],
+            Season: ['2005-06'],
+            'Signed By': ['Printed signature'],
+            Type: ['Sports Trading Card'],
+            Vintage: ['Yes'],
+            'Year Manufactured': ['2005'],
+          },
+        }),
+      })
+    );
+  });
+
+  it('publishes supported CCG candidates without synthesizing Type, Season, or year', async () => {
+    const dependencies = createDependencies({
+      listing: createListing({
+        category_id: '183454',
+        condition_id: '4000',
+        item_specifics: {
+          'Card Condition': 'NEAR_MINT_OR_BETTER',
+          Game: 'pokémon tcg',
+          'Card Name': 'Charizard',
+          Rarity: 'Rare Holo',
+          Unsupported: 'must not leak',
+          Year: '1999',
+        },
+      }),
+    });
+    dependencies.metadataApi.getItemConditionPolicies = vi.fn(async () =>
+      createTradingCardConditionPoliciesResponse([{ id: '400010', name: 'Near mint or better' }], {
+        categoryId: '183454',
+      })
+    );
+    dependencies.taxonomyApi.getItemAspectsForCategory = vi.fn(async () => ({
+      aspects: [
+        {
+          localizedAspectName: 'Game',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Pokémon TCG' }],
+        },
+        {
+          localizedAspectName: 'Card Name',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Rarity',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Card Condition',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    }));
+
+    await publishListing('LIST-001', dependencies);
+
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).toHaveBeenCalledWith(
+      STRUCTURED_SINGLE_SKU,
+      expect.objectContaining({
+        product: expect.objectContaining({
+          aspects: {
+            'Card Name': ['Charizard'],
+            Game: ['Pokémon TCG'],
+            Rarity: ['Rare Holo'],
+          },
+        }),
+      })
     );
   });
 
@@ -1290,9 +1688,7 @@ describe('publishListing', () => {
       STRUCTURED_SINGLE_SKU,
       expect.objectContaining({
         product: expect.objectContaining({
-          aspects: {
-            FRANCHISE: ['Star Wars'],
-          },
+          aspects: { Franchise: ['Star Wars'] },
         }),
       })
     );
@@ -1377,17 +1773,6 @@ describe('publishListing', () => {
     },
     {
       appSettings: {
-        default_fulfillment_policy_id: '   ',
-      },
-      issue: {
-        field: 'fulfillmentPolicyId',
-        message: 'Fulfillment policy ID is required before publishing.',
-        scope: 'publish_config',
-      },
-      label: 'blank fulfillment policy',
-    },
-    {
-      appSettings: {
         default_return_policy_id: '   ',
       },
       issue: {
@@ -1431,6 +1816,25 @@ describe('publishListing', () => {
     }
   );
 
+  it('reports a missing Ground-only fulfillment policy before eBay writes', async () => {
+    const dependencies = createDependencies({
+      appSettings: createAppSettings({ default_fulfillment_policy_id: '   ' }),
+    });
+
+    await expect(publishListing('LIST-001', dependencies)).rejects.toMatchObject({
+      code: 'LISTING_NOT_READY',
+      context: {
+        issues: [
+          'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.groundFulfillmentPolicyId is required for sandbox publish config.',
+        ],
+        listingId: 'LIST-001',
+        stage: 'validate',
+      },
+    });
+    expect(dependencies.inventoryApi.createOrReplaceInventoryItem).not.toHaveBeenCalled();
+    expect(dependencies.inventoryApi.createOffer).not.toHaveBeenCalled();
+  });
+
   it('keeps placeholder publish-config failures on existing non-required validation path', async () => {
     const dependencies = createDependencies({
       appSettings: createAppSettings({
@@ -1446,7 +1850,7 @@ describe('publishListing', () => {
       context: {
         issues: [
           'payment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.paymentPolicyId "mock-payment-policy-id" is a placeholder.',
-          'fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.fulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
+          'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.groundFulfillmentPolicyId "mock-fulfillment-policy-id" is a placeholder.',
           'return_policy_id_missing_for_environment: app_settings.ebay_publish_config.sandbox.returnPolicyId "mock-return-policy-id" is a placeholder.',
           'merchant_location_key_missing_for_environment: app_settings.ebay_publish_config.sandbox.merchantLocationKey "default-main-location" looks like a placeholder.',
         ],
@@ -1602,11 +2006,6 @@ describe('publishListing', () => {
           {
             field: 'paymentPolicyId',
             message: 'Payment policy ID is required before publishing.',
-            scope: 'publish_config',
-          },
-          {
-            field: 'fulfillmentPolicyId',
-            message: 'Fulfillment policy ID is required before publishing.',
             scope: 'publish_config',
           },
           {

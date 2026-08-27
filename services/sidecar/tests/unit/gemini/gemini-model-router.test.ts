@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   classifyGeminiFallbackKind,
   GeminiDraftServiceError,
+  GeminiDraftTitleOverflowError,
   GeminiDraftValidationError,
   GeminiFallbackExecutionError,
   generateListingDraftWithFallback,
@@ -253,6 +254,21 @@ describe('classifyGeminiFallbackKind', () => {
     ).toBe('unavailable');
     expect(
       classifyGeminiFallbackKind(new GeminiDraftServiceError('Gemini returned invalid JSON for the listing draft.'))
+    ).toBe('none');
+  });
+
+  it('does not fallback on deterministic protected title overflow', () => {
+    expect(
+      classifyGeminiFallbackKind(
+        new GeminiDraftTitleOverflowError({
+          preCompactionTitle: 'x'.repeat(81),
+          preCompactionLength: 81,
+          finalTitle: 'x'.repeat(81),
+          finalLength: 81,
+          protectedComponents: ['Player'],
+          omittedComponents: [],
+        })
+      )
     ).toBe('none');
   });
 });

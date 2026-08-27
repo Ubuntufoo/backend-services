@@ -1,6 +1,7 @@
 import type { ListingRow } from '@ebay-inventory/data';
 
 import { readPricingModifierOptions } from '@/listings/pricing-modifier-options.js';
+import { readBrowsePricingOptions } from '@/listings/browse-pricing-options.js';
 import {
   GRADED_TRADING_CARD_CONDITION_ID,
   RAW_TRADING_CARD_CONDITION_ID,
@@ -174,6 +175,7 @@ export function buildPricingProviderInput(
     itemSpecifics,
     listingId,
     listingType: listing.listing_type,
+    browsePricingOptions: readBrowsePricingOptions(listing.item_specifics),
     pricingModifierOptions: readPricingModifierOptions(listing.item_specifics),
     ...(requestedCompCount === undefined ? {} : { requestedCompCount }),
     title,

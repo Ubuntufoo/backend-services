@@ -2,7 +2,11 @@ import type { AppSettingsRow, Json, ListingRow } from '@ebay-inventory/data';
 import { parseStructuredSku } from '@ebay-inventory/types';
 import { Condition } from '@/types/ebay-enums.js';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
-import { getEffectiveItemSpecificsForCategoryValidation } from '@/ebay/required-item-specifics-validation.js';
+import { BROWSE_PRICING_OPTIONS_ITEM_SPECIFIC_KEY } from '@/listings/browse-pricing-options.js';
+import {
+  getEffectiveItemSpecificsForCategoryValidation,
+  type NormalizedOutboundItemSpecifics,
+} from '@/ebay/required-item-specifics-validation.js';
 import type { components } from '@/types/sell-apps/listing-management/sellInventoryV1Oas3.js';
 import {
   getRawCardConditionDisplayLabel,
@@ -32,12 +36,50 @@ const INVENTORY_CONDITION_BY_LISTING_CONDITION_ID: Record<string, Condition> = {
 const INTERNAL_ITEM_SPECIFIC_KEYS = new Set([
   'CategorySuggestion',
   'ConditionSuggestion',
+  BROWSE_PRICING_OPTIONS_ITEM_SPECIFIC_KEY,
   'pricingModifierOptions',
   'skuCategoryCode',
 ]);
+const DESCRIPTION_LABELS = [
+  'Item Info:',
+  'Condition & Photography:',
+  'Combined Shipping:',
+  'Shipping:',
+  'Feedback:',
+] as const;
+// Longest-first alternation so overlapping labels (e.g. 'Combined Shipping:' vs
+// 'Shipping:') match as a single non-overlapping token instead of nesting tags.
+const DESCRIPTION_LABEL_PATTERN = DESCRIPTION_LABELS.map((label) => label.replace('&', '&amp;'))
+  .sort((a, b) => b.length - a.length)
+  .join('|');
+const SHIPPING_PROMOTION_HTML =
+  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 cards under $20 for 1/2 price shipping or 3+ for FREE shipping!</strong><br><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a> - For easy access to this store, and periodic discounts on merchandise.<br><br>';
 
 export interface InventoryItemPayloadOptions {
   conditionDescriptors?: InventoryItem['conditionDescriptors'];
+  outboundItemSpecifics?: NormalizedOutboundItemSpecifics;
+}
+
+export function formatEbayListingDescription(description: string): string {
+  const escaped = description
+    .replace(/\r\n?/g, '\n')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  const withBoldLabels = escaped.replace(
+    new RegExp(`(${DESCRIPTION_LABEL_PATTERN})`, 'g'),
+    '<strong>$1</strong>'
+  );
+
+  const formattedDescription = withBoldLabels
+    .replace(/\n[\t ]*\n+/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+
+  return formattedDescription.length === 0
+    ? formattedDescription
+    : `${SHIPPING_PROMOTION_HTML}${formattedDescription}`;
 }
 
 function normalizeAspectValue(value: Json): string[] | null {
@@ -151,7 +193,8 @@ export function mapListingToInventoryItemPayload(
   const ignoredKeys = new Set(INTERNAL_ITEM_SPECIFIC_KEYS);
   const hasConditionDescriptors =
     Array.isArray(options.conditionDescriptors) && options.conditionDescriptors.length > 0;
-  const effectiveItemSpecifics = getEffectiveItemSpecificsForCategoryValidation(listing);
+  const effectiveItemSpecifics =
+    options.outboundItemSpecifics ?? getEffectiveItemSpecificsForCategoryValidation(listing);
 
   if (hasConditionDescriptors && isTradingCardCategoryId(listing.category_id)) {
     ignoredKeys.add(TRADING_CARD_CONDITION_ASPECT_KEY);
@@ -166,12 +209,17 @@ export function mapListingToInventoryItemPayload(
       },
     },
     condition: mapListingConditionIdToInventoryCondition(listing.condition_id ?? undefined),
-    conditionDescription: hasConditionDescriptors ? undefined : listing.condition_notes ?? undefined,
+    conditionDescription: hasConditionDescriptors
+      ? undefined
+      : (listing.condition_notes ?? undefined),
     conditionDescriptors: options.conditionDescriptors,
     packageWeightAndSize: buildPackageWeightAndSize(listing, appSettings),
     product: {
       aspects: aspects as unknown as components['schemas']['Product']['aspects'],
-      description: listing.description ?? undefined,
+      description:
+        listing.description === null
+          ? undefined
+          : formatEbayListingDescription(listing.description),
       imageUrls: listing.image_urls,
       title: listing.title ?? undefined,
     },
@@ -190,7 +238,8 @@ export function mapListingToOfferPayload(
     categoryId: listing.category_id ?? undefined,
     format: 'FIXED_PRICE',
     listingDuration: 'GTC',
-    listingDescription: listing.description ?? undefined,
+    listingDescription:
+      listing.description === null ? undefined : formatEbayListingDescription(listing.description),
     listingPolicies: {
       fulfillmentPolicyId: publishConfig.fulfillmentPolicyId,
       paymentPolicyId: publishConfig.paymentPolicyId,

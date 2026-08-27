@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   getDefaultScopes,
+  getProductionAppOAuthScopes,
   validateScopes,
   getOAuthAuthorizationUrl,
 } from '../../../src/config/environment.js';
@@ -210,6 +211,23 @@ describe('Scope Validation', () => {
       const scope = parsed.searchParams.get('scope');
       expect(scope).toBeTruthy();
       expect(scope).toContain('sell.inventory');
+    });
+
+    it('should generate production setup consent with only required app scopes', () => {
+      const setupScopes = getProductionAppOAuthScopes();
+      const url = getOAuthAuthorizationUrl(clientId, redirectUri, 'production', setupScopes);
+      const scope = new URL(url).searchParams.get('scope');
+
+      expect(setupScopes).toEqual([
+        'https://api.ebay.com/oauth/api_scope',
+        'https://api.ebay.com/oauth/api_scope/sell.inventory',
+        'https://api.ebay.com/oauth/api_scope/sell.account',
+        'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
+      ]);
+      expect(scope).toBe(setupScopes.join(' '));
+      expect(scope).not.toContain('sell.marketing');
+      expect(scope).not.toContain('sell.edelivery');
+      expect(scope).not.toContain('commerce.shipping');
     });
 
     it('should include custom scopes when provided', () => {

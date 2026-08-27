@@ -4,7 +4,9 @@ import {
   getCategoryTreeIdFromTaxonomyResponse,
   getEffectiveItemSpecificsForCategoryValidation,
   getRequiredAspectNamesFromTaxonomyResponse,
+  getTaxonomyAspectMetadata,
   hasRequiredAspectValue,
+  normalizeSingleCardOutboundItemSpecifics,
   validateRequiredItemSpecificsForCategory,
 } from '@/ebay/required-item-specifics-validation.js';
 
@@ -54,6 +56,8 @@ function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   };
 }
 
+const NORMALIZE_NOW = () => new Date('2026-08-24T00:00:00.000Z');
+
 describe('required item specifics validation', () => {
   it('parses the default category tree id', () => {
     expect(getCategoryTreeIdFromTaxonomyResponse({ categoryTreeId: ' 0 ' })).toBe('0');
@@ -85,6 +89,761 @@ describe('required item specifics validation', () => {
         ],
       })
     ).toEqual(['Franchise']);
+  });
+
+  it('retains canonical names, constraints, usage, allowed values, and cardinality', () => {
+    expect(
+      getTaxonomyAspectMetadata({
+        aspects: [
+          {
+            localizedAspectName: ' Type ',
+            aspectConstraint: {
+              aspectDataType: 'STRING',
+              aspectMode: 'SELECTION_ONLY',
+              aspectRequired: true,
+              aspectUsage: 'RECOMMENDED',
+              itemToAspectCardinality: 'SINGLE',
+            },
+            aspectValues: [
+              { localizedValue: 'Sports Trading Card' },
+              { localizedValue: 'Non-Sport Trading Card' },
+            ],
+          },
+        ],
+      })
+    ).toEqual([
+      {
+        allowedValues: ['Sports Trading Card', 'Non-Sport Trading Card'],
+        cardinality: 'SINGLE',
+        dataType: 'STRING',
+        inputMode: 'SELECTION_ONLY',
+        localizedName: 'Type',
+        required: true,
+        usage: 'RECOMMENDED',
+      },
+    ]);
+  });
+
+  it('normalizes sports aliases, authorized year, and deterministic Type to taxonomy names', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        'Card Condition': 'NEAR_MINT_OR_BETTER',
+        Franchise: 'Chicago Bulls',
+        Player: 'Michael Jordan',
+        Set: 'Upper Deck',
+        Unsupported: 'must not leak',
+        Year: '1991',
+        __draft_metadata: {
+          year: {
+            image_index: 1,
+            source_type: 'copyright_line',
+            visible_text: '© 1991 UPPER DECK COMPANY',
+            year: '1991',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Player/Athlete',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Team',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: false,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Sports Trading Card' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: true,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({
+      'Player/Athlete': ['Michael Jordan'],
+      Set: ['1991 Upper Deck'],
+      Team: ['Chicago Bulls'],
+      'Year Manufactured': ['1991'],
+      Type: ['Sports Trading Card'],
+    });
+  });
+
+  it.each([
+    ['2005', 'Yes'],
+    ['2006', 'No'],
+  ])('derives dynamic Vintage boundary and safe Season for authorized year %s', (year, vintage) => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Year: year,
+        Season: `${year}-${String(Number(year) + 1).slice(-2)}`,
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year,
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({
+      Season: [`${year}-${String(Number(year) + 1).slice(-2)}`],
+      Vintage: [vintage],
+    });
+  });
+
+  it('uses a valid manually persisted Vintage value ahead of deterministic fallback', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Vintage: 'No',
+        Year: '2005',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '2005',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Vintage: ['No'] });
+  });
+
+  it('fills taxonomy-gated sports-card defaults and omits removed taxonomy aspects', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Customized: 'No',
+        'California Prop 65 Warning': 'Cancer and Reproductive Harm',
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Material',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'MULTI' },
+          aspectValues: [{ localizedValue: 'Aluminum' }, { localizedValue: 'Card Stock' }],
+        },
+        {
+          localizedAspectName: 'Autographed',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+        {
+          localizedAspectName: 'Card Thickness',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: '20 Pt.' }],
+        },
+        {
+          localizedAspectName: 'Card Size',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Standard' }],
+        },
+        {
+          localizedAspectName: 'Language',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'English' }],
+        },
+        {
+          localizedAspectName: 'Original/Licensed Reprint',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Licensed Reprint' }, { localizedValue: 'Original' }],
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+        {
+          localizedAspectName: 'California Prop 65 Warning',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Cancer and Reproductive Harm' }],
+        },
+        {
+          localizedAspectName: 'Customized',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'No' }, { localizedValue: 'Yes' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      }),
+    ).toEqual({
+      Material: ['Card Stock'],
+      'Card Thickness': ['20 Pt.'],
+      'Card Size': ['Standard'],
+      Language: ['English'],
+      'Original/Licensed Reprint': ['Original'],
+      Vintage: ['Yes'],
+      Autographed: ['No'],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects: taxonomyAspects.filter(
+          (aspect) => aspect.localizedName !== 'Autographed',
+        ),
+        now: NORMALIZE_NOW,
+      }),
+    ).not.toHaveProperty('Autographed');
+  });
+
+  it('accepts only Yes or No for manually saved Vintage values', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { Vintage: 'Maybe' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      }),
+    ).toEqual({Vintage: ['Yes']});
+  });
+
+  it('publishes manual Season without canonical year and uses missing Vintage fallback', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { Season: '2000-01' },
+    });
+
+    expect(listing.item_specifics).toEqual({ Season: '2000-01' });
+    expect(listing.item_specifics).not.toHaveProperty('Year');
+    expect(listing.item_specifics).not.toHaveProperty('__draft_metadata');
+
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Season: ['2000-01'], Vintage: ['Yes'] });
+  });
+
+  it('uses missing Vintage fallback for stale conflicting year metadata', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Year: '2006',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '2005',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Vintage',
+          aspectConstraint: { aspectMode: 'SELECTION_ONLY', itemToAspectCardinality: 'SINGLE' },
+          aspectValues: [{ localizedValue: 'Yes' }, { localizedValue: 'No' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({Vintage: ['Yes']});
+  });
+
+  it('does not trust mixed or invalid Season arrays', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Season: [123, '2005'],
+        Year: '2005',
+        __draft_metadata: {
+          year: {
+            image_index: null,
+            source_type: 'seller_hint',
+            visible_text: null,
+            year: '2005',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Season: ['2005'] });
+  });
+
+  it('publishes manually persisted autograph item specifics when taxonomy exposes them', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: {
+        Autographed: 'No',
+        'Signed By': 'Printed signature',
+        'Autograph Format': 'Hard Signed',
+        'Autograph Authentication': 'None',
+        'Autograph Authentication Number': '123',
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        ...[
+          'Autographed',
+          'Signed By',
+          'Autograph Format',
+          'Autograph Authentication',
+          'Autograph Authentication Number',
+        ].map((localizedAspectName) => ({
+          localizedAspectName,
+          aspectConstraint: { aspectMode: 'FREE_TEXT', itemToAspectCardinality: 'SINGLE' },
+        })),
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({
+      Autographed: ['No'],
+      'Signed By': ['Printed signature'],
+      'Autograph Format': ['Hard Signed'],
+      'Autograph Authentication': ['None'],
+      'Autograph Authentication Number': ['123'],
+    });
+  });
+
+  it.each([
+    ['BSKBL', 'Basketball'],
+    ['BSBL', 'Baseball'],
+  ])('maps controlled %s SKU category evidence to Sport', (skuCategoryCode, sport) => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { skuCategoryCode },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Sport',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [
+            { localizedValue: 'Baseball' },
+            { localizedValue: 'Basketball' },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Sport: [sport] });
+  });
+
+  it('does not invent Sport from an unrecognized SKU category', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { skuCategoryCode: 'OTHER' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Sport',
+          aspectConstraint: { aspectRequired: true, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({});
+  });
+
+  it.each([
+    { label: 'plain stored Set', year: '1985', set: 'Topps', expected: '1985 Topps' },
+    {
+      label: 'same-year stored Set',
+      year: '1985',
+      set: '1985 Topps',
+      expected: '1985 Topps',
+    },
+    {
+      label: 'authorized short season range',
+      year: '1995',
+      set: '1995-96 SkyBox',
+      expected: '1995-96 SkyBox',
+    },
+    {
+      label: 'authorized slash season range',
+      year: '1995',
+      set: '1995/96 SkyBox',
+      expected: '1995/96 SkyBox',
+    },
+    {
+      label: 'authorized full season range',
+      year: '1995',
+      set: '1995-1996 SkyBox',
+      expected: '1995-1996 SkyBox',
+    },
+    {
+      label: 'conflicting-year stored Set',
+      year: '1985',
+      set: '1986 Topps',
+      expected: '1985 Topps',
+    },
+    { label: 'unsupported-year stored Set', year: '1985', set: '1885 Topps', expected: null },
+    {
+      label: 'conflicting season range',
+      year: '1995',
+      set: '1996-97 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'ambiguous season range',
+      year: '1995',
+      set: '1995-97 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'unsupported season-range separator',
+      year: '1995',
+      set: '1995–96 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'unsupported Unicode minus separator',
+      year: '1995',
+      set: '1995−96 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'ambiguous multiple years',
+      year: '1995',
+      set: '1995 1996 SkyBox',
+      expected: null,
+    },
+    {
+      label: 'mixed valid and conflicting ranges',
+      year: '1995',
+      set: ['1995-96 SkyBox', '1996-97 SkyBox'],
+      expected: null,
+    },
+  ])('canonicalizes an authorized sports Set for $label', ({ year, set, expected }) => {
+    const itemSpecifics = {
+      Set: set,
+      Year: year,
+      __draft_metadata: {
+        year: {
+          image_index: 1,
+          source_type: 'copyright_line',
+          visible_text: `© ${year} CARD COMPANY`,
+          year,
+        },
+      },
+    };
+    const storedBeforeNormalization = structuredClone(itemSpecifics);
+    const listing = createListing({ category_id: '261328', item_specifics: itemSpecifics });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual(expected ? { Set: [expected] } : {});
+    expect(listing.item_specifics).toBe(itemSpecifics);
+    expect(itemSpecifics).toEqual(storedBeforeNormalization);
+  });
+
+  it('keeps a sports Set unchanged without authorized year metadata', () => {
+    const listing = createListing({
+      category_id: '261328',
+      item_specifics: { Set: 'Topps', Year: '1985' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Set: ['Topps'] });
+  });
+
+  it.each(['183050', '183454'])('keeps category %s Set naming unchanged', (categoryId) => {
+    const listing = createListing({
+      category_id: categoryId,
+      item_specifics: {
+        Set: 'Base Set',
+        Year: '1999',
+        __draft_metadata: {
+          year: {
+            image_index: 1,
+            source_type: 'copyright_line',
+            visible_text: '© 1999 CARD COMPANY',
+            year: '1999',
+          },
+        },
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Set',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Set: ['Base Set'] });
+  });
+
+  it('preserves manual taxonomy-supported Season and Type while omitting unsafe values', () => {
+    const listing = createListing({
+      category_id: '183454',
+      item_specifics: {
+        Game: 'pokemon',
+        Rarity: ['Rare Holo', 'Common'],
+        Season: '1999',
+        Type: 'Collectible Card Game',
+        Year: '1999',
+      },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Game',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Pokémon TCG' }],
+        },
+        {
+          localizedAspectName: 'Rarity',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Season',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Type',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+        {
+          localizedAspectName: 'Year Manufactured',
+          aspectConstraint: { aspectRequired: false, itemToAspectCardinality: 'SINGLE' },
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({
+      Season: ['1999'],
+      Type: ['Collectible Card Game'],
+    });
+  });
+
+  it('canonicalizes exact case-insensitive closed-set matches', () => {
+    const listing = createListing({
+      category_id: '183454',
+      item_specifics: { Game: 'pokémon tcg' },
+    });
+    const taxonomyAspects = getTaxonomyAspectMetadata({
+      aspects: [
+        {
+          localizedAspectName: 'Game',
+          aspectConstraint: {
+            aspectMode: 'SELECTION_ONLY',
+            aspectRequired: true,
+            itemToAspectCardinality: 'SINGLE',
+          },
+          aspectValues: [{ localizedValue: 'Pokémon TCG' }],
+        },
+      ],
+    });
+
+    expect(
+      normalizeSingleCardOutboundItemSpecifics({
+        conditionDescriptorsPresent: false,
+        listing,
+        taxonomyAspects,
+        now: NORMALIZE_NOW,
+      })
+    ).toEqual({ Game: ['Pokémon TCG'] });
   });
 
   it.each([

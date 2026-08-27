@@ -22,7 +22,8 @@ export type PublishListingErrorCode =
   | 'LISTING_NOT_FOUND'
   | 'LISTING_NOT_READY'
   | 'OFFER_CREATE_FAILED'
-  | 'OFFER_PUBLISH_FAILED';
+  | 'OFFER_PUBLISH_FAILED'
+  | 'PUBLISH_DISABLED';
 
 export interface PublishListingErrorContext {
   attemptedFields?: string[];

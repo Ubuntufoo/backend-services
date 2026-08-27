@@ -1,5 +1,5 @@
 import { DotEnvCredentialStore } from '@/auth/credential-session.js';
-import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
+import { ROOT_ENV_PATH } from '@/config/env-paths.js';
 import { EbayOAuthClient } from '@/auth/oauth.js';
 import { getBaseUrl } from '@/config/environment.js';
 import type { EbayApiError, EbayConfig } from '@/types/ebay.js';
@@ -15,6 +15,32 @@ import { apiLogger, logRequest, logResponse, logErrorResponse } from '@/utils/lo
 interface AxiosConfigWithRetry extends AxiosRequestConfig {
   authRetryCount?: number;
   retryCount?: number;
+}
+
+function throwIfRequestAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Request deadline exceeded');
+}
+
+function redactEbayErrors(
+  errors: EbayApiError['errors'] | undefined,
+  token: string
+): EbayApiError['errors'] {
+  return (errors ?? []).map((error) => ({
+    ...error,
+    message: error.message.replaceAll(token, '[redacted]'),
+    ...(error.longMessage === undefined
+      ? {}
+      : { longMessage: error.longMessage.replaceAll(token, '[redacted]') }),
+    ...(error.parameters === undefined
+      ? {}
+      : {
+          parameters: error.parameters.map((parameter) => ({
+            ...parameter,
+            value: parameter.value.replaceAll(token, '[redacted]'),
+          })),
+        }),
+  }));
 }
 
 export class EbayApiRequestError extends Error {
@@ -100,10 +126,7 @@ export class EbayApiClient {
 
   constructor(config: EbayConfig) {
     this.config = config;
-    this.authClient = new EbayOAuthClient(
-      config,
-      new DotEnvCredentialStore(() => ROOT_ENV_LOCAL_PATH)
-    );
+    this.authClient = new EbayOAuthClient(config, new DotEnvCredentialStore(() => ROOT_ENV_PATH));
     this.baseUrl = getBaseUrl(config.environment);
     this.rateLimitTracker = new RateLimitTracker();
 
@@ -292,7 +315,7 @@ export class EbayApiClient {
   private validateAccessToken(): void {
     if (!this.config.clientId || !this.config.clientSecret) {
       throw new Error(
-        'Missing required eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env or backend-services/.env.local.'
+        'Missing required eBay credentials. Please set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in backend-services/.env.'
       );
     }
   }
@@ -308,6 +331,94 @@ export class EbayApiClient {
     this.validateAccessToken();
     const response = await this.httpClient.get<T>(endpoint, { params, ...config });
     return response.data;
+  }
+
+  /**
+   * Make an explicit read-only GET request with an Application access token.
+   * This bypasses the User-token-preferred interceptor used by seller APIs.
+   */
+  async getWithApplicationToken<T = unknown>(
+    endpoint: string,
+    params?: Record<string, unknown>,
+    config?: AxiosRequestConfig
+  ): Promise<T> {
+    this.validateAccessToken();
+    const signal = config?.signal as AbortSignal | undefined;
+
+    const request = async (forceRefresh: boolean): Promise<T> => {
+      throwIfRequestAborted(signal);
+      if (!this.rateLimitTracker.canMakeRequest()) {
+        const stats = this.rateLimitTracker.getStats();
+        throw new Error(
+          `Rate limit exceeded: ${stats.current}/${stats.max} requests in ${stats.windowMs}ms window. Please wait before making more requests.`
+        );
+      }
+
+      const token = forceRefresh
+        ? signal === undefined
+          ? await this.authClient.getOrRefreshAppAccessToken(true)
+          : await this.authClient.getOrRefreshAppAccessToken(true, { signal })
+        : signal === undefined
+          ? await this.authClient.getOrRefreshAppAccessToken()
+          : await this.authClient.getOrRefreshAppAccessToken(false, { signal });
+      throwIfRequestAborted(signal);
+      this.rateLimitTracker.recordRequest();
+
+      try {
+        const response = await axios.get<T>(endpoint, {
+          baseURL: this.baseUrl,
+          timeout: 30000,
+          ...config,
+          params,
+          headers: {
+            ...this.getDefaultHeaders(),
+            ...config?.headers,
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        return response.data;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 401 && !forceRefresh) {
+          apiLogger.warn(
+            'Authentication error (401) on Application-token GET. Reminting Application token...'
+          );
+          return await request(true);
+        }
+
+        if (axios.isAxiosError(error) && error.response?.status === 429) {
+          const retryAfter = error.response.headers['retry-after'] as string | undefined;
+          const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : 60000;
+          throw new Error(
+            `eBay API rate limit exceeded. Retry after ${waitTime / 1000} seconds. ` +
+              'Consider reducing request frequency or upgrading to user tokens for higher limits.'
+          );
+        }
+
+        if (axios.isAxiosError(error) && error.response?.data) {
+          const ebayError = error.response.data as EbayApiError;
+          const safeErrors = redactEbayErrors(ebayError.errors, token);
+          const errorMessage =
+            safeErrors[0]?.longMessage ??
+            safeErrors[0]?.message ??
+            error.message.replaceAll(token, '[redacted]');
+          throw new EbayApiRequestError(
+            `eBay API Error: ${errorMessage}`,
+            safeErrors,
+            error.response.status
+          );
+        }
+
+        if (axios.isAxiosError(error)) {
+          const code = error.code ? ` [${error.code}]` : '';
+          const message = error.message.replaceAll(token, '[redacted]');
+          throw new Error(`eBay API request failed${code}: ${message}`);
+        }
+
+        throw error;
+      }
+    };
+
+    return await request(false);
   }
 
   /**
@@ -420,8 +531,14 @@ export class EbayApiClient {
    * Make a GET request with a full URL (for APIs that use different base URLs)
    * Used by Identity API which uses apiz subdomain
    */
-  async getWithFullUrl<T = unknown>(fullUrl: string, params?: Record<string, unknown>): Promise<T> {
+  async getWithFullUrl<T = unknown>(
+    fullUrl: string,
+    params?: Record<string, unknown>,
+    config?: AxiosRequestConfig
+  ): Promise<T> {
     this.validateAccessToken();
+    const signal = config?.signal as AbortSignal | undefined;
+    throwIfRequestAborted(signal);
 
     // Check rate limit
     if (!this.rateLimitTracker.canMakeRequest()) {
@@ -432,7 +549,11 @@ export class EbayApiClient {
     }
 
     // Get auth token
-    let token = await this.authClient.getAccessToken();
+    let token =
+      signal === undefined
+        ? await this.authClient.getAccessToken()
+        : await this.authClient.getAccessToken({ signal });
+    throwIfRequestAborted(signal);
 
     // Record the request
     this.rateLimitTracker.recordRequest();
@@ -440,12 +561,14 @@ export class EbayApiClient {
     try {
       // Make request with full URL
       const response = await axios.get<T>(fullUrl, {
+        ...config,
         params,
         headers: {
-          Authorization: `Bearer ${token}`,
           ...this.getDefaultHeaders(),
+          ...config?.headers,
+          Authorization: `Bearer ${token}`,
         },
-        timeout: 30000,
+        timeout: config?.timeout ?? 30000,
       });
       return response.data;
     } catch (error) {
@@ -456,22 +579,33 @@ export class EbayApiClient {
         );
 
         try {
+          throwIfRequestAborted(signal);
           // Refresh the token
-          await this.authClient.refreshUserToken();
+          if (signal === undefined) {
+            await this.authClient.refreshUserToken();
+          } else {
+            await this.authClient.refreshUserToken({ signal });
+          }
 
           // Get the new token
-          token = await this.authClient.getAccessToken();
+          token =
+            signal === undefined
+              ? await this.authClient.getAccessToken()
+              : await this.authClient.getAccessToken({ signal });
+          throwIfRequestAborted(signal);
 
           apiLogger.info('Token refreshed successfully. Retrying request...');
 
           // Retry the request with the new token
           const response = await axios.get<T>(fullUrl, {
+            ...config,
             params,
             headers: {
-              Authorization: `Bearer ${token}`,
               ...this.getDefaultHeaders(),
+              ...config?.headers,
+              Authorization: `Bearer ${token}`,
             },
-            timeout: 30000,
+            timeout: config?.timeout ?? 30000,
           });
 
           return response.data;

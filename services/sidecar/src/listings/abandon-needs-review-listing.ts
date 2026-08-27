@@ -130,7 +130,7 @@ export async function abandonNeedsReviewListing(
     throw new ListingAbandonmentError('not_found', 404, `Listing "${listingId}" was not found.`);
   }
 
-  if (listing.status !== 'needs_review') {
+  if (listing.status !== 'assets_ready' && listing.status !== 'needs_review') {
     throw new ListingAbandonmentError(
       'listing_abandonment_status_unsupported',
       409,

@@ -20,9 +20,41 @@ const imageUrlSchema = z
   .min(1, 'imageUrls entries must be non-empty strings');
 
 export const aspectValueSchema = z.union([z.string(), z.array(z.string())]);
+export const GENERATED_LISTING_ASPECT_KEYS = [
+  'Player',
+  'Sport',
+  'League',
+  'Franchise',
+  'Character',
+  'Card Name',
+  'Game',
+  'Rarity',
+  'Language',
+  'Card Type',
+  'Finish',
+  'Manufacturer',
+  'Set',
+  'Card Number',
+  'Parallel/Variety',
+  'Insert Set',
+  'Features',
+] as const;
+const generatedListingAspectKeySchema = z.enum(GENERATED_LISTING_ASPECT_KEYS);
+const normalizedGeneratedListingAspectKeySchema = z.union([
+  generatedListingAspectKeySchema,
+  z.literal('Year'),
+  // Season is backend-normalized from validated visible season evidence; it
+  // is never accepted as a free-form Gemini-authored aspect.
+  z.literal('Season'),
+  // Print Run is backend-derived from validated serialEvidence; it is not a
+  // direct Gemini-authored aspect and therefore stays out of the allowlist
+  // above.
+  z.literal('Print Run'),
+]);
 const rawCardConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
 
 export const userHintsSchema = z.object({
+  explicitYear: z.string().regex(/^(?:19\d{2}|20\d{2})$/u).optional(),
   title: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
@@ -45,6 +77,100 @@ const generatedDraftYearEvidenceSchema = z.object({
   imageIndex: z.number().int().min(0),
 });
 
+const generatedDraftSeasonEvidenceSchema = z
+  .object({
+    season: z.string().trim().min(1),
+    visibleText: z.string().trim().min(1),
+    imageIndex: z.number().int().min(0),
+  })
+  .superRefine((value, context) => {
+    const seasonMatch = /^(19\d{2}|20\d{2})\s*[-/]\s*(\d{2}|\d{4})$/u.exec(value.season);
+    if (!seasonMatch) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'season must be an adjacent sports season range',
+        path: ['season'],
+      });
+      return;
+    }
+
+    const expectedFullEnd = String(Number(seasonMatch[1]) + 1);
+    const expectedShortEnd = expectedFullEnd.slice(-2);
+    if (seasonMatch[2] !== expectedFullEnd && seasonMatch[2] !== expectedShortEnd) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'season must be adjacent',
+        path: ['season'],
+      });
+    }
+
+    const visibleClaims = value.visibleText.match(
+      /\b(?:19|20)\d{2}\s*[-/]\s*(?:\d{2}|\d{4})\b/gu
+    );
+    if (!visibleClaims || visibleClaims.length !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'visibleText must contain exactly one season range',
+        path: ['visibleText'],
+      });
+    } else {
+      const claimMatch = /^(19\d{2}|20\d{2})\s*[-/]\s*(\d{2}|\d{4})$/u.exec(
+        visibleClaims[0]!
+      );
+      const claimEnd = claimMatch?.[2];
+      const claimStart = claimMatch?.[1];
+      const claimExpectedFullEnd = claimStart ? String(Number(claimStart) + 1) : null;
+      const claimExpectedShortEnd = claimExpectedFullEnd?.slice(-2);
+      const claimNormalized =
+        claimMatch &&
+        claimStart &&
+        claimEnd &&
+        (claimEnd === claimExpectedFullEnd || claimEnd === claimExpectedShortEnd)
+          ? `${claimStart}-${String(Number(claimStart) + 1).slice(-2)}`
+          : null;
+      const expectedNormalized = `${seasonMatch[1]}-${expectedShortEnd}`;
+      if (claimNormalized !== expectedNormalized) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'visibleText must contain the validated season',
+          path: ['visibleText'],
+        });
+      }
+    }
+  });
+
+const generatedDraftSerialEvidenceSchema = z
+  .object({
+    visibleText: z.string().trim().min(1),
+    imageIndex: z.number().int().min(0),
+    numerator: z.number().int().positive(),
+    denominator: z.number().int().positive(),
+  })
+  .superRefine((value, context) => {
+    if (value.numerator > value.denominator) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'numerator must not exceed denominator',
+        path: ['numerator'],
+      });
+    }
+
+    const fractions = value.visibleText.match(
+      /(?<![\p{L}\p{N}#])\d{1,6}\s*\/\s*\d{1,6}(?![\p{L}\p{N}])/gu
+    );
+    const expectedPattern = new RegExp(
+      `(?<![\\p{L}\\p{N}#])0*${value.numerator}\\s*\\/\\s*0*${value.denominator}(?![\\p{L}\\p{N}])`,
+      'u'
+    );
+    if (!fractions || fractions.length !== 1 || !expectedPattern.test(value.visibleText)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'visibleText must contain exactly the validated serial fraction',
+        path: ['visibleText'],
+      });
+    }
+  });
+
 const skuCategoryCodeSchema = z.enum(SKU_CATEGORY_CODES);
 
 export const generateListingDraftInputSchema = z.object({
@@ -66,8 +192,10 @@ export const generatedListingDraftSchema = z.object({
   cardConditionToken: rawCardConditionTokenSchema.nullable().optional(),
   conditionSuggestion: z.string().nullable().optional(),
   skuCategoryCode: skuCategoryCodeSchema.optional(),
-  aspects: z.record(aspectValueSchema),
+  aspects: z.record(normalizedGeneratedListingAspectKeySchema, aspectValueSchema),
   yearEvidence: generatedDraftYearEvidenceSchema.nullable().optional(),
+  seasonEvidence: generatedDraftSeasonEvidenceSchema.nullable().optional(),
+  serialEvidence: generatedDraftSerialEvidenceSchema.nullable().optional(),
   priceSuggestion: z.number().finite().nullable().optional(),
   confidence: confidenceSchema.optional(),
   warnings: z.array(z.string()),
@@ -106,6 +234,27 @@ export class GeminiDraftServiceError extends Error {
     super(message, options);
     this.name = 'GeminiDraftServiceError';
     this.diagnostics = options?.diagnostics;
+  }
+}
+
+/** Deterministic backend title invariant failure; never retry the model. */
+export class GeminiDraftTitleOverflowError extends GeminiDraftServiceError {
+  readonly code = 'TITLE_OVERFLOW' as const;
+  readonly context: {
+    preCompactionTitle: string;
+    preCompactionLength: number;
+    finalTitle: string;
+    finalLength: number;
+    protectedComponents: string[];
+    omittedComponents: string[];
+  };
+
+  constructor(context: GeminiDraftTitleOverflowError['context']) {
+    super(
+      `Generated listing title exceeds 80 characters after backend normalization. Semantic compaction could not fit protected components (${context.finalLength} characters).`,
+    );
+    this.name = 'GeminiDraftTitleOverflowError';
+    this.context = context;
   }
 }
 

@@ -1,8 +1,38 @@
+import { ROOT_ENV_PATH } from '@/config/env-paths.js';
 import dotenv from 'dotenv';
 import stringify from 'dotenv-stringify';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { ROOT_ENV_LOCAL_PATH } from '@/config/env-paths.js';
 import type { EbayConfig, EbayUserToken, StoredTokenData } from '@/types/ebay.js';
+
+export const CANONICAL_REFRESH_TOKEN_KEY = 'EBAY_REFRESH_TOKEN';
+export const LEGACY_REFRESH_TOKEN_KEY = 'EBAY_USER_REFRESH_TOKEN';
+
+export function getConfiguredRefreshToken(
+  config: Record<string, string | undefined>
+): string | undefined {
+  return config[CANONICAL_REFRESH_TOKEN_KEY] || config[LEGACY_REFRESH_TOKEN_KEY];
+}
+
+/** Merge credential/setup updates into canonical repo-root .env. */
+export function persistEnvConfig(updates: Record<string, string>, envPath = ROOT_ENV_PATH): void {
+  const existingEnv = existsSync(envPath) ? dotenv.parse(readFileSync(envPath, 'utf-8')) : {};
+  const normalizedUpdates = { ...updates };
+  if (
+    !normalizedUpdates[CANONICAL_REFRESH_TOKEN_KEY] &&
+    normalizedUpdates[LEGACY_REFRESH_TOKEN_KEY]
+  ) {
+    normalizedUpdates[CANONICAL_REFRESH_TOKEN_KEY] =
+      normalizedUpdates[LEGACY_REFRESH_TOKEN_KEY];
+  }
+
+  const merged = { ...existingEnv, ...normalizedUpdates };
+  if (normalizedUpdates[CANONICAL_REFRESH_TOKEN_KEY]) {
+    delete merged[LEGACY_REFRESH_TOKEN_KEY];
+  }
+
+  /* eslint-disable-next-line @typescript-eslint/no-unsafe-call -- loose package typings */
+  writeFileSync(envPath, String(stringify(merged)), 'utf-8');
+}
 
 /**
  * Default lifetime for stored eBay user access tokens when eBay omits an expiry.
@@ -33,20 +63,14 @@ export interface CredentialStore {
 }
 
 /**
- * Credential store that merges token updates into the repo-root .env.local file.
+ * Credential store that merges token updates into the canonical repo-root .env file.
  */
 export class DotEnvCredentialStore implements CredentialStore {
-  constructor(private readonly getEnvPath: () => string = () => ROOT_ENV_LOCAL_PATH) {}
+  constructor(private readonly getEnvPath: () => string = () => ROOT_ENV_PATH) {}
 
   write(updates: Record<string, string>): void {
     try {
-      const envPath = this.getEnvPath();
-      const existingEnv = existsSync(envPath) ? dotenv.parse(readFileSync(envPath, 'utf-8')) : {};
-      // `dotenv-stringify` ships loose typings; runtime output is a string env blob.
-      /* eslint-disable-next-line @typescript-eslint/no-unsafe-call */
-      const safeEnvContent = String(stringify({ ...existingEnv, ...updates }));
-
-      writeFileSync(envPath, safeEnvContent, 'utf-8');
+      persistEnvConfig(updates, this.getEnvPath());
     } catch (_error) {
       // Silent failure keeps MCP stdout clean for JSON-RPC clients.
     }
@@ -213,7 +237,7 @@ export function buildCredentialDisplay(input: CredentialDisplayInput) {
   const clientSecret = env.EBAY_CLIENT_SECRET ?? '';
   const environment = env.EBAY_ENVIRONMENT ?? 'sandbox';
   const redirectUri = env.EBAY_REDIRECT_URI ?? '';
-  const refreshToken = env.EBAY_USER_REFRESH_TOKEN ?? '';
+  const refreshToken = getConfiguredRefreshToken(env) ?? '';
 
   return {
     credentials: {
@@ -223,7 +247,7 @@ export function buildCredentialDisplay(input: CredentialDisplayInput) {
       redirectUri: redirectUri || 'Not set',
     },
     tokens: {
-      refreshToken: refreshToken ? maskToken(refreshToken) : 'Not set (in .env.local)',
+      refreshToken: refreshToken ? maskToken(refreshToken) : 'Not set (in .env)',
       accessToken: userTokens?.userAccessToken
         ? maskToken(userTokens.userAccessToken)
         : 'Not available',

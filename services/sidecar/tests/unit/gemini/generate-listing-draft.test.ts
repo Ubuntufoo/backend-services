@@ -233,12 +233,13 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain(
       'Do not return collector shorthand such as NM-MT, EX-MT, VG-EX, MT, NM, EX, VG, FR, or PR.'
     );
-    expect(request.prompt).toContain('Include a Franchise aspect when the team, franchise, or IP is identifiable');
+    expect(request.prompt).toContain('canonical order: [validated year] [set]');
     expect(request.prompt).toContain(
-      'Emit non-year canonical trading-card pricing aspects when visible or strongly inferable'
+      'A team may appear last only when positively evidenced by a visible team name, logo, or wordmark'
     );
+    expect(request.prompt).toContain('Do not include card-condition or grading language in titles');
     expect(request.prompt).toContain(
-      'If title includes a card number marker such as "#98", "Card #98", "Card No. 98", or "Card Number 98"'
+      'Extract visible card-number forms such as "#98" or "Card #98" into the Card Number aspect'
     );
     expect(request.prompt).toContain('"Manufacturer": "string"');
     expect(request.prompt).toContain('"Set": "string"');
@@ -259,7 +260,7 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain('"title": "string"');
 
     expect(result).toEqual({
-      title: 'Fleer Michael Jordan RC',
+      title: 'Fleer Michael Jordan Utah Jazz',
       description: 'Visible front and back images suggest an ungraded single card.',
       categorySuggestion: 'Sports Trading Cards',
       cardConditionNote: 'Soft corners visible; condition estimated from photos.',
@@ -280,12 +281,42 @@ describe('generateListingDraft', () => {
         aspects: 0.84,
       },
       yearEvidence: null,
+      serialEvidence: null,
       warnings: [
         'Condition cannot be confirmed from photos alone.',
         'Gemini exact year discarded: missing qualifying visible year evidence.',
       ],
       rawModelResponse: rawResponse,
     });
+  });
+
+  it('deterministically applies an explicit seller year when Gemini omits it', async () => {
+    setGeminiResponse(
+      JSON.stringify({
+        title: 'Willie Stargell Topps #100',
+        description: 'The description may mention 1974.',
+        aspects: {
+          Player: 'Willie Stargell',
+          Manufacturer: 'Topps',
+          'Card Number': '100',
+        },
+        yearEvidence: null,
+        warnings: [],
+      })
+    );
+
+    const draft = await generateListingDraft({
+      imageUrls: ['https://cdn.example.com/listing.jpg'],
+      listingId: 'LIST-SELLER-YEAR',
+      userHints: {
+        explicitYear: '1974',
+        notes: 'year:1974',
+      },
+    });
+
+    expect(draft.title).toBe('1974 Topps Willie Stargell #100');
+    expect(draft.aspects.Year).toBe('1974');
+    expect(draft.yearEvidence).toBeNull();
   });
 
   it('produces compact prompt and image diagnostics without exposing raw prompt or image data', async () => {
@@ -371,13 +402,13 @@ describe('generateListingDraft', () => {
     });
 
     expect(result.aspects).toMatchObject({
-      Athlete: 'Johnny Riddle',
       Player: 'Johnny Riddle',
       Manufacturer: 'Topps',
       'Card Number': '98',
-      Team: 'St. Louis Cardinals',
     });
-    expect(result.title).toBe('Johnny Riddle Topps #98 St. Louis Cardinals Coach');
+    expect(result.aspects).not.toHaveProperty('Athlete');
+    expect(result.aspects).not.toHaveProperty('Team');
+    expect(result.title).toBe('Topps Johnny Riddle #98');
   });
 
   it('preserves verified details while dropping guessed canonical year data for vintage cards', async () => {
@@ -406,7 +437,7 @@ describe('generateListingDraft', () => {
       Manufacturer: 'Topps',
       'Card Number': '191',
     });
-    expect(result.title).toBe('Ed Stanky Topps #191');
+    expect(result.title).toBe('Topps Ed Stanky #191');
     expect(result.yearEvidence).toBeNull();
   });
 
@@ -481,6 +512,7 @@ describe('generateListingDraft', () => {
         Sport: 'Baseball',
       },
       yearEvidence: null,
+      serialEvidence: null,
       priceSuggestion: null,
       confidence: {},
       warnings: [],
@@ -667,13 +699,10 @@ describe('generateListingDraft', () => {
 
     expect(result.aspects).toEqual({
       Player: 'Michael Jordan',
-      Teams: ['Bulls', 'USA Basketball'],
     });
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        'Gemini response aspect "Teams" contained invalid values and was filtered.',
-        'Gemini response aspect "Grade" was invalid and was discarded.',
-        'Gemini response aspect "EmptyList" contained invalid values and was filtered.',
+        'Gemini response aspects discarded unexpected keys: "Teams", "Grade", "EmptyList".',
       ])
     );
   });

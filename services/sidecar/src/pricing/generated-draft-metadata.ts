@@ -10,9 +10,11 @@ export const GENERATED_DRAFT_METADATA_KEY = '__draft_metadata';
 type JsonRecord = Record<string, unknown>;
 
 export interface GeneratedDraftYearMetadata {
-  image_index: number;
-  source_type: NonNullable<GeneratedListingDraft['yearEvidence']>['sourceType'];
-  visible_text: string;
+  image_index: number | null;
+  source_type:
+    | NonNullable<GeneratedListingDraft['yearEvidence']>['sourceType']
+    | 'seller_hint';
+  visible_text: string | null;
   year: string;
 }
 
@@ -57,6 +59,19 @@ function toGeneratedDraftYearMetadata(value: unknown): GeneratedDraftYearMetadat
     return null;
   }
 
+  if (sourceType === 'seller_hint') {
+    if (value.visible_text !== null || value.image_index !== null) {
+      return null;
+    }
+
+    return {
+      image_index: null,
+      source_type: 'seller_hint',
+      visible_text: null,
+      year,
+    };
+  }
+
   if (!isYearEvidenceSourceType(sourceType)) {
     return null;
   }
@@ -78,8 +93,20 @@ function toGeneratedDraftYearMetadata(value: unknown): GeneratedDraftYearMetadat
 }
 
 export function buildGeneratedDraftMetadata(
-  yearEvidence: GeneratedListingDraft['yearEvidence']
+  yearEvidence: GeneratedListingDraft['yearEvidence'],
+  authorizedYear?: string
 ): GeneratedDraftMetadata | null {
+  if (isSupportedCardYear(authorizedYear)) {
+    return {
+      year: {
+        image_index: null,
+        source_type: 'seller_hint',
+        visible_text: null,
+        year: authorizedYear,
+      },
+    };
+  }
+
   if (!yearEvidence) {
     return null;
   }

@@ -63,6 +63,7 @@ import {
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import type { GeneratedListingDraft } from '@/gemini/contracts.js';
 import { runSidecarJob, type RunSidecarJobOptions } from '@/jobs/index.js';
+import { GeminiDraftTitleOverflowError } from '@/gemini/index.js';
 import {
   ApifyPricingProviderError,
   FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
@@ -72,6 +73,10 @@ import {
 } from '@/pricing/index.js';
 
 const GENERATED_DESCRIPTION_NOTICE =
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value items under $20 ship via eBay Standard Envelope for $0.99. One or two eligible items cost $0.99 total; three or more eligible items receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Items priced at $20 or more, or items not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const PREVIOUS_GENERATED_DESCRIPTION_NOTICE =
+  "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: For cards under $20, I ship securely and free via eBay Standard Envelope, which includes integrated tracking. USPS Ground Advantage is also available at the buyer's expense for an additional $6.49. You can select your preferred shipping option at checkout.\n\nCombined Shipping: Combined shipping is often available for multiple items from my store. Please add items to your eBay cart and message me before payment to request a combined-shipping total.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
+const LEGACY_GENERATED_DESCRIPTION_NOTICE =
   'Condition & Photography:\nCard was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement and moisture. Please review all high-resolution photos closely to assess centering, corners, and surface details.\nCombined Shipping: Combined shipping is available for multiple items. Please add items to your eBay cart and then message to request a total.';
 
 type GenerateListingDraftMock = NonNullable<RunSidecarJobOptions['generateListingDraft']>;
@@ -1324,13 +1329,15 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         category_id: '261328',
         condition_id: '4000',
+        ese_eligible: true,
         condition_notes: 'Visible edge wear and light corner wear.',
-        description: `Ungraded single card with visible edge wear.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+        description: `Item Info: Ungraded single card with visible edge wear.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
         item_specifics: {
           'Card Condition': 'VERY_GOOD',
           Franchise: 'Utah Jazz',
           Player: 'Michael Jordan',
           Manufacturer: 'Upper Deck',
+          Season: '1991',
           __draft_metadata: {
             year: {
               image_index: 1,
@@ -1357,9 +1364,9 @@ describe('runSidecarJob', () => {
     expect(dataAccess.spies.listingsUpdate.mock.invocationCallOrder[0]).toBeLessThan(
       dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
     );
-    expect(
-      dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
-    ).toBeLessThan(dataAccess.spies.jobsComplete.mock.invocationCallOrder[0]);
+    expect(dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.spies.jobsComplete.mock.invocationCallOrder[0]
+    );
     expect(dataAccess.jobs.updateGeminiAttemptAudit).toHaveBeenNthCalledWith(1, 'job-generate-ai', {
       gemini_attempt_count: 1,
       gemini_attempts: [
@@ -1497,13 +1504,27 @@ describe('runSidecarJob', () => {
   });
 
   it.each([
-    ['normal', 'Original description.', `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`],
+    [
+      'normal',
+      'Original description.',
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
     ['empty', '', GENERATED_DESCRIPTION_NOTICE],
     ['whitespace-only', '   \n\t', GENERATED_DESCRIPTION_NOTICE],
     [
       'already-noticed',
       `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
-      `Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
+    [
+      'legacy-noticed',
+      `Original description.\n\n${LEGACY_GENERATED_DESCRIPTION_NOTICE}`,
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
+    ],
+    [
+      'previous-runtime-noticed',
+      `Original description.\n\n${PREVIOUS_GENERATED_DESCRIPTION_NOTICE}`,
+      `Item Info: Original description.\n\n${GENERATED_DESCRIPTION_NOTICE}`,
     ],
   ])(
     'persists the generated description notice for %s descriptions',
@@ -1660,6 +1681,192 @@ describe('runSidecarJob', () => {
     expect(updateInput?.item_specifics).not.toHaveProperty('__draft_metadata');
     expect(updateInput?.title).toBe('Ed Stanky Topps #191');
     expect(result.listing?.title).toBe('Ed Stanky Topps #191');
+  });
+
+  it.each(['year:1974', 'year: 1974', 'Year:1974', 'year:1974\nyear:1974'])(
+    'persists seller year hint authorization for %s',
+    async (sellerHints) => {
+      const dataAccess = createDataAccess({
+        job: {
+          ...queuedGenerateAiJob,
+          listing_id: 'LIST-SELLER-YEAR',
+        },
+        listing: createListingRow({
+          listing_id: 'LIST-SELLER-YEAR',
+          seller_hints: sellerHints,
+          sku: 'LIST-SELLER-YEAR',
+        }),
+      });
+      const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+        createGeneratedListingDraft({
+          aspects: {
+            'Card Number': '100',
+            Manufacturer: 'Topps',
+            Player: 'Willie Stargell',
+            Year: '1974',
+          },
+          description: 'Single card.',
+          title: 'Willie Stargell 1974 Topps #100',
+          yearEvidence: null,
+        })
+      );
+
+      await runSidecarJob('job-generate-ai', {
+        dataAccess,
+        generateListingDraft: generateListingDraftMock,
+        now: () => new Date('2026-05-20T13:00:00.000Z'),
+      });
+
+      expect(generateListingDraftMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userHints: expect.objectContaining({ explicitYear: '1974' }),
+        }),
+        expect.any(Object)
+      );
+      expect(dataAccess.listings.update).toHaveBeenCalledWith(
+        'LIST-SELLER-YEAR',
+        expect.objectContaining({
+          item_specifics: expect.objectContaining({
+            Year: '1974',
+            __draft_metadata: {
+              year: {
+                image_index: null,
+                source_type: 'seller_hint',
+                visible_text: null,
+                year: '1974',
+              },
+            },
+          }),
+          title: 'Willie Stargell 1974 Topps #100',
+        })
+      );
+    }
+  );
+
+  it('persists canonical sports Season and preserves only a safe adjacent Set range', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-SEASON-PERSIST',
+      },
+      listing: createListingRow({
+        category_id: '261328',
+        item_specifics: { Season: '1998-99' },
+        listing_id: 'LIST-SEASON-PERSIST',
+        seller_hints: 'year:1997',
+        sku: 'LIST-SEASON-PERSIST',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        aspects: { Player: 'Test Player', Manufacturer: 'Topps', Set: '1997-98 Topps' },
+        description: 'Sports single.',
+        categorySuggestion: 'Sports Trading Cards',
+        title: 'Topps Test Player',
+        skuCategoryCode: 'BSBL',
+        yearEvidence: null,
+      })
+    );
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-SEASON-PERSIST',
+      expect.objectContaining({
+        item_specifics: expect.objectContaining({ Season: '1997-98' }),
+      })
+    );
+  });
+
+  it('persists validated season evidence separately from canonical year evidence', async () => {
+    const dataAccess = createDataAccess({
+      job: {
+        ...queuedGenerateAiJob,
+        listing_id: 'LIST-SEASON-YEAR-DUAL',
+      },
+      listing: createListingRow({
+        category_id: '261328',
+        listing_id: 'LIST-SEASON-YEAR-DUAL',
+        sku: 'LIST-SEASON-YEAR-DUAL',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>(async () =>
+      createGeneratedListingDraft({
+        aspects: {
+          Manufacturer: 'Panini',
+          Set: 'Revolution',
+          'Insert Set': 'Legends',
+          Player: 'Yao Ming',
+          'Card Number': '170',
+          Franchise: 'Houston Rockets',
+          Year: '2025',
+        },
+        description: 'Sports single.',
+        categorySuggestion: 'Sports Trading Cards',
+        title: '2024-25 Panini Revolution Legends Insert Yao Ming #170 Houston Rockets',
+        seasonEvidence: {
+          season: '2024-25',
+          visibleText: '2024-25 PANINI - REVOLUTION BASKETBALL',
+          imageIndex: 0,
+        },
+        yearEvidence: {
+          year: '2025',
+          sourceType: 'copyright_line',
+          visibleText: '© 2025 Panini America, Inc.',
+          imageIndex: 1,
+        },
+      })
+    );
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(dataAccess.listings.update).toHaveBeenCalledWith(
+      'LIST-SEASON-YEAR-DUAL',
+      expect.objectContaining({
+        item_specifics: expect.objectContaining({
+          Season: '2024-25',
+          Year: '2025',
+          __draft_metadata: {
+            year: {
+              year: '2025',
+              source_type: 'copyright_line',
+              visible_text: '© 2025 Panini America, Inc.',
+              image_index: 1,
+            },
+          },
+        }),
+        title: '2024-25 Panini Revolution Legends Insert Yao Ming #170 Houston Rockets',
+      })
+    );
+  });
+
+  it('fails closed on conflicting seller year hints before a Gemini provider call', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        seller_hints: 'year:1974\nyear:1975',
+      }),
+    });
+    const generateListingDraftMock = vi.fn<GenerateListingDraftMock>();
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error).toContain('Conflicting seller year directives: 1974, 1975.');
+    expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).not.toHaveBeenCalled();
+    expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
   });
 
   it('persists BSBL skuCategoryCode suggestions without changing listing sku or listing_id', async () => {
@@ -2176,9 +2383,9 @@ describe('runSidecarJob', () => {
     });
     expect(dataAccess.jobs.enqueueResearchPrice).toHaveBeenCalledWith('Single-000001');
     expect(dataAccess.jobs.complete).toHaveBeenCalledTimes(1);
-    expect(
-      dataAccess.spies.listingsUpdateWorkflowState.mock.invocationCallOrder[0]
-    ).toBeLessThan(dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]);
+    expect(dataAccess.spies.listingsUpdateWorkflowState.mock.invocationCallOrder[0]).toBeLessThan(
+      dataAccess.spies.jobsEnqueueResearchPrice.mock.invocationCallOrder[0]
+    );
     expect(dataAccess.jobs.fail).not.toHaveBeenCalled();
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
     expect(jobLoggerWarn).toHaveBeenCalledWith(
@@ -2233,6 +2440,35 @@ describe('runSidecarJob', () => {
     });
     expect(result.listing?.sku).toBe('Single-000001');
     expect(result.listing?.listing_id).toBe('Single-000001');
+  });
+
+  it('does not retry or requeue deterministic protected title overflow', async () => {
+    const primaryRoute = createResolvedAiModelRoute({ routeOrder: 1 });
+    const fallbackRoute = createResolvedAiModelRoute({ routeOrder: 2, modelName: 'gemini-fallback' });
+    const dataAccess = createDataAccess({ aiModelRoutes: [primaryRoute, fallbackRoute] });
+    const overflow = new GeminiDraftTitleOverflowError({
+      preCompactionTitle: 'x'.repeat(81),
+      preCompactionLength: 81,
+      finalTitle: 'x'.repeat(81),
+      finalLength: 81,
+      protectedComponents: ['Player'],
+      omittedComponents: [],
+    });
+    const generateListingDraftMock = vi.fn().mockRejectedValue(overflow);
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledTimes(1);
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.listing?.last_error_context).toEqual(
+      expect.objectContaining({ category: 'user_fixable', title_overflow: expect.any(Object) })
+    );
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
   });
 
   it('falls through the four configured Gemini routes and records every attempt', async () => {
@@ -2435,7 +2671,7 @@ describe('runSidecarJob', () => {
     );
     expect(result.job.gemini_selected_model).toBe('gemini-3.5-flash');
     expect(result.listing?.description).toBe(
-      `Recovered after preview-first attempt.\n\n${GENERATED_DESCRIPTION_NOTICE}`
+      `Item Info: Recovered after preview-first attempt.\n\n${GENERATED_DESCRIPTION_NOTICE}`
     );
   });
 
@@ -2512,6 +2748,7 @@ describe('runSidecarJob', () => {
       expect.objectContaining({
         category_id: null,
         condition_id: '4000',
+        ese_eligible: false,
       })
     );
   });
@@ -3268,6 +3505,45 @@ describe('runSidecarJob', () => {
     });
   });
 
+  it('fails publish jobs terminally when the execution guard is disabled', async () => {
+    const dataAccess = createDataAccess({
+      job: queuedPublishJob,
+      listing: createListingRow({
+        status: 'approved_for_export',
+        sub_status: 'publish_queued',
+      }),
+    });
+    const publishListingMock = vi.fn(async () => {
+      throw new PublishListingError(
+        'PUBLISH_DISABLED',
+        'eBay publishing is disabled. Set EBAY_PUBLISH_ENABLED=true only for an authorized publish window.',
+        {
+          listingId: 'LIST-001',
+          stage: 'validate',
+        }
+      );
+    });
+
+    const result = await runSidecarJob('job-publish', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      publishListing: publishListingMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('publish_disabled');
+    expect(result.job.next_run_at).toBeNull();
+    expect(result.listing).toMatchObject({
+      last_error_code: 'publish_disabled',
+      last_error_context: expect.objectContaining({
+        category: 'terminal',
+        publish_error_code: 'PUBLISH_DISABLED',
+      }),
+      status: 'approved_for_export',
+      sub_status: 'idle',
+    });
+  });
+
   it('returns local listing-data publish validation errors to needs_review/review_pending', async () => {
     const dataAccess = createDataAccess({
       job: queuedPublishJob,
@@ -3878,16 +4154,14 @@ describe('runSidecarJob', () => {
           writeOrder.push('listing_update');
         },
       });
-      dataAccess.spies.listingPriceResearchMarkSucceeded.mockImplementationOnce(
-        async (input) => {
-          writeOrder.push('research_success');
-          return createListingPriceResearchRow({
-            ...input,
-            id: input.id,
-            status: 'succeeded',
-          });
-        }
-      );
+      dataAccess.spies.listingPriceResearchMarkSucceeded.mockImplementationOnce(async (input) => {
+        writeOrder.push('research_success');
+        return createListingPriceResearchRow({
+          ...input,
+          id: input.id,
+          status: 'succeeded',
+        });
+      });
 
       const result = await runSidecarJob('job-research-price', {
         dataAccess,
@@ -5251,14 +5525,16 @@ describe('runSidecarJob', () => {
         sub_status: 'review_pending',
         title: 'Broken provider listing',
       });
-      const fetchSoldComps = vi.fn().mockRejectedValue(
-        new SoldCompsPricingProviderError(
-          'soldcomps_provider_failure',
-          'provider_failure',
-          'SoldComps provider exploded',
-          'broken provider listing'
-        )
-      );
+      const fetchSoldComps = vi
+        .fn()
+        .mockRejectedValue(
+          new SoldCompsPricingProviderError(
+            'soldcomps_provider_failure',
+            'provider_failure',
+            'SoldComps provider exploded',
+            'broken provider listing'
+          )
+        );
       const apifyProvider = createFixturePricingProvider();
       const resolvePricingProvider = vi.fn((mode: 'apify' | 'soldcomps') =>
         mode === 'soldcomps'
@@ -5953,6 +6229,35 @@ describe('runSidecarJob', () => {
     expect(generateListingDraftMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userHints: undefined,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('does not authorize an unlabeled seller year hint', async () => {
+    const dataAccess = createDataAccess({
+      listing: createListingRow({
+        seller_hints: 'Possibly from 1974 based on the design.',
+      }),
+    });
+    const generateListingDraftMock = vi.fn(async () => ({
+      title: 'Willie Stargell Topps #100',
+      description: 'Test description.',
+      aspects: {},
+      warnings: [],
+    }));
+
+    await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      generateListingDraft: generateListingDraftMock,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+    });
+
+    expect(generateListingDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userHints: expect.not.objectContaining({
+          explicitYear: expect.anything(),
+        }),
       }),
       expect.anything()
     );

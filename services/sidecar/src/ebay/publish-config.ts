@@ -2,7 +2,9 @@ import type { AppSettingsRow, Json } from '@ebay-inventory/data';
 import type { EbayEnvironment } from '@/ebay/config.js';
 
 export type PublishConfigIssueCode =
+  | 'combined_fulfillment_policy_id_missing_for_environment'
   | 'fulfillment_policy_id_missing_for_environment'
+  | 'ground_fulfillment_policy_id_missing_for_environment'
   | 'marketplace_id_missing_for_environment'
   | 'merchant_location_key_missing_for_environment'
   | 'payment_policy_id_missing_for_environment'
@@ -11,8 +13,10 @@ export type PublishConfigIssueCode =
   | 'return_policy_id_missing_for_environment';
 
 export interface ResolvedPublishConfig {
+  combinedFulfillmentPolicyId: string;
   environment: EbayEnvironment;
   fulfillmentPolicyId: string;
+  groundFulfillmentPolicyId: string;
   marketplaceId: string;
   merchantLocationKey: string;
   paymentPolicyId: string;
@@ -26,7 +30,9 @@ export interface PublishConfigResolutionOptions {
 }
 
 interface PublishConfigFields {
+  combinedFulfillmentPolicyId: string | null;
   fulfillmentPolicyId: string | null;
+  groundFulfillmentPolicyId: string | null;
   marketplaceId: string | null;
   merchantLocationKey: string | null;
   paymentPolicyId: string | null;
@@ -48,7 +54,9 @@ function normalizeText(value: string | null | undefined): string | null {
   return hasText(value) ? value.trim() : null;
 }
 
-function isRecord(value: Json | Record<string, unknown> | null | undefined): value is Record<string, unknown> {
+function isRecord(
+  value: Json | Record<string, unknown> | null | undefined
+): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -87,10 +95,20 @@ function getEnvironmentConfigFields(
   }
 
   return {
+    combinedFulfillmentPolicyId: getStringField(
+      environmentConfig,
+      'combinedFulfillmentPolicyId',
+      'combined_fulfillment_policy_id'
+    ),
     fulfillmentPolicyId: getStringField(
       environmentConfig,
       'fulfillmentPolicyId',
       'fulfillment_policy_id'
+    ),
+    groundFulfillmentPolicyId: getStringField(
+      environmentConfig,
+      'groundFulfillmentPolicyId',
+      'ground_fulfillment_policy_id'
     ),
     marketplaceId: getStringField(environmentConfig, 'marketplaceId', 'marketplace_id'),
     merchantLocationKey: getStringField(
@@ -104,8 +122,11 @@ function getEnvironmentConfigFields(
 }
 
 function getLegacyFlatFields(appSettings: AppSettingsRow): PublishConfigFields {
+  const fulfillmentPolicyId = normalizeText(appSettings.default_fulfillment_policy_id);
   return {
-    fulfillmentPolicyId: normalizeText(appSettings.default_fulfillment_policy_id),
+    combinedFulfillmentPolicyId: fulfillmentPolicyId,
+    fulfillmentPolicyId,
+    groundFulfillmentPolicyId: fulfillmentPolicyId,
     marketplaceId: normalizeText(appSettings.ebay_marketplace_id),
     merchantLocationKey: normalizeText(appSettings.merchant_location_key),
     paymentPolicyId: normalizeText(appSettings.default_payment_policy_id),
@@ -142,7 +163,8 @@ function isPlaceholderMerchantLocationKey(fields: PublishConfigFields): boolean 
     normalized === 'default-main-location' &&
     [
       fields.paymentPolicyId,
-      fields.fulfillmentPolicyId,
+      fields.combinedFulfillmentPolicyId,
+      fields.groundFulfillmentPolicyId,
       fields.returnPolicyId,
     ].some((value) => !hasText(value) || isMockPlaceholder(value))
   );
@@ -180,18 +202,34 @@ function getMissingFieldIssues(
     );
   }
 
-  if (!hasText(fields.fulfillmentPolicyId)) {
+  if (!hasText(fields.combinedFulfillmentPolicyId)) {
     issues.push(
       buildIssue(
-        'fulfillment_policy_id_missing_for_environment',
-        `${pathPrefix}.fulfillmentPolicyId is required for ${environment} publish config.`
+        'combined_fulfillment_policy_id_missing_for_environment',
+        `${pathPrefix}.combinedFulfillmentPolicyId is required for ${environment} publish config.`
       )
     );
-  } else if (isMockPlaceholder(fields.fulfillmentPolicyId)) {
+  } else if (isMockPlaceholder(fields.combinedFulfillmentPolicyId)) {
     issues.push(
       buildIssue(
-        'fulfillment_policy_id_missing_for_environment',
-        `${pathPrefix}.fulfillmentPolicyId "${fields.fulfillmentPolicyId}" is a placeholder.`
+        'combined_fulfillment_policy_id_missing_for_environment',
+        `${pathPrefix}.combinedFulfillmentPolicyId "${fields.combinedFulfillmentPolicyId}" is a placeholder.`
+      )
+    );
+  }
+
+  if (!hasText(fields.groundFulfillmentPolicyId)) {
+    issues.push(
+      buildIssue(
+        'ground_fulfillment_policy_id_missing_for_environment',
+        `${pathPrefix}.groundFulfillmentPolicyId is required for ${environment} publish config.`
+      )
+    );
+  } else if (isMockPlaceholder(fields.groundFulfillmentPolicyId)) {
+    issues.push(
+      buildIssue(
+        'ground_fulfillment_policy_id_missing_for_environment',
+        `${pathPrefix}.groundFulfillmentPolicyId "${fields.groundFulfillmentPolicyId}" is a placeholder.`
       )
     );
   }
@@ -245,7 +283,11 @@ export function resolvePublishConfig(
   if (environmentFields) {
     fields = environmentFields;
     source = 'environment_config';
-  } else if (options.environment === 'sandbox' && !getPublishConfigRoot(appSettings) && hasLegacyFlatPublishConfig(appSettings)) {
+  } else if (
+    options.environment === 'sandbox' &&
+    !getPublishConfigRoot(appSettings) &&
+    hasLegacyFlatPublishConfig(appSettings)
+  ) {
     fields = getLegacyFlatFields(appSettings);
     source = 'legacy_flat';
     pathPrefix = 'app_settings (legacy flat sandbox publish fields)';
@@ -264,7 +306,11 @@ export function resolvePublishConfig(
 
   issues.push(...getMissingFieldIssues(options.environment, fields, pathPrefix));
 
-  if (runtimeMarketplaceId && hasText(fields.marketplaceId) && fields.marketplaceId !== runtimeMarketplaceId) {
+  if (
+    runtimeMarketplaceId &&
+    hasText(fields.marketplaceId) &&
+    fields.marketplaceId !== runtimeMarketplaceId
+  ) {
     issues.push(
       buildIssue(
         'publish_config_marketplace_mismatch',
@@ -282,8 +328,10 @@ export function resolvePublishConfig(
 
   return {
     config: {
+      combinedFulfillmentPolicyId: fields.combinedFulfillmentPolicyId!,
       environment: options.environment,
-      fulfillmentPolicyId: fields.fulfillmentPolicyId!,
+      fulfillmentPolicyId: fields.groundFulfillmentPolicyId!,
+      groundFulfillmentPolicyId: fields.groundFulfillmentPolicyId!,
       marketplaceId: fields.marketplaceId!,
       merchantLocationKey: fields.merchantLocationKey!,
       paymentPolicyId: fields.paymentPolicyId!,
@@ -302,8 +350,13 @@ export function getPublishConfigCandidate(
 
   if (environmentFields) {
     return {
+      combinedFulfillmentPolicyId: environmentFields.combinedFulfillmentPolicyId ?? undefined,
       environment: options.environment,
-      fulfillmentPolicyId: environmentFields.fulfillmentPolicyId ?? undefined,
+      fulfillmentPolicyId:
+        environmentFields.groundFulfillmentPolicyId ??
+        environmentFields.combinedFulfillmentPolicyId ??
+        undefined,
+      groundFulfillmentPolicyId: environmentFields.groundFulfillmentPolicyId ?? undefined,
       marketplaceId: environmentFields.marketplaceId ?? undefined,
       merchantLocationKey: environmentFields.merchantLocationKey ?? undefined,
       paymentPolicyId: environmentFields.paymentPolicyId ?? undefined,
@@ -312,12 +365,18 @@ export function getPublishConfigCandidate(
     };
   }
 
-  if (options.environment === 'sandbox' && !getPublishConfigRoot(appSettings) && hasLegacyFlatPublishConfig(appSettings)) {
+  if (
+    options.environment === 'sandbox' &&
+    !getPublishConfigRoot(appSettings) &&
+    hasLegacyFlatPublishConfig(appSettings)
+  ) {
     const legacyFields = getLegacyFlatFields(appSettings);
 
     return {
+      combinedFulfillmentPolicyId: legacyFields.combinedFulfillmentPolicyId ?? undefined,
       environment: options.environment,
       fulfillmentPolicyId: legacyFields.fulfillmentPolicyId ?? undefined,
+      groundFulfillmentPolicyId: legacyFields.groundFulfillmentPolicyId ?? undefined,
       marketplaceId: legacyFields.marketplaceId ?? undefined,
       merchantLocationKey: legacyFields.merchantLocationKey ?? undefined,
       paymentPolicyId: legacyFields.paymentPolicyId ?? undefined,

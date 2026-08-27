@@ -2,6 +2,10 @@ import { CAPTURE_MODES, PRICING_PROVIDER_MODES } from '@ebay-inventory/types';
 import { parseStructuredSku } from '@ebay-inventory/types';
 import { z } from 'zod';
 import { listingWorkflowStateSchema } from '@/workflow/listing-workflow.js';
+import {
+  DEFAULT_BROWSE_PRICING_OPTIONS,
+  normalizeBrowsePricingOptions,
+} from '@/pricing/browse-pricing-options.js';
 
 const trimmedStringSchema = (name: string): z.ZodString =>
   z
@@ -26,6 +30,23 @@ const pricingModifierOptionsSchema = z
     excludeVariants: z.boolean().optional(),
   })
   .strict();
+const browsePricingOptionsSchema = z
+  .object({
+    skipBrowse: z.boolean().optional(),
+    minPriceMultiplier: z.number().finite().optional(),
+    maxPriceMultiplier: z.number().finite().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    try {
+      normalizeBrowsePricingOptions({ ...DEFAULT_BROWSE_PRICING_OPTIONS, ...value });
+    } catch (error) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : 'Invalid Browse pricing options.',
+      });
+    }
+  });
 const publicImageUrlSchema = z
   .string({
     required_error: 'imageUrl is required',
@@ -94,6 +115,7 @@ export const editableListingFieldsSchema = z
     merchantLocationKey: nullableTrimmedStringSchema('merchantLocationKey'),
     packageType: nullableTrimmedStringSchema('packageType'),
     price: z.number().finite().nonnegative().nullable().optional(),
+    browsePricingOptions: browsePricingOptionsSchema.optional(),
     pricingModifierOptions: pricingModifierOptionsSchema.optional(),
     sellerHints: nullableTrimmedStringSchema('sellerHints'),
     shippingProfile: nullableTrimmedStringSchema('shippingProfile'),
@@ -110,6 +132,7 @@ export const sellerEditableListingFieldsSchema = z
     description: nullableTrimmedStringSchema('description'),
     itemSpecifics: itemSpecificsSchema.optional(),
     price: z.number().finite().nonnegative().nullable().optional(),
+    browsePricingOptions: browsePricingOptionsSchema.optional(),
     pricingModifierOptions: pricingModifierOptionsSchema.optional(),
     sellerHints: nullableTrimmedStringSchema('sellerHints'),
     title: nullableTrimmedStringSchema('title'),

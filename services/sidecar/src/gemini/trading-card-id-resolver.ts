@@ -1,6 +1,7 @@
 import type { ListingRow } from '@ebay-inventory/data';
 import type { GeneratedListingDraft } from './contracts.js';
 import { RAW_TRADING_CARD_CONDITION_ID } from '@/listings/trading-card-conditions.js';
+import { SPORTS_TRADING_CARD_CATEGORY_ID } from '@/listings/trading-card-conditions.js';
 
 export interface TradingCardListingIds {
   category_id: string | null;
@@ -8,16 +9,13 @@ export interface TradingCardListingIds {
 }
 
 const CATEGORY_ID_BY_SUGGESTION_TOKEN: { categoryId: string; pattern: RegExp }[] = [
-  { categoryId: '261328', pattern: /sports trading card/ },
+  { categoryId: SPORTS_TRADING_CARD_CATEGORY_ID, pattern: /sports trading card/ },
   { categoryId: '183050', pattern: /non-sport trading card/ },
   { categoryId: '183454', pattern: /ccg individual card/ },
 ];
 
 function normalizeLabel(value: string | null | undefined): string {
-  return (value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function shouldResolveSportsTradingCardCategory(

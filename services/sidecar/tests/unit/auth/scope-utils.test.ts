@@ -77,6 +77,18 @@ describe('Scope Utils', () => {
       );
     });
 
+    it('accepts either Account read scope for fulfillment-policy discovery', () => {
+      const requirement = getRequiredScopesForTool('ebay_get_fulfillment_policies');
+
+      expect(requirement?.requiredScopes).toEqual([
+        'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+        'https://api.ebay.com/oauth/api_scope/sell.account',
+      ]);
+      expect(requirement?.minimumScope).toBe(
+        'https://api.ebay.com/oauth/api_scope/sell.account.readonly'
+      );
+    });
+
     it('should return scopes for create/write operations', () => {
       const requirement = getRequiredScopesForTool('ebay_create_inventory_item');
 

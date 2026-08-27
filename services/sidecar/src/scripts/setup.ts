@@ -7,12 +7,19 @@ import { homedir, platform } from 'os';
 import axios from 'axios';
 import chalk from 'chalk';
 import { checkForUpdates } from '../utils/version.js';
-import stringify from 'dotenv-stringify';
 import { fileURLToPath } from 'url';
-import { getOAuthAuthorizationUrl } from '../config/environment.js';
-import { ROOT_ENV_LOCAL_PATH, REPO_ROOT, loadRootEnvironment } from '../config/env-paths.js';
+import {
+  getOAuthAuthorizationUrl,
+  getProductionAppOAuthScopes,
+} from '../config/environment.js';
+import { REPO_ROOT, loadRootEnvironment } from '../config/env-paths.js';
 import { defineWizard, runWizard, ClackRenderer } from '../utils/setup-wizard.js';
 import { loadExistingConfig } from './setup-shared.js';
+import {
+  CANONICAL_REFRESH_TOKEN_KEY,
+  getConfiguredRefreshToken,
+  persistEnvConfig,
+} from '../auth/credential-session.js';
 import { configureLLMClient, detectLLMClients } from '../utils/llm-client-detector.js';
 import { runSecurityChecks, displaySecurityResults } from '../utils/security-checker.js';
 import { validateSetup, displayRecommendations } from '../utils/setup-validator.js';
@@ -166,7 +173,7 @@ async function getAppAccessToken(
   return response.data.access_token;
 }
 
-async function verifyRefreshToken(
+export async function verifyRefreshToken(
   refreshToken: string,
   clientId: string,
   clientSecret: string,
@@ -180,8 +187,6 @@ async function verifyRefreshToken(
     new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      scope:
-        'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory',
     }).toString(),
     {
       headers: {
@@ -193,10 +198,52 @@ async function verifyRefreshToken(
   const accessToken = tokenResponse.data.access_token;
   const identityBase =
     environment === 'production' ? 'https://apiz.ebay.com' : 'https://apiz.sandbox.ebay.com';
-  const userResponse = await axios.get(`${identityBase}/commerce/identity/v1/user/`, {
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-  });
+  let userResponse;
+  try {
+    userResponse = await axios.get(`${identityBase}/commerce/identity/v1/user/`, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+    const responseMessage = axios.isAxiosError(error)
+      ? [
+          error.response?.data?.error_description,
+          ...(error.response?.data?.errors ?? []).map((item: { message?: string }) => item.message),
+          error.message,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    const normalizedMessage = responseMessage.toLowerCase();
+    if (
+      status === 401 ||
+      status === 403 ||
+      normalizedMessage.includes('access denied') ||
+      normalizedMessage.includes('insufficient scope') ||
+      normalizedMessage.includes('insufficient permission')
+    ) {
+      throw new Error(
+        'Refresh token lacks the commerce.identity.readonly permission required to verify the eBay account. Re-authorize with the app production OAuth scopes.'
+      );
+    }
+    throw error;
+  }
   return { accessToken, userInfo: userResponse.data };
+}
+
+export function getSetupOAuthAuthorizationUrl(
+  clientId: string,
+  redirectUri: string,
+  environment: 'sandbox' | 'production'
+): string {
+  return getOAuthAuthorizationUrl(
+    clientId,
+    redirectUri,
+    environment,
+    environment === 'production' ? getProductionAppOAuthScopes() : undefined
+  );
 }
 
 async function fetchEbayUserInfo(
@@ -271,8 +318,8 @@ function updateClaudeDesktopConfig(
     if (envConfig.EBAY_MARKETPLACE_ID) envVars.EBAY_MARKETPLACE_ID = envConfig.EBAY_MARKETPLACE_ID;
     if (envConfig.EBAY_CONTENT_LANGUAGE)
       envVars.EBAY_CONTENT_LANGUAGE = envConfig.EBAY_CONTENT_LANGUAGE;
-    if (envConfig.EBAY_USER_REFRESH_TOKEN)
-      envVars.EBAY_USER_REFRESH_TOKEN = envConfig.EBAY_USER_REFRESH_TOKEN;
+    const refreshToken = getConfiguredRefreshToken(envConfig);
+    if (refreshToken) envVars[CANONICAL_REFRESH_TOKEN_KEY] = refreshToken;
     if (envConfig.EBAY_USER_ACCESS_TOKEN?.startsWith('v^'))
       envVars.EBAY_USER_ACCESS_TOKEN = envConfig.EBAY_USER_ACCESS_TOKEN;
     if (envConfig.EBAY_APP_ACCESS_TOKEN?.startsWith('v^'))
@@ -301,37 +348,8 @@ function updateClaudeDesktopConfig(
   }
 }
 
-function formatDate(date: Date): string {
-  return date.toLocaleString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZoneName: 'short',
-  });
-}
-
 function saveConfig(envConfig: Record<string, string>, environment: string): void {
-  const envPath = ROOT_ENV_LOCAL_PATH;
-  const existingConfig = loadExistingConfig();
-  const mergedConfig = {
-    ...existingConfig,
-    ...envConfig,
-    EBAY_ENVIRONMENT: environment,
-  };
-
-  writeFileSync(
-    envPath,
-    `# Local runtime configuration for backend-services
-# Last Updated: ${formatDate(new Date())}
-# Environment: ${environment}
-
-${stringify(mergedConfig)}`,
-    'utf-8'
-  );
+  persistEnvConfig({ ...envConfig, EBAY_ENVIRONMENT: environment });
 }
 
 function showInfo(message: string): void {
@@ -405,6 +423,7 @@ function displayUserInfo(userInfo: EbayUserInfo): void {
  */
 export async function runSetup(): Promise<void> {
   const existingConfig = loadExistingConfig();
+  const existingRefreshToken = getConfiguredRefreshToken(existingConfig);
   const detectedClients = detectLLMClients();
   const availableClients = detectedClients.filter((c) => c.detected);
 
@@ -586,7 +605,7 @@ export async function runSetup(): Promise<void> {
 
     optionsProvider: (stepId) => {
       if (stepId === 'oauth-method') {
-        const hasToken = existingConfig.EBAY_USER_REFRESH_TOKEN?.startsWith('v^1.1#');
+        const hasToken = existingRefreshToken?.startsWith('v^1.1#');
         if (hasToken) {
           return [
             { value: 'keep', label: '✓  Keep and verify existing token' },
@@ -637,14 +656,14 @@ export async function runSetup(): Promise<void> {
           const stopSpinner = showSetupProgress('Verifying existing refresh token...');
           try {
             const { accessToken, userInfo } = await verifyRefreshToken(
-              existingConfig.EBAY_USER_REFRESH_TOKEN,
+              existingRefreshToken ?? '',
               clientId,
               clientSecret,
               environment
             );
             stopSpinner();
             showSuccess('Refresh token verified!');
-            tokens.refreshToken = existingConfig.EBAY_USER_REFRESH_TOKEN;
+            tokens.refreshToken = existingRefreshToken;
             tokens.accessToken = accessToken;
             displayUserInfo(userInfo);
             try {
@@ -657,7 +676,7 @@ export async function runSetup(): Promise<void> {
               const r = updateClaudeDesktopConfig(
                 {
                   ...(a as Record<string, string>),
-                  EBAY_USER_REFRESH_TOKEN: tokens.refreshToken ?? '',
+                  [CANONICAL_REFRESH_TOKEN_KEY]: tokens.refreshToken ?? '',
                 },
                 environment
               );
@@ -680,13 +699,13 @@ export async function runSetup(): Promise<void> {
               showWarning('Token may be missing required OAuth scopes.');
             else showWarning('Existing token may be expired or invalid.');
             showInfo('Continuing with existing token — re-run setup to refresh it.');
-            tokens.refreshToken = existingConfig.EBAY_USER_REFRESH_TOKEN;
+            tokens.refreshToken = existingRefreshToken;
           }
           context.setNextStep(finalStepId);
         } else if (method === 'existing') {
           context.setNextStep('oauth-token');
         } else if (method === 'manual') {
-          const authUrl = getOAuthAuthorizationUrl(clientId, redirectUri, environment);
+          const authUrl = getSetupOAuthAuthorizationUrl(clientId, redirectUri, environment);
           context.showNote('OAuth Authorization URL', authUrl);
           await context.openBrowser(authUrl);
           showInfo('1. Sign in to your eBay account in the browser');
@@ -728,7 +747,7 @@ export async function runSetup(): Promise<void> {
           }
           if (isClaudeDesktopInstalled()) {
             const r = updateClaudeDesktopConfig(
-              { ...(a as Record<string, string>), EBAY_USER_REFRESH_TOKEN: rawToken },
+              { ...(a as Record<string, string>), [CANONICAL_REFRESH_TOKEN_KEY]: rawToken },
               environment
             );
             if (r.success) {
@@ -798,7 +817,7 @@ export async function runSetup(): Promise<void> {
             const r = updateClaudeDesktopConfig(
               {
                 ...(a as Record<string, string>),
-                EBAY_USER_REFRESH_TOKEN: tokens.refreshToken ?? '',
+                [CANONICAL_REFRESH_TOKEN_KEY]: tokens.refreshToken ?? '',
                 EBAY_USER_ACCESS_TOKEN: tokens.accessToken ?? '',
               },
               environment
@@ -848,7 +867,7 @@ export async function runSetup(): Promise<void> {
     },
   });
 
-  // ── Persist final .env.local ───────────────────────────────────────────────
+  // ── Persist final .env ─────────────────────────────────────────────────────
 
   const marketplaceId =
     answers.marketplace === '__custom__'
@@ -871,9 +890,9 @@ export async function runSetup(): Promise<void> {
     ...(marketplaceId ? { EBAY_MARKETPLACE_ID: marketplaceId } : {}),
     ...(contentLanguage ? { EBAY_CONTENT_LANGUAGE: contentLanguage } : {}),
     ...(tokens.refreshToken
-      ? { EBAY_USER_REFRESH_TOKEN: tokens.refreshToken }
-      : existingConfig.EBAY_USER_REFRESH_TOKEN
-        ? { EBAY_USER_REFRESH_TOKEN: existingConfig.EBAY_USER_REFRESH_TOKEN }
+      ? { [CANONICAL_REFRESH_TOKEN_KEY]: tokens.refreshToken }
+      : existingRefreshToken
+        ? { [CANONICAL_REFRESH_TOKEN_KEY]: existingRefreshToken }
         : {}),
     ...(tokens.accessToken ? { EBAY_USER_ACCESS_TOKEN: tokens.accessToken } : {}),
     ...(tokens.appAccessToken ? { EBAY_APP_ACCESS_TOKEN: tokens.appAccessToken } : {}),
@@ -885,7 +904,7 @@ export async function runSetup(): Promise<void> {
   });
   saveConfig(finalConfig, environment);
   stopSave();
-  showSuccess('Configuration saved to backend-services/.env.local\n');
+  showSuccess('Configuration saved to backend-services/.env\n');
 
   console.log(LOGO);
   console.log(ui.bold.white('            MCP Server Setup Wizard by Yosef Hayim Sabag'));
@@ -898,8 +917,8 @@ export async function runSetup(): Promise<void> {
     `Content-Lang:    ${finalConfig.EBAY_CONTENT_LANGUAGE || 'Not set'}`,
     `Client ID:       ${(finalConfig.EBAY_CLIENT_ID || '').slice(0, 20)}...`,
     `Redirect URI:    ${(finalConfig.EBAY_REDIRECT_URI || '').slice(0, 30)}...`,
-    `OAuth Token:     ${finalConfig.EBAY_USER_REFRESH_TOKEN ? '✓ Configured' : '✗ Not set'}`,
-    `Rate Limit:      ${finalConfig.EBAY_USER_REFRESH_TOKEN ? '10k-50k/day' : '1k/day'}`,
+    `OAuth Token:     ${finalConfig[CANONICAL_REFRESH_TOKEN_KEY] ? '✓ Configured' : '✗ Not set'}`,
+    `Rate Limit:      ${finalConfig[CANONICAL_REFRESH_TOKEN_KEY] ? '10k-50k/day' : '1k/day'}`,
   ]);
 
   console.log(ui.bold.cyan('\n  📋 Quick Reference\n'));

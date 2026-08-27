@@ -24,7 +24,8 @@ pnpm --filter @ebay-inventory/watcher-service test
 
 ## Environment
 
-The watcher reads repo-root `backend-services/.env` and overlays `backend-services/.env.local`.
+The watcher CLI loads repo-root `backend-services/.env`, then `backend-services/.env.local` for
+unset variables. Existing `.env` values are not overwritten by the local file.
 
 Set the local incoming folder path in the repo-root env file:
 
@@ -39,6 +40,16 @@ Optional overrides:
 # WATCHER_PROCESSED_DIR=./watcher/processed
 ```
 
+## Capture Guidance
+
+- All-JPEG watcher groups use `enhance_crop` downstream. The finalized profile is JPEG q95,
+  4:2:0 chroma subsampling, and no sharpening; a conservative uncropped fallback is valid.
+- Use fixed overhead/square framing, a smooth uniform matte white or black high-contrast
+  backdrop, even diffused light, minimal glare/shadow, full item edges, and generous clean
+  margin.
+- Textured or linty backgrounds can reduce crop acceptance; never weaken safety gates to force
+  a crop.
+
 ## Runtime Behavior
 
 - Watches only the configured incoming directory.
@@ -46,4 +57,7 @@ Optional overrides:
 - Processes new file `add` events sequentially through `processIncomingImageBatch()`.
 - Preserves grouping state across batches.
 - Ignores startup-existing files in this step.
-- Remains alive after batch failures; failed snapshots are logged and dropped.
+- Supports `single_2_image` and `lot_3_image` capture modes.
+- Accepts `.jpg`, `.jpeg`, `.png`, and `.webp` image files (case-insensitive extension check).
+- Remains alive after batch failures. Retryable batch failures retain grouping state and retry
+  inputs and pause queue draining; other failures are logged without terminating the runtime.

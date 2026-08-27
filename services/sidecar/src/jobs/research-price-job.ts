@@ -9,6 +9,8 @@ import {
 } from '@ebay-inventory/data';
 import type { EnvSource } from '@ebay-inventory/env';
 
+import { EbaySellerApi } from '@/api/index.js';
+import { getEbayConfig } from '@/config/environment.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   computeConditionAdjustmentSummary,
@@ -33,6 +35,13 @@ import {
 } from '@/pricing/provider-resolver.js';
 import { ProductionPricingAnalystError } from '@/pricing/production-llm-pricing-analyst.js';
 import { computePricingStats } from '@/pricing/stats.js';
+import {
+  buildActiveMarketSnapshot,
+  traverseActiveMarket,
+  type ActiveMarketTraversalInput,
+  type ActiveMarketTraversalResult,
+} from '@/pricing/active-market.js';
+import { computeTacticalSellPrice } from '@/pricing/tactical-price.js';
 import type {
   ConditionAdjustmentSummary,
   LlmPricingPromptFactKey,
@@ -104,6 +113,12 @@ export function isSoldCompsRuntimeEnabled(env: EnvSource = process.env): boolean
 }
 
 export interface ResearchPriceJobDependencies {
+  /** Optional bound shadow traversal seam for focused job tests and alternate runtimes. */
+  activeMarketTraversal?: (
+    input: ActiveMarketTraversalInput
+  ) => Promise<ActiveMarketTraversalResult>;
+  /** Injectable facade factory for proving/authenticating the production shadow seam. */
+  createActiveMarketApi?: () => Pick<EbaySellerApi, 'browse' | 'identity' | 'initialize'>;
   createPricingProvider?: () => PricingProvider;
   computeConfidence?: (input: {
     comps: Parameters<typeof computePricingConfidence>[0]['comps'];
@@ -1218,6 +1233,7 @@ async function fetchProviderResultWithFallback(
   options: PriceListingNowOptions
 ): Promise<{
   latency: Pick<PricingResearchLatencyDiagnostics, 'fallbackFetchMs' | 'providerFetchMs'>;
+  providerInput: PricingProviderInput;
   pricingProvider: PricingProvider;
   providerResult: PricingProviderResult;
   providerRouting: ProviderRoutingDiagnostics;
@@ -1249,6 +1265,7 @@ async function fetchProviderResultWithFallback(
     providerRouting.actualProvider = providerResult.provider;
     return {
       latency: { providerFetchMs: elapsedMs(primaryFetchStartedAt) },
+      providerInput,
       pricingProvider,
       providerResult,
       providerRouting,
@@ -1295,6 +1312,7 @@ async function fetchProviderResultWithFallback(
           fallbackFetchMs: elapsedMs(fallbackFetchStartedAt),
           providerFetchMs,
         },
+        providerInput,
         pricingProvider,
         providerResult,
         providerRouting,
@@ -1325,6 +1343,179 @@ function isQualifyingSoldCompsFallbackFailure(
     failure.providerFailureCategory !== undefined &&
     SOLDCOMPS_APIFY_FALLBACK_CATEGORIES.has(failure.providerFailureCategory)
   );
+}
+
+function projectActiveMarketPersistenceSnapshot(result: ActiveMarketTraversalResult): Json {
+  const completeEvidenceIsConsistent =
+    result.status === 'available' &&
+    result.complete &&
+    Number.isSafeInteger(result.exactAcceptedCount) &&
+    result.exactAcceptedCount === result.acceptedItems.length &&
+    result.acceptedCount === result.acceptedItems.length;
+  const persistedStatus =
+    result.status === 'available' && result.complete && !completeEvidenceIsConsistent
+      ? 'unavailable'
+      : result.status;
+  const persistedUnavailableReason =
+    persistedStatus === 'unavailable' && result.status === 'available' && result.complete
+      ? 'malformed_response'
+      : result.unavailableReason;
+  const snapshot = buildActiveMarketSnapshot(
+    result.acceptedItems,
+    completeEvidenceIsConsistent
+  );
+  const complete = snapshot.complete;
+  const tacticalSellPrice = complete
+    ? computeTacticalSellPrice(snapshot, null)
+    : null;
+
+  return asJson({
+    status: persistedStatus,
+    skipReason: result.skipReason,
+    unavailableReason: persistedUnavailableReason,
+    incompleteReason: result.incompleteReason,
+    capturedAt: result.capturedAt,
+    anchor: result.anchor
+      ? {
+          basis: result.anchor.basis,
+          currency: result.anchor.currency,
+          value: result.anchor.value,
+        }
+      : null,
+    multipliers: result.multipliers
+      ? {
+          maxPriceMultiplier: result.multipliers.maxPriceMultiplier,
+          minPriceMultiplier: result.multipliers.minPriceMultiplier,
+        }
+      : null,
+    itemPriceWindow: result.itemPriceWindow
+      ? {
+          currency: result.itemPriceWindow.currency,
+          max: result.itemPriceWindow.max,
+          min: result.itemPriceWindow.min,
+        }
+      : null,
+    query: {
+      canonical: result.query.canonical,
+      marketplaceId: result.query.marketplaceId,
+      categoryId: result.query.categoryId,
+      conditionId: result.query.conditionId,
+      buyingOption: result.query.buyingOption,
+    },
+    sellerExclusionApplied: result.sellerExclusionApplied,
+    shippingContext: result.shippingContext
+      ? {
+          basis: result.shippingContext.basis,
+          country: result.shippingContext.country,
+          postalCode: result.shippingContext.postalCode,
+        }
+      : null,
+    safeguards: {
+      maxPages: result.safeguards.maxPages,
+      maxDurationMs: result.safeguards.maxDurationMs,
+      maxOffset: result.safeguards.maxOffset,
+    },
+    pagesScanned: result.pagesScanned,
+    candidateRowsScanned: result.candidateRowsScanned,
+    complete,
+    exactAcceptedCount: snapshot.exactAcceptedCount,
+    acceptedCount: result.acceptedCount,
+    rejectedCount: result.rejectedCount,
+    rejectionReasonCounts: { ...result.rejectionReasonCounts },
+    distributions: complete
+      ? {
+          itemPrice: snapshot.itemPriceDistribution,
+          shippingKnownTotal: snapshot.shippingKnownTotalDistribution,
+        }
+      : null,
+    shippingKnownAcceptedCount: snapshot.shippingKnownAcceptedCount,
+    latencyMs: result.latencyMs,
+    tacticalSellPrice,
+    competitors: snapshot.competitors.map((competitor) => ({
+      legacyItemId: competitor.legacyItemId,
+      title: competitor.title,
+      condition: competitor.condition,
+      conditionId: competitor.conditionId,
+      itemPrice: {
+        value: competitor.itemPrice.value,
+        currency: competitor.itemPrice.currency,
+      },
+      shippingCost: competitor.shippingCost
+        ? {
+            value: competitor.shippingCost.value,
+            currency: competitor.shippingCost.currency,
+          }
+        : null,
+      shippingType: competitor.shippingType,
+      totalPrice: competitor.totalPrice
+        ? {
+            value: competitor.totalPrice.value,
+            currency: competitor.totalPrice.currency,
+          }
+        : null,
+      itemUrl: competitor.itemUrl,
+    })),
+  });
+}
+
+async function runActiveMarketShadow(
+  listing: ListingRow,
+  listingId: string,
+  providerInput: PricingProviderInput,
+  selectedBasePrice: number,
+  baselineCurrency: string | null,
+  dependencies: ResearchPriceJobDependencies
+): Promise<ActiveMarketTraversalResult | null> {
+  if (listing.auto_pricing_enabled === false || !baselineCurrency) {
+    return null;
+  }
+
+  const input: ActiveMarketTraversalInput = {
+    providerInput,
+    options: providerInput.browsePricingOptions,
+    anchor: {
+      value: selectedBasePrice,
+      currency: baselineCurrency,
+      basis: 'condition_adjusted_base_price_before_competitive_velocity',
+    },
+  };
+
+  try {
+    let result: ActiveMarketTraversalResult;
+    if (dependencies.activeMarketTraversal) {
+      result = await dependencies.activeMarketTraversal(input);
+    } else {
+      const api =
+        dependencies.createActiveMarketApi?.() ?? new EbaySellerApi(getEbayConfig());
+      if (providerInput.browsePricingOptions?.skipBrowse !== true) {
+        await api.initialize();
+      }
+      result = await traverseActiveMarket(input, {
+        browse: api.browse,
+        identity: api.identity,
+        environment: dependencies.pricingProviderEnv,
+      });
+    }
+
+    jobLogger.info('Completed research_price active-market shadow traversal.', {
+      acceptedCount: result.acceptedCount,
+      complete: result.complete,
+      event: 'research_price_active_market_shadow',
+      incompleteReason: result.incompleteReason,
+      listingId,
+      pagesScanned: result.pagesScanned,
+      status: result.status,
+      unavailableReason: result.unavailableReason,
+    });
+    return result;
+  } catch (error) {
+    jobLogger.warn('Active-market shadow traversal failed; baseline retained.', {
+      errorType: error instanceof Error ? error.name : typeof error,
+      event: 'research_price_active_market_shadow_failed',
+      listingId,
+    });
+    return null;
+  }
 }
 
 function assertResearchPriceListingEligible(listing: ListingRow): void {
@@ -1531,6 +1722,35 @@ async function persistSucceededResearch(
   });
 }
 
+async function persistActiveMarketSnapshotBestEffort(
+  dataAccess: SidecarDataAccess,
+  input: {
+    listingId: string;
+    researchId: string;
+    rawResultJson: Json;
+    traversalResult: ActiveMarketTraversalResult;
+  }
+): Promise<void> {
+  try {
+    const activeMarket = projectActiveMarketPersistenceSnapshot(input.traversalResult);
+    const baselineRawResult = isRecord(input.rawResultJson) ? input.rawResultJson : {};
+
+    await dataAccess.listingPriceResearch.markSucceeded({
+      id: input.researchId,
+      raw_result_json: asJson({
+        ...baselineRawResult,
+        activeMarket,
+      }),
+    });
+  } catch (error) {
+    jobLogger.warn('Failed to attach active-market snapshot; baseline retained.', {
+      errorType: error instanceof Error ? error.name : typeof error,
+      event: 'research_price_active_market_snapshot_persist_failed',
+      listingId: input.listingId,
+    });
+  }
+}
+
 export async function priceListingNow(
   listingId: string,
   dependencies: ResearchPriceJobDependencies,
@@ -1571,6 +1791,7 @@ export async function priceListingNow(
   let research: ListingPriceResearchRow | null = null;
   let researchSucceeded = false;
   let providerRouting: ProviderRoutingDiagnostics | undefined;
+  let providerInput: PricingProviderInput | undefined;
   let providerResult: PricingProviderResult | undefined;
   let rawCompCount = 0;
   let normalizedCompCount = 0;
@@ -1606,6 +1827,7 @@ export async function priceListingNow(
 
     ({
       latency: { fallbackFetchMs, providerFetchMs },
+      providerInput,
       pricingProvider,
       providerResult,
       providerRouting,
@@ -1806,6 +2028,22 @@ export async function priceListingNow(
     const pricedListing = await dependencies.dataAccess.listings.update(listingId, {
       price: finalSuggestedPrice,
     });
+    const activeMarketResult = await runActiveMarketShadow(
+      listing,
+      listingId,
+      providerInput!,
+      selectedBasePrice,
+      stats.currency,
+      dependencies
+    );
+    if (activeMarketResult && research) {
+      await persistActiveMarketSnapshotBestEffort(dependencies.dataAccess, {
+        listingId,
+        rawResultJson: pricingRawResult,
+        researchId: research.id,
+        traversalResult: activeMarketResult,
+      });
+    }
 
     jobLogger.info(getResearchPriceLogMessage('succeeded', options.executionSource), {
       acceptedCompCount: normalizedCompCount,

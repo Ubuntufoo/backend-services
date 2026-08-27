@@ -3,12 +3,15 @@ import type { AppSettingsRow, ListingRow } from '@ebay-inventory/data';
 import type { ResolvedPublishConfig } from '@/ebay/publish-config.js';
 import {
   buildPublishSku,
+  formatEbayListingDescription,
   mapListingConditionIdToInventoryCondition,
   mapListingToInventoryItemPayload,
   mapListingToOfferPayload,
 } from '@/ebay/publish-mappers.js';
 
 const STRUCTURED_SKU = 'BSKBL-Single-000001';
+const SHIPPING_PROMOTION_HTML =
+  '<strong style="color: green; font-size: 1.1em;">Buy more, save more — combine 2 cards under $20 for 1/2 price shipping or 3+ for FREE shipping!</strong><br><br><a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a> - For easy access to this store, and periodic discounts on merchandise.<br><br>';
 
 function createListing(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
@@ -87,8 +90,10 @@ function createResolvedPublishConfig(
   overrides: Partial<ResolvedPublishConfig> = {}
 ): ResolvedPublishConfig {
   return {
+    combinedFulfillmentPolicyId: 'COMBINED-1',
     environment: 'sandbox',
     fulfillmentPolicyId: 'FULFILLMENT-1',
+    groundFulfillmentPolicyId: 'FULFILLMENT-1',
     marketplaceId: 'EBAY_US',
     merchantLocationKey: 'warehouse-1',
     paymentPolicyId: 'PAYMENT-1',
@@ -99,6 +104,38 @@ function createResolvedPublishConfig(
 }
 
 describe('publish mappers', () => {
+  it('formats plain text as safe basic HTML with bold notice labels', () => {
+    expect(
+      formatEbayListingDescription(
+        `First & <second> "quoted" 'value'.\r\nSingle line.\r\n\r\nCondition & Photography: A & B < C.\n\nCombined Shipping: message us.`
+      )
+    ).toBe(
+      `${SHIPPING_PROMOTION_HTML}First &amp; &lt;second&gt; &quot;quoted&quot; &#39;value&#39;.<br>Single line.<br><br><strong>Condition &amp; Photography:</strong> A &amp; B &lt; C.<br><br><strong>Combined Shipping:</strong> message us.`
+    );
+  });
+
+  it('escapes model-provided HTML instead of rendering it', () => {
+    expect(formatEbayListingDescription('<script>alert("x")</script>')).toBe(
+      `${SHIPPING_PROMOTION_HTML}&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;`
+    );
+  });
+
+  it('prepends the compact shipping promotion and seller CTA before unchanged description HTML', () => {
+    const description = 'Existing description content.<br>'; // literal HTML is escaped by mapper
+    const formatted = formatEbayListingDescription(description);
+
+    expect(formatted).toMatch(
+      /^<strong style="color: green; font-size: 1\.1em;">Buy more, save more — combine 2 cards under \$20 for 1\/2 price shipping or 3\+ for FREE shipping!<\/strong><br><br><a href="https:\/\/www\.ebay\.com\/usr\/mfhbusiness">Follow \/ Save this seller<\/a> - For easy access to this store, and periodic discounts on merchandise\.<br><br>/
+    );
+    expect(formatted.endsWith('Existing description content.&lt;br&gt;')).toBe(true);
+  });
+
+  it('bolds the Item Info label on the generated card segment', () => {
+    expect(formatEbayListingDescription('Item Info: Single raw card with minor wear.')).toBe(
+      `${SHIPPING_PROMOTION_HTML}<strong>Item Info:</strong> Single raw card with minor wear.`
+    );
+  });
+
   it('builds a stable publish sku from stored structured sku only', () => {
     expect(buildPublishSku(createListing({ sku: STRUCTURED_SKU }))).toBe(STRUCTURED_SKU);
     expect(buildPublishSku(createListing({ sku: ` ${STRUCTURED_SKU} ` }))).toBe(STRUCTURED_SKU);
@@ -146,7 +183,7 @@ describe('publish mappers', () => {
           Brand: ['Acme'],
           Material: ['Cardboard', 'Paper'],
         },
-        description: 'Detailed listing description.',
+        description: `${SHIPPING_PROMOTION_HTML}Detailed listing description.`,
         imageUrls: ['https://cdn.example.com/front.jpg', 'https://cdn.example.com/back.jpg'],
         title: 'Vintage puzzle',
       },
@@ -252,6 +289,24 @@ describe('publish mappers', () => {
     expect(listing.item_specifics).toEqual(originalItemSpecifics);
   });
 
+  it('filters saved Browse options from product aspects without mutating listing specifics', () => {
+    const listing = createListing({
+      item_specifics: {
+        Brand: 'Acme',
+        browsePricingOptions: {
+          skipBrowse: false,
+          minPriceMultiplier: 0.33,
+          maxPriceMultiplier: 3,
+        },
+      },
+    });
+
+    const payload = mapListingToInventoryItemPayload(listing, createAppSettings());
+
+    expect(payload.product?.aspects).toEqual({ Brand: ['Acme'] });
+    expect(listing.item_specifics).toHaveProperty('browsePricingOptions');
+  });
+
   it('maps listing data to an offer payload using stored policies and location key', () => {
     const payload = mapListingToOfferPayload(
       createListing(),
@@ -264,7 +319,7 @@ describe('publish mappers', () => {
       categoryId: '1234',
       format: 'FIXED_PRICE',
       listingDuration: 'GTC',
-      listingDescription: 'Detailed listing description.',
+      listingDescription: `${SHIPPING_PROMOTION_HTML}Detailed listing description.`,
       listingPolicies: {
         fulfillmentPolicyId: 'FULFILLMENT-1',
         paymentPolicyId: 'PAYMENT-1',
@@ -280,5 +335,35 @@ describe('publish mappers', () => {
       },
       sku: 'BSBL-Lot-000002',
     });
+  });
+
+  it('uses the same formatted description for inventory item and offer payloads', () => {
+    const description =
+      'First paragraph.\n\nCondition & Photography: A & B < C.\n\nCombined Shipping: message us.';
+    const listing = createListing({ description });
+    const expected = formatEbayListingDescription(description);
+
+    expect(
+      mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description
+    ).toBe(expected);
+    expect(
+      mapListingToOfferPayload(listing, createResolvedPublishConfig(), STRUCTURED_SKU)
+        .listingDescription
+    ).toBe(expected);
+  });
+
+  it.each([
+    ['null', null, undefined],
+    ['empty', '', ''],
+  ])('preserves %s description behavior', (_case, description, expected) => {
+    const listing = createListing({ description });
+
+    expect(
+      mapListingToInventoryItemPayload(listing, createAppSettings()).product?.description
+    ).toBe(expected);
+    expect(
+      mapListingToOfferPayload(listing, createResolvedPublishConfig(), STRUCTURED_SKU)
+        .listingDescription
+    ).toBe(expected);
   });
 });

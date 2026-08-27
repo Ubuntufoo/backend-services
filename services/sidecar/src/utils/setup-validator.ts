@@ -9,7 +9,7 @@ import { createSupabaseServiceClient } from '@ebay-inventory/data';
 import { existsSync, readFileSync } from 'fs';
 import { EbayOAuthClient } from '../auth/oauth.js';
 import { getOAuthAuthorizationUrl } from '../config/environment.js';
-import { ROOT_ENV_LOCAL_PATH } from '../config/env-paths.js';
+import { ROOT_ENV_PATH } from '../config/env-paths.js';
 import { parseEnvFile } from './env-parser.js';
 import type { EbayConfig } from '../types/ebay.js';
 
@@ -34,30 +34,30 @@ export interface ValidationSummary {
 }
 
 /**
- * Validate .env.local file exists and is readable
+ * Validate canonical .env file exists and is readable
  */
 function validateEnvFile(): ValidationResult {
-  const envPath = ROOT_ENV_LOCAL_PATH;
+  const envPath = ROOT_ENV_PATH;
 
   if (!existsSync(envPath)) {
     return {
-      test: '.env.local File Existence',
+      test: '.env File Existence',
       passed: false,
       message: 'Configuration file not found',
-      error: `.env.local file does not exist at ${envPath}`,
+      error: `.env file does not exist at ${envPath}`,
     };
   }
 
   try {
     readFileSync(envPath, 'utf-8');
     return {
-      test: '.env.local File Existence',
+      test: '.env File Existence',
       passed: true,
       message: 'Configuration file exists and is readable',
     };
   } catch (error) {
     return {
-      test: '.env.local File Existence',
+      test: '.env File Existence',
       passed: false,
       message: 'Configuration file cannot be read',
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -254,7 +254,7 @@ export async function validateSetup(): Promise<ValidationSummary> {
 
   console.log(chalk.bold.cyan('\n🧪 Running Configuration Tests...\n'));
 
-  // Test 1: .env.local file exists
+  // Test 1: canonical .env file exists
   const envFileResult = validateEnvFile();
   results.push(envFileResult);
   printResult(envFileResult);
@@ -268,8 +268,8 @@ export async function validateSetup(): Promise<ValidationSummary> {
     };
   }
 
-  // Parse .env.local file
-  const envVars = parseEnvFile(ROOT_ENV_LOCAL_PATH);
+  // Parse canonical .env file
+  const envVars = parseEnvFile(ROOT_ENV_PATH);
 
   // Test 2: App credentials
   const appCredsResult = validateAppCredentials(envVars);
@@ -378,7 +378,7 @@ export function displayRecommendations(summary: ValidationSummary): void {
     console.log(chalk.gray('     • To enable full API access, use the ebay_get_oauth_url tool'));
     console.log(
       chalk.gray(
-        '     • Then save your refresh token to EBAY_USER_REFRESH_TOKEN in backend-services/.env.local\n'
+        '     • Then save your refresh token to EBAY_REFRESH_TOKEN in backend-services/.env\n'
       )
     );
   }
@@ -386,9 +386,7 @@ export function displayRecommendations(summary: ValidationSummary): void {
   if (summary.failed > 0) {
     console.log(chalk.red('  ❌ Configuration has errors'));
     console.log(chalk.gray('     • Review the failed tests above'));
-    console.log(
-      chalk.gray('     • Update your backend-services/.env.local file with correct values')
-    );
+    console.log(chalk.gray('     • Update your backend-services/.env file with correct values'));
     console.log(chalk.gray('     • Run the setup wizard again: npm run setup\n'));
   } else {
     console.log(chalk.green('  ✅ Configuration is complete and valid'));

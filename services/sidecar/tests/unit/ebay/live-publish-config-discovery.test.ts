@@ -43,6 +43,19 @@ function createApi(overrides: Partial<Record<string, unknown>> = {}) {
             fulfillmentPolicyId: 'FULFILLMENT-1',
             marketplaceId: 'EBAY_US',
             name: 'Live Fulfillment',
+            shippingOptions: [
+              {
+                optionType: 'DOMESTIC',
+                shippingServices: [
+                  {
+                    freeShipping: true,
+                    shippingCarrierCode: 'USPS',
+                    shippingCost: { currency: 'USD', value: '0.00' },
+                    shippingServiceCode: 'USPSGroundAdvantage',
+                  },
+                ],
+              },
+            ],
           },
         ],
       }),
@@ -126,6 +139,14 @@ describe('live publish config discovery', () => {
     ]);
     expect(report.fulfillmentPolicies).toEqual([
       {
+        domesticShippingServices: [
+          {
+            freeShipping: true,
+            shippingCarrierCode: 'USPS',
+            shippingCost: { currency: 'USD', value: '0.00' },
+            shippingServiceCode: 'USPSGroundAdvantage',
+          },
+        ],
         fulfillmentPolicyId: 'FULFILLMENT-1',
         marketplaceId: 'EBAY_US',
         name: 'Live Fulfillment',
