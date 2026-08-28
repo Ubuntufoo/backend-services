@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  adaptYouPickPilotMutationApi,
-  classifyYouPickExactRead,
-  normalizeYouPickGroup,
-  normalizeYouPickItem,
-  normalizeYouPickMetadata,
-  normalizeYouPickOffers,
-  normalizeYouPickPolicies,
-} from '@/scripts/you-pick-sandbox-pilot.js';
+  adaptVariationListingPilotMutationApi,
+  classifyVariationListingExactRead,
+  normalizeVariationListingGroup,
+  normalizeVariationListingItem,
+  normalizeVariationListingMetadata,
+  normalizeVariationListingOffers,
+  normalizeVariationListingPolicies,
+} from '@/scripts/variation-listing-sandbox-pilot.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
 
 function normalizeConditionDescriptors(conditionDescriptors: unknown) {
-  return normalizeYouPickMetadata(
+  return normalizeVariationListingMetadata(
     '261328',
     { listingStructurePolicies: [{ categoryId: '261328', variationsSupported: true }] },
     {
@@ -57,7 +57,7 @@ const validOffer = {
   },
 };
 
-describe('You Pick raw response normalization', () => {
+describe('variation listing raw response normalization', () => {
   it('maps every guarded mutation to the intended Inventory wrapper with en-US config', async () => {
     const inventory = {
       createOrReplaceInventoryItem: vi.fn(),
@@ -70,7 +70,7 @@ describe('You Pick raw response normalization', () => {
       deleteInventoryItemGroup: vi.fn(),
       deleteInventoryItem: vi.fn(),
     } as unknown as InventoryApi;
-    const api = adaptYouPickPilotMutationApi(inventory);
+    const api = adaptVariationListingPilotMutationApi(inventory);
     const headers = { 'Content-Language': 'en-US' as const };
     const config = { headers };
     await api.createOrReplaceInventoryItem('SKU', {}, headers);
@@ -94,7 +94,7 @@ describe('You Pick raw response normalization', () => {
   });
   it('normalizes representative account and metadata payloads without credentials', () => {
     expect(
-      normalizeYouPickPolicies(
+      normalizeVariationListingPolicies(
         { fulfillmentPolicies: [{ fulfillmentPolicyId: 'F1', marketplaceId: 'EBAY_US' }] },
         { paymentPolicies: [{ paymentPolicyId: 'P1', marketplaceId: 'EBAY_US' }] },
         { returnPolicies: [{ returnPolicyId: 'R1', marketplaceId: 'EBAY_US' }] },
@@ -109,7 +109,7 @@ describe('You Pick raw response normalization', () => {
     });
 
     expect(
-      normalizeYouPickMetadata(
+      normalizeVariationListingMetadata(
         '261328',
         { listingStructurePolicies: [{ categoryId: '261328', variationsSupported: true }] },
         {
@@ -279,17 +279,17 @@ describe('You Pick raw response normalization', () => {
   });
 
   it('normalizes exact group, child, offer, listing, status, and 404 state', async () => {
-    expect(normalizeYouPickGroup({ variantSKUs: ['C01', 'C02'] })).toEqual({
+    expect(normalizeVariationListingGroup({ variantSKUs: ['C01', 'C02'] })).toEqual({
       variantSKUs: ['C01', 'C02'],
     });
-    expect(normalizeYouPickItem({ ...validInventoryItem, groupIds: ['G1'] })).toEqual({
+    expect(normalizeVariationListingItem({ ...validInventoryItem, groupIds: ['G1'] })).toEqual({
       sku: 'C01',
       quantity: 1,
       groupKeys: ['G1'],
       semanticSnapshot: validInventoryItem,
     });
     expect(
-      normalizeYouPickOffers({
+      normalizeVariationListingOffers({
         offers: [
           {
             ...validOffer,
@@ -317,14 +317,14 @@ describe('You Pick raw response normalization', () => {
         },
       ],
     });
-    expect(normalizeYouPickOffers({ offers: [] })).toEqual({ offers: [] });
+    expect(normalizeVariationListingOffers({ offers: [] })).toEqual({ offers: [] });
     await expect(
-      classifyYouPickExactRead(async () => {
+      classifyVariationListingExactRead(async () => {
         throw Object.assign(new Error('not found'), { response: { status: 404 } });
       })
     ).resolves.toEqual({ status: 'missing' });
     await expect(
-      classifyYouPickExactRead(async () => {
+      classifyVariationListingExactRead(async () => {
         throw Object.assign(new Error('unavailable'), { response: { status: 503 } });
       })
     ).resolves.toEqual(expect.objectContaining({ status: 'unknown' }));
@@ -347,7 +347,7 @@ describe('You Pick raw response normalization', () => {
       withdrawRequired
     ) => {
       expect(
-        normalizeYouPickOffers({
+        normalizeVariationListingOffers({
           offers: [
             {
               ...validOffer,
@@ -371,7 +371,7 @@ describe('You Pick raw response normalization', () => {
 
   it('rejects unknown or contradictory publication/listing states', () => {
     expect(() =>
-      normalizeYouPickOffers({
+      normalizeVariationListingOffers({
         offers: [
           {
             ...validOffer,
@@ -383,7 +383,7 @@ describe('You Pick raw response normalization', () => {
       })
     ).toThrow(/unsupported listing status/);
     expect(() =>
-      normalizeYouPickOffers({
+      normalizeVariationListingOffers({
         offers: [
           {
             ...validOffer,
@@ -397,17 +397,19 @@ describe('You Pick raw response normalization', () => {
   });
 
   it('rejects malformed arrays, duplicate metadata IDs, and conflicting item associations', () => {
-    expect(() => normalizeYouPickGroup({ variantSKUs: ['C01', 'C01'] })).toThrow(/duplicate/);
-    expect(() => normalizeYouPickOffers({ offers: {} })).toThrow(/must be an array/);
+    expect(() => normalizeVariationListingGroup({ variantSKUs: ['C01', 'C01'] })).toThrow(
+      /duplicate/
+    );
+    expect(() => normalizeVariationListingOffers({ offers: {} })).toThrow(/must be an array/);
     expect(() =>
-      normalizeYouPickItem({
+      normalizeVariationListingItem({
         ...validInventoryItem,
         groupIds: ['G1'],
         inventoryItemGroupKeys: ['G2'],
       })
     ).toThrow(/aliases conflict/);
     expect(() =>
-      normalizeYouPickMetadata(
+      normalizeVariationListingMetadata(
         '261328',
         {
           listingStructurePolicies: [

@@ -1,50 +1,50 @@
-export interface YouPickConditionDescriptor {
+export interface VariationListingConditionDescriptor {
   additionalInfo?: string;
   name: string;
   values: readonly string[];
 }
 
-export interface YouPickSharedCondition {
+export interface VariationListingSharedCondition {
   conditionDescription?: string;
-  conditionDescriptors: readonly YouPickConditionDescriptor[];
+  conditionDescriptors: readonly VariationListingConditionDescriptor[];
   conditionId: string;
 }
 
-export interface YouPickListingPolicies {
+export interface VariationListingPolicies {
   fulfillmentPolicyId: string;
   paymentPolicyId: string;
   returnPolicyId: string;
 }
 
-export interface YouPickMoney {
+export interface VariationListingMoney {
   currency: string;
   value: string;
 }
 
-export interface YouPickCardImages {
+export interface VariationListingCardImages {
   back: string;
   front: string;
 }
 
-export interface YouPickVariantDraft {
+export interface VariationListingVariationDraft {
   availableQuantity: number;
-  images: YouPickCardImages;
-  price: YouPickMoney;
+  images: VariationListingCardImages;
+  price: VariationListingMoney;
   selectorValue: string;
   sku: string;
   variantAspects: Readonly<Record<string, readonly string[]>>;
 }
 
-export interface YouPickGroupDraft {
+export interface VariationListingGroupDraft {
   categoryId: string;
-  condition: YouPickSharedCondition;
+  condition: VariationListingSharedCondition;
   description: string;
   groupKey: string;
   marketplaceId: string;
   merchantLocationKey: string;
-  policies: YouPickListingPolicies;
+  policies: VariationListingPolicies;
   selectorName: string;
   sharedAspects: Readonly<Record<string, readonly string[]>>;
   title: string;
-  variants: readonly YouPickVariantDraft[];
+  variants: readonly VariationListingVariationDraft[];
 }

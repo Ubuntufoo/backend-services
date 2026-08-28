@@ -1,34 +1,34 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import {
-  YOU_PICK_CONTENT_LANGUAGE,
-  YOU_PICK_MARKETPLACE,
+  VARIATION_LISTING_CONTENT_LANGUAGE,
+  VARIATION_LISTING_MARKETPLACE,
   assertInventoryItemSemanticMatch,
   assertOfferSemanticMatch,
   assertExecutableManifestIntegrity,
   buildFuturePlan,
   resolveFuturePlan,
-  executableYouPickManifestSchema,
-  matchesYouPickGroupChildren,
+  executableVariationListingManifestSchema,
+  matchesVariationListingGroupChildren,
   inventoryItemSemanticMismatch,
   offerSemanticMismatch,
   sanitizeError,
-  type ExecutableYouPickManifest,
+  type ExecutableVariationListingManifest,
   type ExactRead,
   type RemoteInventoryItem,
   type RemoteOffer,
-  type YouPickPilotReadApi,
-} from './you-pick-sandbox-pilot.js';
+  type VariationListingPilotReadApi,
+} from './variation-listing-sandbox-pilot.js';
 import {
   reconcileCompletePublicationState,
   type ReconciledPublicationState,
-} from './you-pick-sandbox-verification.js';
+} from './variation-listing-sandbox-verification.js';
 
 export interface GuardedMutationHeaders {
-  'Content-Language': typeof YOU_PICK_CONTENT_LANGUAGE;
+  'Content-Language': typeof VARIATION_LISTING_CONTENT_LANGUAGE;
 }
 
-export interface YouPickPilotMutationApi {
+export interface VariationListingPilotMutationApi {
   createImageFromUrl?(sourceUrl: string): Promise<unknown>;
   getImage?(location: string): Promise<unknown>;
   createOrReplaceInventoryItem(
@@ -132,26 +132,26 @@ export const quantityZeroAttestationSchema = z
     targetUnavailable: z.literal(true),
   })
   .strict();
-export type YouPickPilotAttestation =
+export type VariationListingPilotAttestation =
   | z.infer<typeof publishedViewAttestationSchema>
   | z.infer<typeof quantityZeroAttestationSchema>;
 
 export interface MutationExecutionOptions {
-  manifest: ExecutableYouPickManifest;
+  manifest: ExecutableVariationListingManifest;
   manifestPath?: string;
-  readApi: YouPickPilotReadApi;
-  mutationApi: YouPickPilotMutationApi;
+  readApi: VariationListingPilotReadApi;
+  mutationApi: VariationListingPilotMutationApi;
   headers: GuardedMutationHeaders;
   attestation?: unknown;
   cleanup: boolean;
   now: () => Date;
-  persist(manifest: ExecutableYouPickManifest): Promise<void>;
+  persist(manifest: ExecutableVariationListingManifest): Promise<void>;
 }
 
 export interface MutationExecutionReport {
   mode: 'execute' | 'cleanup-execute';
-  checkpoint: ExecutableYouPickManifest['checkpoint'];
-  run: ExecutableYouPickManifest['run'];
+  checkpoint: ExecutableVariationListingManifest['checkpoint'];
+  run: ExecutableVariationListingManifest['run'];
   listingId: string | null;
   completedOperationIds: string[];
   safeResumeCommand: string;
@@ -249,7 +249,7 @@ function requireOneOfferSemanticMatch(
 }
 
 function requireExactUnpublishedOffer(offer: RemoteOffer, sku: string, label: string): void {
-  if (!offer.offerId || offer.sku !== sku || offer.marketplaceId !== YOU_PICK_MARKETPLACE)
+  if (!offer.offerId || offer.sku !== sku || offer.marketplaceId !== VARIATION_LISTING_MARKETPLACE)
     throw new Error(`${label} has conflicting offer identity or ownership.`);
   if (
     offer.status !== 'UNPUBLISHED' ||
@@ -263,7 +263,10 @@ function requireExactUnpublishedOffer(offer: RemoteOffer, sku: string, label: st
     throw new Error(`${label} is not one exact unpublished offer.`);
 }
 
-function completedOperationTime(manifest: ExecutableYouPickManifest, operationId: string): Date {
+function completedOperationTime(
+  manifest: ExecutableVariationListingManifest,
+  operationId: string
+): Date {
   const entry = manifest.execution.ledger.find((candidate) => candidate.id === operationId);
   if (entry?.state !== 'completed' || !entry.completedAt)
     throw new Error(`Operator attestation requires completed ${operationId} ledger evidence.`);
@@ -281,7 +284,7 @@ function validateAttestationTime(observedAt: string, now: Date, completedAt: Dat
 
 export function validatePublishedViewAttestation(
   input: unknown,
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   now: Date
 ) {
   if (input === undefined)
@@ -319,7 +322,7 @@ export function validatePublishedViewAttestation(
 
 export function validateQuantityZeroAttestation(
   input: unknown,
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   now: Date
 ) {
   if (input === undefined)
@@ -342,9 +345,9 @@ export function validateQuantityZeroAttestation(
 }
 
 function resolveResourcesFromPublication(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   publication: ReconciledPublicationState
-): ExecutableYouPickManifest['resources'] {
+): ExecutableVariationListingManifest['resources'] {
   return manifest.resources.map((resource, index) => ({
     ...resource,
     offerId: publication.offers[index].offerId,
@@ -379,12 +382,16 @@ function expectedOfferPayload(
 }
 
 function requireExactGroupChildren(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   actual: string[],
   message: string
 ): void {
   if (
-    !matchesYouPickGroupChildren(manifest.execution.fixture.version, actual, manifest.run.childSkus)
+    !matchesVariationListingGroupChildren(
+      manifest.execution.fixture.version,
+      actual,
+      manifest.run.childSkus
+    )
   )
     throw new Error(message);
 }
@@ -476,7 +483,7 @@ async function updateLedger(
           readBackDigest: evidence.readBack === undefined ? null : digest(evidence.readBack),
         }
   );
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     updatedAt: timestamp,
     execution: { ...options.manifest.execution, ledger },
@@ -560,9 +567,9 @@ async function controlledMutation(
 
 async function setCheckpoint(
   options: MutationExecutionOptions,
-  checkpoint: ExecutableYouPickManifest['checkpoint']
+  checkpoint: ExecutableVariationListingManifest['checkpoint']
 ): Promise<void> {
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     checkpoint,
     updatedAt: options.now().toISOString(),
@@ -575,7 +582,7 @@ async function persistMediaResource(
   operationId: string,
   update: Record<string, unknown>
 ): Promise<void> {
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     updatedAt: options.now().toISOString(),
     execution: {
@@ -730,7 +737,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
     const operationId = `offer-C0${index + 1}`;
     const request = payload(plan, operationId);
     const offers = exactFound(
-      await options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE),
+      await options.readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE),
       operationId
     ).offers;
     if (offers.length > 1) throw new Error(`${operationId} has duplicate offers.`);
@@ -754,7 +761,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
         (raw) => ({ offerId: createOfferResponseSchema.parse(raw).offerId }),
         async () => {
           const reads = exactFound(
-            await options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE),
+            await options.readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE),
             operationId
           ).offers;
           if (reads.length !== 1) throw new Error(`${operationId} did not reconcile to one offer.`);
@@ -766,7 +773,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
         },
         async () => {
           const read = exactFound(
-            await options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE),
+            await options.readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE),
             `${operationId} pre-state`
           );
           if (read.offers.length !== 0)
@@ -775,7 +782,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
         }
       )) as RemoteOffer;
     }
-    options.manifest = executableYouPickManifestSchema.parse({
+    options.manifest = executableVariationListingManifestSchema.parse({
       ...options.manifest,
       resources: options.manifest.resources.map((resource) =>
         resource.sku === sku
@@ -841,7 +848,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
       throw new Error(`Unpublished item ${sku} is not associated with the exact group.`);
     requireInventoryItemSemanticMatch(item, payload(plan, `item-C0${index + 1}`), `item ${sku}`);
     const offers = exactFound(
-      await options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE),
+      await options.readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE),
       `unpublished verification offer ${sku}`
     ).offers;
     if (offers.length !== 1 || offers[0].offerId !== options.manifest.resources[index].offerId)
@@ -863,7 +870,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
   const publication = await reconcileCompletePublicationState(options.readApi, options.manifest);
   await setCheckpoint(options, 'publishing');
   if (publication.state === 'active' && publication.listingId) {
-    options.manifest = executableYouPickManifestSchema.parse({
+    options.manifest = executableVariationListingManifestSchema.parse({
       ...options.manifest,
       published: true,
       groupListingId: publication.listingId,
@@ -900,7 +907,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
           (returnedListingId && reconciled.listingId !== returnedListingId)
         )
           throw new Error('Publish exact read-back is not one fully active group.');
-        options.manifest = executableYouPickManifestSchema.parse({
+        options.manifest = executableVariationListingManifestSchema.parse({
           ...options.manifest,
           published: true,
           groupListingId: reconciled.listingId,
@@ -919,7 +926,7 @@ async function executePublishPath(options: MutationExecutionOptions): Promise<vo
       }
     );
   }
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     checkpoint: 'awaiting-published-view-verification',
     lastError: null,
@@ -933,7 +940,7 @@ async function executeQuantityZero(options: MutationExecutionOptions): Promise<v
     ? undefined
     : validatePublishedViewAttestation(options.attestation, options.manifest, options.now());
   if (attestation) {
-    options.manifest = executableYouPickManifestSchema.parse({
+    options.manifest = executableVariationListingManifestSchema.parse({
       ...options.manifest,
       checkpoint: 'setting-quantity-zero',
       execution: {
@@ -992,7 +999,7 @@ async function executeQuantityZero(options: MutationExecutionOptions): Promise<v
     await updateLedger(options, 'quantity-zero', 'completed', {
       readBack: snapshot,
     });
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     checkpoint: 'awaiting-quantity-zero-verification',
     execution: {
@@ -1009,7 +1016,7 @@ async function authorizeWithdrawal(options: MutationExecutionOptions): Promise<v
     options.manifest,
     options.now()
   );
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     checkpoint: 'withdrawal-ready',
     execution: {
@@ -1025,7 +1032,7 @@ function requireMissing(read: ExactRead<unknown>, label: string): void {
 }
 
 async function executeCleanup(options: MutationExecutionOptions): Promise<void> {
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     checkpoint: 'cleanup-in-progress',
     cleanup: { ...options.manifest.cleanup, attempts: options.manifest.cleanup.attempts + 1 },
@@ -1071,7 +1078,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
   }
   const offerReads = await Promise.all(
     options.manifest.run.childSkus.map((sku) =>
-      options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE)
+      options.readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE)
     )
   );
   if (offerReads.some((read) => read.status === 'unknown'))
@@ -1083,7 +1090,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
     const offer = read.value.offers[0];
     if (!offer) continue;
     const resource = options.manifest.resources[index];
-    if (offer.sku !== resource.sku || offer.marketplaceId !== YOU_PICK_MARKETPLACE)
+    if (offer.sku !== resource.sku || offer.marketplaceId !== VARIATION_LISTING_MARKETPLACE)
       throw new Error('Cleanup found a foreign offer owner or marketplace.');
     const originalOffer = payload(plan, `offer-C0${index + 1}`);
     const allowedOffers = [originalOffer];
@@ -1096,7 +1103,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
     if (resource.offerId && resource.offerId !== offer.offerId)
       throw new Error('Cleanup found an offer ID conflicting with the manifest.');
     if (!resource.offerId) {
-      options.manifest = executableYouPickManifestSchema.parse({
+      options.manifest = executableVariationListingManifestSchema.parse({
         ...options.manifest,
         resources: options.manifest.resources.map((candidate, candidateIndex) =>
           candidateIndex === index
@@ -1157,7 +1164,7 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
     );
     const operationId = `cleanup-offer-C0${resourceIndex + 1}`;
     const current = exactFound(
-      await options.readApi.getOffers(resource.sku, YOU_PICK_MARKETPLACE),
+      await options.readApi.getOffers(resource.sku, VARIATION_LISTING_MARKETPLACE),
       operationId
     ).offers;
     if (current.length === 0) {
@@ -1175,14 +1182,14 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
         return {};
       },
       async () => {
-        const read = await options.readApi.getOffers(resource.sku, YOU_PICK_MARKETPLACE);
+        const read = await options.readApi.getOffers(resource.sku, VARIATION_LISTING_MARKETPLACE);
         if (read.status !== 'found' || read.value.offers.length !== 0)
           throw new Error(`${operationId} absence is not proven.`);
         return { missing: true };
       },
       async () => {
         const read = exactFound(
-          await options.readApi.getOffers(resource.sku, YOU_PICK_MARKETPLACE),
+          await options.readApi.getOffers(resource.sku, VARIATION_LISTING_MARKETPLACE),
           `${operationId} pre-state`
         ).offers;
         if (read.length !== 1 || read[0].offerId !== resource.offerId)
@@ -1282,14 +1289,14 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
   );
   for (const sku of options.manifest.run.childSkus) {
     requireMissing(await options.readApi.getInventoryItem(sku), sku);
-    const offerRead = await options.readApi.getOffers(sku, YOU_PICK_MARKETPLACE);
+    const offerRead = await options.readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE);
     if (offerRead.status !== 'found' || offerRead.value.offers.length !== 0)
       throw new Error(`${sku} offer absence is not proven.`);
   }
   await updateLedger(options, 'verify-absence', 'completed', {
     readBack: { group: 'missing', items: options.manifest.run.childSkus, offers: 'missing' },
   });
-  options.manifest = executableYouPickManifestSchema.parse({
+  options.manifest = executableVariationListingManifestSchema.parse({
     ...options.manifest,
     checkpoint: 'cleanup-complete',
     cleanup: { ...options.manifest.cleanup, finalAbsenceVerified: true },
@@ -1298,12 +1305,12 @@ async function executeCleanup(options: MutationExecutionOptions): Promise<void> 
   await options.persist(options.manifest);
 }
 
-export async function executeYouPickManifest(
+export async function executeVariationListingManifest(
   options: MutationExecutionOptions
 ): Promise<MutationExecutionReport> {
-  options.manifest = executableYouPickManifestSchema.parse(options.manifest);
+  options.manifest = executableVariationListingManifestSchema.parse(options.manifest);
   assertExecutableManifestIntegrity(options.manifest);
-  if (options.headers['Content-Language'] !== YOU_PICK_CONTENT_LANGUAGE)
+  if (options.headers['Content-Language'] !== VARIATION_LISTING_CONTENT_LANGUAGE)
     throw new Error('Mutation API requires exact Content-Language: en-US.');
   if (options.manifest.checkpoint === 'cleanup-complete')
     throw new Error('Cleaned manifest is historical and cannot mutate again.');
@@ -1345,6 +1352,6 @@ export async function executeYouPickManifest(
     completedOperationIds: options.manifest.execution.ledger
       .filter((entry) => entry.state === 'completed')
       .map((entry) => entry.id),
-    safeResumeCommand: `pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest ${options.manifestPath ?? '<exact-path>'} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${options.manifest.seller?.userId ?? '<seller>'}`,
+    safeResumeCommand: `pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest ${options.manifestPath ?? '<exact-path>'} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${options.manifest.seller?.userId ?? '<seller>'}`,
   };
 }

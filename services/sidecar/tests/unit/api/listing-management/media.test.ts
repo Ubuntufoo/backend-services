@@ -144,16 +144,16 @@ describe('MediaApi', () => {
     it('treats a missing image as proof that authorization reached resource lookup', async () => {
       vi.mocked(client.getWithFullUrl).mockRejectedValue(axiosStatusError(404));
 
-      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).resolves.toBe('authorized');
+      await expect(api.probeImageAccess('VL_MEDIA_AUTH_PROBE_MISSING')).resolves.toBe('authorized');
       expect(client.getWithFullUrl).toHaveBeenCalledWith(
-        'https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/YP_MEDIA_AUTH_PROBE_MISSING'
+        'https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/VL_MEDIA_AUTH_PROBE_MISSING'
       );
     });
 
     it.each([401, 403])('treats HTTP %s as unauthorized', async (status) => {
       vi.mocked(client.getWithFullUrl).mockRejectedValue(axiosStatusError(status));
 
-      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).resolves.toBe(
+      await expect(api.probeImageAccess('VL_MEDIA_AUTH_PROBE_MISSING')).resolves.toBe(
         'unauthorized'
       );
     });
@@ -161,7 +161,7 @@ describe('MediaApi', () => {
     it('fails closed on unexpected responses', async () => {
       vi.mocked(client.getWithFullUrl).mockRejectedValue(axiosStatusError(500));
 
-      await expect(api.probeImageAccess('YP_MEDIA_AUTH_PROBE_MISSING')).rejects.toThrow('HTTP 500');
+      await expect(api.probeImageAccess('VL_MEDIA_AUTH_PROBE_MISSING')).rejects.toThrow('HTTP 500');
     });
   });
 });

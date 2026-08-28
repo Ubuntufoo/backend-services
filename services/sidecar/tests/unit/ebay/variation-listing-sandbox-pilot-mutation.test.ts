@@ -6,23 +6,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildFuturePlan,
   digest,
-  executableYouPickManifestSchema,
-  legacyYouPickManifestSchema,
+  executableVariationListingManifestSchema,
+  legacyVariationListingManifestSchema,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
   readManifest,
-  runYouPickSandboxPilot,
+  runVariationListingSandboxPilot,
   writeManifestAtomic,
-  type ExecutableYouPickManifest,
+  type ExecutableVariationListingManifest,
   type RemoteOffer,
-  type YouPickPilotReadApi,
-} from '@/ebay/you-pick-sandbox-pilot.js';
+  type VariationListingPilotReadApi,
+} from '@/ebay/variation-listing-sandbox-pilot.js';
 import {
-  executeYouPickManifest,
+  executeVariationListingManifest,
   validatePublishedViewAttestation,
   validateQuantityZeroAttestation,
-  type YouPickPilotMutationApi,
-} from '@/ebay/you-pick-sandbox-pilot-mutation.js';
+  type VariationListingPilotMutationApi,
+} from '@/ebay/variation-listing-sandbox-pilot-mutation.js';
 
 const fixturePath = fileURLToPath(
   new URL('../../fixtures/you-pick-sandbox/two-card.json', import.meta.url)
@@ -34,7 +34,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function gateApi(): YouPickPilotReadApi {
+function gateApi(): VariationListingPilotReadApi {
   return {
     getRuntimeSnapshot: vi.fn(async () => ({
       environment: 'sandbox',
@@ -105,11 +105,11 @@ function gateApi(): YouPickPilotReadApi {
 async function freshManifestState(): Promise<{
   root: string;
   manifestPath: string;
-  manifest: ExecutableYouPickManifest;
+  manifest: ExecutableVariationListingManifest;
 }> {
-  const root = await mkdtemp(join(tmpdir(), 'yp-mutation-'));
+  const root = await mkdtemp(join(tmpdir(), 'variation-listing-mutation-'));
   roots.push(root);
-  const report = await runYouPickSandboxPilot({
+  const report = await runVariationListingSandboxPilot({
     api: gateApi(),
     fixturePath,
     repoRoot: root,
@@ -117,24 +117,24 @@ async function freshManifestState(): Promise<{
     randomBytesImpl: () => Buffer.from('a1b2c3', 'hex'),
   });
   if (!('manifestPath' in report)) throw new Error('Expected dry-run report.');
-  const manifest = executableYouPickManifestSchema.parse(
+  const manifest = executableVariationListingManifestSchema.parse(
     await readManifest(report.manifestPath, join(root, '.local', 'you-pick-sandbox'))
   );
   return { root, manifestPath: report.manifestPath, manifest };
 }
 
-async function freshManifest(): Promise<ExecutableYouPickManifest> {
+async function freshManifest(): Promise<ExecutableVariationListingManifest> {
   return (await freshManifestState()).manifest;
 }
 
-async function freshVersion3Manifest(): Promise<ExecutableYouPickManifest> {
-  const root = await mkdtemp(join(tmpdir(), 'yp-mutation-media-'));
+async function freshVersion3Manifest(): Promise<ExecutableVariationListingManifest> {
+  const root = await mkdtemp(join(tmpdir(), 'variation-listing-mutation-media-'));
   roots.push(root);
   const fixture = JSON.parse(await readFile(fixturePath, 'utf8'));
   fixture.version = 3;
   const customFixturePath = join(root, 'media-two-card.json');
   await writeFile(customFixturePath, JSON.stringify(fixture));
-  const report = await runYouPickSandboxPilot({
+  const report = await runVariationListingSandboxPilot({
     api: gateApi(),
     fixturePath: customFixturePath,
     repoRoot: root,
@@ -142,13 +142,13 @@ async function freshVersion3Manifest(): Promise<ExecutableYouPickManifest> {
     randomBytesImpl: () => Buffer.from('d4e5f6', 'hex'),
   });
   if (!('manifestPath' in report)) throw new Error('Expected version-3 dry-run report.');
-  return executableYouPickManifestSchema.parse(
+  return executableVariationListingManifestSchema.parse(
     await readManifest(report.manifestPath, join(root, '.local', 'you-pick-sandbox'))
   );
 }
 
-async function freshThreeChildManifest(): Promise<ExecutableYouPickManifest> {
-  const root = await mkdtemp(join(tmpdir(), 'yp-mutation-three-'));
+async function freshThreeChildManifest(): Promise<ExecutableVariationListingManifest> {
+  const root = await mkdtemp(join(tmpdir(), 'variation-listing-mutation-three-'));
   roots.push(root);
   const fixture = JSON.parse(await readFile(fixturePath, 'utf8'));
   const third = structuredClone(fixture.children[1]);
@@ -177,7 +177,7 @@ async function freshThreeChildManifest(): Promise<ExecutableYouPickManifest> {
   fixture.group.variesBy.specifications[0].values.push(third.selector.value);
   const customFixturePath = join(root, 'three-card.json');
   await writeFile(customFixturePath, JSON.stringify(fixture));
-  const report = await runYouPickSandboxPilot({
+  const report = await runVariationListingSandboxPilot({
     api: gateApi(),
     fixturePath: customFixturePath,
     repoRoot: root,
@@ -185,13 +185,13 @@ async function freshThreeChildManifest(): Promise<ExecutableYouPickManifest> {
     randomBytesImpl: () => Buffer.from('d4e5f6', 'hex'),
   });
   if (!('manifestPath' in report)) throw new Error('Expected three-child dry-run report.');
-  return executableYouPickManifestSchema.parse(
+  return executableVariationListingManifestSchema.parse(
     await readManifest(report.manifestPath, join(root, '.local', 'you-pick-sandbox'))
   );
 }
 
 function publishedAttestation(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   observedAt = new Date(fixed.getTime() + 1_000).toISOString()
 ) {
   return {
@@ -217,11 +217,11 @@ function publishedAttestation(
 }
 
 function withCompletedOperation(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   operationId: 'publish-group' | 'quantity-zero',
   completedAt = fixed.toISOString()
-): ExecutableYouPickManifest {
-  return executableYouPickManifestSchema.parse({
+): ExecutableVariationListingManifest {
+  return executableVariationListingManifestSchema.parse({
     ...manifest,
     execution: {
       ...manifest.execution,
@@ -241,7 +241,7 @@ function withCompletedOperation(
 }
 
 function quantityAttestation(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   observedAt: string,
   remainingChildren = manifest.run.childSkus.slice(1).map((sku) => ({
     sku,
@@ -261,11 +261,11 @@ function quantityAttestation(
 }
 
 function withUnresolvedOperation(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   operationId: string,
   state: 'started' | 'unknown'
-): ExecutableYouPickManifest {
-  return executableYouPickManifestSchema.parse({
+): ExecutableVariationListingManifest {
+  return executableVariationListingManifestSchema.parse({
     ...manifest,
     execution: {
       ...manifest.execution,
@@ -285,7 +285,7 @@ function withUnresolvedOperation(
   });
 }
 
-function mutationSpies(): YouPickPilotMutationApi {
+function mutationSpies(): VariationListingPilotMutationApi {
   return {
     createOrReplaceInventoryItem: vi.fn(),
     createOffer: vi.fn(),
@@ -299,7 +299,7 @@ function mutationSpies(): YouPickPilotMutationApi {
   };
 }
 
-describe('guarded You Pick staged mutation lifecycle', () => {
+describe('guarded variation listing staged mutation lifecycle', () => {
   it('creates and reconciles ordered EPS resources before sending resolved Inventory images', async () => {
     let manifest = await freshVersion3Manifest();
     const sourceUrls = manifest.execution.fixture.children.flatMap((child) =>
@@ -329,7 +329,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       createOrReplaceInventoryItem,
     };
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi: gateApi(),
         mutationApi,
@@ -395,7 +395,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   ])('rejects %s tampering through the authoritative integrity gate', async (_label, mutate) => {
     const tampered = structuredClone(await freshManifest()) as any;
     mutate(tampered);
-    expect(() => executableYouPickManifestSchema.parse(tampered)).toThrow();
+    expect(() => executableVariationListingManifestSchema.parse(tampered)).toThrow();
   });
 
   it('rejects a raw tampered manifest before either mutation dependency resolves', async () => {
@@ -403,10 +403,10 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     const raw = JSON.parse(await readFile(state.manifestPath, 'utf8'));
     raw.execution.fixture.policies.fulfillmentPolicyId += '-TAMPERED';
     await writeFile(state.manifestPath, JSON.stringify(raw));
-    const readFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
-    const mutationFactory = vi.fn<() => Promise<YouPickPilotMutationApi>>();
+    const readFactory = vi.fn<() => Promise<VariationListingPilotReadApi>>();
+    const mutationFactory = vi.fn<() => Promise<VariationListingPilotMutationApi>>();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         apiFactory: readFactory,
         mutationApiFactory: mutationFactory,
         manifestPath: state.manifestPath,
@@ -422,24 +422,24 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   it('keeps version-4 proof readable but permanently non-executable', async () => {
     const current = await freshManifest();
     const { execution: _execution, version: _version, ...common } = current;
-    const legacy = legacyYouPickManifestSchema.parse({ ...common, version: 4 });
+    const legacy = legacyVariationListingManifestSchema.parse({ ...common, version: 4 });
     expect(legacy.version).toBe(4);
-    expect(executableYouPickManifestSchema.safeParse(legacy).success).toBe(false);
+    expect(executableVariationListingManifestSchema.safeParse(legacy).success).toBe(false);
   });
 
   it('rejects legacy and incomplete checkpoints before either API factory is resolved', async () => {
     const state = await freshManifestState();
     const localRoot = join(state.root, '.local', 'you-pick-sandbox');
-    const readFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
-    const mutationFactory = vi.fn<() => Promise<YouPickPilotMutationApi>>();
+    const readFactory = vi.fn<() => Promise<VariationListingPilotReadApi>>();
+    const mutationFactory = vi.fn<() => Promise<VariationListingPilotMutationApi>>();
     const { execution: _execution, version: _version, ...common } = state.manifest;
     await writeManifestAtomic(
       state.manifestPath,
-      legacyYouPickManifestSchema.parse({ ...common, version: 4 }),
+      legacyVariationListingManifestSchema.parse({ ...common, version: 4 }),
       localRoot
     );
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         apiFactory: readFactory,
         mutationApiFactory: mutationFactory,
         manifestPath: state.manifestPath,
@@ -453,11 +453,11 @@ describe('guarded You Pick staged mutation lifecycle', () => {
 
     await writeManifestAtomic(
       state.manifestPath,
-      executableYouPickManifestSchema.parse({ ...state.manifest, checkpoint: 'created' }),
+      executableVariationListingManifestSchema.parse({ ...state.manifest, checkpoint: 'created' }),
       localRoot
     );
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         apiFactory: readFactory,
         mutationApiFactory: mutationFactory,
         manifestPath: state.manifestPath,
@@ -470,7 +470,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     expect(mutationFactory).not.toHaveBeenCalled();
 
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         apiFactory: readFactory,
         mutationApiFactory: mutationFactory,
         manifestPath: state.manifestPath,
@@ -489,7 +489,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     const localRoot = join(state.root, '.local', 'you-pick-sandbox');
     await writeManifestAtomic(
       state.manifestPath,
-      executableYouPickManifestSchema.parse({
+      executableVariationListingManifestSchema.parse({
         ...state.manifest,
         checkpoint: 'awaiting-published-view-verification',
         published: true,
@@ -497,9 +497,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       }),
       localRoot
     );
-    const mutationFactory = vi.fn<() => Promise<YouPickPilotMutationApi>>();
+    const mutationFactory = vi.fn<() => Promise<VariationListingPilotMutationApi>>();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: gateApi(),
         mutationApiFactory: mutationFactory,
         manifestPath: state.manifestPath,
@@ -513,7 +513,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   });
 
   it('checkpoints every operation, stops twice for exact attestations, and cleans exact resources', async () => {
-    let manifest = executableYouPickManifestSchema.parse({
+    let manifest = executableVariationListingManifestSchema.parse({
       ...(await freshManifest()),
       lastError: 'stale pre-publication validation error',
     });
@@ -529,7 +529,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     >();
     const offers = new Map<string, RemoteOffer>();
     let group: { digest: string; skus: string[] } | undefined;
-    const readApi: YouPickPilotReadApi = {
+    const readApi: VariationListingPilotReadApi = {
       ...gateApi(),
       getInventoryItem: vi.fn(async (sku) => {
         const item = items.get(sku);
@@ -557,7 +557,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       ),
     };
     const headers: Record<string, string>[] = [];
-    const mutationApi: YouPickPilotMutationApi = {
+    const mutationApi: VariationListingPilotMutationApi = {
       createOrReplaceInventoryItem: vi.fn(async (sku, request, guarded) => {
         headers.push(guarded);
         items.set(sku, {
@@ -661,7 +661,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         items.delete(sku);
       }),
     };
-    const persist = vi.fn(async (next: ExecutableYouPickManifest) => {
+    const persist = vi.fn(async (next: ExecutableVariationListingManifest) => {
       manifest = next;
     });
     const base = () => ({
@@ -673,7 +673,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       persist,
     });
 
-    const published = await executeYouPickManifest({ ...base(), cleanup: false });
+    const published = await executeVariationListingManifest({ ...base(), cleanup: false });
     expect(published.checkpoint).toBe('awaiting-published-view-verification');
     expect(manifest.lastError).toBeNull();
     expect(mutationApi.createOrReplaceInventoryItem).toHaveBeenCalledTimes(2);
@@ -685,7 +685,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     );
 
     clock = new Date(fixed.getTime() + 2_000);
-    const zero = await executeYouPickManifest({
+    const zero = await executeVariationListingManifest({
       ...base(),
       cleanup: false,
       attestation: publishedAttestation(manifest),
@@ -710,13 +710,13 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       })),
     };
     clock = new Date(fixed.getTime() + 4_000);
-    const ready = await executeYouPickManifest({
+    const ready = await executeVariationListingManifest({
       ...base(),
       cleanup: false,
       attestation: quantityAttestation,
     });
     expect(ready.checkpoint).toBe('withdrawal-ready');
-    const cleaned = await executeYouPickManifest({ ...base(), cleanup: true });
+    const cleaned = await executeVariationListingManifest({ ...base(), cleanup: true });
     expect(cleaned.checkpoint).toBe('cleanup-complete');
     expect(manifest.cleanup.finalAbsenceVerified).toBe(true);
     expect(group).toBeUndefined();
@@ -727,7 +727,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   it('rejects stale or mismatched published evidence and never accepts generic booleans', async () => {
     const completedAt = new Date(fixed.getTime() - 1_000).toISOString();
     const base = await freshManifest();
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...base,
       checkpoint: 'awaiting-published-view-verification',
       published: true,
@@ -780,7 +780,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       let manifest = await freshManifest();
       manifest = withCompletedOperation(manifest, 'publish-group');
       manifest = withCompletedOperation(manifest, 'quantity-zero');
-      manifest = executableYouPickManifestSchema.parse({
+      manifest = executableVariationListingManifestSchema.parse({
         ...manifest,
         published: true,
         groupListingId: 'LISTING-1',
@@ -802,7 +802,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   );
 
   it('fails attestation closed when the corresponding operation has no completion evidence', async () => {
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...(await freshManifest()),
       groupListingId: 'LISTING-1',
     });
@@ -819,7 +819,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   it('requires the exact ordered set of every non-target child and rejects the singular shape', async () => {
     let twoChild = await freshManifest();
     twoChild = withCompletedOperation(twoChild, 'quantity-zero');
-    twoChild = executableYouPickManifestSchema.parse({
+    twoChild = executableVariationListingManifestSchema.parse({
       ...twoChild,
       groupListingId: 'LISTING-1',
     });
@@ -843,7 +843,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
 
     let threeChild = await freshThreeChildManifest();
     threeChild = withCompletedOperation(threeChild, 'quantity-zero');
-    threeChild = executableYouPickManifestSchema.parse({
+    threeChild = executableVariationListingManifestSchema.parse({
       ...threeChild,
       groupListingId: 'LISTING-1',
     });
@@ -887,7 +887,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     let manifest = await freshManifest();
     const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
     const operation = (id: string) => plan.operations.find((candidate) => candidate.id === id)!;
-    manifest = executableYouPickManifestSchema.parse({
+    manifest = executableVariationListingManifestSchema.parse({
       ...manifest,
       checkpoint: 'awaiting-published-view-verification',
       published: true,
@@ -936,7 +936,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       offerPayload.availableQuantity = 0;
       state.offers[0].availableQuantity = 0;
       state.offers[0].snapshotDigest = digest(offerPayload);
-      manifest = executableYouPickManifestSchema.parse({
+      manifest = executableVariationListingManifestSchema.parse({
         ...manifest,
         checkpoint: 'setting-quantity-zero',
         execution: {
@@ -956,7 +956,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       });
     }
     drift(state);
-    const readApi: YouPickPilotReadApi = {
+    const readApi: VariationListingPilotReadApi = {
       ...gateApi(),
       getInventoryItemGroup: vi.fn(async () => ({ status: 'found', value: state.group })),
       getInventoryItem: vi.fn(async (sku) => ({
@@ -970,9 +970,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     };
     const mutationApi = {
       bulkUpdatePriceQuantity: vi.fn(),
-    } as unknown as YouPickPilotMutationApi;
+    } as unknown as VariationListingPilotMutationApi;
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi,
         mutationApi,
@@ -1036,9 +1036,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       deleteOffer: vi.fn(),
       deleteInventoryItemGroup: vi.fn(),
       deleteInventoryItem: vi.fn(),
-    } as unknown as YouPickPilotMutationApi;
+    } as unknown as VariationListingPilotMutationApi;
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi,
         mutationApi,
@@ -1069,7 +1069,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       withdrawRequired: false,
       snapshotDigest: operationDigest('offer-C01'),
     });
-    const readApi: YouPickPilotReadApi = {
+    const readApi: VariationListingPilotReadApi = {
       ...gateApi(),
       getInventoryItem: vi.fn(async (sku) => ({
         status: 'found',
@@ -1099,9 +1099,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       deleteOffer: vi.fn(),
       deleteInventoryItemGroup: vi.fn(),
       deleteInventoryItem: vi.fn(),
-    } as unknown as YouPickPilotMutationApi;
+    } as unknown as VariationListingPilotMutationApi;
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi,
         mutationApi,
@@ -1185,7 +1185,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
     let manifest = await freshManifest();
     const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
     const operation = (id: string) => plan.operations.find((candidate) => candidate.id === id)!;
-    manifest = executableYouPickManifestSchema.parse({
+    manifest = executableVariationListingManifestSchema.parse({
       ...manifest,
       checkpoint: 'withdrawal-ready',
       published: true,
@@ -1213,7 +1213,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       })
     );
     const transformed = transform(baseOffers) as RemoteOffer[] | RemoteOffer[][];
-    const readApi: YouPickPilotReadApi = {
+    const readApi: VariationListingPilotReadApi = {
       ...gateApi(),
       getInventoryItemGroup: vi.fn(async () => ({
         status: 'found',
@@ -1252,9 +1252,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       deleteOffer: vi.fn(),
       deleteInventoryItemGroup: vi.fn(),
       deleteInventoryItem: vi.fn(),
-    } as unknown as YouPickPilotMutationApi;
+    } as unknown as VariationListingPilotMutationApi;
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi,
         mutationApi,
@@ -1283,7 +1283,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       );
       const mutationApi = mutationSpies();
       await expect(
-        executeYouPickManifest({
+        executeVariationListingManifest({
           manifest,
           readApi,
           mutationApi,
@@ -1318,7 +1318,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       });
       const mutationApi = mutationSpies();
       await expect(
-        executeYouPickManifest({
+        executeVariationListingManifest({
           manifest,
           readApi,
           mutationApi,
@@ -1367,7 +1367,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         exists = true;
       });
       await expect(
-        executeYouPickManifest({
+        executeVariationListingManifest({
           manifest,
           readApi,
           mutationApi,
@@ -1393,7 +1393,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
       const operation = (id: string) => plan.operations.find((candidate) => candidate.id === id)!;
       const offerReads = new Map<string, number>();
-      const readApi: YouPickPilotReadApi = {
+      const readApi: VariationListingPilotReadApi = {
         ...gateApi(),
         getInventoryItem: vi.fn(async (sku) => ({
           status: 'found',
@@ -1445,7 +1445,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       };
       const mutationApi = mutationSpies();
       await expect(
-        executeYouPickManifest({
+        executeVariationListingManifest({
           manifest,
           readApi,
           mutationApi,
@@ -1467,7 +1467,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       let manifest = await freshManifest();
       const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
       const operation = (id: string) => plan.operations.find((candidate) => candidate.id === id)!;
-      manifest = executableYouPickManifestSchema.parse({
+      manifest = executableVariationListingManifestSchema.parse({
         ...manifest,
         checkpoint: 'setting-quantity-zero',
         published: true,
@@ -1484,7 +1484,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       });
       manifest = withUnresolvedOperation(manifest, 'quantity-zero', ledgerState);
       let groupReads = 0;
-      const readApi: YouPickPilotReadApi = {
+      const readApi: VariationListingPilotReadApi = {
         ...gateApi(),
         getInventoryItemGroup: vi.fn(async () =>
           ++groupReads >= 3
@@ -1542,7 +1542,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       };
       const mutationApi = mutationSpies();
       await expect(
-        executeYouPickManifest({
+        executeVariationListingManifest({
           manifest,
           readApi,
           mutationApi,
@@ -1569,7 +1569,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       let manifest = await freshManifest();
       const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
       const operation = (id: string) => plan.operations.find((candidate) => candidate.id === id)!;
-      manifest = executableYouPickManifestSchema.parse({
+      manifest = executableVariationListingManifestSchema.parse({
         ...manifest,
         checkpoint: 'withdrawal-ready',
         published: true,
@@ -1582,7 +1582,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       });
       manifest = withUnresolvedOperation(manifest, operationId, ledgerState);
       const offerReads = new Map<string, number>();
-      const readApi: YouPickPilotReadApi = {
+      const readApi: VariationListingPilotReadApi = {
         ...gateApi(),
         getInventoryItemGroup: vi.fn(async () => ({
           status: 'found',
@@ -1642,7 +1642,7 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       };
       const mutationApi = mutationSpies();
       await expect(
-        executeYouPickManifest({
+        executeVariationListingManifest({
           manifest,
           readApi,
           mutationApi,
@@ -1672,9 +1672,9 @@ describe('guarded You Pick staged mutation lifecycle', () => {
       deleteOffer: vi.fn(),
       deleteInventoryItemGroup: vi.fn(),
       deleteInventoryItem: vi.fn(),
-    } as unknown as YouPickPilotMutationApi;
+    } as unknown as VariationListingPilotMutationApi;
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi: gateApi(),
         mutationApi,
@@ -1692,14 +1692,14 @@ describe('guarded You Pick staged mutation lifecycle', () => {
   });
 
   it('cleans and resumes from a partial child-only checkpoint without prefix scanning', async () => {
-    let manifest = executableYouPickManifestSchema.parse({
+    let manifest = executableVariationListingManifestSchema.parse({
       ...(await freshManifest()),
       checkpoint: 'creating-items',
     });
     const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
     const firstItem = plan.operations.find((operation) => operation.id === 'item-C01')!;
     let firstExists = true;
-    const readApi: YouPickPilotReadApi = {
+    const readApi: VariationListingPilotReadApi = {
       ...gateApi(),
       getInventoryItemGroup: vi.fn(async () => ({ status: 'missing' })),
       getInventoryItem: vi.fn(async (sku) =>
@@ -1731,8 +1731,8 @@ describe('guarded You Pick staged mutation lifecycle', () => {
         expect(sku).toBe(manifest.run.childSkus[0]);
         firstExists = false;
       }),
-    } as unknown as YouPickPilotMutationApi;
-    const result = await executeYouPickManifest({
+    } as unknown as VariationListingPilotMutationApi;
+    const result = await executeVariationListingManifest({
       manifest,
       readApi,
       mutationApi,

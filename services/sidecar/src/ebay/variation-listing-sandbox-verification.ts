@@ -1,18 +1,18 @@
 import {
   assertExecutableManifestIntegrity,
   digest,
-  executableYouPickManifestSchema,
+  executableVariationListingManifestSchema,
   inventoryItemSemanticMismatch,
   offerSemanticMismatch,
   resolveFuturePlan,
   sanitizeError,
-  YOU_PICK_CONTENT_LANGUAGE,
-  YOU_PICK_MARKETPLACE,
-  YOU_PICK_SANDBOX_ORIGIN,
-  type ExecutableYouPickManifest,
+  VARIATION_LISTING_CONTENT_LANGUAGE,
+  VARIATION_LISTING_MARKETPLACE,
+  VARIATION_LISTING_SANDBOX_ORIGIN,
+  type ExecutableVariationListingManifest,
   type RemoteOffer,
-  type YouPickPilotReadApi,
-} from './you-pick-sandbox-pilot.js';
+  type VariationListingPilotReadApi,
+} from './variation-listing-sandbox-pilot.js';
 
 // Re-exported for the mutation module — single source of truth.
 export interface ReconciledPublicationState {
@@ -28,12 +28,12 @@ export interface ReconciledPublicationState {
  * Does NOT accept a mutation API, persist callback, or execute flag.
  */
 export async function reconcileCompletePublicationState(
-  readApi: YouPickPilotReadApi,
-  manifest: ExecutableYouPickManifest,
+  readApi: VariationListingPilotReadApi,
+  manifest: ExecutableVariationListingManifest,
   allowAbsent = false
 ): Promise<ReconciledPublicationState> {
   const reads = await Promise.all(
-    manifest.run.childSkus.map((sku) => readApi.getOffers(sku, YOU_PICK_MARKETPLACE))
+    manifest.run.childSkus.map((sku) => readApi.getOffers(sku, VARIATION_LISTING_MARKETPLACE))
   );
   const offers: RemoteOffer[] = [];
   let absentCount = 0;
@@ -50,7 +50,7 @@ export async function reconcileCompletePublicationState(
     const recordedOfferId = manifest.resources[index].offerId;
     if (
       offer.sku !== sku ||
-      offer.marketplaceId !== YOU_PICK_MARKETPLACE ||
+      offer.marketplaceId !== VARIATION_LISTING_MARKETPLACE ||
       (recordedOfferId !== null && offer.offerId !== recordedOfferId)
     )
       throw new Error(`Publication state for ${sku} has conflicting ownership.`);
@@ -152,8 +152,8 @@ export interface VerificationReport {
 }
 
 export interface VerificationOptions {
-  readApi: YouPickPilotReadApi;
-  manifest: ExecutableYouPickManifest;
+  readApi: VariationListingPilotReadApi;
+  manifest: ExecutableVariationListingManifest;
   manifestSha256: string;
   confirmSandboxSeller: string;
 }
@@ -164,7 +164,7 @@ export interface VerificationOptions {
  * throws immediately before a verified report is returned.
  * Never mutates local or remote state.
  */
-export async function verifyYouPickSandbox(
+export async function verifyVariationListingSandbox(
   options: VerificationOptions
 ): Promise<VerificationReport> {
   const { readApi, manifest, manifestSha256, confirmSandboxSeller } = options;
@@ -177,15 +177,15 @@ export async function verifyYouPickSandbox(
   const expected = manifest.expected;
   if (expected.environment !== 'sandbox')
     throw new Error('Verification requires sandbox environment in manifest.');
-  if (expected.restOrigin !== YOU_PICK_SANDBOX_ORIGIN)
+  if (expected.restOrigin !== VARIATION_LISTING_SANDBOX_ORIGIN)
     throw new Error('Verification requires exact sandbox REST origin in manifest.');
-  if (expected.oauthOrigin !== YOU_PICK_SANDBOX_ORIGIN)
+  if (expected.oauthOrigin !== VARIATION_LISTING_SANDBOX_ORIGIN)
     throw new Error('Verification requires exact sandbox OAuth origin in manifest.');
-  if (expected.tradingOrigin !== YOU_PICK_SANDBOX_ORIGIN)
+  if (expected.tradingOrigin !== VARIATION_LISTING_SANDBOX_ORIGIN)
     throw new Error('Verification requires exact sandbox Trading origin in manifest.');
-  if (expected.marketplaceId !== YOU_PICK_MARKETPLACE)
+  if (expected.marketplaceId !== VARIATION_LISTING_MARKETPLACE)
     throw new Error('Verification requires EBAY_US marketplace in manifest.');
-  if (expected.contentLanguage !== YOU_PICK_CONTENT_LANGUAGE)
+  if (expected.contentLanguage !== VARIATION_LISTING_CONTENT_LANGUAGE)
     throw new Error('Verification requires Content-Language: en-US in manifest.');
   if (expected.categoryId !== '261328')
     throw new Error('Verification requires category 261328 in manifest.');
@@ -193,15 +193,15 @@ export async function verifyYouPickSandbox(
   // Validate actual runtime snapshot against exact constants
   const runtime = await readApi.getRuntimeSnapshot();
   if (runtime.environment !== 'sandbox') throw new Error('Runtime environment must be sandbox.');
-  if (runtime.restOrigin !== YOU_PICK_SANDBOX_ORIGIN)
+  if (runtime.restOrigin !== VARIATION_LISTING_SANDBOX_ORIGIN)
     throw new Error('Runtime REST origin must be exact sandbox.');
-  if (runtime.oauthOrigin !== YOU_PICK_SANDBOX_ORIGIN)
+  if (runtime.oauthOrigin !== VARIATION_LISTING_SANDBOX_ORIGIN)
     throw new Error('Runtime OAuth origin must be exact sandbox.');
-  if (runtime.tradingOrigin !== YOU_PICK_SANDBOX_ORIGIN)
+  if (runtime.tradingOrigin !== VARIATION_LISTING_SANDBOX_ORIGIN)
     throw new Error('Runtime Trading origin must be exact sandbox.');
-  if (runtime.marketplaceId !== YOU_PICK_MARKETPLACE)
+  if (runtime.marketplaceId !== VARIATION_LISTING_MARKETPLACE)
     throw new Error('Runtime marketplace must be EBAY_US.');
-  if (runtime.contentLanguage !== YOU_PICK_CONTENT_LANGUAGE)
+  if (runtime.contentLanguage !== VARIATION_LISTING_CONTENT_LANGUAGE)
     throw new Error('Runtime content language must be en-US.');
   if (Object.values(runtime.background).some((enabled) => enabled))
     throw new Error('All background work must be disabled during verification.');

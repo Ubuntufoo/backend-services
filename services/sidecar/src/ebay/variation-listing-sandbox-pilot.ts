@@ -5,18 +5,18 @@ import { z } from 'zod';
 import type {
   GuardedMutationHeaders,
   MutationExecutionReport,
-  YouPickPilotMutationApi,
-} from './you-pick-sandbox-pilot-mutation.js';
+  VariationListingPilotMutationApi,
+} from './variation-listing-sandbox-pilot-mutation.js';
 
-export const YOU_PICK_MANIFEST_VERSION = 5 as const;
-export const YOU_PICK_LEGACY_MANIFEST_VERSION = 4 as const;
-export const YOU_PICK_EXECUTION_ERROR =
+export const VARIATION_LISTING_MANIFEST_VERSION = 5 as const;
+export const VARIATION_LISTING_LEGACY_MANIFEST_VERSION = 4 as const;
+export const VARIATION_LISTING_EXECUTION_ERROR =
   'Guarded execution requires --manifest, --execute, and an exact --confirm-sandbox-seller; fixture execution, legacy manifests, and incomplete checkpoints are not executable.';
-export const YOU_PICK_MARKETPLACE = 'EBAY_US' as const;
-export const YOU_PICK_CATEGORY = '261328' as const;
-export const YOU_PICK_CONTENT_LANGUAGE = 'en-US' as const;
-export const YOU_PICK_SANDBOX_ORIGIN = 'https://api.sandbox.ebay.com' as const;
-export const YOU_PICK_MAX_SKU_LENGTH = 50;
+export const VARIATION_LISTING_MARKETPLACE = 'EBAY_US' as const;
+export const VARIATION_LISTING_CATEGORY = '261328' as const;
+export const VARIATION_LISTING_CONTENT_LANGUAGE = 'en-US' as const;
+export const VARIATION_LISTING_SANDBOX_ORIGIN = 'https://api.sandbox.ebay.com' as const;
+export const VARIATION_LISTING_MAX_SKU_LENGTH = 50;
 
 const RUN_ID_PATTERN = /^\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 const CHILD_SLOT_PATTERN = /^C0[1-3]$/;
@@ -30,7 +30,7 @@ const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).stri
 const nonEmpty = z.string().trim().min(1);
 const numericId = z.string().regex(/^\d+$/);
 const selectorNameSchema = z.enum(['Card', 'Card Selection']);
-export const YOU_PICK_LISTING_STATUSES = [
+export const VARIATION_LISTING_STATUSES = [
   'ACTIVE',
   'OUT_OF_STOCK',
   'INACTIVE',
@@ -38,8 +38,8 @@ export const YOU_PICK_LISTING_STATUSES = [
   'EBAY_ENDED',
   'NOT_LISTED',
 ] as const;
-export type YouPickListingStatus = (typeof YOU_PICK_LISTING_STATUSES)[number];
-export type YouPickLifecycleClass = 'active' | 'ended' | 'not-listed' | 'ambiguous';
+export type VariationListingStatus = (typeof VARIATION_LISTING_STATUSES)[number];
+export type VariationListingLifecycleClass = 'active' | 'ended' | 'not-listed' | 'ambiguous';
 
 const imageSchema = strictObject({
   role: z.enum(['front', 'back']),
@@ -83,11 +83,11 @@ const childFixtureSchema = strictObject({
   condition: sharedConditionSchema,
 });
 
-const youPickFixtureCommonShape = {
-  marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
-  categoryId: z.literal(YOU_PICK_CATEGORY),
+const variationListingFixtureCommonShape = {
+  marketplaceId: z.literal(VARIATION_LISTING_MARKETPLACE),
+  categoryId: z.literal(VARIATION_LISTING_CATEGORY),
   format: z.literal('FIXED_PRICE'),
-  contentLanguage: z.literal(YOU_PICK_CONTENT_LANGUAGE),
+  contentLanguage: z.literal(VARIATION_LISTING_CONTENT_LANGUAGE),
   policies: strictObject({
     fulfillmentPolicyId: nonEmpty,
     paymentPolicyId: nonEmpty,
@@ -116,29 +116,32 @@ const youPickFixtureCommonShape = {
   predecessorFullyCleaned: z.boolean().optional(),
 } satisfies z.ZodRawShape;
 
-const youPickFixtureVersion1BaseSchema = strictObject({
+const variationListingFixtureVersion1BaseSchema = strictObject({
   version: z.literal(1),
-  ...youPickFixtureCommonShape,
+  ...variationListingFixtureCommonShape,
 });
-const youPickFixtureVersion2BaseSchema = strictObject({
+const variationListingFixtureVersion2BaseSchema = strictObject({
   version: z.literal(2),
-  ...youPickFixtureCommonShape,
+  ...variationListingFixtureCommonShape,
 });
-const youPickFixtureVersion3BaseSchema = strictObject({
+const variationListingFixtureVersion3BaseSchema = strictObject({
   version: z.literal(3),
-  ...youPickFixtureCommonShape,
+  ...variationListingFixtureCommonShape,
 });
-const youPickFixtureVersion4BaseSchema = strictObject({
+const variationListingFixtureVersion4BaseSchema = strictObject({
   version: z.literal(4),
-  ...youPickFixtureCommonShape,
+  ...variationListingFixtureCommonShape,
 });
-type YouPickFixtureRefinementInput =
-  | z.infer<typeof youPickFixtureVersion1BaseSchema>
-  | z.infer<typeof youPickFixtureVersion2BaseSchema>
-  | z.infer<typeof youPickFixtureVersion3BaseSchema>
-  | z.infer<typeof youPickFixtureVersion4BaseSchema>;
+type VariationListingFixtureRefinementInput =
+  | z.infer<typeof variationListingFixtureVersion1BaseSchema>
+  | z.infer<typeof variationListingFixtureVersion2BaseSchema>
+  | z.infer<typeof variationListingFixtureVersion3BaseSchema>
+  | z.infer<typeof variationListingFixtureVersion4BaseSchema>;
 
-function refineYouPickFixture(fixture: YouPickFixtureRefinementInput, ctx: z.RefinementCtx): void {
+function refineVariationListingFixture(
+  fixture: VariationListingFixtureRefinementInput,
+  ctx: z.RefinementCtx
+): void {
   const childCount = fixture.children.length;
   const slots = fixture.children.map((child) => child.slot);
   const expectedSlots = Array.from({ length: childCount }, (_, index) => `C0${index + 1}`);
@@ -230,28 +233,28 @@ function refineYouPickFixture(fixture: YouPickFixtureRefinementInput, ctx: z.Ref
     issue('predecessorFullyCleaned requires predecessorRunId.', ['predecessorFullyCleaned']);
 }
 
-export const youPickFixtureVersion1Schema =
-  youPickFixtureVersion1BaseSchema.superRefine(refineYouPickFixture);
-export const youPickFixtureVersion2Schema =
-  youPickFixtureVersion2BaseSchema.superRefine(refineYouPickFixture);
-export const youPickFixtureVersion3Schema =
-  youPickFixtureVersion3BaseSchema.superRefine(refineYouPickFixture);
-export const youPickFixtureVersion4Schema =
-  youPickFixtureVersion4BaseSchema.superRefine(refineYouPickFixture);
-export const youPickFixtureSchema = z.union([
-  youPickFixtureVersion1Schema,
-  youPickFixtureVersion2Schema,
-  youPickFixtureVersion3Schema,
-  youPickFixtureVersion4Schema,
+export const variationListingFixtureVersion1Schema =
+  variationListingFixtureVersion1BaseSchema.superRefine(refineVariationListingFixture);
+export const variationListingFixtureVersion2Schema =
+  variationListingFixtureVersion2BaseSchema.superRefine(refineVariationListingFixture);
+export const variationListingFixtureVersion3Schema =
+  variationListingFixtureVersion3BaseSchema.superRefine(refineVariationListingFixture);
+export const variationListingFixtureVersion4Schema =
+  variationListingFixtureVersion4BaseSchema.superRefine(refineVariationListingFixture);
+export const variationListingFixtureSchema = z.union([
+  variationListingFixtureVersion1Schema,
+  variationListingFixtureVersion2Schema,
+  variationListingFixtureVersion3Schema,
+  variationListingFixtureVersion4Schema,
 ]);
 
-export type YouPickFixture = z.infer<typeof youPickFixtureSchema>;
+export type VariationListingFixture = z.infer<typeof variationListingFixtureSchema>;
 
 const runIdentitySchema = strictObject({
   runId: z.string().regex(RUN_ID_PATTERN),
   prefix: nonEmpty,
-  groupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
-  childSkus: z.array(nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH)).min(2).max(3),
+  groupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
+  childSkus: z.array(nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH)).min(2).max(3),
 });
 
 const gateSchema = strictObject({
@@ -291,7 +294,7 @@ const cleanupRemoteSummarySchema = strictObject({
   listingId: z.string().regex(REMOTE_ID_PATTERN).nullable(),
   lifecycleClass: z.enum(['active', 'ended', 'not-listed']).nullable(),
   listingStatuses: z
-    .array(z.enum(YOU_PICK_LISTING_STATUSES))
+    .array(z.enum(VARIATION_LISTING_STATUSES))
     .max(2)
     .refine(
       (values) => JSON.stringify(values) === JSON.stringify([...new Set(values)].sort()),
@@ -325,12 +328,12 @@ const manifestCommonShape = {
   seller: strictObject({ userId: nonEmpty, username: nonEmpty.optional() }).nullable(),
   expected: strictObject({
     environment: z.literal('sandbox'),
-    restOrigin: z.literal(YOU_PICK_SANDBOX_ORIGIN),
-    oauthOrigin: z.literal(YOU_PICK_SANDBOX_ORIGIN),
-    tradingOrigin: z.literal(YOU_PICK_SANDBOX_ORIGIN),
-    marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
-    categoryId: z.literal(YOU_PICK_CATEGORY),
-    contentLanguage: z.literal(YOU_PICK_CONTENT_LANGUAGE),
+    restOrigin: z.literal(VARIATION_LISTING_SANDBOX_ORIGIN),
+    oauthOrigin: z.literal(VARIATION_LISTING_SANDBOX_ORIGIN),
+    tradingOrigin: z.literal(VARIATION_LISTING_SANDBOX_ORIGIN),
+    marketplaceId: z.literal(VARIATION_LISTING_MARKETPLACE),
+    categoryId: z.literal(VARIATION_LISTING_CATEGORY),
+    contentLanguage: z.literal(VARIATION_LISTING_CONTENT_LANGUAGE),
   }),
   ownership: strictObject({
     selectorName: selectorNameSchema,
@@ -433,7 +436,7 @@ const mediaResourceSchema = strictObject({
 
 const executableStateSchema = strictObject({
   eligible: z.literal(true),
-  fixture: youPickFixtureSchema,
+  fixture: variationListingFixtureSchema,
   ledger: z.array(operationLedgerEntrySchema).min(1),
   publishedAttestationDigest: z
     .string()
@@ -480,13 +483,13 @@ function refineManifest(
     });
 }
 
-export const legacyYouPickManifestSchema = strictObject({
-  version: z.literal(YOU_PICK_LEGACY_MANIFEST_VERSION),
+export const legacyVariationListingManifestSchema = strictObject({
+  version: z.literal(VARIATION_LISTING_LEGACY_MANIFEST_VERSION),
   ...manifestCommonShape,
 }).superRefine(refineManifest);
 
-export const executableYouPickManifestSchema = strictObject({
-  version: z.literal(YOU_PICK_MANIFEST_VERSION),
+export const executableVariationListingManifestSchema = strictObject({
+  version: z.literal(VARIATION_LISTING_MANIFEST_VERSION),
   ...manifestCommonShape,
   execution: executableStateSchema,
 }).superRefine((manifest, ctx) => {
@@ -502,13 +505,15 @@ export const executableYouPickManifestSchema = strictObject({
   }
 });
 
-export const youPickManifestSchema = z.union([
-  legacyYouPickManifestSchema,
-  executableYouPickManifestSchema,
+export const variationListingManifestSchema = z.union([
+  legacyVariationListingManifestSchema,
+  executableVariationListingManifestSchema,
 ]);
 
-export type YouPickManifest = z.infer<typeof youPickManifestSchema>;
-export type ExecutableYouPickManifest = z.infer<typeof executableYouPickManifestSchema>;
+export type VariationListingManifest = z.infer<typeof variationListingManifestSchema>;
+export type ExecutableVariationListingManifest = z.infer<
+  typeof executableVariationListingManifestSchema
+>;
 
 export interface CurrentUserIdentity {
   userId: string;
@@ -576,7 +581,7 @@ export interface RemoteInventoryItemGroup {
   snapshotDigest?: string;
 }
 export const inventoryItemSemanticSnapshotSchema = strictObject({
-  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
   availability: strictObject({
     shipToLocationAvailability: strictObject({ quantity: z.number().int().nonnegative() }),
   }),
@@ -594,7 +599,7 @@ export const inventoryItemSemanticSnapshotSchema = strictObject({
 });
 export type InventoryItemSemanticSnapshot = z.infer<typeof inventoryItemSemanticSnapshotSchema>;
 export const offerSemanticSnapshotSchema = strictObject({
-  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
   marketplaceId: nonEmpty,
   format: nonEmpty,
   categoryId: nonEmpty,
@@ -622,8 +627,8 @@ export interface RemoteOffer {
   marketplaceId: string;
   status: 'PUBLISHED' | 'UNPUBLISHED';
   listingId: string | null;
-  listingStatus: YouPickListingStatus | null;
-  lifecycleClass: YouPickLifecycleClass | null;
+  listingStatus: VariationListingStatus | null;
+  lifecycleClass: VariationListingLifecycleClass | null;
   publicationObserved: boolean;
   listingCurrentlyActive: boolean | null;
   withdrawRequired: boolean | null;
@@ -631,8 +636,8 @@ export interface RemoteOffer {
   semanticSnapshot?: OfferSemanticSnapshot;
 }
 
-export function classifyYouPickListingStatus(status: YouPickListingStatus | null): {
-  lifecycleClass: YouPickLifecycleClass | null;
+export function classifyVariationListingStatus(status: VariationListingStatus | null): {
+  lifecycleClass: VariationListingLifecycleClass | null;
   publicationObserved: boolean;
   listingCurrentlyActive: boolean | null;
   withdrawRequired: boolean | null;
@@ -670,7 +675,7 @@ export type ExactRead<T = unknown> =
   | { status: 'found'; value: T }
   | { status: 'unknown'; reason: string };
 
-export interface YouPickPilotReadApi {
+export interface VariationListingPilotReadApi {
   getRuntimeSnapshot(): Promise<RuntimeSnapshot>;
   probeMediaImageAccess?(missingImageId: string): Promise<'authorized' | 'unauthorized'>;
   getCurrentUserIdentity(): Promise<CurrentUserIdentity>;
@@ -697,7 +702,7 @@ const plannedConditionDescriptorSchema = strictObject({
   values: z.array(numericId).min(1),
 });
 const plannedItemCommonShape = {
-  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
   availability: strictObject({
     shipToLocationAvailability: strictObject({ quantity: z.number().int().positive() }),
   }),
@@ -731,10 +736,10 @@ const plannedMediaSchema = strictObject({
   sourceFingerprint: z.string().regex(NON_SECRET_FINGERPRINT_PATTERN),
 });
 const plannedOfferSchema = strictObject({
-  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
-  marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
+  sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
+  marketplaceId: z.literal(VARIATION_LISTING_MARKETPLACE),
   format: z.literal('FIXED_PRICE'),
-  categoryId: z.literal(YOU_PICK_CATEGORY),
+  categoryId: z.literal(VARIATION_LISTING_CATEGORY),
   merchantLocationKey: nonEmpty,
   availableQuantity: z.number().int().positive(),
   pricingSummary: strictObject({
@@ -747,11 +752,11 @@ const plannedOfferSchema = strictObject({
   }),
 });
 const plannedGroupCommonShape = {
-  inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  inventoryItemGroupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
   title: nonEmpty,
   description: nonEmpty,
   aspects: z.record(nonEmpty, z.array(nonEmpty).min(1)),
-  variantSKUs: z.array(nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH)).min(2).max(3),
+  variantSKUs: z.array(nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH)).min(2).max(3),
   variesBy: strictObject({
     specifications: z.tuple([
       strictObject({ name: nonEmpty, values: z.array(nonEmpty).min(2).max(3) }),
@@ -773,13 +778,13 @@ const plannedGroupVersion3Schema = strictObject({
 });
 const plannedGroupVersion4Schema = strictObject(plannedGroupCommonShape);
 const plannedGroupRequestSchema = strictObject({
-  inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
-  marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
+  inventoryItemGroupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
+  marketplaceId: z.literal(VARIATION_LISTING_MARKETPLACE),
 });
 const plannedBulkQuantitySchema = strictObject({
   requests: z.tuple([
     strictObject({
-      sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+      sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
       shipToLocationAvailability: strictObject({ quantity: z.number().int().nonnegative() }),
       offers: z.tuple([
         strictObject({ offerId: nonEmpty, availableQuantity: z.number().int().nonnegative() }),
@@ -788,33 +793,35 @@ const plannedBulkQuantitySchema = strictObject({
   ]),
 });
 const plannedGroupKeySchema = strictObject({
-  inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  inventoryItemGroupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
 });
-const plannedSkuSchema = strictObject({ sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH) });
+const plannedSkuSchema = strictObject({ sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH) });
 const plannedOfferIdSchema = strictObject({ offerId: nonEmpty });
 const plannedAbsenceSchema = strictObject({
-  inventoryItemGroupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
-  skus: z.array(nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH)).min(2).max(3),
-  marketplaceId: z.literal(YOU_PICK_MARKETPLACE),
+  inventoryItemGroupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
+  skus: z.array(nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH)).min(2).max(3),
+  marketplaceId: z.literal(VARIATION_LISTING_MARKETPLACE),
 });
 const cleanupWithdrawSchema = strictObject({
-  groupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  groupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
   listingId: z.string().regex(REMOTE_ID_PATTERN).nullable(),
 });
 const cleanupOfferSchema = strictObject({
   offerId: z.string().regex(REMOTE_ID_PATTERN),
-  sku: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
+  sku: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
 });
-const cleanupGroupSchema = strictObject({ groupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH) });
+const cleanupGroupSchema = strictObject({
+  groupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
+});
 const cleanupAbsenceSchema = strictObject({
-  groupKey: nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH),
-  skus: z.array(nonEmpty.max(YOU_PICK_MAX_SKU_LENGTH)).min(2).max(3),
+  groupKey: nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH),
+  skus: z.array(nonEmpty.max(VARIATION_LISTING_MAX_SKU_LENGTH)).min(2).max(3),
 });
 
 export interface PilotRunOptions {
-  api?: YouPickPilotReadApi;
-  apiFactory?: () => Promise<YouPickPilotReadApi>;
-  mutationApiFactory?: () => Promise<YouPickPilotMutationApi>;
+  api?: VariationListingPilotReadApi;
+  apiFactory?: () => Promise<VariationListingPilotReadApi>;
+  mutationApiFactory?: () => Promise<VariationListingPilotMutationApi>;
   fixturePath?: string;
   manifestPath?: string;
   cleanup?: boolean;
@@ -829,22 +836,22 @@ export interface PilotRunOptions {
 
 export interface PilotReport {
   mode: 'dry-run' | 'cleanup-plan' | 'execute' | 'cleanup-execute';
-  run: YouPickManifest['run'];
+  run: VariationListingManifest['run'];
   manifestPath: string;
   seller: CurrentUserIdentity;
   sellerConfirmation: 'not-supplied' | 'matched';
-  contentLanguage: typeof YOU_PICK_CONTENT_LANGUAGE;
-  gates: YouPickManifest['gates'];
-  selected: { policies: YouPickFixture['policies']; merchantLocationKey: string };
+  contentLanguage: typeof VARIATION_LISTING_CONTENT_LANGUAGE;
+  gates: VariationListingManifest['gates'];
+  selected: { policies: VariationListingFixture['policies']; merchantLocationKey: string };
   metadata: MetadataSnapshot;
-  metadataSummary: NonNullable<YouPickManifest['metadataSummary']>;
-  cleanupRemoteSummary: YouPickManifest['cleanupRemoteSummary'];
-  collisions: YouPickManifest['collisions'];
+  metadataSummary: NonNullable<VariationListingManifest['metadataSummary']>;
+  cleanupRemoteSummary: VariationListingManifest['cleanupRemoteSummary'];
+  collisions: VariationListingManifest['collisions'];
   arrangementId: string;
   operationPlan: Omit<PlannedOperation, 'payload'>[];
   requestDigests: string[];
   nextAuthorizedCommand: string;
-  checkpoint?: YouPickManifest['checkpoint'];
+  checkpoint?: VariationListingManifest['checkpoint'];
   listingId?: string | null;
   completedOperationIds?: string[];
   safeResumeCommand?: string;
@@ -1079,7 +1086,7 @@ export function generateRunIdentity(
   childCount: number,
   now = new Date(),
   random: Buffer = randomBytes(3)
-): YouPickManifest['run'] {
+): VariationListingManifest['run'] {
   if (childCount !== 2 && childCount !== 3)
     throw new Error('Run identity requires exactly 2 or 3 children.');
   const timestamp = now
@@ -1098,8 +1105,8 @@ export function generateRunIdentity(
   return run;
 }
 
-export function validateRunIdentity(run: YouPickManifest['run']): void {
-  if (!RUN_ID_PATTERN.test(run.runId)) throw new Error('Invalid You Pick run ID.');
+export function validateRunIdentity(run: VariationListingManifest['run']): void {
+  if (!RUN_ID_PATTERN.test(run.runId)) throw new Error('Invalid variation listing run ID.');
   const expectedPrefix = `YPSBX-${run.runId}`;
   if (run.prefix !== expectedPrefix || run.groupKey !== `${expectedPrefix}-G`)
     throw new Error('Run prefix or group key is not owned by this run.');
@@ -1109,10 +1116,14 @@ export function validateRunIdentity(run: YouPickManifest['run']): void {
   );
   if (JSON.stringify(run.childSkus) !== JSON.stringify(expectedSkus))
     throw new Error('Child SKUs are not exact ordered run-owned identifiers.');
-  if ([run.groupKey, ...run.childSkus].some((value) => value.length > YOU_PICK_MAX_SKU_LENGTH))
+  if (
+    [run.groupKey, ...run.childSkus].some(
+      (value) => value.length > VARIATION_LISTING_MAX_SKU_LENGTH
+    )
+  )
     throw new Error('Run-owned identifier exceeds eBay SKU length.');
   if ([run.groupKey, ...run.childSkus].some((value) => /(?:Single|Lot)-\d{6}/.test(value)))
-    throw new Error('You Pick identifiers must not match Single/Lot SKU grammar.');
+    throw new Error('variation listing identifiers must not match Single/Lot SKU grammar.');
 }
 
 export function parseCurrentUserIdentity(value: unknown): CurrentUserIdentity {
@@ -1148,11 +1159,11 @@ export function buildGuardedMutationHeaders(input: {
     throw new Error('Guarded mutation contract requires sandbox.');
   if (!input.sellerUserId || input.sellerUserId !== input.expectedSellerUserId)
     throw new Error('Guarded mutation contract requires exact seller identity.');
-  if (input.marketplaceId !== YOU_PICK_MARKETPLACE)
+  if (input.marketplaceId !== VARIATION_LISTING_MARKETPLACE)
     throw new Error('Guarded mutation contract requires EBAY_US.');
-  if (input.contentLanguage !== YOU_PICK_CONTENT_LANGUAGE)
+  if (input.contentLanguage !== VARIATION_LISTING_CONTENT_LANGUAGE)
     throw new Error('Guarded mutation contract requires Content-Language: en-US.');
-  return { 'Content-Language': YOU_PICK_CONTENT_LANGUAGE };
+  return { 'Content-Language': VARIATION_LISTING_CONTENT_LANGUAGE };
 }
 
 function operation(
@@ -1165,8 +1176,11 @@ function operation(
   return { id, kind, payload, digest: digest(payload) };
 }
 
-export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run']): FuturePlan {
-  const fixture = youPickFixtureSchema.parse(fixtureInput);
+export function buildFuturePlan(
+  fixtureInput: unknown,
+  run: VariationListingManifest['run']
+): FuturePlan {
+  const fixture = variationListingFixtureSchema.parse(fixtureInput);
   validateRunIdentity(run);
   if (fixture.children.length !== run.childSkus.length)
     throw new Error('Fixture child count does not match run identity.');
@@ -1351,8 +1365,8 @@ export function buildFuturePlan(fixtureInput: unknown, run: YouPickManifest['run
   };
 }
 
-export function resolveFuturePlan(manifest: ExecutableYouPickManifest): FuturePlan {
-  const fixture = youPickFixtureSchema.parse(manifest.execution.fixture);
+export function resolveFuturePlan(manifest: ExecutableVariationListingManifest): FuturePlan {
+  const fixture = variationListingFixtureSchema.parse(manifest.execution.fixture);
   const plan = buildFuturePlan(fixture, manifest.run);
   if (fixture.version < 3) return plan;
   const resources = manifest.execution.mediaResources;
@@ -1406,8 +1420,10 @@ function requireExactIntegrity(label: string, actual: unknown, expected: unknown
     throw new Error(`Executable manifest integrity mismatch: ${label}.`);
 }
 
-export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickManifest): void {
-  const fixture = youPickFixtureSchema.parse(manifest.execution.fixture);
+export function assertExecutableManifestIntegrity(
+  manifest: ExecutableVariationListingManifest
+): void {
+  const fixture = variationListingFixtureSchema.parse(manifest.execution.fixture);
   const plan = buildFuturePlan(fixture, manifest.run);
   const expectedOperations = plan.operations.map(({ id, kind, digest: operationDigest }) => ({
     id,
@@ -1424,7 +1440,7 @@ export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickMan
     kind,
     requestDigest,
   }));
-  const expectedOwnership: ExecutableYouPickManifest['ownership'] = {
+  const expectedOwnership: ExecutableVariationListingManifest['ownership'] = {
     selectorName: fixture.selector.name,
     selectorValues: fixture.selector.values,
     imageFingerprints: fixture.children.flatMap((child) =>
@@ -1516,7 +1532,7 @@ export function assertExecutableManifestIntegrity(manifest: ExecutableYouPickMan
 function manifestLocalRoot(repoRoot: string, override?: string): string {
   const expected = resolve(repoRoot, '.local', 'you-pick-sandbox');
   if (override !== undefined && resolve(override) !== expected) {
-    throw new Error('You Pick manifest root must be <repo>/.local/you-pick-sandbox.');
+    throw new Error('variation listing manifest root must be <repo>/.local/you-pick-sandbox.');
   }
   return expected;
 }
@@ -1530,7 +1546,7 @@ export function assertSafeManifestPath(
   const root = resolve(localRoot);
   const rel = relative(root, absolute);
   if (!rel || rel.startsWith(`..${sep}`) || rel === '..' || resolve(root, rel) !== absolute)
-    throw new Error('Manifest path must be contained in the You Pick local root.');
+    throw new Error('Manifest path must be contained in the variation listing local root.');
   if (
     absolute !== join(root, expectedRunId ?? dirname(rel).split(sep).at(-1) ?? '', 'manifest.json')
   )
@@ -1545,11 +1561,11 @@ async function assertRealManifestContainment(path: string, localRoot: string): P
   ]);
   const parentReal = await realpath(dirname(localRoot));
   if (rootReal !== join(parentReal, basename(localRoot))) {
-    throw new Error('You Pick local root must not be a symbolic link.');
+    throw new Error('variation listing local root must not be a symbolic link.');
   }
   const rel = relative(rootReal, directoryReal);
   if (rel.startsWith(`..${sep}`) || rel === '..') {
-    throw new Error('Manifest directory resolves outside the You Pick local root.');
+    throw new Error('Manifest directory resolves outside the variation listing local root.');
   }
   if (directoryReal !== join(rootReal, basename(dirname(path)))) {
     throw new Error('Manifest run directory must not be a symbolic link.');
@@ -1571,9 +1587,9 @@ export async function writeManifestAtomic(
   manifestInput: unknown,
   localRoot: string
 ): Promise<void> {
-  const parsed = youPickManifestSchema.parse(manifestInput);
+  const parsed = variationListingManifestSchema.parse(manifestInput);
   const sanitized = sanitizeReport(parsed);
-  const manifest = youPickManifestSchema.parse(
+  const manifest = variationListingManifestSchema.parse(
     'execution' in parsed && 'execution' in sanitized
       ? {
           ...sanitized,
@@ -1618,7 +1634,10 @@ export async function writeManifestAtomic(
   }
 }
 
-export async function readManifest(path: string, localRoot: string): Promise<YouPickManifest> {
+export async function readManifest(
+  path: string,
+  localRoot: string
+): Promise<VariationListingManifest> {
   const absolute = assertSafeManifestPath(path, localRoot);
   await assertRealManifestContainment(absolute, localRoot);
   const [fileReal, directoryReal] = await Promise.all([
@@ -1634,20 +1653,20 @@ export async function readManifest(path: string, localRoot: string): Promise<You
   } catch (error) {
     throw new Error(`Manifest is missing or corrupt: ${sanitizeError(error)}`);
   }
-  const manifest = youPickManifestSchema.parse(parsed);
+  const manifest = variationListingManifestSchema.parse(parsed);
   assertSafeManifestPath(absolute, localRoot, manifest.run.runId);
   return manifest;
 }
 
 function initialManifest(
-  fixture: YouPickFixture,
-  run: YouPickManifest['run'],
+  fixture: VariationListingFixture,
+  run: VariationListingManifest['run'],
   plan: FuturePlan,
   now: Date
-): YouPickManifest {
+): VariationListingManifest {
   const timestamp = now.toISOString();
-  return youPickManifestSchema.parse({
-    version: YOU_PICK_MANIFEST_VERSION,
+  return variationListingManifestSchema.parse({
+    version: VARIATION_LISTING_MANIFEST_VERSION,
     run,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -1656,12 +1675,12 @@ function initialManifest(
     seller: null,
     expected: {
       environment: 'sandbox',
-      restOrigin: YOU_PICK_SANDBOX_ORIGIN,
-      oauthOrigin: YOU_PICK_SANDBOX_ORIGIN,
-      tradingOrigin: YOU_PICK_SANDBOX_ORIGIN,
-      marketplaceId: YOU_PICK_MARKETPLACE,
-      categoryId: YOU_PICK_CATEGORY,
-      contentLanguage: YOU_PICK_CONTENT_LANGUAGE,
+      restOrigin: VARIATION_LISTING_SANDBOX_ORIGIN,
+      oauthOrigin: VARIATION_LISTING_SANDBOX_ORIGIN,
+      tradingOrigin: VARIATION_LISTING_SANDBOX_ORIGIN,
+      marketplaceId: VARIATION_LISTING_MARKETPLACE,
+      categoryId: VARIATION_LISTING_CATEGORY,
+      contentLanguage: VARIATION_LISTING_CONTENT_LANGUAGE,
     },
     ownership: {
       selectorName: fixture.selector.name,
@@ -1732,31 +1751,35 @@ function initialManifest(
   });
 }
 
-function pass(name: string, detail: string): YouPickManifest['gates'][number] {
+function pass(name: string, detail: string): VariationListingManifest['gates'][number] {
   return { name, status: 'pass', detail };
 }
 function assertGate(
   condition: unknown,
   name: string,
   detail: string
-): YouPickManifest['gates'][number] {
+): VariationListingManifest['gates'][number] {
   if (!condition) throw new Error(`${name} gate failed: ${detail}`);
   return pass(name, detail);
 }
 
-function validateRuntime(runtime: RuntimeSnapshot): YouPickManifest['gates'] {
+function validateRuntime(runtime: RuntimeSnapshot): VariationListingManifest['gates'] {
   return [
     assertGate(runtime.environment === 'sandbox', 'environment', 'sandbox environment required'),
     assertGate(
-      runtime.restOrigin === YOU_PICK_SANDBOX_ORIGIN &&
-        runtime.oauthOrigin === YOU_PICK_SANDBOX_ORIGIN &&
-        runtime.tradingOrigin === YOU_PICK_SANDBOX_ORIGIN,
+      runtime.restOrigin === VARIATION_LISTING_SANDBOX_ORIGIN &&
+        runtime.oauthOrigin === VARIATION_LISTING_SANDBOX_ORIGIN &&
+        runtime.tradingOrigin === VARIATION_LISTING_SANDBOX_ORIGIN,
       'hosts',
       'exact sandbox REST, OAuth, and Trading origins required'
     ),
-    assertGate(runtime.marketplaceId === YOU_PICK_MARKETPLACE, 'marketplace', 'EBAY_US required'),
     assertGate(
-      runtime.contentLanguage === YOU_PICK_CONTENT_LANGUAGE,
+      runtime.marketplaceId === VARIATION_LISTING_MARKETPLACE,
+      'marketplace',
+      'EBAY_US required'
+    ),
+    assertGate(
+      runtime.contentLanguage === VARIATION_LISTING_CONTENT_LANGUAGE,
       'content-language',
       'exact en-US required'
     ),
@@ -1779,12 +1802,12 @@ function validateRuntime(runtime: RuntimeSnapshot): YouPickManifest['gates'] {
 }
 
 const MEDIA_INVENTORY_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.inventory';
-const MEDIA_AUTH_PROBE_IMAGE_ID = 'YP_MEDIA_AUTH_PROBE_MISSING';
+const MEDIA_AUTH_PROBE_IMAGE_ID = 'VL_MEDIA_AUTH_PROBE_MISSING';
 
 async function validateMediaOAuth(
   runtime: RuntimeSnapshot,
-  api: YouPickPilotReadApi
-): Promise<YouPickManifest['gates'][number]> {
+  api: VariationListingPilotReadApi
+): Promise<VariationListingManifest['gates'][number]> {
   if (runtime.grantedUserScopes !== undefined) {
     return assertGate(
       runtime.grantedUserScopes.includes(MEDIA_INVENTORY_SCOPE),
@@ -1826,13 +1849,15 @@ function validateIdentity(
 
 function selectOwnedResources(
   snapshot: PolicyLocationSnapshot,
-  ownership: YouPickManifest['ownership'],
+  ownership: VariationListingManifest['ownership'],
   userId: string
 ): void {
   const exact = (items: OwnedPolicy[], id: string, label: string) =>
     items.filter(
       (item) =>
-        item.id === id && item.marketplaceId === YOU_PICK_MARKETPLACE && item.ownerUserId === userId
+        item.id === id &&
+        item.marketplaceId === VARIATION_LISTING_MARKETPLACE &&
+        item.ownerUserId === userId
     ).length === 1 ||
     (() => {
       throw new Error(
@@ -1856,9 +1881,9 @@ function selectOwnedResources(
 
 function validateMetadata(
   metadata: MetadataSnapshot,
-  manifest: YouPickManifest
-): NonNullable<YouPickManifest['metadataSummary']> {
-  if (metadata.categoryId !== YOU_PICK_CATEGORY || !metadata.variationsSupported)
+  manifest: VariationListingManifest
+): NonNullable<VariationListingManifest['metadataSummary']> {
+  if (metadata.categoryId !== VARIATION_LISTING_CATEGORY || !metadata.variationsSupported)
     throw new Error('Current metadata does not confirm category 261328 variation support.');
   if (new Set(metadata.selectorCandidates).size !== metadata.selectorCandidates.length)
     throw new Error('Current taxonomy returned duplicate variation aspect candidates.');
@@ -1899,16 +1924,16 @@ function validateMetadata(
 }
 
 async function collisions(
-  api: YouPickPilotReadApi,
-  run: YouPickManifest['run']
-): Promise<YouPickManifest['collisions']> {
-  const results: YouPickManifest['collisions'] = [];
+  api: VariationListingPilotReadApi,
+  run: VariationListingManifest['run']
+): Promise<VariationListingManifest['collisions']> {
+  const results: VariationListingManifest['collisions'] = [];
   const group = await api.getInventoryItemGroup(run.groupKey);
   results.push({ identifier: run.groupKey, resource: 'group', status: group.status });
   for (const sku of run.childSkus) {
     const item = await api.getInventoryItem(sku);
     results.push({ identifier: sku, resource: 'item', status: item.status });
-    const offers = await api.getOffers(sku, YOU_PICK_MARKETPLACE);
+    const offers = await api.getOffers(sku, VARIATION_LISTING_MARKETPLACE);
     const offerStatus =
       offers.status === 'found' && offers.value.offers.length === 0 ? 'missing' : offers.status;
     results.push({ identifier: sku, resource: 'offers', status: offerStatus });
@@ -1928,22 +1953,24 @@ export interface CleanupRemoteState {
   listingCurrentlyActive: boolean;
   withdrawRequired: boolean;
   listingId: string | null;
-  lifecycleClass: Exclude<YouPickLifecycleClass, 'ambiguous'> | null;
-  listingStatuses: YouPickListingStatus[];
+  lifecycleClass: Exclude<VariationListingLifecycleClass, 'ambiguous'> | null;
+  listingStatuses: VariationListingStatus[];
   warnings: string[];
 }
 
 async function cleanupReads(
-  api: YouPickPilotReadApi,
-  manifest: YouPickManifest
-): Promise<{ collisions: YouPickManifest['collisions']; state: CleanupRemoteState }> {
-  const results: YouPickManifest['collisions'] = [];
+  api: VariationListingPilotReadApi,
+  manifest: VariationListingManifest
+): Promise<{ collisions: VariationListingManifest['collisions']; state: CleanupRemoteState }> {
+  const results: VariationListingManifest['collisions'] = [];
   const group = await api.getInventoryItemGroup(manifest.run.groupKey);
   if (group.status === 'unknown') throw new Error('Cleanup group state is unknown.');
   if (
     group.status === 'found' &&
-    !matchesYouPickGroupChildren(
-      manifest.version === YOU_PICK_MANIFEST_VERSION ? manifest.execution.fixture.version : 0,
+    !matchesVariationListingGroupChildren(
+      manifest.version === VARIATION_LISTING_MANIFEST_VERSION
+        ? manifest.execution.fixture.version
+        : 0,
       group.value.variantSKUs,
       manifest.run.childSkus
     )
@@ -1974,7 +2001,7 @@ async function cleanupReads(
       groupKeys: item.status === 'found' ? item.value.groupKeys : null,
     });
     results.push({ identifier: resource.sku, resource: 'item', status: item.status });
-    const offers = await api.getOffers(resource.sku, YOU_PICK_MARKETPLACE);
+    const offers = await api.getOffers(resource.sku, VARIATION_LISTING_MARKETPLACE);
     if (offers.status === 'unknown')
       throw new Error(`Cleanup offer state is unknown for ${resource.sku}.`);
     if (offers.status === 'found' && offers.value.offers.length > 1)
@@ -1985,20 +2012,20 @@ async function cleanupReads(
         !resource.offerId ||
         offer.offerId !== resource.offerId ||
         offer.sku !== resource.sku ||
-        offer.marketplaceId !== YOU_PICK_MARKETPLACE
+        offer.marketplaceId !== VARIATION_LISTING_MARKETPLACE
       ) {
         throw new Error(`Cleanup found an unrecorded or ambiguous offer for ${resource.sku}.`);
       }
       if (
         !['PUBLISHED', 'UNPUBLISHED'].includes(offer.status) ||
         (offer.listingStatus !== null &&
-          !(YOU_PICK_LISTING_STATUSES as readonly string[]).includes(offer.listingStatus)) ||
+          !(VARIATION_LISTING_STATUSES as readonly string[]).includes(offer.listingStatus)) ||
         (offer.status === 'PUBLISHED' && (!offer.listingId || !offer.listingStatus)) ||
         (offer.status === 'UNPUBLISHED' && (offer.listingId || offer.listingStatus))
       ) {
         throw new Error(`Cleanup found an invalid publication/listing state for ${resource.sku}.`);
       }
-      const lifecycle = classifyYouPickListingStatus(offer.listingStatus);
+      const lifecycle = classifyVariationListingStatus(offer.listingStatus);
       const expectedPublicationObserved =
         offer.status === 'PUBLISHED' || lifecycle.publicationObserved;
       if (
@@ -2048,7 +2075,7 @@ async function cleanupReads(
   const lifecycleClass =
     lifecycleClassValue === 'unpublished'
       ? null
-      : (lifecycleClassValue as Exclude<YouPickLifecycleClass, 'ambiguous'>);
+      : (lifecycleClassValue as Exclude<VariationListingLifecycleClass, 'ambiguous'>);
   const publicationObserved =
     lifecycleClass === 'active' ||
     lifecycleClass === 'ended' ||
@@ -2083,7 +2110,7 @@ async function cleanupReads(
   };
 }
 
-export function matchesYouPickGroupChildren(
+export function matchesVariationListingGroupChildren(
   fixtureVersion: number,
   actual: string[],
   expected: string[]
@@ -2094,7 +2121,7 @@ export function matchesYouPickGroupChildren(
 }
 
 export function buildCleanupPlan(
-  manifest: YouPickManifest,
+  manifest: VariationListingManifest,
   remote: CleanupRemoteState
 ): Omit<PlannedOperation, 'payload'>[] {
   const planned: PlannedOperation[] = [];
@@ -2145,27 +2172,27 @@ export function buildCleanupPlan(
   return planned.map(({ id, kind, digest: value }) => ({ id, kind, digest: value }));
 }
 
-export async function runYouPickSandboxPilot(
+export async function runVariationListingSandboxPilot(
   options: PilotRunOptions
 ): Promise<PilotReport | MutationExecutionReport> {
   if (Boolean(options.fixturePath) === Boolean(options.manifestPath))
     throw new Error('Supply exactly one of --fixture or --manifest.');
   if (options.cleanup && !options.manifestPath) throw new Error('--cleanup requires --manifest.');
   if (options.execute && (!options.manifestPath || !options.confirmSandboxSeller?.trim()))
-    throw new Error(YOU_PICK_EXECUTION_ERROR);
-  if (options.execute && options.fixturePath) throw new Error(YOU_PICK_EXECUTION_ERROR);
+    throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
+  if (options.execute && options.fixturePath) throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
   const now = options.now ?? (() => new Date());
   const localRoot = manifestLocalRoot(options.repoRoot, options.localRoot);
-  let manifest: YouPickManifest;
+  let manifest: VariationListingManifest;
   let path: string;
   let planOperations: Omit<PlannedOperation, 'payload'>[] | undefined;
 
   if (options.fixturePath) {
     const fixture = z
       .union([
-        youPickFixtureVersion2Schema,
-        youPickFixtureVersion3Schema,
-        youPickFixtureVersion4Schema,
+        variationListingFixtureVersion2Schema,
+        variationListingFixtureVersion3Schema,
+        variationListingFixtureVersion4Schema,
       ])
       .parse(JSON.parse(await readFile(resolve(options.fixturePath), 'utf8')) as unknown);
     const run = generateRunIdentity(
@@ -2197,7 +2224,8 @@ export async function runYouPickSandboxPilot(
   }
 
   if (options.execute) {
-    if (manifest.version !== YOU_PICK_MANIFEST_VERSION) throw new Error(YOU_PICK_EXECUTION_ERROR);
+    if (manifest.version !== VARIATION_LISTING_MANIFEST_VERSION)
+      throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
     assertExecutableManifestIntegrity(manifest);
     const allowed = options.cleanup
       ? [
@@ -2227,21 +2255,22 @@ export async function runYouPickSandboxPilot(
           'setting-quantity-zero',
           'awaiting-quantity-zero-verification',
         ];
-    if (!allowed.includes(manifest.checkpoint)) throw new Error(YOU_PICK_EXECUTION_ERROR);
-    if (!options.mutationApiFactory) throw new Error(YOU_PICK_EXECUTION_ERROR);
+    if (!allowed.includes(manifest.checkpoint)) throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
+    if (!options.mutationApiFactory) throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
   }
 
   if (Boolean(options.api) === Boolean(options.apiFactory)) {
     throw new Error('Supply exactly one pilot read API or API factory.');
   }
-  const api = options.api ?? (await (options.apiFactory as () => Promise<YouPickPilotReadApi>)());
+  const api =
+    options.api ?? (await (options.apiFactory as () => Promise<VariationListingPilotReadApi>)());
 
-  const gates: YouPickManifest['gates'] = [];
+  const gates: VariationListingManifest['gates'] = [];
   let activeGate = 'runtime';
   let identity: CurrentUserIdentity | undefined;
   let metadata: MetadataSnapshot | undefined;
-  let metadataSummary: NonNullable<YouPickManifest['metadataSummary']> | undefined;
-  let collisionResults: YouPickManifest['collisions'] | undefined;
+  let metadataSummary: NonNullable<VariationListingManifest['metadataSummary']> | undefined;
+  let collisionResults: VariationListingManifest['collisions'] | undefined;
   let cleanupState: CleanupRemoteState | undefined;
   let mutationHeaders: GuardedMutationHeaders | undefined;
   try {
@@ -2277,7 +2306,7 @@ export async function runYouPickSandboxPilot(
     selectOwnedResources(policies, manifest.ownership, identity.userId);
     gates.push(pass('policies-location', 'exact fixture-owned seller resources selected'));
     activeGate = 'metadata';
-    metadata = await api.getMetadataSnapshot(YOU_PICK_CATEGORY);
+    metadata = await api.getMetadataSnapshot(VARIATION_LISTING_CATEGORY);
     metadataSummary = validateMetadata(metadata, manifest);
     gates.push(
       pass(
@@ -2325,7 +2354,7 @@ export async function runYouPickSandboxPilot(
       ...gates.filter((gate) => gate.name !== namedGate),
       { name: namedGate, status: 'fail' as const, detail },
     ];
-    manifest = youPickManifestSchema.parse({
+    manifest = variationListingManifestSchema.parse({
       ...manifest,
       seller: identity ?? manifest.seller,
       gates: failedGates,
@@ -2345,7 +2374,7 @@ export async function runYouPickSandboxPilot(
     throw new Error('Pilot preflight ended without complete read-only evidence.');
   }
 
-  manifest = youPickManifestSchema.parse({
+  manifest = variationListingManifestSchema.parse({
     ...manifest,
     seller: identity,
     gates,
@@ -2379,20 +2408,20 @@ export async function runYouPickSandboxPilot(
 
   if (options.execute) {
     try {
-      if (manifest.version !== YOU_PICK_MANIFEST_VERSION || !mutationHeaders)
-        throw new Error(YOU_PICK_EXECUTION_ERROR);
+      if (manifest.version !== VARIATION_LISTING_MANIFEST_VERSION || !mutationHeaders)
+        throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
       const {
-        executeYouPickManifest,
+        executeVariationListingManifest,
         validatePublishedViewAttestation,
         validateQuantityZeroAttestation,
-      } = await import('./you-pick-sandbox-pilot-mutation.js');
+      } = await import('./variation-listing-sandbox-pilot-mutation.js');
       if (!options.cleanup && manifest.checkpoint === 'awaiting-published-view-verification')
         validatePublishedViewAttestation(options.attestation, manifest, now());
       if (!options.cleanup && manifest.checkpoint === 'awaiting-quantity-zero-verification')
         validateQuantityZeroAttestation(options.attestation, manifest, now());
       assertExecutableManifestIntegrity(manifest);
       const mutationApi = await options.mutationApiFactory!();
-      return await executeYouPickManifest({
+      return await executeVariationListingManifest({
         manifest,
         manifestPath: path,
         readApi: api,
@@ -2408,13 +2437,13 @@ export async function runYouPickSandboxPilot(
       });
     } catch (error) {
       const detail = sanitizeError(error);
-      manifest = executableYouPickManifestSchema.parse({
+      manifest = executableVariationListingManifestSchema.parse({
         ...manifest,
         lastError: detail,
         updatedAt: now().toISOString(),
       });
       await writeManifestAtomic(path, manifest, localRoot);
-      const resume = `pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest ${path} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${identity.userId}`;
+      const resume = `pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest ${path} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${identity.userId}`;
       throw new Error(`${detail} Safe resume command: ${resume}`);
     }
   }
@@ -2433,7 +2462,7 @@ export async function runYouPickSandboxPilot(
     manifestPath: path,
     seller: identity,
     sellerConfirmation: options.confirmSandboxSeller ? 'matched' : 'not-supplied',
-    contentLanguage: YOU_PICK_CONTENT_LANGUAGE,
+    contentLanguage: VARIATION_LISTING_CONTENT_LANGUAGE,
     gates,
     selected,
     metadata,
@@ -2443,7 +2472,7 @@ export async function runYouPickSandboxPilot(
     arrangementId: manifest.arrangementId,
     operationPlan: planOperations!,
     requestDigests: planOperations!.map((item) => item.digest),
-    nextAuthorizedCommand: `pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest ${path} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${identity.userId}`,
+    nextAuthorizedCommand: `pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest ${path} ${options.cleanup ? '--cleanup ' : ''}--execute --confirm-sandbox-seller ${identity.userId}`,
   });
 }
 

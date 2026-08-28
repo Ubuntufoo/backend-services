@@ -2,20 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildFuturePlan,
   digest,
-  executableYouPickManifestSchema,
+  executableVariationListingManifestSchema,
   generateRunIdentity,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
-  type ExecutableYouPickManifest,
+  type ExecutableVariationListingManifest,
   type RemoteOffer,
-  type YouPickListingStatus,
-  type YouPickPilotReadApi,
+  type VariationListingStatus,
+  type VariationListingPilotReadApi,
   type RuntimeSnapshot,
-} from '@/ebay/you-pick-sandbox-pilot.js';
+} from '@/ebay/variation-listing-sandbox-pilot.js';
 import {
   reconcileCompletePublicationState,
-  verifyYouPickSandbox,
-} from '@/ebay/you-pick-sandbox-verification.js';
+  verifyVariationListingSandbox,
+} from '@/ebay/variation-listing-sandbox-verification.js';
 
 const fixedDate = new Date('2026-08-06T19:03:00.000Z');
 
@@ -25,7 +25,7 @@ function remoteOffer(input: {
   marketplaceId?: string;
   status?: RemoteOffer['status'];
   listingId?: string | null;
-  listingStatus?: YouPickListingStatus | null;
+  listingStatus?: VariationListingStatus | null;
   availableQuantity?: number;
   semanticPayload?: unknown;
 }): RemoteOffer {
@@ -87,7 +87,9 @@ const defaultRuntime: RuntimeSnapshot = {
   },
 };
 
-function createReadApi(overrides: Partial<YouPickPilotReadApi> = {}): YouPickPilotReadApi {
+function createReadApi(
+  overrides: Partial<VariationListingPilotReadApi> = {}
+): VariationListingPilotReadApi {
   return {
     getRuntimeSnapshot: vi.fn(async () => ({ ...defaultRuntime })),
     getCurrentUserIdentity: vi.fn(async () => ({
@@ -107,8 +109,8 @@ function createReadApi(overrides: Partial<YouPickPilotReadApi> = {}): YouPickPil
 }
 
 function makeManifest(
-  overrides: Partial<ExecutableYouPickManifest> = {}
-): ExecutableYouPickManifest {
+  overrides: Partial<ExecutableVariationListingManifest> = {}
+): ExecutableVariationListingManifest {
   const run = generateRunIdentity(2, fixedDate, Buffer.from('a1b2c3', 'hex'));
   const fixture = {
     version: 2 as const,
@@ -196,7 +198,7 @@ function makeManifest(
     'group-complete',
     'publish-group',
   ]);
-  return executableYouPickManifestSchema.parse({
+  return executableVariationListingManifestSchema.parse({
     version: 5,
     run,
     createdAt: fixedDate.toISOString(),
@@ -250,7 +252,7 @@ function makeManifest(
     cleanup: { attempts: 0, finalAbsenceVerified: false },
     lastError: null,
     ...overrides,
-  }) as ExecutableYouPickManifest;
+  }) as ExecutableVariationListingManifest;
 }
 
 afterEach(() => {
@@ -365,7 +367,7 @@ describe('reconcileCompletePublicationState', () => {
   });
 });
 
-describe('verifyYouPickSandbox', () => {
+describe('verifyVariationListingSandbox', () => {
   const sha = 'e'.repeat(64);
 
   it('returns verified report with all children matching', async () => {
@@ -390,7 +392,7 @@ describe('verifyYouPickSandbox', () => {
         return validGroupResponse(m.run.childSkus, gp);
       }),
     });
-    const r = await verifyYouPickSandbox({
+    const r = await verifyVariationListingSandbox({
       readApi: api,
       manifest: m,
       manifestSha256: sha,
@@ -414,7 +416,7 @@ describe('verifyYouPickSandbox', () => {
       getRuntimeSnapshot: vi.fn(async () => ({ ...defaultRuntime, environment: 'production' })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -429,7 +431,7 @@ describe('verifyYouPickSandbox', () => {
       getRuntimeSnapshot: vi.fn(async () => ({ ...defaultRuntime, marketplaceId: 'EBAY_DE' })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -444,7 +446,7 @@ describe('verifyYouPickSandbox', () => {
       getRuntimeSnapshot: vi.fn(async () => ({ ...defaultRuntime, contentLanguage: 'de-DE' })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -462,7 +464,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -480,7 +482,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -495,7 +497,7 @@ describe('verifyYouPickSandbox', () => {
       getRuntimeSnapshot: vi.fn(async () => ({ ...defaultRuntime, hasUserRefreshToken: false })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -513,7 +515,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -525,7 +527,7 @@ describe('verifyYouPickSandbox', () => {
   it('throws on wrong seller', async () => {
     const m = makeManifest();
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: createReadApi(),
         manifest: m,
         manifestSha256: sha,
@@ -537,9 +539,9 @@ describe('verifyYouPickSandbox', () => {
   it('throws on wrong checkpoint', async () => {
     const m = makeManifest({
       checkpoint: 'preflight-complete',
-    } as Partial<ExecutableYouPickManifest>);
+    } as Partial<ExecutableVariationListingManifest>);
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: createReadApi(),
         manifest: m,
         manifestSha256: sha,
@@ -552,9 +554,9 @@ describe('verifyYouPickSandbox', () => {
     const m = makeManifest({
       published: false,
       groupListingId: null,
-    } as Partial<ExecutableYouPickManifest>);
+    } as Partial<ExecutableVariationListingManifest>);
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: createReadApi(),
         manifest: m,
         manifestSha256: sha,
@@ -589,7 +591,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -620,7 +622,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -652,7 +654,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -684,7 +686,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -716,7 +718,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -748,7 +750,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -795,7 +797,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -820,7 +822,7 @@ describe('verifyYouPickSandbox', () => {
       getOffers: vi.fn(async () => ({ status: 'found' as const, value: { offers: [] } })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -852,7 +854,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -884,7 +886,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -917,7 +919,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -928,7 +930,7 @@ describe('verifyYouPickSandbox', () => {
 
   it('throws when ledger publish-group has wrong state', async () => {
     const m = makeManifest();
-    const bad = executableYouPickManifestSchema.parse({
+    const bad = executableVariationListingManifestSchema.parse({
       ...m,
       execution: {
         ...m.execution,
@@ -945,9 +947,9 @@ describe('verifyYouPickSandbox', () => {
             : e
         ),
       },
-    }) as ExecutableYouPickManifest;
+    }) as ExecutableVariationListingManifest;
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: createReadApi(),
         manifest: bad,
         manifestSha256: sha,
@@ -958,7 +960,7 @@ describe('verifyYouPickSandbox', () => {
 
   it('throws when planned operation has started evidence', async () => {
     const m = makeManifest();
-    const bad = executableYouPickManifestSchema.parse({
+    const bad = executableVariationListingManifestSchema.parse({
       ...m,
       execution: {
         ...m.execution,
@@ -973,9 +975,9 @@ describe('verifyYouPickSandbox', () => {
             : e
         ),
       },
-    }) as ExecutableYouPickManifest;
+    }) as ExecutableVariationListingManifest;
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: createReadApi(),
         manifest: bad,
         manifestSha256: sha,
@@ -993,7 +995,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1025,7 +1027,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1044,7 +1046,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1062,7 +1064,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1080,7 +1082,7 @@ describe('verifyYouPickSandbox', () => {
       })),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1125,7 +1127,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1173,7 +1175,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1205,12 +1207,12 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     // Override groupListingId but keep offers pointing to LISTING-1
-    const badM = executableYouPickManifestSchema.parse({
+    const badM = executableVariationListingManifestSchema.parse({
       ...m,
       groupListingId: 'WRONG-LISTING',
-    }) as ExecutableYouPickManifest;
+    }) as ExecutableVariationListingManifest;
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: badM,
         manifestSha256: sha,
@@ -1253,7 +1255,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1296,7 +1298,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1329,7 +1331,7 @@ describe('verifyYouPickSandbox', () => {
       }),
     });
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: api,
         manifest: m,
         manifestSha256: sha,
@@ -1341,7 +1343,7 @@ describe('verifyYouPickSandbox', () => {
   // -- Ledger: planned entry with non-null result (regression) -------------
   it('throws when planned ledger entry has non-null result', async () => {
     const m = makeManifest();
-    const bad = executableYouPickManifestSchema.parse({
+    const bad = executableVariationListingManifestSchema.parse({
       ...m,
       execution: {
         ...m.execution,
@@ -1360,9 +1362,9 @@ describe('verifyYouPickSandbox', () => {
             : e
         ),
       },
-    }) as ExecutableYouPickManifest;
+    }) as ExecutableVariationListingManifest;
     await expect(
-      verifyYouPickSandbox({
+      verifyVariationListingSandbox({
         readApi: createReadApi(),
         manifest: bad,
         manifestSha256: sha,

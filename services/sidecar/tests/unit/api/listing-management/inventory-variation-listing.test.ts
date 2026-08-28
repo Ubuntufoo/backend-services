@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { InventoryApi } from '@/api/listing-management/inventory.js';
 import type { EbayApiClient } from '@/api/client.js';
 
-describe('InventoryApi guarded You Pick mutation headers', () => {
+describe('InventoryApi guarded variation listing mutation headers', () => {
   let client: EbayApiClient;
   let api: InventoryApi;
   const config = { headers: { 'Content-Language': 'en-US' } };

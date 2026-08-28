@@ -1,4 +1,4 @@
-# You Pick reference listing evidence
+# Variation listing reference listing evidence
 
 Observed read-only on 2026-08-03 at canonical item URL
 [`285274212401`](https://www.ebay.com/itm/285274212401). Page behavior is buyer-facing

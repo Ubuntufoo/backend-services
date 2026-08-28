@@ -6,14 +6,14 @@ import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { loadRootEnvironment } from '@/config/env-paths.js';
 import {
-  executableYouPickManifestSchema,
+  executableVariationListingManifestSchema,
   sanitizeError,
-  type ExecutableYouPickManifest,
-} from '@/ebay/you-pick-sandbox-pilot.js';
+  type ExecutableVariationListingManifest,
+} from '@/ebay/variation-listing-sandbox-pilot.js';
 import {
-  verifyYouPickSandbox,
+  verifyVariationListingSandbox,
   type VerificationReport,
-} from '@/ebay/you-pick-sandbox-verification.js';
+} from '@/ebay/variation-listing-sandbox-verification.js';
 
 loadRootEnvironment();
 
@@ -26,7 +26,9 @@ interface VerifyArgs {
 
 export interface CliSeams {
   repoRoot?: string;
-  readApiFactory?: () => Promise<import('@/ebay/you-pick-sandbox-pilot.js').YouPickPilotReadApi>;
+  readApiFactory?: () => Promise<
+    import('@/ebay/variation-listing-sandbox-pilot.js').VariationListingPilotReadApi
+  >;
   sha256FileImpl?: (path: string) => Promise<string>;
   print?: (output: string) => void;
   readFileImpl?: (path: string) => Promise<string>;
@@ -150,7 +152,7 @@ function sanitizeVerificationReport(report: VerificationReport): Record<string, 
 
 // -- Main -------------------------------------------------------------------
 
-export async function runVerifyYouPickSandboxCli(
+export async function runVerifyVariationListingSandboxCli(
   argv: string[] = process.argv.slice(2),
   seams: CliSeams = {}
 ): Promise<void> {
@@ -183,21 +185,22 @@ export async function runVerifyYouPickSandboxCli(
     throw new Error(`Manifest is missing or corrupt: ${sanitizeError(error)}`);
   }
 
-  const manifest = executableYouPickManifestSchema.parse(
+  const manifest = executableVariationListingManifestSchema.parse(
     manifestParsed
-  ) as ExecutableYouPickManifest;
+  ) as ExecutableVariationListingManifest;
 
   // Resolve read API (never resolve mutation API)
   const factory =
     seams.readApiFactory ??
     (async () => {
-      const { createYouPickPilotReadApi } = await import('@/scripts/you-pick-sandbox-pilot.js');
-      return createYouPickPilotReadApi();
+      const { createVariationListingPilotReadApi } =
+        await import('@/scripts/variation-listing-sandbox-pilot.js');
+      return createVariationListingPilotReadApi();
     });
   const readApi = await factory();
 
   // Run pure verification
-  const report = await verifyYouPickSandbox({
+  const report = await verifyVariationListingSandbox({
     readApi,
     manifest,
     manifestSha256,
@@ -213,7 +216,7 @@ const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
 const modulePath = resolve(fileURLToPath(import.meta.url));
 
 if (entryPath && entryPath === modulePath) {
-  runVerifyYouPickSandboxCli().catch((error) => {
+  runVerifyVariationListingSandboxCli().catch((error) => {
     process.stderr.write(`${JSON.stringify({ error: sanitizeError(error), status: 'failed' })}\n`);
     /* eslint-disable-next-line n/no-process-exit -- CLI must fail non-zero on gate failure. */
     process.exit(1);

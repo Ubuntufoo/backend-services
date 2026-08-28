@@ -1,4 +1,4 @@
-# Reversible You Pick sandbox pilot
+# Reversible variation listing sandbox pilot
 
 ## Authority and hard stop
 
@@ -133,21 +133,21 @@ All gates are fail-closed and must be recorded as pass/fail in the manifest.
 ## Implemented guarded harness contract
 
 The dedicated CLI lives at
-`services/sidecar/src/scripts/you-pick-sandbox-pilot.ts` with package command
-`ebay:pilot-you-pick-sandbox`. Do not extend the broad `test-endpoints.ts` flow and do not use
+`services/sidecar/src/scripts/variation-listing-sandbox-pilot.ts` with package command
+`ebay:pilot-variation-listing-sandbox`. Do not extend the broad `test-endpoints.ts` flow and do not use
 ad hoc MCP mutations: both have wider authority and weaker run ownership than this pilot needs.
 
 Command shapes:
 
 ```text
-pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --fixture <path>
-pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --execute \
+pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --fixture <path>
+pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest <path> --execute \
   --confirm-sandbox-seller <UserID>
-pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --execute \
+pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest <path> --execute \
   --confirm-sandbox-seller <UserID> --attestation <published-view.json>
-pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --execute \
+pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest <path> --execute \
   --confirm-sandbox-seller <UserID> --attestation <quantity-zero.json>
-pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest <path> --cleanup --execute \
+pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest <path> --cleanup --execute \
   --confirm-sandbox-seller <UserID>
 ```
 
@@ -274,7 +274,7 @@ missing, empty, unknown/inherited, and non-`en-US` values, and the guarded Inven
 actually supplies `Content-Language: en-US`. Configuration defaults alone do not satisfy this
 contract. Identity tests must also reject Commerce Identity mock/placeholder data, missing or
 changed Trading `UserID`, confirmation mismatch, and token-account mismatch across resume and
-cleanup. The mutation adapter is a separate `YouPickPilotMutationApi`; read-only commands neither
+cleanup. The mutation adapter is a separate `VariationListingPilotMutationApi`; read-only commands neither
 construct nor receive it. Every adapter mutation passes an explicit validated
 `Content-Language: en-US` request configuration.
 

@@ -7,11 +7,11 @@ import {
   buildFuturePlan,
   digest,
   generateRunIdentity,
-  executableYouPickManifestSchema,
-  type YouPickPilotReadApi,
+  executableVariationListingManifestSchema,
+  type VariationListingPilotReadApi,
   type RuntimeSnapshot,
-} from '@/ebay/you-pick-sandbox-pilot.js';
-import type { CliSeams } from '@/scripts/verify-you-pick-sandbox.js';
+} from '@/ebay/variation-listing-sandbox-pilot.js';
+import type { CliSeams } from '@/scripts/verify-variation-listing-sandbox.js';
 
 const tempRoots: string[] = [];
 const fixedDate = new Date('2026-08-06T19:03:00.000Z');
@@ -119,7 +119,7 @@ function validManifestJson(): string {
     'group-complete',
     'publish-group',
   ]);
-  const manifest = executableYouPickManifestSchema.parse({
+  const manifest = executableVariationListingManifestSchema.parse({
     version: 5,
     run,
     createdAt: fixedDate.toISOString(),
@@ -196,10 +196,11 @@ function sha256(data: string): string {
 }
 
 describe('parseVerifyArgs', () => {
-  let parseVerifyArgs: typeof import('@/scripts/verify-you-pick-sandbox.js').parseVerifyArgs;
+  let parseVerifyArgs: typeof import('@/scripts/verify-variation-listing-sandbox.js').parseVerifyArgs;
 
   beforeAll(async () => {
-    parseVerifyArgs = (await import('@/scripts/verify-you-pick-sandbox.js')).parseVerifyArgs;
+    parseVerifyArgs = (await import('@/scripts/verify-variation-listing-sandbox.js'))
+      .parseVerifyArgs;
   });
 
   it('parses valid relative manifest path and seller', () => {
@@ -340,12 +341,13 @@ describe('parseVerifyArgs', () => {
   });
 });
 
-describe('runVerifyYouPickSandboxCli DI', () => {
-  let runVerifyYouPickSandboxCli: typeof import('@/scripts/verify-you-pick-sandbox.js').runVerifyYouPickSandboxCli;
+describe('runVerifyVariationListingSandboxCli DI', () => {
+  let runVerifyVariationListingSandboxCli: typeof import('@/scripts/verify-variation-listing-sandbox.js').runVerifyVariationListingSandboxCli;
 
   beforeAll(async () => {
-    runVerifyYouPickSandboxCli = (await import('@/scripts/verify-you-pick-sandbox.js'))
-      .runVerifyYouPickSandboxCli;
+    runVerifyVariationListingSandboxCli = (
+      await import('@/scripts/verify-variation-listing-sandbox.js')
+    ).runVerifyVariationListingSandboxCli;
   });
 
   it('read API resolved, runtime gate fails, nothing printed', async () => {
@@ -368,7 +370,7 @@ describe('runVerifyYouPickSandboxCli DI', () => {
       getOffers: vi.fn(),
     }));
     await expect(
-      runVerifyYouPickSandboxCli(
+      runVerifyVariationListingSandboxCli(
         [
           '--manifest',
           '.local/you-pick-sandbox/20260806T190300Z-a1b2c3/manifest.json',
@@ -398,7 +400,7 @@ describe('runVerifyYouPickSandboxCli DI', () => {
     await writeFile(join(localDir, 'manifest.json'), 'not json', 'utf8');
     let factoryCalled = false;
     await expect(
-      runVerifyYouPickSandboxCli(
+      runVerifyVariationListingSandboxCli(
         [
           '--manifest',
           '.local/you-pick-sandbox/20260806T190300Z-deadbe/manifest.json',
@@ -439,7 +441,7 @@ describe('runVerifyYouPickSandboxCli DI', () => {
     const printed: string[] = [];
     const apiFactoryCalled = vi.fn();
 
-    await runVerifyYouPickSandboxCli(
+    await runVerifyVariationListingSandboxCli(
       [
         '--manifest',
         '.local/you-pick-sandbox/20260806T190300Z-a1b2c3/manifest.json',
@@ -451,7 +453,7 @@ describe('runVerifyYouPickSandboxCli DI', () => {
         readApiFactory: async () => {
           apiFactoryCalled();
           const { projectInventoryItemSemanticSnapshot, projectOfferSemanticSnapshot } =
-            await import('@/ebay/you-pick-sandbox-pilot.js');
+            await import('@/ebay/variation-listing-sandbox-pilot.js');
           return {
             getRuntimeSnapshot: vi.fn(async () => ({ ...defaultRuntime })),
             getCurrentUserIdentity: vi.fn(async () => ({
@@ -560,7 +562,7 @@ describe('runVerifyYouPickSandboxCli DI', () => {
     await mkdir(join(symlinkPath, 'sub'), { recursive: true });
     await writeFile(join(symlinkPath, 'sub', 'manifest.json'), validManifestJson(), 'utf8');
     await expect(
-      runVerifyYouPickSandboxCli(
+      runVerifyVariationListingSandboxCli(
         [
           '--manifest',
           '.local/you-pick-sandbox/20260806T190300Z-escape/sub/manifest.json',
@@ -588,7 +590,7 @@ describe('runVerifyYouPickSandboxCli DI', () => {
     const preDirEntries = new Set(await readdir(localDir));
 
     await expect(
-      runVerifyYouPickSandboxCli(
+      runVerifyVariationListingSandboxCli(
         [
           '--manifest',
           '.local/you-pick-sandbox/20260806T190300Z-a1b2c3/manifest.json',

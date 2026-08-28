@@ -5,41 +5,44 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  YOU_PICK_EXECUTION_ERROR,
+  VARIATION_LISTING_EXECUTION_ERROR,
   assertExecutableManifestIntegrity,
   assertSafeManifestPath,
   buildCleanupPlan,
   buildFuturePlan,
   buildGuardedMutationHeaders,
-  classifyYouPickListingStatus,
+  classifyVariationListingStatus,
   digest,
-  executableYouPickManifestSchema,
+  executableVariationListingManifestSchema,
   generateRunIdentity,
   inventoryItemSemanticMismatch,
-  matchesYouPickGroupChildren,
+  matchesVariationListingGroupChildren,
   parseCurrentUserIdentity,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
   readManifest,
   resolveFuturePlan,
-  runYouPickSandboxPilot,
+  runVariationListingSandboxPilot,
   sanitizeReport,
   validateRunIdentity,
   writeManifestAtomic,
-  youPickFixtureSchema,
+  variationListingFixtureSchema,
   type RuntimeSnapshot,
-  type ExecutableYouPickManifest,
+  type ExecutableVariationListingManifest,
   type RemoteOffer,
-  type YouPickListingStatus,
-  type YouPickManifest,
-  type YouPickPilotReadApi,
-} from '@/ebay/you-pick-sandbox-pilot.js';
+  type VariationListingStatus,
+  type VariationListingManifest,
+  type VariationListingPilotReadApi,
+} from '@/ebay/variation-listing-sandbox-pilot.js';
 import {
-  executeYouPickManifest,
-  type YouPickPilotMutationApi,
-} from '@/ebay/you-pick-sandbox-pilot-mutation.js';
-import * as youPickMutation from '@/ebay/you-pick-sandbox-pilot-mutation.js';
-import { normalizeYouPickGroup, normalizeYouPickItem } from '@/scripts/you-pick-sandbox-pilot.js';
+  executeVariationListingManifest,
+  type VariationListingPilotMutationApi,
+} from '@/ebay/variation-listing-sandbox-pilot-mutation.js';
+import * as variationListingMutation from '@/ebay/variation-listing-sandbox-pilot-mutation.js';
+import {
+  normalizeVariationListingGroup,
+  normalizeVariationListingItem,
+} from '@/scripts/variation-listing-sandbox-pilot.js';
 
 const fixturePath = fileURLToPath(
   new URL('../../fixtures/you-pick-sandbox/two-card.json', import.meta.url)
@@ -66,13 +69,13 @@ function remoteOffer(input: {
   marketplaceId?: string;
   status?: RemoteOffer['status'];
   listingId?: string | null;
-  listingStatus?: YouPickListingStatus | null;
+  listingStatus?: VariationListingStatus | null;
   semanticPayload?: unknown;
 }): RemoteOffer {
   const status = input.status ?? 'PUBLISHED';
   const listingStatus = input.listingStatus === undefined ? 'ACTIVE' : input.listingStatus;
   const listingId = input.listingId === undefined ? 'LISTING-1' : input.listingId;
-  const lifecycle = classifyYouPickListingStatus(listingStatus);
+  const lifecycle = classifyVariationListingStatus(listingStatus);
   return {
     offerId: input.offerId ?? (input.sku.endsWith('C01') ? 'OFFER-1' : 'OFFER-2'),
     sku: input.sku,
@@ -92,7 +95,7 @@ function remoteOffer(input: {
 }
 
 async function tempRepo(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'you-pick-pilot-'));
+  const root = await mkdtemp(join(tmpdir(), 'variation-listing-pilot-'));
   tempRoots.push(root);
   return root;
 }
@@ -124,7 +127,9 @@ const runtime: RuntimeSnapshot = {
   },
 };
 
-function createApi(overrides: Partial<YouPickPilotReadApi> = {}): YouPickPilotReadApi {
+function createApi(
+  overrides: Partial<VariationListingPilotReadApi> = {}
+): VariationListingPilotReadApi {
   return {
     getRuntimeSnapshot: vi.fn(async () => runtime),
     getCurrentUserIdentity: vi.fn(async () => ({
@@ -187,7 +192,7 @@ function createApi(overrides: Partial<YouPickPilotReadApi> = {}): YouPickPilotRe
   };
 }
 
-function createMutationApi(): YouPickPilotMutationApi {
+function createMutationApi(): VariationListingPilotMutationApi {
   return {
     createOrReplaceInventoryItem: vi.fn(async () => undefined),
     createOffer: vi.fn(async () => undefined),
@@ -201,9 +206,11 @@ function createMutationApi(): YouPickPilotMutationApi {
   };
 }
 
-function unknownC01Manifest(manifest: YouPickManifest): ExecutableYouPickManifest {
+function unknownC01Manifest(
+  manifest: VariationListingManifest
+): ExecutableVariationListingManifest {
   const attemptedAt = '2026-08-04T21:00:00.000Z';
-  return executableYouPickManifestSchema.parse({
+  return executableVariationListingManifestSchema.parse({
     ...manifest,
     checkpoint: 'creating-items',
     execution: {
@@ -229,12 +236,14 @@ function unknownC01Manifest(manifest: YouPickManifest): ExecutableYouPickManifes
   });
 }
 
-function verifyingUnpublishedManifest(manifest: YouPickManifest): ExecutableYouPickManifest {
+function verifyingUnpublishedManifest(
+  manifest: VariationListingManifest
+): ExecutableVariationListingManifest {
   if (!('execution' in manifest)) throw new Error('Expected an executable manifest.');
   const completedAt = '2026-08-05T14:32:58.598Z';
   const completed = new Set(['item-C01', 'item-C02', 'offer-C01', 'offer-C02', 'group-complete']);
   const offerIds = ['11409899010', '11409959010'];
-  return executableYouPickManifestSchema.parse({
+  return executableVariationListingManifestSchema.parse({
     ...manifest,
     checkpoint: 'verifying-unpublished',
     published: false,
@@ -285,7 +294,7 @@ async function prepareExecutionCheckpoint(
     ...(checkpoint === 'awaiting-quantity-zero-verification' ? ['quantity-zero'] : []),
   ]);
   const offerIds = ['11409899010', '11409959010'];
-  const executable = executableYouPickManifestSchema.parse({
+  const executable = executableVariationListingManifestSchema.parse({
     ...manifest,
     checkpoint,
     published: true,
@@ -333,7 +342,7 @@ async function loadLegacyFixture(): Promise<unknown> {
 }
 
 async function runFresh(root: string, api = createApi()) {
-  return await runYouPickSandboxPilot({
+  return await runVariationListingSandboxPilot({
     api,
     fixturePath,
     repoRoot: root,
@@ -346,7 +355,7 @@ async function prepareCleanup(root: string, published: boolean) {
   const fresh = await runFresh(root);
   const localRoot = join(root, '.local', 'you-pick-sandbox');
   const manifest = await readManifest(fresh.manifestPath, localRoot);
-  const recorded: YouPickManifest = {
+  const recorded: VariationListingManifest = {
     ...manifest,
     published,
     groupListingId: published ? 'LISTING-1' : null,
@@ -361,9 +370,9 @@ async function prepareCleanup(root: string, published: boolean) {
 }
 
 function cleanupApi(
-  manifest: YouPickManifest,
+  manifest: VariationListingManifest,
   offerFactory: (sku: string) => RemoteOffer[]
-): YouPickPilotReadApi {
+): VariationListingPilotReadApi {
   return createApi({
     getInventoryItemGroup: vi.fn(async () => ({
       status: 'found',
@@ -381,13 +390,13 @@ function cleanupApi(
 }
 
 function cleanupExecutionHarness(
-  manifest: ExecutableYouPickManifest,
+  manifest: ExecutableVariationListingManifest,
   failFinalGroupAbsence = false
 ) {
   const plan = buildFuturePlan(manifest.execution.fixture, manifest.run);
   const planned = new Map(plan.operations.map(({ id, payload }) => [id, payload]));
   let groupPresent = true;
-  let listingStatus: YouPickListingStatus = 'ACTIVE';
+  let listingStatus: VariationListingStatus = 'ACTIVE';
   let missingGroupReads = 0;
   const items = new Set(manifest.run.childSkus);
   const offers = new Set(manifest.run.childSkus);
@@ -396,7 +405,10 @@ function cleanupExecutionHarness(
       if (groupPresent)
         return {
           status: 'found' as const,
-          value: normalizeYouPickGroup(planned.get('group-complete'), manifest.run.groupKey),
+          value: normalizeVariationListingGroup(
+            planned.get('group-complete'),
+            manifest.run.groupKey
+          ),
         };
       missingGroupReads += 1;
       return failFinalGroupAbsence && missingGroupReads > 1
@@ -407,7 +419,7 @@ function cleanupExecutionHarness(
       items.has(sku)
         ? {
             status: 'found' as const,
-            value: normalizeYouPickItem({
+            value: normalizeVariationListingItem({
               ...(planned.get(`item-${sku.endsWith('C01') ? 'C01' : 'C02'}`) as Record<
                 string,
                 unknown
@@ -436,7 +448,7 @@ function cleanupExecutionHarness(
       };
     }),
   });
-  const mutationApi: YouPickPilotMutationApi = {
+  const mutationApi: VariationListingPilotMutationApi = {
     ...createMutationApi(),
     withdrawInventoryItemGroup: vi.fn(async () => {
       listingStatus = 'ENDED';
@@ -460,15 +472,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe('You Pick sandbox pilot fixture and plan', () => {
+describe('variation listing sandbox pilot fixture and plan', () => {
   it('strictly validates the complete ordered fixture', async () => {
-    const fixture = youPickFixtureSchema.parse(await loadFixture());
+    const fixture = variationListingFixtureSchema.parse(await loadFixture());
     expect(fixture.version).toBe(2);
     expect(fixture.children.map((child) => child.slot)).toEqual(['C01', 'C02']);
 
-    expect(() => youPickFixtureSchema.parse({ ...fixture, unexpected: true })).toThrow();
+    expect(() => variationListingFixtureSchema.parse({ ...fixture, unexpected: true })).toThrow();
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         selector: {
           ...fixture.selector,
@@ -477,7 +489,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/Selector values|exactly match/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 0 ? { ...child, images: [child.images[1], child.images[0]] } : child
@@ -485,7 +497,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/front then back/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 0 ? { ...child, images: [child.images[0]] } : child
@@ -493,7 +505,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow();
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 0
@@ -506,7 +518,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/source URLs/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 0
@@ -522,7 +534,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/public HTTPS/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 0
@@ -538,7 +550,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/without credentials, query, or fragment/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 0
@@ -554,7 +566,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/non-secret/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         children: fixture.children.map((child, index) =>
           index === 1
@@ -570,13 +582,13 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).toThrow(/distinct across children/);
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         selector: { ...fixture.selector, name: 'Customized' },
       })
     ).toThrow();
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         sharedCondition: {
           ...fixture.sharedCondition,
@@ -602,7 +614,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
   });
 
   it('builds a complete deterministic ordered and digested future plan without offer descriptions', async () => {
-    const fixture = youPickFixtureSchema.parse(await loadFixture());
+    const fixture = variationListingFixtureSchema.parse(await loadFixture());
     const run = generateRunIdentity(2, fixedDate, fixedRandom());
     const first = buildFuturePlan(fixture, run);
     const second = buildFuturePlan(fixture, run);
@@ -655,11 +667,11 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       { name: fixture.selector.name, values: fixture.selector.values },
     ]);
     expect(groupRequest.variesBy.aspectsImageVariesBy).toEqual([fixture.selector.name]);
-    expect(normalizeYouPickGroup(groupRequest, run.groupKey).snapshotDigest).toBe(
+    expect(normalizeVariationListingGroup(groupRequest, run.groupKey).snapshotDigest).toBe(
       first.operations.find(({ id }) => id === 'group-complete')?.digest
     );
     expect(
-      normalizeYouPickGroup(
+      normalizeVariationListingGroup(
         { ...groupRequest, imageUrls: [...groupRequest.imageUrls].reverse() },
         run.groupKey
       ).snapshotDigest
@@ -668,7 +680,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
 
   it('preflights version 3 with ordered Media operations and resolves only exact ready EPS URLs', async () => {
     const fixture = { ...((await loadFixture()) as Record<string, unknown>), version: 3 };
-    const parsedFixture = youPickFixtureSchema.parse(fixture);
+    const parsedFixture = variationListingFixtureSchema.parse(fixture);
     const run = generateRunIdentity(2, fixedDate, fixedRandom());
     const plan = buildFuturePlan(parsedFixture, run);
     expect(plan.operations.slice(0, 4).map(({ id }) => id)).toEqual([
@@ -696,7 +708,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
     const version3FixturePath = join(root, 'version-3-fixture.json');
     await writeFile(version3FixturePath, JSON.stringify(fixture));
     const probeMediaImageAccess = vi.fn(async () => 'authorized' as const);
-    const report = await runYouPickSandboxPilot({
+    const report = await runVariationListingSandboxPilot({
       api: createApi({
         getRuntimeSnapshot: vi.fn(async () => ({ ...runtime, grantedUserScopes: undefined })),
         probeMediaImageAccess,
@@ -706,7 +718,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       now: () => fixedDate,
       randomBytesImpl: fixedRandom,
     });
-    expect(probeMediaImageAccess).toHaveBeenCalledWith('YP_MEDIA_AUTH_PROBE_MISSING');
+    expect(probeMediaImageAccess).toHaveBeenCalledWith('VL_MEDIA_AUTH_PROBE_MISSING');
     const manifest = await readManifest(
       report.manifestPath,
       join(root, '.local', 'you-pick-sandbox')
@@ -724,7 +736,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
     const unauthorizedFixturePath = join(unauthorizedRoot, 'version-3-fixture.json');
     await writeFile(unauthorizedFixturePath, JSON.stringify(fixture));
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: createApi({
           getRuntimeSnapshot: vi.fn(async () => ({ ...runtime, grantedUserScopes: undefined })),
           probeMediaImageAccess: vi.fn(async () => 'unauthorized'),
@@ -736,7 +748,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
       })
     ).rejects.toThrow(/media-oauth-capability gate failed/);
 
-    const ready = executableYouPickManifestSchema.parse({
+    const ready = executableVariationListingManifestSchema.parse({
       ...manifest,
       execution: {
         ...manifest.execution,
@@ -796,7 +808,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
   });
 
   it('builds version 4 with ordered child Media pairs and no group imageUrls', async () => {
-    const fixture = youPickFixtureSchema.parse({ ...(await loadFixture()), version: 4 });
+    const fixture = variationListingFixtureSchema.parse({ ...(await loadFixture()), version: 4 });
     const run = generateRunIdentity(2, fixedDate, fixedRandom());
     const plan = buildFuturePlan(fixture, run);
     const group = plan.operations.find(({ id }) => id === 'group-complete')?.payload as Record<
@@ -828,17 +840,17 @@ describe('You Pick sandbox pilot fixture and plan', () => {
     const root = await tempRepo();
     const fixturePath = join(root, 'version-4-fixture.json');
     await writeFile(fixturePath, JSON.stringify(fixture));
-    const report = await runYouPickSandboxPilot({
+    const report = await runVariationListingSandboxPilot({
       api: createApi(),
       fixturePath,
       repoRoot: root,
       now: () => fixedDate,
       randomBytesImpl: fixedRandom,
     });
-    const manifest = executableYouPickManifestSchema.parse(
+    const manifest = executableVariationListingManifestSchema.parse(
       await readManifest(report.manifestPath, join(root, '.local', 'you-pick-sandbox'))
     );
-    const ready = executableYouPickManifestSchema.parse({
+    const ready = executableVariationListingManifestSchema.parse({
       ...manifest,
       execution: {
         ...manifest.execution,
@@ -889,7 +901,7 @@ describe('You Pick sandbox pilot fixture and plan', () => {
     ).not.toHaveProperty('imageUrls');
     const resolvedGroup = resolved.operations.find(({ id }) => id === 'group-complete');
     expect(
-      normalizeYouPickGroup(
+      normalizeVariationListingGroup(
         {
           ...(resolvedGroup?.payload as Record<string, unknown>),
           variantSKUs: [...run.childSkus].reverse(),
@@ -981,9 +993,9 @@ describe('You Pick sandbox pilot fixture and plan', () => {
   });
 
   it('requires a different fully cleaned predecessor for a fresh-run fallback', async () => {
-    const fixture = youPickFixtureSchema.parse(await loadFixture());
+    const fixture = variationListingFixtureSchema.parse(await loadFixture());
     expect(() =>
-      youPickFixtureSchema.parse({
+      variationListingFixtureSchema.parse({
         ...fixture,
         predecessorRunId: '20260803T140000Z-abcdef',
         predecessorFullyCleaned: false,
@@ -992,13 +1004,13 @@ describe('You Pick sandbox pilot fixture and plan', () => {
   });
 });
 
-describe('You Pick manifest persistence and dry-run gates', () => {
+describe('variation listing manifest persistence and dry-run gates', () => {
   it('rejects version-1 fixtures for new pilot runs before resolving reads', async () => {
     const root = await tempRepo();
-    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+    const apiFactory = vi.fn<() => Promise<VariationListingPilotReadApi>>();
 
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         apiFactory,
         fixturePath: legacyFixturePath,
         repoRoot: root,
@@ -1014,7 +1026,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
     const api = createApi();
     const report = await runFresh(root, api);
     const manifestText = await readFile(report.manifestPath, 'utf8');
-    const manifest = JSON.parse(manifestText) as YouPickManifest;
+    const manifest = JSON.parse(manifestText) as VariationListingManifest;
 
     expect(report.mode).toBe('dry-run');
     expect(report.seller.userId).toBe('sandbox-seller-123');
@@ -1043,7 +1055,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
       return createApi();
     });
 
-    await runYouPickSandboxPilot({
+    await runVariationListingSandboxPilot({
       apiFactory,
       fixturePath,
       repoRoot: root,
@@ -1136,11 +1148,11 @@ describe('You Pick manifest persistence and dry-run gates', () => {
     const linkedManifest = join(localRoot, foreign.run.runId, 'manifest.json');
     await mkdir(localRoot, { recursive: true });
     await symlink(dirname(foreign.manifestPath), dirname(linkedManifest), 'dir');
-    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+    const apiFactory = vi.fn<() => Promise<VariationListingPilotReadApi>>();
     const mutationApiFactory = vi.fn();
 
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         apiFactory,
         manifestPath: linkedManifest,
         repoRoot: root,
@@ -1195,7 +1207,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
   it('requires exact seller confirmation and stable identity on resume', async () => {
     const root = await tempRepo();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: createApi(),
         fixturePath,
         repoRoot: root,
@@ -1208,7 +1220,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
     const secondRoot = await tempRepo();
     const report = await runFresh(secondRoot);
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: createApi({
           getCurrentUserIdentity: vi.fn(async () => ({ userId: 'changed-seller' })),
         }),
@@ -1388,7 +1400,7 @@ describe('You Pick manifest persistence and dry-run gates', () => {
   });
 });
 
-describe('You Pick C01 semantic recovery', () => {
+describe('variation listing C01 semantic recovery', () => {
   it('adopts matching unknown C01 without any later mutation', async () => {
     const root = await tempRepo();
     const fresh = await runFresh(root);
@@ -1415,7 +1427,7 @@ describe('You Pick C01 semantic recovery', () => {
     let persisted = manifest;
 
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         manifestPath: fresh.manifestPath,
         readApi: createApi({ getInventoryItem }),
@@ -1451,7 +1463,7 @@ describe('You Pick C01 semantic recovery', () => {
     const mutationApi = createMutationApi();
 
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi: createApi({
           getInventoryItem: vi.fn(async (sku) => ({
@@ -1481,7 +1493,7 @@ describe('You Pick C01 semantic recovery', () => {
     const initial = await readManifest(fresh.manifestPath, localRoot);
     if (!('execution' in initial)) throw new Error('Expected an executable manifest.');
     const timestamp = '2026-08-05T13:20:56.855Z';
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...initial,
       checkpoint: 'creating-offers',
       execution: {
@@ -1557,7 +1569,7 @@ describe('You Pick C01 semantic recovery', () => {
     );
 
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         manifestPath: fresh.manifestPath,
         readApi: createApi({
@@ -1597,7 +1609,7 @@ describe('You Pick C01 semantic recovery', () => {
     const initial = await readManifest(fresh.manifestPath, localRoot);
     if (!('execution' in initial)) throw new Error('Expected an executable manifest.');
     const timestamp = '2026-08-05T13:20:56.855Z';
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...initial,
       checkpoint: 'creating-offers',
       execution: {
@@ -1651,7 +1663,7 @@ describe('You Pick C01 semantic recovery', () => {
     const mutationApi = createMutationApi();
 
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi: createApi({
           getInventoryItem: vi.fn(async (sku) => ({
@@ -1691,7 +1703,7 @@ describe('You Pick C01 semantic recovery', () => {
   });
 });
 
-describe('You Pick verifying-unpublished recovery', () => {
+describe('variation listing verifying-unpublished recovery', () => {
   it('verifies the current arrangement with equivalent aliases and replays no mutation', async () => {
     const root = await tempRepo();
     const fresh = await runFresh(root);
@@ -1712,7 +1724,7 @@ describe('You Pick verifying-unpublished recovery', () => {
     const groupRequest = plan.operations.find(({ id }) => id === 'group-complete')?.payload;
     const getInventoryItem = vi.fn(async (sku: string) => ({
       status: 'found' as const,
-      value: normalizeYouPickItem({
+      value: normalizeVariationListingItem({
         ...(itemRequests.get(sku) as Record<string, unknown>),
         groupIds: [manifest.run.groupKey],
         inventoryItemGroupKeys: [manifest.run.groupKey],
@@ -1742,13 +1754,13 @@ describe('You Pick verifying-unpublished recovery', () => {
     });
     const getInventoryItemGroup = vi.fn(async () => ({
       status: 'found' as const,
-      value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+      value: normalizeVariationListingGroup(groupRequest, manifest.run.groupKey),
     }));
     const mutationApi = createMutationApi();
     let persisted = manifest;
 
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         manifestPath: fresh.manifestPath,
         readApi: createApi({ getInventoryItem, getOffers, getInventoryItemGroup }),
@@ -1833,12 +1845,12 @@ describe('You Pick verifying-unpublished recovery', () => {
     const mutationApi = createMutationApi();
 
     await expect(
-      executeYouPickManifest({
+      executeVariationListingManifest({
         manifest,
         readApi: createApi({
           getInventoryItem: vi.fn(async (sku) => ({
             status: 'found',
-            value: normalizeYouPickItem({
+            value: normalizeVariationListingItem({
               ...(itemRequests.get(sku) as Record<string, unknown>),
               ...associations(manifest.run.groupKey),
             }),
@@ -1863,7 +1875,7 @@ describe('You Pick verifying-unpublished recovery', () => {
           }),
           getInventoryItemGroup: vi.fn(async () => ({
             status: 'found',
-            value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+            value: normalizeVariationListingGroup(groupRequest, manifest.run.groupKey),
           })),
         }),
         mutationApi,
@@ -1878,7 +1890,7 @@ describe('You Pick verifying-unpublished recovery', () => {
   });
 });
 
-describe('You Pick publication resource persistence', () => {
+describe('variation listing publication resource persistence', () => {
   it('persists PUBLISHED on all resources after successful first publication', async () => {
     const root = await tempRepo();
     const fresh = await runFresh(root);
@@ -1900,7 +1912,7 @@ describe('You Pick publication resource persistence', () => {
     const listingId = '110590199999';
     const getInventoryItem = vi.fn(async (sku: string) => ({
       status: 'found' as const,
-      value: normalizeYouPickItem({
+      value: normalizeVariationListingItem({
         ...(itemRequests.get(sku) as Record<string, unknown>),
         groupIds: [manifest.run.groupKey],
         inventoryItemGroupKeys: [manifest.run.groupKey],
@@ -1931,13 +1943,13 @@ describe('You Pick publication resource persistence', () => {
     });
     const getInventoryItemGroup = vi.fn(async () => ({
       status: 'found' as const,
-      value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+      value: normalizeVariationListingGroup(groupRequest, manifest.run.groupKey),
     }));
     const mutationApi = createMutationApi();
     mutationApi.publishInventoryItemGroup = vi.fn(async () => ({ listingId }));
     let persisted = manifest;
 
-    const report = await executeYouPickManifest({
+    const report = await executeVariationListingManifest({
       manifest,
       manifestPath: fresh.manifestPath,
       readApi: createApi({ getInventoryItem, getOffers, getInventoryItemGroup }),
@@ -1988,7 +2000,7 @@ describe('You Pick publication resource persistence', () => {
     const listingId = '110590199998';
     const getInventoryItem = vi.fn(async (sku: string) => ({
       status: 'found' as const,
-      value: normalizeYouPickItem({
+      value: normalizeVariationListingItem({
         ...(itemRequests.get(sku) as Record<string, unknown>),
         groupIds: [manifest.run.groupKey],
         inventoryItemGroupKeys: [manifest.run.groupKey],
@@ -2019,12 +2031,12 @@ describe('You Pick publication resource persistence', () => {
     });
     const getInventoryItemGroup = vi.fn(async () => ({
       status: 'found' as const,
-      value: normalizeYouPickGroup(groupRequest, manifest.run.groupKey),
+      value: normalizeVariationListingGroup(groupRequest, manifest.run.groupKey),
     }));
     const mutationApi = createMutationApi();
     let persisted = manifest;
 
-    const report = await executeYouPickManifest({
+    const report = await executeVariationListingManifest({
       manifest,
       manifestPath: fresh.manifestPath,
       readApi: createApi({ getInventoryItem, getOffers, getInventoryItemGroup }),
@@ -2055,19 +2067,19 @@ describe('You Pick publication resource persistence', () => {
   });
 });
 
-describe('You Pick execution attestation gates', () => {
+describe('variation listing execution attestation gates', () => {
   it.each(['awaiting-published-view-verification', 'awaiting-quantity-zero-verification'] as const)(
     'bypasses quantity-experiment attestations for cleanup from %s',
     async (checkpoint) => {
       const root = await tempRepo();
       const prepared = await prepareExecutionCheckpoint(root, checkpoint);
       const publishedValidator = vi
-        .spyOn(youPickMutation, 'validatePublishedViewAttestation')
+        .spyOn(variationListingMutation, 'validatePublishedViewAttestation')
         .mockImplementation(() => {
           throw new Error('Published-view validator must not run during cleanup.');
         });
       const quantityValidator = vi
-        .spyOn(youPickMutation, 'validateQuantityZeroAttestation')
+        .spyOn(variationListingMutation, 'validateQuantityZeroAttestation')
         .mockImplementation(() => {
           throw new Error('Quantity-zero validator must not run during cleanup.');
         });
@@ -2080,12 +2092,12 @@ describe('You Pick execution attestation gates', () => {
         safeResumeCommand: 'manifest-owned cleanup resume',
       } as const;
       const execute = vi
-        .spyOn(youPickMutation, 'executeYouPickManifest')
+        .spyOn(variationListingMutation, 'executeVariationListingManifest')
         .mockResolvedValue(executionReport);
       const mutationApiFactory = vi.fn(async () => createMutationApi());
 
       await expect(
-        runYouPickSandboxPilot({
+        runVariationListingSandboxPilot({
           api: createApi(),
           manifestPath: prepared.manifestPath,
           cleanup: true,
@@ -2122,7 +2134,7 @@ describe('You Pick execution attestation gates', () => {
       const failedAt = '2026-08-05T16:00:00.000Z';
 
       await expect(
-        runYouPickSandboxPilot({
+        runVariationListingSandboxPilot({
           api: createApi(),
           manifestPath: prepared.manifestPath,
           execute: true,
@@ -2141,18 +2153,18 @@ describe('You Pick execution attestation gates', () => {
   );
 });
 
-describe('You Pick cleanup completion accounting', () => {
+describe('variation listing cleanup completion accounting', () => {
   it('executes a valid cleanup-plan checkpoint and clears its stale pre-mutation error', async () => {
     const root = await tempRepo();
     const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...prepared.manifest,
       lastError: 'stale pre-mutation gate error',
     });
     await writeManifestAtomic(prepared.manifestPath, manifest, prepared.localRoot);
     const harness = cleanupExecutionHarness(manifest);
 
-    await runYouPickSandboxPilot({
+    await runVariationListingSandboxPilot({
       api: harness.readApi,
       manifestPath: prepared.manifestPath,
       cleanup: true,
@@ -2165,7 +2177,7 @@ describe('You Pick cleanup completion accounting', () => {
     expect(planned.lastError).toBeNull();
 
     let tick = 0;
-    await runYouPickSandboxPilot({
+    await runVariationListingSandboxPilot({
       api: harness.readApi,
       manifestPath: prepared.manifestPath,
       cleanup: true,
@@ -2189,7 +2201,7 @@ describe('You Pick cleanup completion accounting', () => {
   it('clears stale errors only after exact absence and records read-only verification completed/0', async () => {
     const root = await tempRepo();
     const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...prepared.manifest,
       lastError: 'stale historical error',
     });
@@ -2197,7 +2209,7 @@ describe('You Pick cleanup completion accounting', () => {
     const harness = cleanupExecutionHarness(manifest);
     let tick = 0;
 
-    await runYouPickSandboxPilot({
+    await runVariationListingSandboxPilot({
       api: harness.readApi,
       manifestPath: prepared.manifestPath,
       cleanup: true,
@@ -2247,7 +2259,7 @@ describe('You Pick cleanup completion accounting', () => {
   it('persists a current final-absence error and does not clear stale state early', async () => {
     const root = await tempRepo();
     const prepared = await prepareExecutionCheckpoint(root, 'awaiting-published-view-verification');
-    const manifest = executableYouPickManifestSchema.parse({
+    const manifest = executableVariationListingManifestSchema.parse({
       ...prepared.manifest,
       lastError: 'stale historical error',
     });
@@ -2256,7 +2268,7 @@ describe('You Pick cleanup completion accounting', () => {
     let tick = 0;
 
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: harness.readApi,
         manifestPath: prepared.manifestPath,
         cleanup: true,
@@ -2285,13 +2297,13 @@ describe('You Pick cleanup completion accounting', () => {
   });
 });
 
-describe('You Pick cleanup planning and redaction', () => {
+describe('variation listing cleanup planning and redaction', () => {
   it('reconstructs manifest-owned state and emits dependency-ordered cleanup without mutations', async () => {
     const root = await tempRepo();
     const fresh = await runFresh(root);
     const localRoot = join(root, '.local', 'you-pick-sandbox');
     const manifest = await readManifest(fresh.manifestPath, localRoot);
-    const withResources: YouPickManifest = {
+    const withResources: VariationListingManifest = {
       ...manifest,
       published: true,
       groupListingId: 'LISTING-1',
@@ -2319,7 +2331,7 @@ describe('You Pick cleanup planning and redaction', () => {
       })),
     });
 
-    const report = await runYouPickSandboxPilot({
+    const report = await runVariationListingSandboxPilot({
       api,
       manifestPath: fresh.manifestPath,
       cleanup: true,
@@ -2364,7 +2376,7 @@ describe('You Pick cleanup planning and redaction', () => {
     async (listingStatus, listingCurrentlyActive, withdrawRequired) => {
       const root = await tempRepo();
       const { fresh, manifest } = await prepareCleanup(root, true);
-      const report = await runYouPickSandboxPilot({
+      const report = await runVariationListingSandboxPilot({
         api: cleanupApi(manifest, (sku) => [remoteOffer({ sku, listingStatus })]),
         manifestPath: fresh.manifestPath,
         cleanup: true,
@@ -2396,7 +2408,7 @@ describe('You Pick cleanup planning and redaction', () => {
     async (listingStatus) => {
       const root = await tempRepo();
       const { fresh, manifest } = await prepareCleanup(root, false);
-      const report = await runYouPickSandboxPilot({
+      const report = await runVariationListingSandboxPilot({
         api: cleanupApi(manifest, (sku) => [
           remoteOffer({ sku, listingId: 'LISTING-REMOTE', listingStatus }),
         ]),
@@ -2418,7 +2430,7 @@ describe('You Pick cleanup planning and redaction', () => {
     async (listingStatus) => {
       const root = await tempRepo();
       const { fresh, manifest } = await prepareCleanup(root, true);
-      const report = await runYouPickSandboxPilot({
+      const report = await runVariationListingSandboxPilot({
         api: cleanupApi(manifest, (sku) => [remoteOffer({ sku, listingStatus })]),
         manifestPath: fresh.manifestPath,
         cleanup: true,
@@ -2436,7 +2448,7 @@ describe('You Pick cleanup planning and redaction', () => {
   it('allows ACTIVE plus OUT_OF_STOCK and persists sorted unique active evidence', async () => {
     const root = await tempRepo();
     const { fresh, manifest } = await prepareCleanup(root, true);
-    const report = await runYouPickSandboxPilot({
+    const report = await runVariationListingSandboxPilot({
       api: cleanupApi(manifest, (sku) => [
         remoteOffer({
           sku,
@@ -2468,7 +2480,7 @@ describe('You Pick cleanup planning and redaction', () => {
   it('allows ENDED plus EBAY_ENDED and omits withdrawal with all status evidence', async () => {
     const root = await tempRepo();
     const { fresh, manifest } = await prepareCleanup(root, true);
-    const report = await runYouPickSandboxPilot({
+    const report = await runVariationListingSandboxPilot({
       api: cleanupApi(manifest, (sku) => [
         remoteOffer({
           sku,
@@ -2496,7 +2508,7 @@ describe('You Pick cleanup planning and redaction', () => {
     const conflictingRoot = await tempRepo();
     const conflicting = await prepareCleanup(conflictingRoot, true);
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: cleanupApi(conflicting.manifest, (sku) => [
           remoteOffer({ sku, listingStatus: sku.endsWith('C01') ? 'ACTIVE' : 'ENDED' }),
         ]),
@@ -2509,7 +2521,7 @@ describe('You Pick cleanup planning and redaction', () => {
     const inactiveRoot = await tempRepo();
     const inactive = await prepareCleanup(inactiveRoot, true);
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: cleanupApi(inactive.manifest, (sku) => [
           remoteOffer({ sku, listingStatus: 'INACTIVE' }),
         ]),
@@ -2532,11 +2544,11 @@ describe('You Pick cleanup planning and redaction', () => {
         offerId: `OFFER-${index + 1}`,
         offerStatus: 'UNPUBLISHED',
       })),
-    } satisfies YouPickManifest;
+    } satisfies VariationListingManifest;
     await writeManifestAtomic(fresh.manifestPath, recorded, localRoot);
 
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: createApi({
           getInventoryItemGroup: vi.fn(async () => ({
             status: 'found',
@@ -2551,9 +2563,9 @@ describe('You Pick cleanup planning and redaction', () => {
   });
 
   it('accepts reordered child membership only for child-only EPS fixtures', () => {
-    expect(matchesYouPickGroupChildren(4, ['C02', 'C01'], ['C01', 'C02'])).toBe(true);
-    expect(matchesYouPickGroupChildren(3, ['C02', 'C01'], ['C01', 'C02'])).toBe(false);
-    expect(matchesYouPickGroupChildren(4, ['C02', 'FOREIGN'], ['C01', 'C02'])).toBe(false);
+    expect(matchesVariationListingGroupChildren(4, ['C02', 'C01'], ['C01', 'C02'])).toBe(true);
+    expect(matchesVariationListingGroupChildren(3, ['C02', 'C01'], ['C01', 'C02'])).toBe(false);
+    expect(matchesVariationListingGroupChildren(4, ['C02', 'FOREIGN'], ['C01', 'C02'])).toBe(false);
   });
 
   it('adds withdrawal from remote publication evidence and reports manifest reconciliation', async () => {
@@ -2561,7 +2573,7 @@ describe('You Pick cleanup planning and redaction', () => {
     const fresh = await runFresh(root);
     const localRoot = join(root, '.local', 'you-pick-sandbox');
     const manifest = await readManifest(fresh.manifestPath, localRoot);
-    const recorded: YouPickManifest = {
+    const recorded: VariationListingManifest = {
       ...manifest,
       published: false,
       resources: manifest.resources.map((resource, index) => ({
@@ -2571,7 +2583,7 @@ describe('You Pick cleanup planning and redaction', () => {
       })),
     };
     await writeManifestAtomic(fresh.manifestPath, recorded, localRoot);
-    const report = await runYouPickSandboxPilot({
+    const report = await runVariationListingSandboxPilot({
       api: createApi({
         getInventoryItemGroup: vi.fn(async () => ({
           status: 'found',
@@ -2604,7 +2616,7 @@ describe('You Pick cleanup planning and redaction', () => {
       const fresh = await runFresh(root);
       const localRoot = join(root, '.local', 'you-pick-sandbox');
       const manifest = await readManifest(fresh.manifestPath, localRoot);
-      const recorded: YouPickManifest = {
+      const recorded: VariationListingManifest = {
         ...manifest,
         resources: manifest.resources.map((resource, index) => ({
           ...resource,
@@ -2615,7 +2627,10 @@ describe('You Pick cleanup planning and redaction', () => {
       await writeManifestAtomic(fresh.manifestPath, recorded, localRoot);
       return { root, fresh, manifest };
     };
-    const baseApi = (manifest: YouPickManifest, offerFactory: (sku: string) => RemoteOffer[]) =>
+    const baseApi = (
+      manifest: VariationListingManifest,
+      offerFactory: (sku: string) => RemoteOffer[]
+    ) =>
       createApi({
         getInventoryItemGroup: vi.fn(async () => ({
           status: 'found',
@@ -2633,7 +2648,7 @@ describe('You Pick cleanup planning and redaction', () => {
 
     const foreign = await makeRecorded();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: baseApi(foreign.manifest, (sku) => [remoteOffer({ sku, marketplaceId: 'EBAY_GB' })]),
         manifestPath: foreign.fresh.manifestPath,
         cleanup: true,
@@ -2643,7 +2658,7 @@ describe('You Pick cleanup planning and redaction', () => {
 
     const conflicting = await makeRecorded();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: baseApi(conflicting.manifest, (sku) => [
           remoteOffer({
             sku,
@@ -2658,7 +2673,7 @@ describe('You Pick cleanup planning and redaction', () => {
 
     const unknown = await makeRecorded();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api: createApi({
           getInventoryItemGroup: vi.fn(async () => ({ status: 'unknown', reason: 'HTTP 503' })),
         }),
@@ -2672,13 +2687,13 @@ describe('You Pick cleanup planning and redaction', () => {
   it('unconditionally rejects execute before any dependency call', async () => {
     const api = createApi();
     await expect(
-      runYouPickSandboxPilot({
+      runVariationListingSandboxPilot({
         api,
         fixturePath,
         execute: true,
         repoRoot: await tempRepo(),
       })
-    ).rejects.toThrow(YOU_PICK_EXECUTION_ERROR);
+    ).rejects.toThrow(VARIATION_LISTING_EXECUTION_ERROR);
     expect(api.getRuntimeSnapshot).not.toHaveBeenCalled();
   });
 

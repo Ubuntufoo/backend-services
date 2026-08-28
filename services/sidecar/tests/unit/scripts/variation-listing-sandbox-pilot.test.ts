@@ -4,25 +4,25 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  YOU_PICK_EXECUTION_ERROR,
+  VARIATION_LISTING_EXECUTION_ERROR,
   assertInventoryItemSemanticMatch,
   assertOfferSemanticMatch,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
   type PilotReport,
-  type YouPickPilotReadApi,
-} from '@/ebay/you-pick-sandbox-pilot.js';
+  type VariationListingPilotReadApi,
+} from '@/ebay/variation-listing-sandbox-pilot.js';
 import {
-  adaptYouPickPilotMutationApi,
-  classifyYouPickExactRead,
-  classifyYouPickOfferListRead,
-  normalizeYouPickItem,
-  normalizeYouPickOffers,
-  parseYouPickPilotArgs,
-  normalizeYouPickMetadata,
-  normalizeYouPickPolicies,
-  runYouPickSandboxPilotCli,
-} from '@/scripts/you-pick-sandbox-pilot.js';
+  adaptVariationListingPilotMutationApi,
+  classifyVariationListingExactRead,
+  classifyVariationListingOfferListRead,
+  normalizeVariationListingItem,
+  normalizeVariationListingOffers,
+  parseVariationListingPilotArgs,
+  normalizeVariationListingMetadata,
+  normalizeVariationListingPolicies,
+  runVariationListingSandboxPilotCli,
+} from '@/scripts/variation-listing-sandbox-pilot.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
 
 const tempRoots: string[] = [];
@@ -94,7 +94,7 @@ const report: PilotReport = {
   ],
   requestDigests: ['a'.repeat(64)],
   nextAuthorizedCommand:
-    'pnpm --filter sidecar ebay:pilot-you-pick-sandbox -- --manifest /repo/manifest.json --execute --confirm-sandbox-seller sandbox-seller-123',
+    'pnpm --filter sidecar ebay:pilot-variation-listing-sandbox -- --manifest /repo/manifest.json --execute --confirm-sandbox-seller sandbox-seller-123',
 };
 
 const plannedItem = {
@@ -139,38 +139,43 @@ const plannedOffer = {
   },
 };
 
-describe('You Pick sandbox pilot CLI', () => {
+describe('variation listing sandbox pilot CLI', () => {
   it('parses only the dedicated explicit dry-run arguments', () => {
     expect(
-      parseYouPickPilotArgs(['--fixture', 'fixture.json', '--confirm-sandbox-seller', 'seller-1'])
+      parseVariationListingPilotArgs([
+        '--fixture',
+        'fixture.json',
+        '--confirm-sandbox-seller',
+        'seller-1',
+      ])
     ).toEqual({
       fixturePath: 'fixture.json',
       cleanup: false,
       execute: false,
       confirmSandboxSeller: 'seller-1',
     });
-    expect(parseYouPickPilotArgs(['--manifest', 'manifest.json', '--cleanup'])).toEqual({
+    expect(parseVariationListingPilotArgs(['--manifest', 'manifest.json', '--cleanup'])).toEqual({
       manifestPath: 'manifest.json',
       cleanup: true,
       execute: false,
     });
-    expect(() => parseYouPickPilotArgs(['--fixture', 'a', '--manifest', 'b'])).toThrow(
+    expect(() => parseVariationListingPilotArgs(['--fixture', 'a', '--manifest', 'b'])).toThrow(
       /exactly one/
     );
-    expect(() => parseYouPickPilotArgs(['--fixture', 'a', '--force'])).toThrow(
+    expect(() => parseVariationListingPilotArgs(['--fixture', 'a', '--force'])).toThrow(
       'Unknown argument: --force'
     );
-    expect(() => parseYouPickPilotArgs(['--fixture', 'a', '--cleanup'])).toThrow(
+    expect(() => parseVariationListingPilotArgs(['--fixture', 'a', '--cleanup'])).toThrow(
       /requires --manifest/
     );
-    expect(() => parseYouPickPilotArgs(['--manifest', 'a', '--manifest', 'b'])).toThrow(
+    expect(() => parseVariationListingPilotArgs(['--manifest', 'a', '--manifest', 'b'])).toThrow(
       /only once/
     );
-    expect(() => parseYouPickPilotArgs(['--manifest', 'a', '--execute'])).toThrow(
-      YOU_PICK_EXECUTION_ERROR
+    expect(() => parseVariationListingPilotArgs(['--manifest', 'a', '--execute'])).toThrow(
+      VARIATION_LISTING_EXECUTION_ERROR
     );
     expect(
-      parseYouPickPilotArgs([
+      parseVariationListingPilotArgs([
         '--manifest',
         'manifest.json',
         '--execute',
@@ -193,22 +198,22 @@ describe('You Pick sandbox pilot CLI', () => {
     ['--fixture', 'fixture.json', '--execute'],
     ['--manifest', 'manifest.json', '--cleanup', '--execute'],
   ])('rejects every execute shape before resolving dependencies: %s', async (...argv) => {
-    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+    const apiFactory = vi.fn<() => Promise<VariationListingPilotReadApi>>();
 
-    await expect(runYouPickSandboxPilotCli(argv, { apiFactory })).rejects.toThrow(
-      YOU_PICK_EXECUTION_ERROR
+    await expect(runVariationListingSandboxPilotCli(argv, { apiFactory })).rejects.toThrow(
+      VARIATION_LISTING_EXECUTION_ERROR
     );
     expect(apiFactory).not.toHaveBeenCalled();
   });
 
   it('prints sanitized structured JSON for dry-run output', async () => {
-    const api = {} as YouPickPilotReadApi;
+    const api = {} as VariationListingPilotReadApi;
     const apiFactory = vi.fn(async () => api);
     const runner = vi.fn(async () => report);
     const print = vi.fn();
 
     await expect(
-      runYouPickSandboxPilotCli(['--fixture', 'fixture.json'], {
+      runVariationListingSandboxPilotCli(['--fixture', 'fixture.json'], {
         apiFactory,
         runner,
         print,
@@ -231,7 +236,7 @@ describe('You Pick sandbox pilot CLI', () => {
   });
 
   it('resolves fixture, manifest, and attestation paths from repo root under package cwd', async () => {
-    const repoRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-paths-'));
+    const repoRoot = await mkdtemp(join(tmpdir(), 'variation-listing-cli-paths-'));
     tempRoots.push(repoRoot);
     const packageCwd = join(repoRoot, 'services', 'sidecar');
     const runId = '20260803T151700Z-a1b2c3';
@@ -249,12 +254,12 @@ describe('You Pick sandbox pilot CLI', () => {
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue(packageCwd);
 
     try {
-      await runYouPickSandboxPilotCli(['--fixture', 'fixtures/two-card.json'], {
+      await runVariationListingSandboxPilotCli(['--fixture', 'fixtures/two-card.json'], {
         repoRoot,
         runner,
         print: vi.fn(),
       });
-      await runYouPickSandboxPilotCli(
+      await runVariationListingSandboxPilotCli(
         [
           '--manifest',
           `.local/you-pick-sandbox/${runId}/manifest.json`,
@@ -288,8 +293,8 @@ describe('You Pick sandbox pilot CLI', () => {
   });
 
   it('rejects outside and symlinked attestation paths before dependency resolution', async () => {
-    const repoRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-safe-'));
-    const outsideRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-outside-'));
+    const repoRoot = await mkdtemp(join(tmpdir(), 'variation-listing-cli-safe-'));
+    const outsideRoot = await mkdtemp(join(tmpdir(), 'variation-listing-cli-outside-'));
     tempRoots.push(repoRoot, outsideRoot);
     const runId = '20260803T151700Z-a1b2c3';
     const localRun = join(repoRoot, '.local', 'you-pick-sandbox', runId);
@@ -298,12 +303,12 @@ describe('You Pick sandbox pilot CLI', () => {
     await mkdir(localRun, { recursive: true });
     await writeFile(outsideAttestation, '{}', 'utf8');
     await symlink(outsideAttestation, linkedAttestation);
-    const apiFactory = vi.fn<() => Promise<YouPickPilotReadApi>>();
+    const apiFactory = vi.fn<() => Promise<VariationListingPilotReadApi>>();
     const mutationApiFactory = vi.fn();
     const runner = vi.fn(async () => report);
 
     await expect(
-      runYouPickSandboxPilotCli(['--fixture', '../outside.json'], {
+      runVariationListingSandboxPilotCli(['--fixture', '../outside.json'], {
         apiFactory,
         mutationApiFactory,
         repoRoot,
@@ -311,7 +316,7 @@ describe('You Pick sandbox pilot CLI', () => {
       })
     ).rejects.toThrow(/contained in the repository root/);
     await expect(
-      runYouPickSandboxPilotCli(
+      runVariationListingSandboxPilotCli(
         [
           '--manifest',
           `.local/you-pick-sandbox/${runId}/manifest.json`,
@@ -330,13 +335,13 @@ describe('You Pick sandbox pilot CLI', () => {
   });
 
   it('runs the CLI dry-run through raw-response normalization without loading credentials', async () => {
-    const repoRoot = await mkdtemp(join(tmpdir(), 'you-pick-cli-'));
+    const repoRoot = await mkdtemp(join(tmpdir(), 'variation-listing-cli-'));
     tempRoots.push(repoRoot);
     const relativeFixturePath = join('fixtures', 'two-card.json');
     await mkdir(join(repoRoot, 'fixtures'), { recursive: true });
     await copyFile(fixturePath, join(repoRoot, relativeFixturePath));
     const apiFactory = vi.fn(
-      async (): Promise<YouPickPilotReadApi> => ({
+      async (): Promise<VariationListingPilotReadApi> => ({
         getRuntimeSnapshot: async () => ({
           environment: 'sandbox',
           restOrigin: 'https://api.sandbox.ebay.com',
@@ -364,7 +369,7 @@ describe('You Pick sandbox pilot CLI', () => {
         }),
         getCurrentUserIdentity: async () => ({ userId: 'sandbox-seller-123' }),
         getPolicyLocationSnapshot: async () =>
-          normalizeYouPickPolicies(
+          normalizeVariationListingPolicies(
             {
               fulfillmentPolicies: [
                 { fulfillmentPolicyId: 'FULFILLMENT-PILOT', marketplaceId: 'EBAY_US' },
@@ -383,7 +388,7 @@ describe('You Pick sandbox pilot CLI', () => {
             'sandbox-seller-123'
           ),
         getMetadataSnapshot: async () =>
-          normalizeYouPickMetadata(
+          normalizeVariationListingMetadata(
             '261328',
             { listingStructurePolicies: [{ categoryId: '261328', variationsSupported: true }] },
             {
@@ -420,7 +425,7 @@ describe('You Pick sandbox pilot CLI', () => {
     );
     const print = vi.fn();
 
-    const result = await runYouPickSandboxPilotCli(['--fixture', relativeFixturePath], {
+    const result = await runVariationListingSandboxPilotCli(['--fixture', relativeFixturePath], {
       apiFactory,
       print,
       repoRoot,
@@ -432,10 +437,10 @@ describe('You Pick sandbox pilot CLI', () => {
   });
 });
 
-describe('You Pick inventory item adapter contract', () => {
+describe('variation listing inventory item adapter contract', () => {
   it('canonicalizes a successful empty-string transport result to void', async () => {
     const createOrReplaceInventoryItem = vi.fn(async () => '' as never);
-    const api = adaptYouPickPilotMutationApi({
+    const api = adaptVariationListingPilotMutationApi({
       createOrReplaceInventoryItem,
     } as unknown as InventoryApi);
 
@@ -451,7 +456,7 @@ describe('You Pick inventory item adapter contract', () => {
 
   it('preserves real inventory item transport errors', async () => {
     const transportError = new Error('transport failed');
-    const api = adaptYouPickPilotMutationApi({
+    const api = adaptVariationListingPilotMutationApi({
       createOrReplaceInventoryItem: vi.fn(async () => {
         throw transportError;
       }),
@@ -465,7 +470,7 @@ describe('You Pick inventory item adapter contract', () => {
   });
 });
 
-describe('You Pick offer-list read adapter contract', () => {
+describe('variation listing offer-list read adapter contract', () => {
   const offer = {
     ...plannedOffer,
     offerId: 'OFFER-1',
@@ -476,19 +481,21 @@ describe('You Pick offer-list read adapter contract', () => {
     const notFound = Object.assign(new Error('not found'), { response: { status: 404 } });
 
     await expect(
-      classifyYouPickOfferListRead(async () => {
+      classifyVariationListingOfferListRead(async () => {
         throw notFound;
       })
     ).resolves.toEqual({ status: 'found', value: { offers: [] } });
     await expect(
-      classifyYouPickExactRead(async () => {
+      classifyVariationListingExactRead(async () => {
         throw notFound;
       })
     ).resolves.toEqual({ status: 'missing' });
   });
 
   it('normalizes an existing offer collection', async () => {
-    await expect(classifyYouPickOfferListRead(async () => ({ offers: [offer] }))).resolves.toEqual({
+    await expect(
+      classifyVariationListingOfferListRead(async () => ({ offers: [offer] }))
+    ).resolves.toEqual({
       status: 'found',
       value: {
         offers: [
@@ -508,7 +515,7 @@ describe('You Pick offer-list read adapter contract', () => {
     ['malformed', { offers: ['not-an-offer'] }],
     ['duplicate', { offers: [offer, { ...offer }] }],
   ])('rejects a %s offer collection', async (_label, response) => {
-    await expect(classifyYouPickOfferListRead(async () => response)).rejects.toThrow();
+    await expect(classifyVariationListingOfferListRead(async () => response)).rejects.toThrow();
   });
 
   it('preserves a non-404 transport failure as unknown', async () => {
@@ -517,14 +524,14 @@ describe('You Pick offer-list read adapter contract', () => {
     });
 
     await expect(
-      classifyYouPickOfferListRead(async () => {
+      classifyVariationListingOfferListRead(async () => {
         throw unavailable;
       })
     ).resolves.toEqual({ status: 'unknown', reason: 'transport unavailable' });
   });
 
   it('ignores the demonstrated server-managed offer fields', () => {
-    const normalized = normalizeYouPickOffers({
+    const normalized = normalizeVariationListingOffers({
       offers: [
         {
           ...offer,
@@ -607,7 +614,7 @@ describe('You Pick offer-list read adapter contract', () => {
     ['malformed quantity', { ...offer, availableQuantity: '1' }],
     ['malformed price', { ...offer, pricingSummary: { price: { currency: 'USD', value: 1.11 } } }],
   ])('fails closed on %s', (_label, malformed) => {
-    expect(() => normalizeYouPickOffers({ offers: [malformed] })).toThrow();
+    expect(() => normalizeVariationListingOffers({ offers: [malformed] })).toThrow();
   });
 
   it.each([
@@ -620,30 +627,32 @@ describe('You Pick offer-list read adapter contract', () => {
       },
     ],
   ])('rejects %s', (_label, ambiguous) => {
-    expect(() => normalizeYouPickOffers({ offers: [ambiguous] })).toThrow(
+    expect(() => normalizeVariationListingOffers({ offers: [ambiguous] })).toThrow(
       'Offer response has ambiguous publication and listing identity.'
     );
   });
 });
 
-describe('You Pick inventory item semantic snapshots', () => {
+describe('variation listing inventory item semantic snapshots', () => {
   it.each([
     ['groupIds', { groupIds: ['G1'] }],
     ['inventoryItemGroupKeys', { inventoryItemGroupKeys: ['G1'] }],
   ])('normalizes the %s association alias', (_label, associations) => {
-    expect(normalizeYouPickItem({ ...plannedItem, ...associations }).groupKeys).toEqual(['G1']);
+    expect(normalizeVariationListingItem({ ...plannedItem, ...associations }).groupKeys).toEqual([
+      'G1',
+    ]);
   });
 
   it('accepts equivalent association aliases and returns one deterministic list', () => {
     expect(
-      normalizeYouPickItem({
+      normalizeVariationListingItem({
         ...plannedItem,
         groupIds: ['G1'],
         inventoryItemGroupKeys: ['G1'],
       }).groupKeys
     ).toEqual(['G1']);
     expect(
-      normalizeYouPickItem({
+      normalizeVariationListingItem({
         ...plannedItem,
         groupIds: ['G2', 'G1'],
         inventoryItemGroupKeys: ['G1', 'G2'],
@@ -652,9 +661,9 @@ describe('You Pick inventory item semantic snapshots', () => {
   });
 
   it('distinguishes absent aliases from agreed empty association aliases', () => {
-    expect(normalizeYouPickItem(plannedItem).groupKeys).toBeNull();
+    expect(normalizeVariationListingItem(plannedItem).groupKeys).toBeNull();
     expect(
-      normalizeYouPickItem({
+      normalizeVariationListingItem({
         ...plannedItem,
         groupIds: [],
         inventoryItemGroupKeys: [],
@@ -668,7 +677,7 @@ describe('You Pick inventory item semantic snapshots', () => {
     ['missing value in one alias', ['G1', 'G2'], ['G1']],
   ])('rejects %s association aliases', (_label, groupIds, inventoryItemGroupKeys) => {
     expect(() =>
-      normalizeYouPickItem({ ...plannedItem, groupIds, inventoryItemGroupKeys })
+      normalizeVariationListingItem({ ...plannedItem, groupIds, inventoryItemGroupKeys })
     ).toThrow('Inventory item group association aliases conflict.');
   });
 
@@ -677,7 +686,7 @@ describe('You Pick inventory item semantic snapshots', () => {
     ['inventoryItemGroupKeys', { key: 'inventoryItemGroupKeys', value: {} }],
   ])('rejects non-array %s', (_label, malformed) => {
     expect(() =>
-      normalizeYouPickItem({ ...plannedItem, [malformed.key]: malformed.value })
+      normalizeVariationListingItem({ ...plannedItem, [malformed.key]: malformed.value })
     ).toThrow(/association must be an array/);
   });
 
@@ -686,14 +695,14 @@ describe('You Pick inventory item semantic snapshots', () => {
     ['blank', { inventoryItemGroupKeys: [' '] }],
     ['duplicate', { groupIds: ['G1', ' G1 '] }],
   ])('rejects %s association values', (_label, associations) => {
-    expect(() => normalizeYouPickItem({ ...plannedItem, ...associations })).toThrow(
+    expect(() => normalizeVariationListingItem({ ...plannedItem, ...associations })).toThrow(
       /malformed or duplicate associations/
     );
   });
 
   it('preserves multiple case-sensitive associations while canonicalizing only order', () => {
     expect(
-      normalizeYouPickItem({
+      normalizeVariationListingItem({
         ...plannedItem,
         groupIds: ['group-2', 'Group 1'],
       }).groupKeys
@@ -721,7 +730,7 @@ describe('You Pick inventory item semantic snapshots', () => {
       },
     };
 
-    expect(normalizeYouPickItem(raw)).toEqual({
+    expect(normalizeVariationListingItem(raw)).toEqual({
       sku: plannedItem.sku,
       groupKeys: null,
       quantity: 1,
@@ -730,7 +739,7 @@ describe('You Pick inventory item semantic snapshots', () => {
   });
 
   it('keeps version-1 semantic recovery independent of child image fields', () => {
-    const actual = normalizeYouPickItem({
+    const actual = normalizeVariationListingItem({
       ...plannedItem,
       product: {
         ...plannedItem.product,
@@ -742,7 +751,7 @@ describe('You Pick inventory item semantic snapshots', () => {
   });
 
   it('accepts the exact ordered version-2 child image pair', () => {
-    const actual = normalizeYouPickItem(plannedVersion2Item).semanticSnapshot;
+    const actual = normalizeVariationListingItem(plannedVersion2Item).semanticSnapshot;
 
     expect(() =>
       assertInventoryItemSemanticMatch(actual, plannedVersion2Item, 'item-C01')
@@ -788,7 +797,7 @@ describe('You Pick inventory item semantic snapshots', () => {
       },
     ],
   ])('rejects %s version-2 child image ownership', (_label, raw) => {
-    const actual = normalizeYouPickItem(raw).semanticSnapshot;
+    const actual = normalizeVariationListingItem(raw).semanticSnapshot;
 
     expect(() => assertInventoryItemSemanticMatch(actual, plannedVersion2Item, 'item-C01')).toThrow(
       'item-C01 semantic product images does not match the immutable planned item.'
@@ -820,7 +829,7 @@ describe('You Pick inventory item semantic snapshots', () => {
       },
     ],
   ])('reports a field-specific %s mismatch', (field, changed) => {
-    const actual = normalizeYouPickItem(plannedItem).semanticSnapshot;
+    const actual = normalizeVariationListingItem(plannedItem).semanticSnapshot;
     expect(() => assertInventoryItemSemanticMatch(actual, changed, 'item-C01')).toThrow(
       `item-C01 semantic ${field} does not match the immutable planned item.`
     );
@@ -861,11 +870,11 @@ describe('You Pick inventory item semantic snapshots', () => {
     ],
     ['missing aspects', { ...plannedItem, product: {} }, /product aspects is missing/],
   ])('fails closed on %s', (_label, raw, error) => {
-    expect(() => normalizeYouPickItem(raw)).toThrow(error);
+    expect(() => normalizeVariationListingItem(raw)).toThrow(error);
   });
 });
 
-// Module-level mock state for createYouPickPilotReadApi tests
+// Module-level mock state for createVariationListingPilotReadApi tests
 var readApiMockState = {
   initFn: vi.fn(async () => {}),
   getInventoryItemFn: vi.fn(async () => ({
@@ -916,7 +925,7 @@ vi.mock('@/config/environment.js', () => ({
   getAuthUrl: () => 'https://api.sandbox.ebay.com/oauth',
 }));
 
-describe('createYouPickPilotReadApi ensureInitialized', () => {
+describe('createVariationListingPilotReadApi ensureInitialized', () => {
   beforeEach(() => {
     vi.stubEnv('EBAY_ENVIRONMENT', 'sandbox');
     vi.stubEnv('EBAY_MARKETPLACE_ID', 'EBAY_US');
@@ -935,8 +944,8 @@ describe('createYouPickPilotReadApi ensureInitialized', () => {
   });
 
   async function getApi() {
-    const mod = await import('@/scripts/you-pick-sandbox-pilot.js');
-    return mod.createYouPickPilotReadApi();
+    const mod = await import('@/scripts/variation-listing-sandbox-pilot.js');
+    return mod.createVariationListingPilotReadApi();
   }
 
   it('getInventoryItem initializes before the inventory call', async () => {

@@ -5,14 +5,14 @@ import { readFile, realpath } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
 import {
-  YOU_PICK_EXECUTION_ERROR,
-  YOU_PICK_LISTING_STATUSES,
-  YOU_PICK_SANDBOX_ORIGIN,
-  classifyYouPickListingStatus,
+  VARIATION_LISTING_EXECUTION_ERROR,
+  VARIATION_LISTING_STATUSES,
+  VARIATION_LISTING_SANDBOX_ORIGIN,
+  classifyVariationListingStatus,
   digest,
   projectInventoryItemSemanticSnapshot,
   projectOfferSemanticSnapshot,
-  runYouPickSandboxPilot,
+  runVariationListingSandboxPilot,
   sanitizeError,
   sanitizeReport,
   type ExactRead,
@@ -23,17 +23,17 @@ import {
   type RemoteInventoryItemGroup,
   type RemoteOffer,
   type RuntimeSnapshot,
-  type YouPickListingStatus,
-  type YouPickPilotReadApi,
-} from '@/ebay/you-pick-sandbox-pilot.js';
+  type VariationListingStatus,
+  type VariationListingPilotReadApi,
+} from '@/ebay/variation-listing-sandbox-pilot.js';
 import type {
   MutationExecutionReport,
-  YouPickPilotMutationApi,
-} from '@/ebay/you-pick-sandbox-pilot-mutation.js';
+  VariationListingPilotMutationApi,
+} from '@/ebay/variation-listing-sandbox-pilot-mutation.js';
 import type { InventoryApi } from '@/api/listing-management/inventory.js';
 import type { MediaApi } from '@/api/listing-management/media.js';
 
-export interface YouPickPilotCliArgs {
+export interface VariationListingPilotCliArgs {
   fixturePath?: string;
   manifestPath?: string;
   cleanup: boolean;
@@ -44,9 +44,9 @@ export interface YouPickPilotCliArgs {
 
 interface CliOptions {
   repoRoot?: string;
-  apiFactory?: () => Promise<YouPickPilotReadApi>;
-  mutationApiFactory?: () => Promise<YouPickPilotMutationApi>;
-  runner?: typeof runYouPickSandboxPilot;
+  apiFactory?: () => Promise<VariationListingPilotReadApi>;
+  mutationApiFactory?: () => Promise<VariationListingPilotMutationApi>;
+  runner?: typeof runVariationListingSandboxPilot;
   print?: (output: string) => void;
 }
 
@@ -76,8 +76,8 @@ function requireValue(value: string | undefined, flag: string): string {
   return value.trim();
 }
 
-export function parseYouPickPilotArgs(argv: string[]): YouPickPilotCliArgs {
-  const parsed: YouPickPilotCliArgs = { cleanup: false, execute: false };
+export function parseVariationListingPilotArgs(argv: string[]): VariationListingPilotCliArgs {
+  const parsed: VariationListingPilotCliArgs = { cleanup: false, execute: false };
   const seen = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -119,8 +119,8 @@ export function parseYouPickPilotArgs(argv: string[]): YouPickPilotCliArgs {
     throw new Error(`Unknown argument: ${argument}`);
   }
   if (parsed.execute && (!parsed.manifestPath || !parsed.confirmSandboxSeller))
-    throw new Error(YOU_PICK_EXECUTION_ERROR);
-  if (parsed.execute && parsed.fixturePath) throw new Error(YOU_PICK_EXECUTION_ERROR);
+    throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
+  if (parsed.execute && parsed.fixturePath) throw new Error(VARIATION_LISTING_EXECUTION_ERROR);
   if (Boolean(parsed.fixturePath) === Boolean(parsed.manifestPath))
     throw new Error('Supply exactly one of --fixture or --manifest.');
   if (parsed.cleanup && !parsed.manifestPath) throw new Error('--cleanup requires --manifest.');
@@ -169,7 +169,7 @@ function errorStatus(error: unknown): number | undefined {
   return undefined;
 }
 
-export async function classifyYouPickExactRead<T>(
+export async function classifyVariationListingExactRead<T>(
   operation: () => Promise<T>
 ): Promise<ExactRead<T>> {
   try {
@@ -180,7 +180,7 @@ export async function classifyYouPickExactRead<T>(
   }
 }
 
-export function normalizeYouPickPolicies(
+export function normalizeVariationListingPolicies(
   fulfillmentRaw: unknown,
   paymentRaw: unknown,
   returnRaw: unknown,
@@ -232,7 +232,7 @@ function requiredArray(value: unknown, name: string): Record<string, unknown>[] 
   return parsed;
 }
 
-export function normalizeYouPickMetadata(
+export function normalizeVariationListingMetadata(
   categoryId: string,
   listingStructureRaw: unknown,
   conditionRaw: unknown,
@@ -322,7 +322,7 @@ export function normalizeYouPickMetadata(
   };
 }
 
-export function normalizeYouPickGroup(
+export function normalizeVariationListingGroup(
   raw: unknown,
   inventoryItemGroupKey?: string
 ): RemoteInventoryItemGroup {
@@ -351,7 +351,7 @@ export function normalizeYouPickGroup(
   return snapshotDigest ? { variantSKUs, snapshotDigest } : { variantSKUs };
 }
 
-export function normalizeYouPickItem(raw: unknown): RemoteInventoryItem {
+export function normalizeVariationListingItem(raw: unknown): RemoteInventoryItem {
   const record = asRecord(raw);
   if (!record) throw new Error('Inventory item response must be an object.');
   const semanticSnapshot = projectInventoryItemSemanticSnapshot(record);
@@ -380,7 +380,7 @@ export function normalizeYouPickItem(raw: unknown): RemoteInventoryItem {
   return { ...base, groupKeys };
 }
 
-export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } {
+export function normalizeVariationListingOffers(raw: unknown): { offers: RemoteOffer[] } {
   const offerRows = requiredArray(raw, 'offers');
   const offers = uniqueRecords(offerRows, 'Offer', (offer) => stringField(offer, 'offerId')).map(
     (offer): RemoteOffer => {
@@ -396,12 +396,12 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
         throw new Error('Offer response has an unsupported publication status.');
       if (
         rawListingStatus !== null &&
-        !(YOU_PICK_LISTING_STATUSES as readonly string[]).includes(rawListingStatus)
+        !(VARIATION_LISTING_STATUSES as readonly string[]).includes(rawListingStatus)
       ) {
         throw new Error('Offer response has an unsupported listing status.');
       }
-      const listingStatus = rawListingStatus as YouPickListingStatus | null;
-      const lifecycle = classifyYouPickListingStatus(listingStatus);
+      const listingStatus = rawListingStatus as VariationListingStatus | null;
+      const lifecycle = classifyVariationListingStatus(listingStatus);
       const normalized: RemoteOffer = {
         offerId: stringField(offer, 'offerId'),
         sku: semanticSnapshot.sku,
@@ -431,16 +431,16 @@ export function normalizeYouPickOffers(raw: unknown): { offers: RemoteOffer[] } 
   return { offers };
 }
 
-export async function classifyYouPickOfferListRead(
+export async function classifyVariationListingOfferListRead(
   operation: () => Promise<unknown>
 ): Promise<ExactRead<{ offers: RemoteOffer[] }>> {
-  const read = await classifyYouPickExactRead(operation);
+  const read = await classifyVariationListingExactRead(operation);
   if (read.status === 'missing') return { status: 'found', value: { offers: [] } };
   if (read.status === 'unknown') return read;
-  return { status: 'found', value: normalizeYouPickOffers(read.value) };
+  return { status: 'found', value: normalizeVariationListingOffers(read.value) };
 }
 
-export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> {
+export async function createVariationListingPilotReadApi(): Promise<VariationListingPilotReadApi> {
   const [{ EbaySellerApi }, environmentModule] = await Promise.all([
     import('@/api/index.js'),
     import('@/config/environment.js'),
@@ -478,7 +478,9 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         restOrigin: environmentModule.getBaseUrl(config.environment),
         oauthOrigin: new URL(environmentModule.getAuthUrl(config.environment)).origin,
         tradingOrigin:
-          config.environment === 'sandbox' ? YOU_PICK_SANDBOX_ORIGIN : 'https://api.ebay.com',
+          config.environment === 'sandbox'
+            ? VARIATION_LISTING_SANDBOX_ORIGIN
+            : 'https://api.ebay.com',
         marketplaceId: process.env.EBAY_MARKETPLACE_ID?.trim() ?? '',
         contentLanguage: process.env.EBAY_CONTENT_LANGUAGE?.trim(),
         hasUserRefreshToken: Boolean(config.refreshToken?.trim()),
@@ -522,7 +524,13 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         api.account.getReturnPolicies(marketplace),
         api.inventory.getInventoryLocations(),
       ]);
-      return normalizeYouPickPolicies(fulfillment, payment, returns, locations, currentUserId);
+      return normalizeVariationListingPolicies(
+        fulfillment,
+        payment,
+        returns,
+        locations,
+        currentUserId
+      );
     },
     async getMetadataSnapshot(categoryId) {
       await ensureInitialized();
@@ -536,48 +544,52 @@ export async function createYouPickPilotReadApi(): Promise<YouPickPilotReadApi> 
         api.metadata.getItemConditionPolicies(marketplace, filter),
         api.taxonomy.getItemAspectsForCategory(treeId, categoryId),
       ]);
-      return normalizeYouPickMetadata(categoryId, listingStructure, conditions, taxonomy);
+      return normalizeVariationListingMetadata(categoryId, listingStructure, conditions, taxonomy);
     },
     async getInventoryItemGroup(groupKey) {
       await ensureInitialized();
-      const read = await classifyYouPickExactRead(() =>
+      const read = await classifyVariationListingExactRead(() =>
         api.inventory.getInventoryItemGroup(groupKey)
       );
       return read.status === 'found'
-        ? { status: 'found', value: normalizeYouPickGroup(read.value, groupKey) }
+        ? { status: 'found', value: normalizeVariationListingGroup(read.value, groupKey) }
         : read;
     },
     async getInventoryItem(sku) {
       await ensureInitialized();
-      const read = await classifyYouPickExactRead(() => api.inventory.getInventoryItem(sku));
+      const read = await classifyVariationListingExactRead(() =>
+        api.inventory.getInventoryItem(sku)
+      );
       return read.status === 'found'
-        ? { status: 'found', value: normalizeYouPickItem(read.value) }
+        ? { status: 'found', value: normalizeVariationListingItem(read.value) }
         : read;
     },
     async getOffers(sku, marketplaceId) {
       await ensureInitialized();
-      return await classifyYouPickOfferListRead(() => api.inventory.getOffers(sku, marketplaceId));
+      return await classifyVariationListingOfferListRead(() =>
+        api.inventory.getOffers(sku, marketplaceId)
+      );
     },
   };
 }
 
-export async function createYouPickPilotMutationApi(): Promise<YouPickPilotMutationApi> {
+export async function createVariationListingPilotMutationApi(): Promise<VariationListingPilotMutationApi> {
   const [{ EbaySellerApi }, environmentModule] = await Promise.all([
     import('@/api/index.js'),
     import('@/config/environment.js'),
   ]);
   const api = new EbaySellerApi(environmentModule.getEbayConfig());
   await api.initialize();
-  return adaptYouPickPilotMutationApi(api.inventory, api.media);
+  return adaptVariationListingPilotMutationApi(api.inventory, api.media);
 }
 
 type PilotInventoryAdapter = InventoryApi;
 type PilotMediaAdapter = MediaApi;
 
-export function adaptYouPickPilotMutationApi(
+export function adaptVariationListingPilotMutationApi(
   inventory: PilotInventoryAdapter,
   media?: PilotMediaAdapter
-): YouPickPilotMutationApi {
+): VariationListingPilotMutationApi {
   const config = (headers: { 'Content-Language': 'en-US' }) => ({ headers });
   return {
     createImageFromUrl: media
@@ -631,11 +643,11 @@ export function adaptYouPickPilotMutationApi(
   };
 }
 
-export async function runYouPickSandboxPilotCli(
+export async function runVariationListingSandboxPilotCli(
   argv: string[] = process.argv.slice(2),
   options: CliOptions = {}
 ): Promise<PilotReport | MutationExecutionReport> {
-  const args = parseYouPickPilotArgs(argv);
+  const args = parseVariationListingPilotArgs(argv);
   const repoRoot =
     options.repoRoot ?? resolve(fileURLToPath(new URL('../../../../', import.meta.url)));
   const fixturePath = args.fixturePath
@@ -647,16 +659,16 @@ export async function runYouPickSandboxPilotCli(
   const attestationPath = args.attestationPath
     ? resolveRepositoryFile(args.attestationPath, repoRoot, 'Attestation')
     : undefined;
-  const runner = options.runner ?? runYouPickSandboxPilot;
+  const runner = options.runner ?? runVariationListingSandboxPilot;
   const attestation = attestationPath
     ? await readRepositoryJson(attestationPath, repoRoot, 'Attestation')
     : undefined;
   const report = await runner({
-    apiFactory: options.apiFactory ?? createYouPickPilotReadApi,
+    apiFactory: options.apiFactory ?? createVariationListingPilotReadApi,
     fixturePath,
     manifestPath,
     cleanup: args.cleanup,
-    mutationApiFactory: options.mutationApiFactory ?? createYouPickPilotMutationApi,
+    mutationApiFactory: options.mutationApiFactory ?? createVariationListingPilotMutationApi,
     execute: args.execute,
     confirmSandboxSeller: args.confirmSandboxSeller,
     attestation,
@@ -669,7 +681,7 @@ export async function runYouPickSandboxPilotCli(
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
 const modulePath = resolve(fileURLToPath(import.meta.url));
 if (entryPath && entryPath === modulePath) {
-  runYouPickSandboxPilotCli().catch((error) => {
+  runVariationListingSandboxPilotCli().catch((error) => {
     console.error(JSON.stringify({ error: sanitizeError(error), status: 'failed' }));
     /* eslint-disable-next-line n/no-process-exit -- CLI entry must fail non-zero on validation/gate failure. */
     process.exit(1);
