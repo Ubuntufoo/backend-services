@@ -1,4 +1,5 @@
-// Generated from the connected Supabase project schema.
+// Generated from the connected Supabase project schema. Pending additive migration
+// table blocks are mechanically merged from its disposable local schema validation.
 // Regenerate with:
 //   npx supabase gen types typescript --project-id "$PROJECT_REF" --schema public > packages/data/src/database-generated.ts
 
@@ -672,6 +673,310 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: 'listings';
             referencedColumns: ['listing_id'];
+          },
+        ];
+      };
+      variation_listing_copies: {
+        Row: {
+          availability_state: string;
+          back_r2_key: string;
+          capture_back_source_ref: string;
+          capture_front_source_ref: string;
+          capture_pair_id: string;
+          capture_session_version: number;
+          capture_source_key: string;
+          capture_started_at: string;
+          captured_at: string;
+          condition_notes: string | null;
+          condition_token: string;
+          copy_id: string;
+          created_at: string;
+          front_r2_key: string;
+          updated_at: string;
+          variation_id: string;
+        };
+        Insert: {
+          availability_state?: string;
+          back_r2_key: string;
+          capture_back_source_ref: string;
+          capture_front_source_ref: string;
+          capture_pair_id: string;
+          capture_session_version: number;
+          capture_source_key: string;
+          capture_started_at: string;
+          captured_at?: string;
+          condition_notes?: string | null;
+          condition_token: string;
+          copy_id: string;
+          created_at?: string;
+          front_r2_key: string;
+          updated_at?: string;
+          variation_id: string;
+        };
+        Update: {
+          availability_state?: string;
+          back_r2_key?: string;
+          capture_back_source_ref?: string;
+          capture_front_source_ref?: string;
+          capture_pair_id?: string;
+          capture_session_version?: number;
+          capture_source_key?: string;
+          capture_started_at?: string;
+          captured_at?: string;
+          condition_notes?: string | null;
+          condition_token?: string;
+          copy_id?: string;
+          created_at?: string;
+          front_r2_key?: string;
+          updated_at?: string;
+          variation_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_copies_variation_id_fkey';
+            columns: ['variation_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_variations';
+            referencedColumns: ['variation_id'];
+          },
+        ];
+      };
+      variation_listing_groups: {
+        Row: {
+          category_id: string;
+          condition_description: string | null;
+          condition_descriptors: Json;
+          condition_id: string;
+          condition_token: string;
+          created_at: string;
+          derived_common_ebay_aspects: Json;
+          description: string | null;
+          desired_revision: number;
+          fulfillment_policy_id: string;
+          group_id: string;
+          group_key: string;
+          last_confirmed_revision: number | null;
+          lifecycle_state: string;
+          listing_format: string;
+          marketplace_id: string;
+          merchant_location_key: string;
+          next_inventory_serial: number;
+          payment_policy_id: string;
+          recovery_required: boolean;
+          return_policy_id: string;
+          selector_name: string;
+          sku_bucket_token: string;
+          sku_category_code: string;
+          title: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          category_id: string;
+          condition_description?: string | null;
+          condition_descriptors?: Json;
+          condition_id: string;
+          condition_token: string;
+          created_at?: string;
+          derived_common_ebay_aspects?: Json;
+          description?: string | null;
+          desired_revision?: number;
+          fulfillment_policy_id: string;
+          group_id: string;
+          group_key: string;
+          last_confirmed_revision?: number | null;
+          lifecycle_state?: string;
+          listing_format?: string;
+          marketplace_id: string;
+          merchant_location_key: string;
+          next_inventory_serial?: number;
+          payment_policy_id: string;
+          recovery_required?: boolean;
+          return_policy_id: string;
+          selector_name?: string;
+          sku_bucket_token: string;
+          sku_category_code: string;
+          title?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          category_id?: string;
+          condition_description?: string | null;
+          condition_descriptors?: Json;
+          condition_id?: string;
+          condition_token?: string;
+          created_at?: string;
+          derived_common_ebay_aspects?: Json;
+          description?: string | null;
+          desired_revision?: number;
+          fulfillment_policy_id?: string;
+          group_id?: string;
+          group_key?: string;
+          last_confirmed_revision?: number | null;
+          lifecycle_state?: string;
+          listing_format?: string;
+          marketplace_id?: string;
+          merchant_location_key?: string;
+          next_inventory_serial?: number;
+          payment_policy_id?: string;
+          recovery_required?: boolean;
+          return_policy_id?: string;
+          selector_name?: string;
+          sku_bucket_token?: string;
+          sku_category_code?: string;
+          title?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      variation_listing_intake_sessions: {
+        Row: {
+          capture_source_key: string;
+          created_at: string;
+          mode: string;
+          pending_pair_front_source_ref: string | null;
+          pending_pair_id: string | null;
+          pending_pair_mode: string | null;
+          pending_pair_price_amount: number | null;
+          pending_pair_price_currency: string | null;
+          pending_pair_session_version: number | null;
+          pending_pair_started_at: string | null;
+          pending_pair_target_group_id: string | null;
+          pending_pair_target_variation_id: string | null;
+          session_version: number;
+          sticky_price_amount: number;
+          sticky_price_currency: string;
+          target_group_id: string | null;
+          target_variation_id: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          capture_source_key: string;
+          created_at?: string;
+          mode?: string;
+          pending_pair_front_source_ref?: string | null;
+          pending_pair_id?: string | null;
+          pending_pair_mode?: string | null;
+          pending_pair_price_amount?: number | null;
+          pending_pair_price_currency?: string | null;
+          pending_pair_session_version?: number | null;
+          pending_pair_started_at?: string | null;
+          pending_pair_target_group_id?: string | null;
+          pending_pair_target_variation_id?: string | null;
+          session_version?: number;
+          sticky_price_amount?: number;
+          sticky_price_currency?: string;
+          target_group_id?: string | null;
+          target_variation_id?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          capture_source_key?: string;
+          created_at?: string;
+          mode?: string;
+          pending_pair_front_source_ref?: string | null;
+          pending_pair_id?: string | null;
+          pending_pair_mode?: string | null;
+          pending_pair_price_amount?: number | null;
+          pending_pair_price_currency?: string | null;
+          pending_pair_session_version?: number | null;
+          pending_pair_started_at?: string | null;
+          pending_pair_target_group_id?: string | null;
+          pending_pair_target_variation_id?: string | null;
+          session_version?: number;
+          sticky_price_amount?: number;
+          sticky_price_currency?: string;
+          target_group_id?: string | null;
+          target_variation_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_intake_sessions_pending_pair_group_fkey';
+            columns: ['pending_pair_target_group_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_groups';
+            referencedColumns: ['group_id'];
+          },
+          {
+            foreignKeyName: 'variation_listing_intake_sessions_pending_variation_group_fkey';
+            columns: ['pending_pair_target_group_id', 'pending_pair_target_variation_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_variations';
+            referencedColumns: ['group_id', 'variation_id'];
+          },
+          {
+            foreignKeyName: 'variation_listing_intake_sessions_target_group_id_fkey';
+            columns: ['target_group_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_groups';
+            referencedColumns: ['group_id'];
+          },
+          {
+            foreignKeyName: 'variation_listing_intake_sessions_target_variation_group_fkey';
+            columns: ['target_group_id', 'target_variation_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_variations';
+            referencedColumns: ['group_id', 'variation_id'];
+          },
+        ];
+      };
+      variation_listing_variations: {
+        Row: {
+          created_at: string;
+          group_id: string;
+          inventory_serial: number;
+          position: number;
+          price_amount: number;
+          price_currency: string;
+          representative_copy_id: string | null;
+          selector_value: string;
+          sku: string;
+          updated_at: string;
+          variation_id: string;
+          variation_metadata: Json;
+        };
+        Insert: {
+          created_at?: string;
+          group_id: string;
+          inventory_serial: number;
+          position: number;
+          price_amount: number;
+          price_currency?: string;
+          representative_copy_id?: string | null;
+          selector_value: string;
+          sku: string;
+          updated_at?: string;
+          variation_id: string;
+          variation_metadata?: Json;
+        };
+        Update: {
+          created_at?: string;
+          group_id?: string;
+          inventory_serial?: number;
+          position?: number;
+          price_amount?: number;
+          price_currency?: string;
+          representative_copy_id?: string | null;
+          selector_value?: string;
+          sku?: string;
+          updated_at?: string;
+          variation_id?: string;
+          variation_metadata?: Json;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_variations_group_id_fkey';
+            columns: ['group_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_groups';
+            referencedColumns: ['group_id'];
+          },
+          {
+            foreignKeyName: 'variation_listing_variations_representative_copy_fkey';
+            columns: ['variation_id', 'representative_copy_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_copies';
+            referencedColumns: ['variation_id', 'copy_id'];
           },
         ];
       };

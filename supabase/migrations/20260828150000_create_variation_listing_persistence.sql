@@ -181,7 +181,7 @@ create table public.variation_listing_intake_sessions (
     references public.variation_listing_variations (group_id,variation_id) on update no action on delete no action,
   constraint variation_listing_intake_sessions_sticky_price_check check (sticky_price_amount in (0.99,1.49,1.99,2.49)),
   constraint variation_listing_intake_sessions_sticky_price_currency_check check (sticky_price_currency = 'USD'),
-  constraint variation_listing_intake_sessions_pending_pair_all_or_none_check check (
+  constraint variation_listing_intake_sessions_pending_all_or_none_check check (
     (pending_pair_id is null and pending_pair_session_version is null and pending_pair_mode is null
       and pending_pair_target_group_id is null and pending_pair_target_variation_id is null
       and pending_pair_price_amount is null and pending_pair_price_currency is null
@@ -197,10 +197,10 @@ create table public.variation_listing_intake_sessions (
   constraint variation_listing_intake_sessions_pending_pair_mode_check check (pending_pair_mode is null or pending_pair_mode in ('new_variation','duplicate_copy')),
   constraint variation_listing_intake_sessions_pending_pair_group_fkey foreign key (pending_pair_target_group_id)
     references public.variation_listing_groups (group_id) on update no action on delete no action,
-  constraint variation_listing_intake_sessions_pending_pair_variation_group_fkey foreign key (pending_pair_target_group_id,pending_pair_target_variation_id)
+  constraint variation_listing_intake_sessions_pending_variation_group_fkey foreign key (pending_pair_target_group_id,pending_pair_target_variation_id)
     references public.variation_listing_variations (group_id,variation_id) on update no action on delete no action,
   constraint variation_listing_intake_sessions_pending_pair_version_check check (pending_pair_session_version is null or (pending_pair_session_version >= 1 and pending_pair_session_version = session_version)),
-  constraint variation_listing_intake_sessions_pending_pair_current_snapshot_check check (
+  constraint variation_listing_intake_sessions_pending_snapshot_check check (
     (pending_pair_id is null and pending_pair_mode is null)
     or (pending_pair_mode = mode and pending_pair_target_group_id is not distinct from target_group_id
       and pending_pair_target_variation_id is not distinct from target_variation_id
@@ -234,11 +234,11 @@ begin
 end; $$;
 
 create function public.validate_variation_listing_group_guarded_update()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql security definer
+set search_path = pg_catalog, public, pg_temp as $$
 declare scope text := current_setting('app.variation_listing_write_scope', true);
 declare configured_group text := current_setting('app.variation_listing_group_id', true);
 declare configured_revision text := current_setting('app.variation_listing_expected_revision', true);
-declare existing_proof text := current_setting('app.variation_listing_group_revision_proof', true);
 begin
   if configured_group is null or configured_group = '' or configured_revision is null or configured_revision = ''
      or configured_group <> old.group_id::text or configured_revision::bigint <> old.desired_revision then
@@ -250,14 +250,17 @@ begin
        or new.next_inventory_serial not in (old.next_inventory_serial, old.next_inventory_serial + 1) then
       raise exception 'invalid aggregate revision or allocator transition';
     end if;
-    if existing_proof is not null and existing_proof <> '' then
-      raise exception 'variation listing aggregate revision proof already exists';
-    end if;
-    perform set_config(
-      'app.variation_listing_group_revision_proof',
-      format('%s|%s|%s|%s', txid_current(), old.group_id, old.desired_revision, new.desired_revision),
-      true
-    );
+    execute $proof$
+      create temp table variation_listing_aggregate_revision_proof (
+        transaction_id xid8 not null,
+        group_id uuid not null,
+        from_revision bigint not null,
+        to_revision bigint not null
+      ) on commit drop
+    $proof$;
+    insert into pg_temp.variation_listing_aggregate_revision_proof
+      (transaction_id, group_id, from_revision, to_revision)
+    values (pg_current_xact_id(), old.group_id, old.desired_revision, new.desired_revision);
   elsif scope = 'confirmation' then
     if new.desired_revision <> old.desired_revision or new.next_inventory_serial <> old.next_inventory_serial
        or new.last_confirmed_revision is null or new.last_confirmed_revision < 1
@@ -347,12 +350,14 @@ begin
 end; $$;
 
 create function public.require_variation_listing_variation_revision_advance()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql security definer
+set search_path = pg_catalog, public, pg_temp as $$
 declare configured_revision text := current_setting('app.variation_listing_expected_revision', true);
-declare revision_proof text := current_setting('app.variation_listing_group_revision_proof', true);
 declare row_group uuid;
 declare current_revision bigint;
-declare expected_proof text;
+declare proof_relation oid;
+declare proof_owner oid;
+declare proof_valid boolean := false;
 begin
   if tg_op = 'DELETE' then row_group := old.group_id; else row_group := new.group_id; end if;
   select desired_revision into current_revision from public.variation_listing_groups where group_id = row_group;
@@ -360,8 +365,25 @@ begin
      or current_revision <> configured_revision::bigint + 1 then
     raise exception 'variation write did not observe exactly one group revision advance';
   end if;
-  expected_proof := format('%s|%s|%s|%s', txid_current(), row_group, configured_revision::bigint, current_revision);
-  if revision_proof is distinct from expected_proof then
+  proof_relation := pg_catalog.to_regclass('pg_temp.variation_listing_aggregate_revision_proof');
+  if proof_relation is null then
+    raise exception 'variation write lacks same-transaction group revision proof';
+  end if;
+  select c.relowner into proof_owner
+  from pg_catalog.pg_class c
+  where c.oid = proof_relation;
+  if proof_owner is distinct from (select r.oid from pg_catalog.pg_roles r where r.rolname = current_user) then
+    raise exception 'variation write proof table has unexpected owner';
+  end if;
+  select count(*) = 1 and bool_and(
+      p.transaction_id = pg_current_xact_id()
+      and p.group_id = row_group
+      and p.from_revision = configured_revision::bigint
+      and p.to_revision = current_revision
+    )
+    into proof_valid
+  from pg_temp.variation_listing_aggregate_revision_proof p;
+  if proof_valid is not true then
     raise exception 'variation write lacks same-transaction group revision proof';
   end if;
   if tg_op = 'DELETE' then return old; end if;
@@ -401,13 +423,15 @@ begin
 end; $$;
 
 create function public.require_variation_listing_copy_revision_advance()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql security definer
+set search_path = pg_catalog, public, pg_temp as $$
 declare configured_revision text := current_setting('app.variation_listing_expected_revision', true);
-declare revision_proof text := current_setting('app.variation_listing_group_revision_proof', true);
 declare row_variation uuid;
 declare row_group uuid;
 declare current_revision bigint;
-declare expected_proof text;
+declare proof_relation oid;
+declare proof_owner oid;
+declare proof_valid boolean := false;
 begin
   if tg_op = 'DELETE' then
     row_variation := old.variation_id;
@@ -423,8 +447,25 @@ begin
      or current_revision <> configured_revision::bigint + 1 then
     raise exception 'copy write did not observe exactly one group revision advance';
   end if;
-  expected_proof := format('%s|%s|%s|%s', txid_current(), row_group, configured_revision::bigint, current_revision);
-  if revision_proof is distinct from expected_proof then
+  proof_relation := pg_catalog.to_regclass('pg_temp.variation_listing_aggregate_revision_proof');
+  if proof_relation is null then
+    raise exception 'copy write lacks same-transaction group revision proof';
+  end if;
+  select c.relowner into proof_owner
+  from pg_catalog.pg_class c
+  where c.oid = proof_relation;
+  if proof_owner is distinct from (select r.oid from pg_catalog.pg_roles r where r.rolname = current_user) then
+    raise exception 'copy write proof table has unexpected owner';
+  end if;
+  select count(*) = 1 and bool_and(
+      p.transaction_id = pg_current_xact_id()
+      and p.group_id = row_group
+      and p.from_revision = configured_revision::bigint
+      and p.to_revision = current_revision
+    )
+    into proof_valid
+  from pg_temp.variation_listing_aggregate_revision_proof p;
+  if proof_valid is not true then
     raise exception 'copy write lacks same-transaction group revision proof';
   end if;
   if tg_op = 'DELETE' then return old; end if;
@@ -504,6 +545,21 @@ begin
   end if;
   return new;
 end; $$;
+
+revoke all on function public.prevent_variation_listing_group_identity_update() from public, anon, authenticated, service_role;
+revoke all on function public.prevent_allocated_variation_listing_group_delete() from public, anon, authenticated, service_role;
+revoke all on function public.validate_variation_listing_group_guarded_update() from public, anon, authenticated, service_role;
+revoke all on function public.verify_variation_listing_allocator_consumption() from public, anon, authenticated, service_role;
+revoke all on function public.prevent_variation_listing_variation_identity_update() from public, anon, authenticated, service_role;
+revoke all on function public.validate_variation_listing_sku_projection() from public, anon, authenticated, service_role;
+revoke all on function public.validate_variation_listing_variation_aggregate_write() from public, anon, authenticated, service_role;
+revoke all on function public.require_variation_listing_variation_revision_advance() from public, anon, authenticated, service_role;
+revoke all on function public.prevent_variation_listing_copy_identity_update() from public, anon, authenticated, service_role;
+revoke all on function public.validate_variation_listing_copy_aggregate_write() from public, anon, authenticated, service_role;
+revoke all on function public.require_variation_listing_copy_revision_advance() from public, anon, authenticated, service_role;
+revoke all on function public.require_variation_listing_representative_copy() from public, anon, authenticated, service_role;
+revoke all on function public.prevent_variation_listing_intake_session_identity_update() from public, anon, authenticated, service_role;
+revoke all on function public.validate_variation_listing_intake_session_transition() from public, anon, authenticated, service_role;
 
 create trigger variation_listing_groups_prevent_identity_update
   before update on public.variation_listing_groups for each row

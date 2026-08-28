@@ -102,13 +102,8 @@ The migration must use these names and semantics:
 `variation_listing_groups_validate_guarded_update`, backed by
 `public.validate_variation_listing_group_guarded_update()`, reads transaction-local setting
 `app.variation_listing_write_scope`. For aggregate writes, the trusted service also sets
-`app.variation_listing_group_id` and `app.variation_listing_expected_revision`. It calls
-`set_config(<key>, <value>, true)` for those three caller-configured keys before child writes and the
-one group update, then leaves them set through commit so deferred checks can read them. The guarded
-group trigger, not the caller, sets the separate revision proof after the CAS validation described
-below. `true` makes every setting transaction local, and PostgreSQL clears them when the transaction
-ends. One transaction mutates exactly one group aggregate; cross-group bulk writes use separate
-transactions.
+`app.variation_listing_group_id` and `app.variation_listing_expected_revision`. One transaction
+mutates exactly one group aggregate; cross-group bulk writes use separate transactions.
 The trigger requires configured group ID = `OLD.group_id` and configured expected revision =
 `OLD.desired_revision`. Exact accepted transitions:
 
@@ -119,14 +114,18 @@ The trigger requires configured group ID = `OLD.group_id` and configured expecte
 - missing/empty: all three allocator/revision fields and all material group fields unchanged; only
   trigger-maintained `updated_at` may differ.
 
-After validating an `aggregate` transition from revision `N` to `N+1`, the group trigger requires that
-no proof is already present and sets transaction-local
-`app.variation_listing_group_revision_proof` to the exact
-`<txid>|<group_id>|<N>|<N+1>` tuple. A confirmation, missing, or unknown scope never creates this proof.
-The transaction ID plus exact group/from/to revisions prevents proof from another transaction, group,
-or revision transition from satisfying a deferred child check and enforces the one-group/one-CAS
-transaction boundary. The proof is trigger-produced under the trusted `service_role` write seam and is
-cleared automatically at transaction end.
+After validating an `aggregate` transition from revision `N` to `N+1`, the SECURITY DEFINER group
+trigger creates a fixed-name temporary table `pg_temp.variation_listing_aggregate_revision_proof`
+with `ON COMMIT DROP` (without `IF NOT EXISTS`) and inserts exactly one row containing
+`pg_current_xact_id()`, group ID, `N`, and `N+1`. A confirmation, missing, or unknown scope never
+creates this proof. A second aggregate CAS in the same transaction fails because the fixed table
+already exists. Deferred variation/copy checks are SECURITY DEFINER functions with a pinned
+`search_path`; they require the table to exist, require its owner to equal the function owner, and
+match its one row against the current transaction ID, owning group, and exact from/to revisions.
+Callers cannot forge the proof by setting a GUC or pre-creating a temporary table under their own role.
+The proof is trigger-produced under the trusted service write seam and is cleared automatically at
+transaction end. A row `xmin` is insufficient: any ordinary non-aggregate update also stamps `xmin`,
+so it cannot prove that this aggregate CAS created the child-write authorization.
 
 Identity changes are rejected for every scope. `aggregate` may change local content/lifecycle/recovery;
 `confirmation` may change only confirmation and remote-evidence lifecycle/recovery. The trigger rejects
@@ -201,9 +200,10 @@ service may change `position`, and only the service may change price/metadata/re
 `DELETE`. It requires aggregate scope plus configured group/expected-revision values matching the row.
 Deferred companion `variation_listing_variations_require_revision_advance` re-queries the owning group
 at commit and requires both `desired_revision = configured_expected_revision + 1` and the exact
-same-transaction group/revision proof minted by the guarded group CAS. Delete uses `OLD.group_id`;
+same-transaction temporary proof row minted by the guarded group CAS. Delete uses `OLD.group_id`;
 insert/update use `NEW.group_id`. Direct child mutation against a group already sitting at the numeric
-target revision cannot pass without that transaction's owning group CAS.
+target revision cannot pass without that transaction's owning group CAS and its SECURITY DEFINER-owned
+temporary proof table.
 
 ## Copy table — `public.variation_listing_copies`
 
@@ -261,8 +261,9 @@ invokes `public.set_row_updated_at()`.
 It resolves the owning group through the variation and requires the same aggregate scope/group/expected
 revision settings. Deferred companion `variation_listing_copies_require_revision_advance` re-queries
 that group at commit and requires both `desired_revision = configured_expected_revision + 1` and the
-exact same-transaction group/revision proof. Direct copy mutation without the owning aggregate CAS in
-that transaction fails even when an earlier transaction already advanced the group to the target number.
+exact same-transaction temporary proof row. Direct copy mutation without the owning aggregate CAS and
+its SECURITY DEFINER-owned temporary proof table fails even when an earlier transaction already advanced
+the group to the target number.
 
 ### Representative-copy cycle and transaction sequence
 
@@ -334,7 +335,7 @@ Constraints/FKs/indexes:
   `(target_group_id, target_variation_id)` references variations `(group_id, variation_id)` with
   `ON UPDATE NO ACTION ON DELETE NO ACTION`; this proves duplicate target membership.
 - `variation_listing_intake_sessions_sticky_price_check` and `_currency_check`: exact four USD baskets.
-- `variation_listing_intake_sessions_pending_pair_all_or_none_check`: either every required pending
+- `variation_listing_intake_sessions_pending_all_or_none_check`: either every required pending
   field is null or `pending_pair_id`, positive version, mode, group, price/currency, front ref, and start
   time are all non-null; pending variation is non-null exactly when mode is `duplicate_copy`. YP2.2a
   uses exhaustive `IS NULL`/`IS NOT NULL` branches (or `num_nonnulls`) so SQL `UNKNOWN` cannot admit a
@@ -344,11 +345,11 @@ Constraints/FKs/indexes:
 - `variation_listing_intake_sessions_pending_pair_mode_check`: nullable snapshot mode is only
   `new_variation` or `duplicate_copy`.
 - `variation_listing_intake_sessions_pending_pair_group_fkey` and
-  `variation_listing_intake_sessions_pending_pair_variation_group_fkey`: same nullable group/composite
+  `variation_listing_intake_sessions_pending_variation_group_fkey`: same nullable group/composite
   FKs as current targets, proving snapshot duplicate variation belongs to its snapshotted group.
 - `variation_listing_intake_sessions_pending_pair_version_check`: positive and equal to the current
   `session_version` while pending (the service preserves this equality; SQL rejects stale writes).
-- `variation_listing_intake_sessions_pending_pair_current_snapshot_check`: when pending,
+- `variation_listing_intake_sessions_pending_snapshot_check`: when pending,
   `pending_pair_mode = mode`, both target IDs are `IS NOT DISTINCT FROM` their current target IDs, and
   pending price/currency equal current sticky price/currency. With no pending pair, every pending field
   is null. A target/mode/price rewrite during a half-pair therefore fails at SQL.
