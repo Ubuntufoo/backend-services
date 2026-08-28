@@ -103,10 +103,12 @@ The migration must use these names and semantics:
 `public.validate_variation_listing_group_guarded_update()`, reads transaction-local setting
 `app.variation_listing_write_scope`. For aggregate writes, the trusted service also sets
 `app.variation_listing_group_id` and `app.variation_listing_expected_revision`. It calls
-`set_config(<key>, <value>, true)` for all required keys before child writes and the one group update,
-and leaves them set through commit so deferred checks can read them; `true` makes settings transaction
-local and PostgreSQL clears them when the transaction ends. One transaction mutates exactly one group
-aggregate; cross-group bulk writes use separate transactions.
+`set_config(<key>, <value>, true)` for those three caller-configured keys before child writes and the
+one group update, then leaves them set through commit so deferred checks can read them. The guarded
+group trigger, not the caller, sets the separate revision proof after the CAS validation described
+below. `true` makes every setting transaction local, and PostgreSQL clears them when the transaction
+ends. One transaction mutates exactly one group aggregate; cross-group bulk writes use separate
+transactions.
 The trigger requires configured group ID = `OLD.group_id` and configured expected revision =
 `OLD.desired_revision`. Exact accepted transitions:
 
@@ -116,6 +118,15 @@ The trigger requires configured group ID = `OLD.group_id` and configured expecte
   `last_confirmed_revision` between `1` and `desired_revision`, not below its prior non-null value;
 - missing/empty: all three allocator/revision fields and all material group fields unchanged; only
   trigger-maintained `updated_at` may differ.
+
+After validating an `aggregate` transition from revision `N` to `N+1`, the group trigger requires that
+no proof is already present and sets transaction-local
+`app.variation_listing_group_revision_proof` to the exact
+`<txid>|<group_id>|<N>|<N+1>` tuple. A confirmation, missing, or unknown scope never creates this proof.
+The transaction ID plus exact group/from/to revisions prevents proof from another transaction, group,
+or revision transition from satisfying a deferred child check and enforces the one-group/one-CAS
+transaction boundary. The proof is trigger-produced under the trusted `service_role` write seam and is
+cleared automatically at transaction end.
 
 Identity changes are rejected for every scope. `aggregate` may change local content/lifecycle/recovery;
 `confirmation` may change only confirmation and remote-evidence lifecycle/recovery. The trigger rejects
@@ -189,8 +200,10 @@ service may change `position`, and only the service may change price/metadata/re
 `public.validate_variation_listing_variation_aggregate_write()`, runs on `INSERT`, `UPDATE`, and
 `DELETE`. It requires aggregate scope plus configured group/expected-revision values matching the row.
 Deferred companion `variation_listing_variations_require_revision_advance` re-queries the owning group
-at commit and requires `desired_revision = configured_expected_revision + 1`. Delete uses
-`OLD.group_id`; insert/update use `NEW.group_id`. Direct child mutation without the one group CAS fails.
+at commit and requires both `desired_revision = configured_expected_revision + 1` and the exact
+same-transaction group/revision proof minted by the guarded group CAS. Delete uses `OLD.group_id`;
+insert/update use `NEW.group_id`. Direct child mutation against a group already sitting at the numeric
+target revision cannot pass without that transaction's owning group CAS.
 
 ## Copy table — `public.variation_listing_copies`
 
@@ -247,8 +260,9 @@ invokes `public.set_row_updated_at()`.
 `public.validate_variation_listing_copy_aggregate_write()`, runs on `INSERT`, `UPDATE`, and `DELETE`.
 It resolves the owning group through the variation and requires the same aggregate scope/group/expected
 revision settings. Deferred companion `variation_listing_copies_require_revision_advance` re-queries
-that group at commit and requires `desired_revision = configured_expected_revision + 1`. Direct copy
-mutation without the exact owning aggregate revision advance fails.
+that group at commit and requires both `desired_revision = configured_expected_revision + 1` and the
+exact same-transaction group/revision proof. Direct copy mutation without the owning aggregate CAS in
+that transaction fails even when an earlier transaction already advanced the group to the target number.
 
 ### Representative-copy cycle and transaction sequence
 
@@ -518,17 +532,24 @@ Each table has `created_at`/`updated_at` defaults, a dedicated updated-at trigge
 guards above. The migration must create dedicated functions/triggers without changing the shared
 `set_row_updated_at()` function or any legacy trigger. All foreign keys use `NO ACTION` unless this
 document explicitly says otherwise; service deletion is dependency ordered and service-role-only.
+The first additive migration uses fail-closed `CREATE FUNCTION` for every dedicated variation-listing
+function; it does not silently replace an unexpected pre-existing function with the same signature.
 
 After YP2.2a is locally validated, the normal generation workflow adds `Row`, `Insert`, `Update`, and
 `Relationships` entries for these four tables to `packages/data/src/database-generated.ts` (UUID/time
 as `string`, integer/numeric as `number`, JSONB as generated `Json`). No manual `database.ts` overlay is
 needed. Generated types are not edited in YP2.1 and no runtime type is added here.
 
-Before shared application, rollback may drop only empty variation-listing tables in dependency order:
-intake sessions, copies, variations, groups, then dedicated functions/triggers if no other object uses
-them. Never drop shared functions, legacy objects, or generated legacy types. After any durable data or
-shared apply, use an additive compensating migration preserving UUIDs, serials, images, and evidence;
-a Git rollback is not a database rollback.
+YP2.2a implements the forward contract in
+`supabase/migrations/20260828150000_create_variation_listing_persistence.sql`. Its manual-only,
+pre-apply rollback is
+`supabase/rollbacks/20260828150000_create_variation_listing_persistence.rollback.sql`; keeping it
+outside `supabase/migrations` prevents the destructive SQL from entering the automatic forward
+migration sequence. The rollback takes exclusive locks, aborts unless all four namespaced tables are
+empty, then drops intake sessions, copies, variations, groups, and only the dedicated functions in
+reverse dependency order. It never drops the shared updated-at helper, legacy objects, or generated
+legacy types. After any durable data or shared apply, use an additive compensating migration preserving
+UUIDs, serials, images, and evidence; a Git rollback is not a database rollback.
 
 Forward DDL order is groups, variations without the representative FK, copies, intake sessions, then
 `ALTER TABLE variation_listing_variations` to add the deferred composite representative FK and its
