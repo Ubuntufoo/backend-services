@@ -11,6 +11,7 @@ create table if not exists public.listing_price_research (
   comps jsonb not null default '[]'::jsonb,
   raw_result_json jsonb not null default '{}'::jsonb,
   llm_reasoning_json jsonb not null default '{}'::jsonb,
+  llm_selected_comp_ids jsonb not null default '[]'::jsonb,
   llm_rejected_comp_ids jsonb not null default '[]'::jsonb,
   llm_price_explanation text,
   pricing_model_name text,

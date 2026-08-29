@@ -428,7 +428,7 @@ describe('listing abandonment cascade migration', () => {
   it('cascades listing deletion through jobs and pricing research without changing orders', async () => {
     const migration = await readFile(
       new URL(
-        '../../../../../supabase/migrations/20260730140615_add_needs_review_listing_abandonment_cascades.sql',
+        '../../../../../supabase/migrations/20260730161901_add_needs_review_listing_abandonment_cascades.sql',
         import.meta.url
       ),
       'utf8'

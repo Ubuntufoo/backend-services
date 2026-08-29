@@ -1,7 +1,7 @@
 // Generated from the connected Supabase project schema. Pending additive migration
 // table blocks are mechanically merged from its disposable local schema validation.
 // Regenerate with:
-//   npx supabase gen types typescript --project-id "$PROJECT_REF" --schema public > packages/data/src/database-generated.ts
+//   npx --yes supabase@2.116.0 gen types typescript --project-id "$PROJECT_REF" --schema public > packages/data/src/database-generated.ts
 
 export type Json =
   | string
@@ -426,6 +426,7 @@ export type Database = {
           llm_price_explanation: string | null;
           llm_reasoning_json: Json;
           llm_rejected_comp_ids: Json;
+          llm_selected_comp_ids: Json;
           median_sold_price: number | null;
           suggested_price: number | null;
           confidence: string | null;
@@ -448,6 +449,7 @@ export type Database = {
           llm_price_explanation?: string | null;
           llm_reasoning_json?: Json;
           llm_rejected_comp_ids?: Json;
+          llm_selected_comp_ids?: Json;
           median_sold_price?: number | null;
           suggested_price?: number | null;
           confidence?: string | null;
@@ -470,6 +472,7 @@ export type Database = {
           llm_price_explanation?: string | null;
           llm_reasoning_json?: Json;
           llm_rejected_comp_ids?: Json;
+          llm_selected_comp_ids?: Json;
           median_sold_price?: number | null;
           suggested_price?: number | null;
           confidence?: string | null;
@@ -616,8 +619,8 @@ export type Database = {
           shipping_profile?: string | null;
           sku?: string | null;
           sold_at?: string | null;
-          status?: string | null;
-          sub_status?: string | null;
+          status?: string;
+          sub_status?: string;
           title?: string | null;
           updated_at?: string;
         };
@@ -985,27 +988,31 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      jsonb_text_array: {
+        Args: { input: Json };
+        Returns: string[];
+      };
       reserve_ai_model_usage: {
         Args: {
           p_amount?: number;
           p_model_name: string;
           p_now: string;
           p_provider: string;
-          p_requests_per_day?: number | null;
-          p_requests_per_minute?: number | null;
+          p_requests_per_day?: number;
+          p_requests_per_minute?: number;
           p_task_type: string;
         };
         Returns: {
           allowed: boolean;
-          day_remaining: number | null;
-          day_request_limit: number | null;
-          day_requests_used: number | null;
-          day_window_start: string | null;
-          denied_reason: string | null;
-          minute_remaining: number | null;
-          minute_request_limit: number | null;
-          minute_requests_used: number | null;
-          minute_window_start: string | null;
+          day_remaining: number;
+          day_request_limit: number;
+          day_requests_used: number;
+          day_window_start: string;
+          denied_reason: string;
+          minute_remaining: number;
+          minute_request_limit: number;
+          minute_requests_used: number;
+          minute_window_start: string;
         }[];
       };
       reserve_ai_model_usage_window: {
