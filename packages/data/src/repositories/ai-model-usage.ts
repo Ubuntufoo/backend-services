@@ -192,8 +192,8 @@ export async function reserveAiModelUsage(
       p_model_name: input.modelName,
       p_now: now.toISOString(),
       p_provider: input.provider,
-      p_requests_per_day: requestsPerDay,
-      p_requests_per_minute: requestsPerMinute,
+      p_requests_per_day: requestsPerDay ?? undefined,
+      p_requests_per_minute: requestsPerMinute ?? undefined,
       p_task_type: input.taskType,
     })
     .single()) as SingleResult<ReserveAiModelUsageRpcRow>;

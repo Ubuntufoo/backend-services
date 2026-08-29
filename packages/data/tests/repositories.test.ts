@@ -173,6 +173,7 @@ const listingPriceResearchRow: ListingPriceResearchRow = {
   llm_price_explanation: null,
   llm_reasoning_json: {},
   llm_rejected_comp_ids: [],
+  llm_selected_comp_ids: [],
   median_sold_price: null,
   suggested_price: null,
   confidence: null,
