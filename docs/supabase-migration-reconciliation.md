@@ -1,11 +1,8 @@
 # Supabase migration reconciliation
 
-This repository now tracks the canonical migration versions used by the linked
-production Supabase project. The reconciliation is repository-only: it does not
-write `supabase_migrations.schema_migrations`, execute SQL, or change the hosted
-schema. The canonical history snapshot used for this ledger now includes the
-YP2.4 variation-listing migration through `20260828150000`; the YP2.5 journal
-migration is authored locally and remains the sole expected next pending file.
+This repository tracks the canonical migration versions used by the linked
+production Supabase project. The verified history snapshot now includes both
+variation-listing migrations through the YP2.6 application of `20260829150000`.
 
 ## Local versus canonical history ledger
 
@@ -53,7 +50,7 @@ is represented in live history under the canonical version/name.
 | `20260730140615_add_needs_review_listing_abandonment_cascades.sql` | `20260730161901_add_needs_review_listing_abandonment_cascades.sql` | applied-equivalent; version/name corrected |
 | `20260616164800_trim_pricing_research_persistence.sql` | `supabase/retired-migrations/20260616164800_trim_pricing_research_persistence.sql` | **retired; never include in automatic CLI migrations** |
 | — | `20260828150000_create_variation_listing_persistence.sql` | applied exactly once; 35/35 history alignment; four tables verified empty |
-| — | `20260829150000_create_variation_listing_publishing_journal.sql` | **pending; sole expected next additive YP2.5 migration; author/validate only** |
+| — | `20260829150000_create_variation_listing_publishing_journal.sql` | applied exactly once; 36/36 history alignment; three journal tables verified empty |
 
 The retired file is byte-preserved historical intent. Its `drop column if
 exists listing_price_research.llm_selected_comp_ids` statement is unsafe to
@@ -63,9 +60,10 @@ explicit migration; this reconciliation does not remove or alter the column.
 
 ## Generated schema reconciliation
 
-`packages/data/src/database-generated.ts` is the fresh canonical live type
-surface plus the four applied YP2.4 variation-listing table blocks and the
-three locally validated pending YP2.5 journal table blocks.
+`packages/data/src/database-generated.ts` matches the canonical live type
+surface, including all four YP2.4 variation-listing tables and all three applied
+YP2.5 journal tables. Post-apply generation matched the tracked journal types
+semantically; the only textual differences were property ordering.
 The reconciliation restores live `listing_price_research.llm_selected_comp_ids`,
 `public.jsonb_text_array()`, `reserve_ai_model_usage` argument/return nullability,
 and non-null `listings.Update.status` / `sub_status`. The canonical pricing
@@ -115,8 +113,18 @@ confirming `supabase --version` prints `2.116.0`.
    unchanged legacy Single/Lot tables/helpers. Any unknown or partial result is
    a stop condition; do not replay the push.
 
-Authenticated YP2.4 read-back completed on 2026-08-29 with Supabase CLI
-`2.116.0`: all 35 canonical history rows aligned, the four YP2.4 tables were
-empty, and critical Single/Lot schema remained unchanged. The YP2.5 file is the
-sole expected next pending migration after this author/validate task. Never use
-`--include-all`, migration repair, reset, or replay after an unknown result.
+Authenticated YP2.6 application and read-back completed on 2026-08-29 with
+Supabase CLI `2.116.0`. Fresh preflight aligned all 35 previously applied rows
+and reported only `20260829150000_create_variation_listing_publishing_journal.sql`,
+with no seeds or roles. After explicit operator authorization, the normal linked
+push applied that file exactly once; immediate history read-back aligned all 36
+rows with no pending migration.
+
+Read-only catalog verification found the exact three-table journal contract,
+its reviewed constraints, indexes, triggers, six dedicated functions, RLS with
+no browser policies, and least-privilege service-role grants: revisions
+`SELECT, INSERT`; operations `SELECT, INSERT, UPDATE`; attempts `SELECT, INSERT`.
+`DELETE` and `TRUNCATE` remain absent. All three journal tables and all four YP2.4
+tables had zero rows. The YP2.4 object counts and critical Single/Lot table,
+pricing-column, and shared-helper hashes matched the prior verified checkpoint.
+No eBay or application data mutation occurred.
