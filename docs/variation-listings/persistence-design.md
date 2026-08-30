@@ -25,8 +25,65 @@ Single/Lot capture modes, and Single/Lot SKU parsing/allocation remain untouched
 
 The initial tables deliberately do not contain revision snapshots, payload digests, remote IDs,
 operation attempts/checkpoints, eBay Media identities, order lines, or sold-history evidence. Those
-rows belong to the separately reviewed YP2.5 operation ledger (and YP2.8 sold/order extension).
+rows belong to the separately reviewed YP2.5 operation ledger (and the deferred YP8.1/YP8.2 sold/order work).
 No publishing is allowed before that ledger exists.
+
+## YP2.5 crash-safe publishing journal
+
+YP2.5 adds exactly three purpose-built tables. They freeze one complete Publish
+Changes revision and retain enough ordered remote evidence to resume only when
+the prior effect is proven; they are not a generic event store or workflow
+engine.
+
+### `variation_listing_revisions`
+
+`revision_id` is an immutable application UUID primary key. `group_id` references
+`variation_listing_groups(group_id)` with `NO ACTION`; `(group_id,
+captured_desired_revision)` is unique. `captured_desired_revision` and
+`snapshot_version` are positive, `snapshot_digest` is exactly a lowercase
+64-character SHA-256 string, `snapshot` is a JSON object, and `operation_count`
+is positive. `captured_at` records capture time. A deferred plan check requires
+exactly `operation_count` operation rows before commit, so a revision cannot be
+partially captured. Update and delete triggers reject every mutation.
+
+### `variation_listing_operations`
+
+Each row is one concrete ordered step for a captured revision. `sequence_no` is
+unique within the revision and must be in `1..operation_count`; `operation_key`
+is trimmed/non-empty and unique within the revision. `operation_kind` is limited
+to `media_ingest`, `child_inventory_item_write`, `child_offer_write`,
+`complete_group_replace`, `group_publish`, `revision_reconcile`, `withdrawal`,
+`cleanup_offer`, `cleanup_group`, `cleanup_child_inventory_item`, and
+`final_absence_verification`. `target_ref`, positive `intent_version`, lowercase
+SHA-256 `intent_digest`, and object `intent` freeze the request. Revision/order/
+intent identity is immutable and operation rows cannot be deleted. Service-owned
+projection fields are mutable: `current_state` (`planned`, `started`,
+`confirmed_complete`, `confirmed_no_op`, `unknown`), nullable
+`current_evidence_state` (`present`, `proven_absent`, `unknown`), nullable object
+`current_evidence`, `latest_attempt_number >= 0`, and timestamps.
+
+### `variation_listing_operation_attempts`
+
+Attempts/checkpoints are strictly append-only. Each has a UUID `checkpoint_id`,
+operation FK, positive `attempt_number` and `checkpoint_number`, state
+(`started`, `confirmed_complete`, `confirmed_no_op`, `unknown`), positive
+`evidence_version`, optional object `pre_evidence`, `response_evidence`,
+`post_evidence`, `error_evidence`, and `remote_identity`, optional trimmed
+`decision`, nullable observed remote state (`present`, `proven_absent`,
+`unknown`), and `created_at`. `(operation_id, attempt_number, checkpoint_number)`
+is unique. Update/delete triggers reject writes; retries insert new rows and never
+overwrite earlier evidence.
+
+Unknown state is durable and fail-closed: it never authorizes replay, withdrawal,
+or destructive cleanup. Current evidence is deliberately separate from retained
+historical identities/evidence. Successful operation rows do not advance
+`variation_listing_groups.last_confirmed_revision`; only exact reconciliation of
+the complete captured revision may invoke the existing YP2.4 confirmation scope
+and CAS seam. The current operation projection is not replay or destructive
+authority: YP2.7b service code must evaluate the complete append-only attempt
+history, reject `latest_attempt_number` regression or clearing `unknown` without
+exact reconciliation, and write a new checkpoint evidence row before any state
+change.
 
 ## Group table — `public.variation_listing_groups`
 
@@ -296,7 +353,8 @@ it must occur before deleting the current representative. Selling or making a re
 unavailable never auto-repoints it. A delete transaction that removes a representative must first
 update the variation to another same-variation copy (or delete the variation in the same transaction);
 `NO ACTION` plus deferred checking rejects an orphan at commit. Copy deletion is otherwise service-role
-only and only for an eligible unsold/unprotected local aggregate; YP2.8 adds order/sold guards.
+only and only for an eligible unsold/unprotected local aggregate; deferred YP8.1/YP8.2 order/sold
+evidence adds the proven order/sold guards.
 
 ## Durable intake sessions — `public.variation_listing_intake_sessions`
 
@@ -524,10 +582,13 @@ representative ownership beyond the FK, or derived quantity. Those are service-l
 
 ## RLS, grants, timestamps, rollback, and generated types
 
-All four tables enable RLS. The initial migration must revoke all table privileges from `anon` and
-`authenticated`, grant all table privileges to `service_role`, and create no browser policy. The UI
-uses a trusted server/API seam; a later authenticated read policy is a separate review. No speculative
-`owner_user_id` column is added.
+All seven variation-listing tables enable RLS. The migrations revoke all table privileges from `anon`
+and `authenticated` and create no browser policy. The four initial persistence tables retain the
+service-role privileges required by their aggregate write seam; the YP2.5 journal uses least privilege:
+`variation_listing_revisions` grants `SELECT, INSERT`, `variation_listing_operations` grants
+`SELECT, INSERT, UPDATE`, and `variation_listing_operation_attempts` grants `SELECT, INSERT`, with no
+service-role `DELETE` or `TRUNCATE` capability on journal tables. The UI uses a trusted server/API seam;
+a later authenticated read policy is a separate review. No speculative `owner_user_id` column is added.
 
 Each table has `created_at`/`updated_at` defaults, a dedicated updated-at trigger, and named identity
 guards above. The migration must create dedicated functions/triggers without changing the shared
@@ -536,8 +597,8 @@ document explicitly says otherwise; service deletion is dependency ordered and s
 The first additive migration uses fail-closed `CREATE FUNCTION` for every dedicated variation-listing
 function; it does not silently replace an unexpected pre-existing function with the same signature.
 
-After YP2.2a is locally validated, the normal generation workflow adds `Row`, `Insert`, `Update`, and
-`Relationships` entries for these four tables to `packages/data/src/database-generated.ts` (UUID/time
+After each migration is locally validated, the normal generation workflow adds `Row`, `Insert`, `Update`,
+and `Relationships` entries for its tables to `packages/data/src/database-generated.ts` (UUID/time
 as `string`, integer/numeric as `number`, JSONB as generated `Json`). No manual `database.ts` overlay is
 needed. Generated types are not edited in YP2.1 and no runtime type is added here.
 
@@ -555,6 +616,13 @@ UUIDs, serials, images, and evidence; a Git rollback is not a database rollback.
 Forward DDL order is groups, variations without the representative FK, copies, intake sessions, then
 `ALTER TABLE variation_listing_variations` to add the deferred composite representative FK and its
 deferred current-row constraint trigger. This mechanically breaks the relational creation cycle.
+
+YP2.5 forward DDL creates revisions, operations, and operation attempts after the YP2.4 tables. Its
+manual-only rollback is
+`supabase/rollbacks/20260829150000_create_variation_listing_publishing_journal.rollback.sql`.
+The rollback locks only those three tables, aborts when any durable row exists, then drops attempts,
+operations, revisions, and their dedicated functions. It preserves all YP2.4 tables/helpers; after
+durable journal data exists, recovery requires a compensating migration.
 
 ## Compatibility proof
 

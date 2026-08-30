@@ -1,5 +1,5 @@
 // Generated from the connected Supabase project schema. Pending additive migration
-// table blocks are mechanically merged from its disposable local schema validation.
+// table blocks are mechanically merged from disposable local schema validation.
 // Regenerate with:
 //   npx --yes supabase@2.116.0 gen types typescript --project-id "$PROJECT_REF" --schema public > packages/data/src/database-generated.ts
 
@@ -920,6 +920,168 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: 'variation_listing_variations';
             referencedColumns: ['group_id', 'variation_id'];
+          },
+        ];
+      };
+      variation_listing_operation_attempts: {
+        Row: {
+          attempt_number: number;
+          checkpoint_id: string;
+          checkpoint_number: number;
+          created_at: string;
+          decision: string | null;
+          error_evidence: Json | null;
+          evidence_version: number;
+          operation_id: string;
+          post_evidence: Json | null;
+          pre_evidence: Json | null;
+          observed_remote_state: string | null;
+          remote_identity: Json | null;
+          response_evidence: Json | null;
+          state: string;
+        };
+        Insert: {
+          attempt_number: number;
+          checkpoint_id: string;
+          checkpoint_number: number;
+          created_at?: string;
+          decision?: string | null;
+          error_evidence?: Json | null;
+          evidence_version: number;
+          observed_remote_state?: string | null;
+          operation_id: string;
+          post_evidence?: Json | null;
+          pre_evidence?: Json | null;
+          remote_identity?: Json | null;
+          response_evidence?: Json | null;
+          state: string;
+        };
+        Update: {
+          attempt_number?: number;
+          checkpoint_id?: string;
+          checkpoint_number?: number;
+          created_at?: string;
+          decision?: string | null;
+          error_evidence?: Json | null;
+          evidence_version?: number;
+          observed_remote_state?: string | null;
+          operation_id?: string;
+          post_evidence?: Json | null;
+          pre_evidence?: Json | null;
+          remote_identity?: Json | null;
+          response_evidence?: Json | null;
+          state?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_operation_attempts_operation_id_fkey';
+            columns: ['operation_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_operations';
+            referencedColumns: ['operation_id'];
+          },
+        ];
+      };
+      variation_listing_operations: {
+        Row: {
+          created_at: string;
+          current_evidence: Json | null;
+          current_evidence_state: string | null;
+          current_state: string;
+          intent: Json;
+          intent_digest: string;
+          intent_version: number;
+          latest_attempt_number: number;
+          operation_id: string;
+          operation_kind: string;
+          operation_key: string;
+          revision_id: string;
+          sequence_no: number;
+          target_ref: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          current_evidence?: Json | null;
+          current_evidence_state?: string | null;
+          current_state?: string;
+          intent: Json;
+          intent_digest: string;
+          intent_version: number;
+          latest_attempt_number?: number;
+          operation_id: string;
+          operation_kind: string;
+          operation_key: string;
+          revision_id: string;
+          sequence_no: number;
+          target_ref: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          current_evidence?: Json | null;
+          current_evidence_state?: string | null;
+          current_state?: string;
+          intent?: Json;
+          intent_digest?: string;
+          intent_version?: number;
+          latest_attempt_number?: number;
+          operation_id?: string;
+          operation_kind?: string;
+          operation_key?: string;
+          revision_id?: string;
+          sequence_no?: number;
+          target_ref?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_operations_revision_id_fkey';
+            columns: ['revision_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_revisions';
+            referencedColumns: ['revision_id'];
+          },
+        ];
+      };
+      variation_listing_revisions: {
+        Row: {
+          captured_at: string;
+          captured_desired_revision: number;
+          group_id: string;
+          operation_count: number;
+          revision_id: string;
+          snapshot: Json;
+          snapshot_digest: string;
+          snapshot_version: number;
+        };
+        Insert: {
+          captured_at?: string;
+          captured_desired_revision: number;
+          group_id: string;
+          operation_count: number;
+          revision_id: string;
+          snapshot: Json;
+          snapshot_digest: string;
+          snapshot_version: number;
+        };
+        Update: {
+          captured_at?: string;
+          captured_desired_revision?: number;
+          group_id?: string;
+          operation_count?: number;
+          revision_id?: string;
+          snapshot?: Json;
+          snapshot_digest?: string;
+          snapshot_version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_revisions_group_id_fkey';
+            columns: ['group_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_groups';
+            referencedColumns: ['group_id'];
           },
         ];
       };

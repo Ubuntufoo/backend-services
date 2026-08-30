@@ -3,8 +3,9 @@
 This repository now tracks the canonical migration versions used by the linked
 production Supabase project. The reconciliation is repository-only: it does not
 write `supabase_migrations.schema_migrations`, execute SQL, or change the hosted
-schema. The canonical history snapshot used for this ledger ended at
-`20260730161901`; the variation-listing migration remains unapplied.
+schema. The canonical history snapshot used for this ledger now includes the
+YP2.4 variation-listing migration through `20260828150000`; the YP2.5 journal
+migration is authored locally and remains the sole expected next pending file.
 
 ## Local versus canonical history ledger
 
@@ -51,7 +52,8 @@ is represented in live history under the canonical version/name.
 | `20260729202152_add_listing_auto_pricing_enabled.sql` | `20260729204026_add_listing_auto_pricing_enabled.sql` | applied-equivalent; version/name corrected |
 | `20260730140615_add_needs_review_listing_abandonment_cascades.sql` | `20260730161901_add_needs_review_listing_abandonment_cascades.sql` | applied-equivalent; version/name corrected |
 | `20260616164800_trim_pricing_research_persistence.sql` | `supabase/retired-migrations/20260616164800_trim_pricing_research_persistence.sql` | **retired; never include in automatic CLI migrations** |
-| — | `20260828150000_create_variation_listing_persistence.sql` | **pending; intended additive YP2.4 migration** |
+| — | `20260828150000_create_variation_listing_persistence.sql` | applied exactly once; 35/35 history alignment; four tables verified empty |
+| — | `20260829150000_create_variation_listing_publishing_journal.sql` | **pending; sole expected next additive YP2.5 migration; author/validate only** |
 
 The retired file is byte-preserved historical intent. Its `drop column if
 exists listing_price_research.llm_selected_comp_ids` statement is unsafe to
@@ -62,7 +64,8 @@ explicit migration; this reconciliation does not remove or alter the column.
 ## Generated schema reconciliation
 
 `packages/data/src/database-generated.ts` is the fresh canonical live type
-surface plus only the four validated, pending variation-listing table blocks.
+surface plus the four applied YP2.4 variation-listing table blocks and the
+three locally validated pending YP2.5 journal table blocks.
 The reconciliation restores live `listing_price_research.llm_selected_comp_ids`,
 `public.jsonb_text_array()`, `reserve_ai_model_usage` argument/return nullability,
 and non-null `listings.Update.status` / `sub_status`. The canonical pricing
@@ -70,14 +73,18 @@ foundation migration also defines `llm_selected_comp_ids`, so disposable schema
 recreation and generated types agree with production while the retired drop is
 excluded from automatic migration discovery.
 
-## Deterministic YP2.4 CLI workflow
+## Deterministic migration workflow
 
 Run from this repository with the canonical project already linked. Do not link
 or select a different project in this workflow. Use the repository-recorded CLI
 version `2.116.0`; substitute a globally installed `supabase` binary only after
 confirming `supabase --version` prints `2.116.0`.
 
-1. Read-only preflight:
+1. YP2.4 was applied exactly once and read back as 35/35 aligned history rows;
+   all four YP2.4 tables were empty. YP2.5 authoring and validation use only
+   disposable/local PostgreSQL and do not call the hosted project.
+
+2. For the separately authorized YP2.6 apply gate, run the read-only preflight:
 
    ```sh
    npx --yes supabase@2.116.0 migration list --linked
@@ -86,11 +93,11 @@ confirming `supabase --version` prints `2.116.0`.
 
    The list must show every canonical applied version above and no local/remote
    mismatch. The dry-run must report exactly one pending file:
-   `20260828150000_create_variation_listing_persistence.sql`. Stop if any other
+   `20260829150000_create_variation_listing_publishing_journal.sql`. Stop if any other
    migration is pending, missing remotely, out of order, or described as a
    destructive legacy change.
 
-2. After separate operator authorization for YP2.4, apply once:
+3. After separate operator authorization for YP2.6, apply once:
 
    ```sh
    npx --yes supabase@2.116.0 db push --linked
@@ -100,18 +107,16 @@ confirming `supabase --version` prints `2.116.0`.
    not a migration selector. Do not use `migration repair`, `db reset`, or a
    semantic one-off apply in place of this workflow.
 
-3. Immediately read back, without changing data: rerun
+4. Immediately read back, without changing data: rerun
    `npx --yes supabase@2.116.0 migration list --linked` and confirm the target version/name occurs
    exactly once with no pending rows; then use the canonical read-only schema
-   inspection/type-generation tools to confirm the four variation-listing
-   tables, their constraints/RLS/grants/functions, and unchanged legacy
-   Single/Lot tables/helpers. Any unknown or partial result is a stop condition;
-   do not replay the push.
+   inspection/type-generation tools to confirm the three YP2.5 journal tables,
+   all four preserved YP2.4 tables, their constraints/RLS/grants/functions, and
+   unchanged legacy Single/Lot tables/helpers. Any unknown or partial result is
+   a stop condition; do not replay the push.
 
-Authenticated YP2.3 preflight completed on 2026-08-29 with Supabase CLI
-`2.116.0`. `migration list --linked` showed all 34 canonical applied versions
-aligned local-to-remote and only local `20260828150000` unapplied.
-`db push --dry-run --linked` reported exactly
-`20260828150000_create_variation_listing_persistence.sql`, with `dryRun=true`,
-and no seeds or roles. No migration, SQL, schema, data, or history mutation was
-executed. YP2.4 remains a separate operator-authorized action.
+Authenticated YP2.4 read-back completed on 2026-08-29 with Supabase CLI
+`2.116.0`: all 35 canonical history rows aligned, the four YP2.4 tables were
+empty, and critical Single/Lot schema remained unchanged. The YP2.5 file is the
+sole expected next pending migration after this author/validate task. Never use
+`--include-all`, migration repair, reset, or replay after an unknown result.

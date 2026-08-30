@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Disposable YP2.2b migration validation.  This intentionally uses only Node
+ * Disposable YP2.5 migration validation.  This intentionally uses only Node
  * built-ins and the Docker/psql CLIs; it never connects to a hosted database.
  */
 import { randomBytes } from 'node:crypto';
@@ -10,7 +10,9 @@ import { spawn } from 'node:child_process';
 
 const root = new URL('..', import.meta.url);
 const migrationPath = new URL('supabase/migrations/20260828150000_create_variation_listing_persistence.sql', root);
+const journalMigrationPath = new URL('supabase/migrations/20260829150000_create_variation_listing_publishing_journal.sql', root);
 const rollbackPath = new URL('supabase/rollbacks/20260828150000_create_variation_listing_persistence.rollback.sql', root);
+const journalRollbackPath = new URL('supabase/rollbacks/20260829150000_create_variation_listing_publishing_journal.rollback.sql', root);
 
 const password = 'codex-yp22b-postgres';
 const name = `codex-yp22b-${process.pid}-${randomBytes(4).toString('hex')}`;
@@ -59,6 +61,12 @@ const pair1 = '77777777-7777-4777-8777-777777777777';
 const pair2 = '88888888-8888-4888-8888-888888888888';
 const pair3 = '88888888-8888-4888-8888-888888888889';
 const pair4 = '88888888-8888-4888-8888-88888888888a';
+const rev1 = '99999999-9999-4999-8999-999999999901';
+const op1 = '99999999-9999-4999-8999-999999999902';
+const op2 = '99999999-9999-4999-8999-999999999903';
+const attempt1 = '99999999-9999-4999-8999-999999999904';
+const revEmpty = '99999999-9999-4999-8999-999999999905';
+const attempt2 = '99999999-9999-4999-8999-999999999906';
 
 const constraintNames = [
   'variation_listing_groups_pkey', 'variation_listing_groups_group_key_key', 'variation_listing_groups_sku_namespace_key',
@@ -115,6 +123,42 @@ const functionNames = [
   'prevent_variation_listing_intake_session_identity_update', 'validate_variation_listing_intake_session_transition',
 ];
 const functionValues = functionNames.map((name) => `('${name}')`).join(', ');
+
+const journalConstraintNames = [
+  'variation_listing_revisions_pkey', 'variation_listing_revisions_group_revision_key',
+  'variation_listing_revisions_group_id_fkey', 'variation_listing_revisions_captured_revision_check',
+  'variation_listing_revisions_snapshot_version_check', 'variation_listing_revisions_snapshot_digest_check',
+  'variation_listing_revisions_snapshot_object_check', 'variation_listing_revisions_operation_count_check',
+  'variation_listing_operations_pkey', 'variation_listing_operations_revision_sequence_key',
+  'variation_listing_operations_revision_key_key', 'variation_listing_operations_revision_id_fkey',
+  'variation_listing_operations_sequence_check', 'variation_listing_operations_key_check',
+  'variation_listing_operations_kind_check', 'variation_listing_operations_target_ref_check',
+  'variation_listing_operations_intent_version_check', 'variation_listing_operations_intent_digest_check',
+  'variation_listing_operations_intent_object_check', 'variation_listing_operations_current_state_check',
+  'variation_listing_operations_current_evidence_state_check', 'variation_listing_operations_current_evidence_object_check',
+  'variation_listing_operations_latest_attempt_check', 'variation_listing_operation_attempts_pkey',
+  'variation_listing_operation_attempts_operation_attempt_checkpoint_key',
+  'variation_listing_operation_attempts_operation_id_fkey', 'variation_listing_operation_attempts_attempt_number_check',
+  'variation_listing_operation_attempts_checkpoint_number_check', 'variation_listing_operation_attempts_state_check',
+  'variation_listing_operation_attempts_evidence_version_check', 'variation_listing_operation_attempts_pre_evidence_check',
+  'variation_listing_operation_attempts_response_evidence_check', 'variation_listing_operation_attempts_post_evidence_check',
+  'variation_listing_operation_attempts_error_evidence_check', 'variation_listing_operation_attempts_remote_identity_check',
+  'variation_listing_operation_attempts_decision_check', 'variation_listing_operation_attempts_observed_remote_state_check',
+];
+const journalConstraintValues = journalConstraintNames.map((name) => `('${name.slice(0, 63)}')`).join(', ');
+const journalTriggerNames = [
+  'variation_listing_revisions_prevent_update', 'variation_listing_revisions_prevent_delete',
+  'variation_listing_operations_prevent_identity_update', 'variation_listing_operations_prevent_delete',
+  'variation_listing_operations_require_sequence', 'variation_listing_operations_updated_at',
+  'variation_listing_revisions_require_complete_plan', 'variation_listing_operation_attempts_prevent_mutation',
+];
+const journalTriggerValues = journalTriggerNames.map((name) => `('${name}')`).join(', ');
+const journalFunctionNames = [
+  'prevent_variation_listing_revision_mutation', 'prevent_variation_listing_operation_identity_update',
+  'prevent_variation_listing_operation_delete', 'prevent_variation_listing_operation_attempt_mutation',
+  'require_variation_listing_operation_sequence', 'require_variation_listing_revision_plan',
+];
+const journalFunctionValues = journalFunctionNames.map((name) => `('${name}')`).join(', ');
 
 function aggregateTransaction(group, expected, body) {
   return `begin;
@@ -195,7 +239,7 @@ select assert_true((select bool_and(proconfig @> array['search_path=pg_catalog, 
 with callers(role_name) as (values ('anon'), ('authenticated'), ('service_role')),
      funcs(name) as (values ${functionValues})
 select assert_true((select bool_and(not has_function_privilege(callers.role_name, format('public.%s()', funcs.name), 'execute')) from callers cross join funcs), 'dedicated functions revoke caller execute');
-select assert_true((select count(*) from pg_class where relname like 'variation_listing_%' and relrowsecurity) = 4, 'RLS enabled on all four tables');
+select assert_true((select count(*) from pg_class where relname like 'variation_listing_%' and relrowsecurity) = 7, 'RLS enabled on persistence and journal tables');
 select assert_true((select count(*) from pg_policies where schemaname = 'public' and tablename like 'variation_listing_%') = 0, 'no browser policies installed');
 select assert_true((select bool_and(not has_table_privilege('anon', format('public.%s', table_name), 'select')) from (values ('variation_listing_groups'), ('variation_listing_variations'), ('variation_listing_copies'), ('variation_listing_intake_sessions')) as tables(table_name)), 'anon has no table privileges');
 select assert_true((select bool_and(not has_table_privilege('authenticated', format('public.%s', table_name), 'select')) from (values ('variation_listing_groups'), ('variation_listing_variations'), ('variation_listing_copies'), ('variation_listing_intake_sessions')) as tables(table_name)), 'authenticated has no table privileges');
@@ -397,6 +441,64 @@ select assert_failure('unsupported sticky price', $$insert into public.variation
 ${aggregateFailureTransaction(g1, 5, 'surviving-null representative', `update public.variation_listing_variations set representative_copy_id = null where variation_id = '${v1}'`)}
 select assert_true((select representative_copy_id is not null from public.variation_listing_variations where variation_id = '${v1}'), 'representative remains non-null');
 
+-- YP2.5 publishing journal: immutable captured revision, ordered operations, and append-only attempts.
+select assert_true(to_regclass('public.variation_listing_revisions') is not null, 'publishing revisions table exists');
+select assert_true(to_regclass('public.variation_listing_operations') is not null, 'publishing operations table exists');
+select assert_true(to_regclass('public.variation_listing_operation_attempts') is not null, 'publishing attempts table exists');
+with expected(name) as (values ${journalConstraintValues})
+select assert_true((select count(*) from pg_constraint c join expected e on e.name = c.conname) = ${journalConstraintNames.length}, 'all journal constraints installed');
+select assert_true((select count(*) from pg_indexes where schemaname = 'public' and indexname = 'variation_listing_operations_recovery_idx') = 1, 'journal recovery index installed');
+with expected(name) as (values ${journalTriggerValues})
+select assert_true((select count(*) from pg_trigger t join expected e on e.name = t.tgname where not t.tgisinternal) = ${journalTriggerNames.length}, 'all journal triggers installed');
+with expected(name) as (values ${journalFunctionValues})
+select assert_true((select count(*) from pg_proc p join expected e on e.name = p.proname where p.pronamespace = 'public'::regnamespace) = ${journalFunctionNames.length}, 'all journal functions installed');
+with callers(role_name) as (values ('anon'), ('authenticated'), ('service_role')),
+     funcs(name) as (values ${journalFunctionValues})
+select assert_true((select bool_and(not has_function_privilege(callers.role_name, format('public.%s()', funcs.name), 'execute')) from callers cross join funcs), 'journal functions revoke execute');
+select assert_true((select count(*) from pg_class where relname like 'variation_listing_%' and relrowsecurity) = 7, 'RLS enabled on journal and persistence tables');
+select assert_true((select bool_and(not has_table_privilege('anon', format('public.%s', table_name), 'select')) from (values ('variation_listing_revisions'), ('variation_listing_operations'), ('variation_listing_operation_attempts')) as tables(table_name)), 'anon has no journal privileges');
+select assert_true((select bool_and(not has_table_privilege('authenticated', format('public.%s', table_name), 'select')) from (values ('variation_listing_revisions'), ('variation_listing_operations'), ('variation_listing_operation_attempts')) as tables(table_name)), 'authenticated has no journal privileges');
+select assert_true(has_table_privilege('service_role', 'public.variation_listing_revisions', 'select') and has_table_privilege('service_role', 'public.variation_listing_revisions', 'insert'), 'service role can read and insert revisions');
+select assert_true(has_table_privilege('service_role', 'public.variation_listing_operations', 'select') and has_table_privilege('service_role', 'public.variation_listing_operations', 'insert') and has_table_privilege('service_role', 'public.variation_listing_operations', 'update'), 'service role can read, insert, and update operations');
+select assert_true(has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'select') and has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'insert'), 'service role can read and insert attempts');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_revisions', 'update') and not has_table_privilege('service_role', 'public.variation_listing_revisions', 'delete') and not has_table_privilege('service_role', 'public.variation_listing_revisions', 'truncate'), 'service role cannot mutate or truncate revisions');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operations', 'delete') and not has_table_privilege('service_role', 'public.variation_listing_operations', 'truncate'), 'service role cannot delete or truncate operations');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'update') and not has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'delete') and not has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'truncate'), 'service role cannot mutate or truncate attempts');
+select assert_true((select bool_and(not has_table_privilege('service_role', format('public.%s', table_name), 'references') and not has_table_privilege('service_role', format('public.%s', table_name), 'trigger')) from (values ('variation_listing_revisions'), ('variation_listing_operations'), ('variation_listing_operation_attempts')) as tables(table_name)), 'service role has no journal references or trigger privileges');
+select assert_failure('revision FK to missing group', $$insert into public.variation_listing_revisions (revision_id, group_id, captured_desired_revision, snapshot_version, snapshot_digest, snapshot, operation_count) values ('${revEmpty}', '99999999-9999-4999-8999-999999999906', 1, 1, repeat('a', 64), '{}'::jsonb, 1)$$);
+select assert_failure('revision requires positive operation plan', $$insert into public.variation_listing_revisions (revision_id, group_id, captured_desired_revision, snapshot_version, snapshot_digest, snapshot, operation_count) values ('${revEmpty}', '${g1}', 5, 1, repeat('a', 64), '{}'::jsonb, 0)$$);
+select assert_failure('revision requires complete operation plan', $$insert into public.variation_listing_revisions (revision_id, group_id, captured_desired_revision, snapshot_version, snapshot_digest, snapshot, operation_count) values ('${revEmpty}', '${g1}', 6, 1, repeat('a', 64), '{}'::jsonb, 1)$$);
+begin;
+insert into public.variation_listing_revisions (revision_id, group_id, captured_desired_revision, snapshot_version, snapshot_digest, snapshot, operation_count)
+values ('${rev1}', '${g1}', 5, 1, repeat('a', 64), '{"group":"${g1}","desired_revision":5}'::jsonb, 2);
+insert into public.variation_listing_operations (operation_id, revision_id, sequence_no, operation_key, operation_kind, target_ref, intent_version, intent_digest, intent)
+values ('${op1}', '${rev1}', 1, 'media-1', 'media_ingest', 'variation/${v1}/front', 1, repeat('b', 64), '{"media":"front"}'::jsonb),
+       ('${op2}', '${rev1}', 2, 'group-1', 'complete_group_replace', 'group/${g1}', 1, repeat('c', 64), '{"group":"${g1}"}'::jsonb);
+set constraints all immediate;
+commit;
+select assert_true((select count(*) = 2 from public.variation_listing_operations where revision_id = '${rev1}'), 'complete operation plan committed');
+select assert_failure('operation sequence outside captured plan', $$insert into public.variation_listing_operations (operation_id, revision_id, sequence_no, operation_key, operation_kind, target_ref, intent_version, intent_digest, intent) values ('${revEmpty}', '${rev1}', 3, 'too-late', 'withdrawal', 'group/${g1}', 1, repeat('d', 64), '{}'::jsonb)$$);
+insert into public.variation_listing_operation_attempts (checkpoint_id, operation_id, attempt_number, checkpoint_number, state, evidence_version, pre_evidence, response_evidence, remote_identity, decision, observed_remote_state)
+values ('${attempt1}', '${op1}', 1, 1, 'started', 1, '{"before":true}'::jsonb, '{"accepted":true}'::jsonb, '{"media_id":"m-1"}'::jsonb, 'reconcile', 'unknown');
+update public.variation_listing_operations set current_state = 'unknown', current_evidence_state = 'unknown', current_evidence = '{"ambiguous":true}'::jsonb, latest_attempt_number = 1 where operation_id = '${op1}';
+select assert_true((select current_state = 'unknown' and latest_attempt_number = 1 from public.variation_listing_operations where operation_id = '${op1}'), 'unknown operation state retained');
+insert into public.variation_listing_operation_attempts (checkpoint_id, operation_id, attempt_number, checkpoint_number, state, evidence_version, pre_evidence, response_evidence, error_evidence, decision, observed_remote_state)
+values ('${attempt2}', '${op1}', 2, 1, 'unknown', 1, '{"before":true}'::jsonb, '{"timeout":true}'::jsonb, '{"code":"transport_timeout"}'::jsonb, 'reconcile-required', 'unknown');
+update public.variation_listing_operations set current_state = 'unknown', current_evidence_state = 'unknown', current_evidence = '{"ambiguous":true,"attempt":2}'::jsonb, latest_attempt_number = 2 where operation_id = '${op1}';
+select assert_true((select count(*) = 2 from public.variation_listing_operation_attempts where operation_id = '${op1}'), 'retry attempt retained as second append-only row');
+select assert_true((select pre_evidence = '{"before":true}'::jsonb and response_evidence = '{"accepted":true}'::jsonb and remote_identity = '{"media_id":"m-1"}'::jsonb from public.variation_listing_operation_attempts where checkpoint_id = '${attempt1}'), 'first attempt evidence and identity remain unchanged');
+select assert_true((select current_state = 'unknown' and latest_attempt_number = 2 from public.variation_listing_operations where operation_id = '${op1}'), 'latest unknown retry remains fail-closed');
+update public.variation_listing_operations set current_state = 'confirmed_complete', current_evidence_state = 'present', current_evidence = '{"verified":true}'::jsonb where operation_id = '${op2}';
+select assert_true((select current_state = 'confirmed_complete' from public.variation_listing_operations where operation_id = '${op2}'), 'successful operation state retained');
+select assert_true((select last_confirmed_revision is null from public.variation_listing_groups where group_id = '${g1}'), 'operation success does not advance group confirmation watermark');
+select assert_failure('immutable revision snapshot', $$update public.variation_listing_revisions set snapshot = '{"mutated":true}'::jsonb where revision_id = '${rev1}'$$);
+select assert_failure('immutable operation intent', $$update public.variation_listing_operations set intent = '{"mutated":true}'::jsonb where operation_id = '${op1}'$$);
+select assert_failure('append-only attempt update', $$update public.variation_listing_operation_attempts set decision = 'overwrite' where checkpoint_id = '${attempt1}'$$);
+select assert_failure('append-only attempt delete', $$delete from public.variation_listing_operation_attempts where checkpoint_id = '${attempt1}'$$);
+select assert_failure('operation delete guarded', $$delete from public.variation_listing_operations where operation_id = '${op2}'$$);
+select assert_failure('duplicate attempt checkpoint', $$insert into public.variation_listing_operation_attempts (checkpoint_id, operation_id, attempt_number, checkpoint_number, state, evidence_version) values ('${revEmpty}', '${op1}', 1, 1, 'unknown', 1)$$);
+select assert_failure('attempt FK to missing operation', $$insert into public.variation_listing_operation_attempts (checkpoint_id, operation_id, attempt_number, checkpoint_number, state, evidence_version) values ('${revEmpty}', '${revEmpty}', 1, 2, 'unknown', 1)$$);
+
 -- Function collision is fail-closed: a second empty database pre-creates one dedicated function.
 `;
 
@@ -421,6 +523,20 @@ with expected(name) as (values ${functionValues})
 select assert_true((select count(*) from pg_proc p join expected e on e.name = p.proname where p.pronamespace = 'public'::regnamespace and p.pronargs = 0) = 0, 'rollback removed dedicated functions');
 `;
 
+const journalRollbackAssertions = `
+select assert_true(to_regclass('public.variation_listing_revisions') is null, 'journal rollback removed revisions');
+select assert_true(to_regclass('public.variation_listing_operations') is null, 'journal rollback removed operations');
+select assert_true(to_regclass('public.variation_listing_operation_attempts') is null, 'journal rollback removed attempts');
+select assert_true(to_regclass('public.variation_listing_groups') is not null, 'journal rollback preserved groups');
+select assert_true(to_regclass('public.variation_listing_variations') is not null, 'journal rollback preserved variations');
+select assert_true(to_regclass('public.variation_listing_copies') is not null, 'journal rollback preserved copies');
+select assert_true(to_regclass('public.variation_listing_intake_sessions') is not null, 'journal rollback preserved intake');
+select assert_true((select count(*) from pg_views where schemaname = 'public' and viewname = 'sentinel_shared_view') = 1, 'journal rollback preserved shared view');
+select assert_true(to_regprocedure('public.set_row_updated_at()') is not null, 'journal rollback preserved shared helper');
+with expected(name) as (values ${journalFunctionValues})
+select assert_true((select count(*) from pg_proc p join expected e on e.name = p.proname where p.pronamespace = 'public'::regnamespace) = 0, 'journal rollback removed dedicated functions');
+`;
+
 async function main() {
   let started = false;
   try {
@@ -436,8 +552,10 @@ async function main() {
       }
     }
     const migration = await readFile(migrationPath, 'utf8');
+    const journalMigration = await readFile(journalMigrationPath, 'utf8');
     const rollback = await readFile(rollbackPath, 'utf8');
-    await psql('postgres', bootstrap + migration + assertions);
+    const journalRollback = await readFile(journalRollbackPath, 'utf8');
+    await psql('postgres', bootstrap + migration + journalMigration + assertions);
 
     await docker(['exec', name, 'createdb', '-U', 'postgres', 'collision_db']);
     const collisionError = await psqlExpectFailure('collision_db', `${collisionBootstrap}${collision}\nbegin;\n${migration}\ncommit;`);
@@ -449,15 +567,44 @@ async function main() {
       throw new Error(`collision transaction did not roll back cleanly:\n${collisionProbe.stdout}`);
     }
 
+    await docker(['exec', name, 'createdb', '-U', 'postgres', 'journal_collision_db']);
+    const journalCollision = `
+create function public.prevent_variation_listing_revision_mutation() returns trigger language plpgsql as $$ begin return new; end; $$;
+`;
+    const journalCollisionError = await psqlExpectFailure(
+      'journal_collision_db',
+      `${collisionBootstrap}${journalCollision}\nbegin;\n${migration}\n${journalMigration}\ncommit;`,
+    );
+    if (!/already exists|duplicate/i.test(`${journalCollisionError.stderr}${journalCollisionError.stdout}`)) {
+      throw new Error(`journal function collision failed for an unexpected reason:\n${journalCollisionError.stderr || journalCollisionError.stdout}`);
+    }
+    const journalCollisionProbe = await psql('journal_collision_db', "select case when to_regprocedure('public.prevent_variation_listing_revision_mutation()') is not null and to_regprocedure('public.set_row_updated_at()') is not null and to_regclass('public.sentinel_shared_view') is not null and (select count(*) from pg_class where relname like 'variation_listing_%' and relkind = 'r') = 0 then 'journal-collision-ok' else 'journal-collision-bad' end;");
+    if (!/journal-collision-ok/.test(journalCollisionProbe.stdout)) {
+      throw new Error(`journal collision transaction did not roll back cleanly:\n${journalCollisionProbe.stdout}`);
+    }
+
+    const occupiedJournalRollbackError = await psqlExpectFailure('postgres', journalRollback);
+    if (!/not empty|durable|journal|variation_listing/i.test(`${occupiedJournalRollbackError.stderr}${occupiedJournalRollbackError.stdout}`)) {
+      throw new Error(`occupied journal rollback failed for an unexpected reason:\n${occupiedJournalRollbackError.stderr || occupiedJournalRollbackError.stdout}`);
+    }
+    // Row-level append-only guards intentionally reject DELETE; disposable
+    // validation uses TRUNCATE to model a pre-apply empty database only.
+    await psql('postgres', `truncate table public.variation_listing_operation_attempts, public.variation_listing_operations, public.variation_listing_revisions cascade;`);
+    await psql('postgres', journalRollback);
+    await psql('postgres', journalRollbackAssertions);
+    await psql('postgres', journalMigration);
+    await psql('postgres', "select assert_true(to_regclass('public.variation_listing_revisions') is not null, 'journal reapply succeeds');");
+    await psql('postgres', journalRollback);
+
     const occupiedRollbackError = await psqlExpectFailure('postgres', rollback);
     if (!/not empty|durable|variation_listing/i.test(`${occupiedRollbackError.stderr}${occupiedRollbackError.stdout}`)) {
       throw new Error(`occupied rollback failed for an unexpected reason:\n${occupiedRollbackError.stderr || occupiedRollbackError.stdout}`);
     }
     await psql('postgres', `truncate table public.variation_listing_intake_sessions, public.variation_listing_copies, public.variation_listing_variations, public.variation_listing_groups cascade;\n${rollback}`);
     await psql('postgres', rollbackAssertions);
-    await psql('postgres', migration);
+    await psql('postgres', migration + journalMigration);
     await psql('postgres', "select assert_true(to_regclass('public.variation_listing_groups') is not null, 'reapply succeeds');");
-    console.log('YP2.2b variation-listing migration validation: passed');
+    console.log('YP2.5 variation-listing migration validation: passed');
   } finally {
     if (started) {
       try { await docker(['rm', '--force', name]); } catch (error) { console.error(`cleanup failed: ${error.message}`); }
@@ -466,6 +613,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`YP2.2b variation-listing migration validation: failed\n${error.message}`);
+  console.error(`YP2.5 variation-listing migration validation: failed\n${error.message}`);
   process.exitCode = 1;
 });
