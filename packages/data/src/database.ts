@@ -112,3 +112,31 @@ export type ListingUpdate = TableUpdate<'listings'>;
 export type OrderRow = TableRow<'orders'>;
 export type OrderInsert = TableInsert<'orders'>;
 export type OrderUpdate = TableUpdate<'orders'>;
+
+export type VariationListingGroupRow = TableRow<'variation_listing_groups'>;
+export type VariationListingGroupInsert = TableInsert<'variation_listing_groups'>;
+export type VariationListingGroupUpdate = TableUpdate<'variation_listing_groups'>;
+
+export type VariationListingVariationRow = TableRow<'variation_listing_variations'>;
+export type VariationListingVariationInsert = TableInsert<'variation_listing_variations'>;
+export type VariationListingVariationUpdate = TableUpdate<'variation_listing_variations'>;
+
+export type VariationListingCopyRow = TableRow<'variation_listing_copies'>;
+export type VariationListingCopyInsert = TableInsert<'variation_listing_copies'>;
+export type VariationListingCopyUpdate = TableUpdate<'variation_listing_copies'>;
+
+export type VariationListingIntakeSessionRow = TableRow<'variation_listing_intake_sessions'>;
+export type VariationListingIntakeSessionInsert = TableInsert<'variation_listing_intake_sessions'>;
+export type VariationListingIntakeSessionUpdate = TableUpdate<'variation_listing_intake_sessions'>;
+
+export type VariationListingRevisionRow = TableRow<'variation_listing_revisions'>;
+export type VariationListingRevisionInsert = TableInsert<'variation_listing_revisions'>;
+export type VariationListingRevisionUpdate = TableUpdate<'variation_listing_revisions'>;
+
+export type VariationListingOperationRow = TableRow<'variation_listing_operations'>;
+export type VariationListingOperationInsert = TableInsert<'variation_listing_operations'>;
+export type VariationListingOperationUpdate = TableUpdate<'variation_listing_operations'>;
+
+export type VariationListingOperationAttemptRow = TableRow<'variation_listing_operation_attempts'>;
+export type VariationListingOperationAttemptInsert = TableInsert<'variation_listing_operation_attempts'>;
+export type VariationListingOperationAttemptUpdate = TableUpdate<'variation_listing_operation_attempts'>;
