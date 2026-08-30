@@ -46,6 +46,7 @@
     "codex:verify-run": "node ./scripts/run-codex-verification.mjs",
     "test": "pnpm -r --if-present test",
     "test:variation-listing-migration": "node ./scripts/validate-variation-listing-migration.mjs",
+    "test:variation-listing-rpc": "node ./scripts/validate-variation-listing-rpc.mjs",
     "test:scripts": "node --test scripts/run-app-dev-profile.test.mjs scripts/run-codex-verification.test.mjs scripts/sidecar-runtime-alias.test.mjs",
     "test:coverage": "pnpm -r --if-present test:coverage",
     "typecheck": "pnpm -r --if-present typecheck",

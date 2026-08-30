@@ -240,6 +240,23 @@ export {
   type VariationListingVariation,
 } from './repositories/variation-listings.js';
 export {
+  assertVariationListingJournalCanContinue,
+  inspectVariationListingJournal,
+  type AppendVariationListingJournalCheckpointInput,
+  type AppendVariationListingJournalCheckpointResult,
+  type CaptureVariationListingRevisionInput,
+  type CaptureVariationListingRevisionResult,
+  type ConfirmVariationListingRevisionInput,
+  type VariationListingAggregateSnapshot,
+  type VariationListingJournalInspection,
+  type VariationListingRevisionPlanOperationInput,
+  type VariationListingTransactionGateway,
+} from './variation-listing-transactions.js';
+export {
+  VariationListingTransactionConflictError,
+  createSupabaseVariationListingTransactionGateway,
+} from './variation-listing-rpc.js';
+export {
   ListingWorkflowStateError,
   assertValidListingWorkflowStateInput,
   updateListingWorkflowState,

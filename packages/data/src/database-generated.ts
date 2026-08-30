@@ -3,13 +3,7 @@
 // Regenerate with:
 //   npx --yes supabase@2.116.0 gen types typescript --project-id "$PROJECT_REF" --schema public > packages/data/src/database-generated.ts
 
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[];
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
   __InternalSupabase: {
@@ -1150,6 +1144,55 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      append_variation_listing_journal_checkpoint: {
+        Args: {
+          p_attempt_number: number;
+          p_checkpoint_id: string;
+          p_checkpoint_number: number;
+          p_current_evidence: Json | null;
+          p_current_evidence_state: string | null;
+          p_current_state: string;
+          p_decision: string | null;
+          p_error_evidence: Json | null;
+          p_evidence_version: number;
+          p_observed_remote_state: string | null;
+          p_operation_id: string;
+          p_post_evidence: Json | null;
+          p_pre_evidence: Json | null;
+          p_remote_identity: Json | null;
+          p_response_evidence: Json | null;
+          p_state: string;
+        };
+        Returns: {
+          attempt: Json;
+          operation: Json;
+        }[];
+      };
+      capture_variation_listing_revision: {
+        Args: {
+          p_captured_desired_revision: number;
+          p_group_id: string;
+          p_operations: Json;
+          p_revision_id: string;
+          p_snapshot: Json;
+          p_snapshot_digest: string;
+          p_snapshot_version: number;
+        };
+        Returns: {
+          operations: Json;
+          revision: Json;
+        }[];
+      };
+      confirm_variation_listing_revision: {
+        Args: {
+          p_confirmed_revision: number;
+          p_expected_previous_confirmed_revision: number | null;
+          p_group_id: string;
+        };
+        Returns: {
+          group_row: Json;
+        }[];
+      };
       jsonb_text_array: {
         Args: { input: Json };
         Returns: string[];

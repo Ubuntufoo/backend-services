@@ -85,6 +85,25 @@ history, reject `latest_attempt_number` regression or clearing `unknown` without
 exact reconciliation, and write a new checkpoint evidence row before any state
 change.
 
+### YP2.7b transaction seam boundary
+
+YP2.7b adds three narrow service-role-only SECURITY DEFINER RPCs for the journal
+boundary: capture an immutable revision with its complete operation plan, append
+one durable checkpoint plus its projection, and confirm one fully resolved
+captured revision. The append and confirmation RPCs lock the owning group before
+the operation rows, and confirmed operation states are terminal; only an exact
+present/proven-absent reconciliation may resolve a prior unknown attempt.
+A `started` checkpoint may only receive that attempt's outcome (`unknown` or an
+exact terminal result); it cannot open a new attempt. A later attempt is allowed
+only after `unknown` is durably recorded and must be an exact
+present/proven-absent reconciliation.
+
+This seam does not implement aggregate mutation or an atomic aggregate loader.
+`loadAggregate()` remains a set of ordinary PostgREST reads, and no generic
+transaction RPC is introduced. The concrete aggregate mutation shape belongs to
+the downstream intake persistence task (YP3.3), which remains blocked until the
+separate hosted-apply gate YP2.7c is explicitly authorized and completed.
+
 ## Group table — `public.variation_listing_groups`
 
 | Column | PostgreSQL contract | Meaning and mutability |
