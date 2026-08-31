@@ -1,551 +1,76 @@
 import type { SupabaseDataClient } from './client.js';
-import type {
-  Json,
-  VariationListingGroupRow,
-  VariationListingOperationAttemptRow,
-  VariationListingOperationRow,
-  VariationListingRevisionRow,
-} from './database.js';
+import type { Json, VariationListingCopyRow, VariationListingGroupRow, VariationListingIntakeSessionRow, VariationListingPublishingCheckpointRow, VariationListingRevisionRow, VariationListingVariationRow } from './database.js';
+import { getVariationListingGroupById, listVariationListingCopiesByVariationId, listVariationListingVariationsByGroupId, validateVariationListingCheckpointEvidence, validateVariationListingOperationPlan, validateVariationListingPendingPair } from './repositories/variation-listings.js';
 import type { SingleResult } from './repositories/shared.js';
-import {
-  getVariationListingGroupById,
-  listVariationListingCopiesByVariationId,
-  listVariationListingVariationsByGroupId,
-} from './repositories/variation-listings.js';
-import type {
-  AppendVariationListingJournalCheckpointInput,
-  AppendVariationListingJournalCheckpointResult,
-  CaptureVariationListingRevisionInput,
-  CaptureVariationListingRevisionResult,
-  ConfirmVariationListingRevisionInput,
-  VariationListingAggregateSnapshot,
-  VariationListingTransactionGateway,
-} from './variation-listing-transactions.js';
+import type { AppendVariationListingJournalCheckpointInput, AppendVariationListingJournalCheckpointResult, CaptureVariationListingRevisionInput, CaptureVariationListingRevisionResult, ConfirmVariationListingRevisionInput, CreateVariationListingGroupInput, ConfigureVariationListingIntakeInput, StartVariationListingIntakePairInput, CompleteVariationListingNewVariationInput, CompleteVariationListingDuplicateCopyInput, VariationListingAggregateSnapshot, VariationListingTransactionGateway } from './variation-listing-transactions.js';
 
-/**
- * Stable error for a variation-listing transaction conflict surfaced by the
- * RPC seam (revision/confirmation CAS mismatch, journal attempt/checkpoint
- * regression, or clearing an ambiguous outcome without exact reconciliation).
- */
-export class VariationListingTransactionConflictError extends Error {
-  readonly code: string;
+export class VariationListingTransactionConflictError extends Error { readonly code: string; constructor(code: string, message: string) { super(message); this.name = 'VariationListingTransactionConflictError'; this.code = code; } }
+type RecordJson = Record<string, Json>;
+const record = (v: unknown, label: string): RecordJson => { if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`Variation listing RPC ${label} must be a JSON object.`); return v as RecordJson; };
+const str = (r: RecordJson, k: string): string => { if (typeof r[k] !== 'string' || (r[k] as string).trim() === '') throw new Error(`Variation listing RPC field "${k}" must be a non-empty string.`); return r[k] as string; };
+const nullableStr = (r: RecordJson, k: string): string | null => r[k] === null ? null : str(r, k);
+const num = (r: RecordJson, k: string): number => { if (typeof r[k] !== 'number' || !Number.isFinite(r[k] as number)) throw new Error(`Variation listing RPC field "${k}" must be a finite number.`); return r[k] as number; };
+const integer = (r: RecordJson, k: string, min = 0): number => { const value = num(r, k); if (!Number.isInteger(value) || value < min) throw new Error(`Variation listing RPC field "${k}" must be an integer >= ${min}.`); return value; };
+const positive = (r: RecordJson, k: string): number => integer(r, k, 1);
+const jsonObj = (r: RecordJson, k: string): Json => { const v = r[k]; if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`Variation listing RPC field "${k}" must be a JSON object.`); return v; };
+const unwrap = <T>(result: SingleResult<T>, missing: string): T => { if (result.error) { if (/^VR00[1-4]$/.test(result.error.code ?? '')) throw new VariationListingTransactionConflictError(result.error.code!, result.error.message); throw new Error(result.error.message); } if (result.data === null) throw new Error(missing); return result.data; };
+const parseRevision = (v: Json): VariationListingRevisionRow => {
+  const r = record(v, 'revision');
+  const operationCount = positive(r, 'operation_count');
+  const plan = validateVariationListingOperationPlan(r.operation_plan, operationCount);
+  const digest = str(r, 'snapshot_digest');
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error('Variation listing RPC snapshot_digest must be 64 lowercase hex characters.');
+  return { revision_id: str(r,'revision_id'), group_id: str(r,'group_id'), captured_desired_revision: positive(r,'captured_desired_revision'), snapshot_version: positive(r,'snapshot_version'), snapshot_digest: digest, snapshot: jsonObj(r,'snapshot'), operation_plan: plan, operation_count: operationCount, captured_at: str(r,'captured_at') } as unknown as VariationListingRevisionRow;
+};
+const parseCheckpoint = (v: Json): VariationListingPublishingCheckpointRow => {
+  const r = record(v, 'checkpoint');
+  const state = str(r, 'state');
+  if (!['started','unknown','confirmed_complete','confirmed_no_op'].includes(state)) throw new Error('Variation listing RPC checkpoint state is invalid.');
+  const observed = nullableStr(r, 'observed_remote_state');
+  if (observed !== null && !['present','proven_absent','unknown'].includes(observed)) throw new Error('Variation listing RPC observed_remote_state is invalid.');
+  if (state === 'started' && observed !== null) throw new Error('Variation listing RPC started checkpoint cannot claim remote evidence.');
+  if (state === 'unknown' && observed !== 'unknown') throw new Error('Variation listing RPC unknown checkpoint requires ambiguity evidence.');
+  if ((state === 'confirmed_complete' || state === 'confirmed_no_op') && (observed !== 'present' && observed !== 'proven_absent')) throw new Error('Variation listing RPC terminal checkpoint requires exact remote evidence.');
+  const evidence = validateVariationListingCheckpointEvidence(r.evidence);
+  if ((state === 'unknown' || state === 'confirmed_complete' || state === 'confirmed_no_op') && Object.keys(evidence).length === 0) throw new Error('Variation listing RPC resolved checkpoint requires non-empty evidence.');
+  return { checkpoint_id: str(r,'checkpoint_id'), revision_id: str(r,'revision_id'), operation_key: str(r,'operation_key'), attempt_number: positive(r,'attempt_number'), checkpoint_number: positive(r,'checkpoint_number'), state, observed_remote_state: observed, evidence, created_at: str(r,'created_at') } as VariationListingPublishingCheckpointRow;
+};
+const parseGroup = (v: Json): VariationListingGroupRow => {
+  const r = record(v,'group');
+  str(r,'group_id'); str(r,'group_key'); str(r,'sku_category_code'); str(r,'sku_bucket_token'); str(r,'category_id'); str(r,'marketplace_id'); str(r,'merchant_location_key'); str(r,'fulfillment_policy_id'); str(r,'payment_policy_id'); str(r,'return_policy_id'); str(r,'condition_id'); str(r,'condition_token');
+  integer(r,'desired_revision'); if (r.last_confirmed_revision !== null) positive(r,'last_confirmed_revision'); if (!['intake','draft','review','publish-ready','publishing','active','withdrawn','abandoned','cleanup','terminal-absent'].includes(str(r,'lifecycle_state'))) throw new Error('Variation listing RPC lifecycle_state is invalid.'); str(r,'listing_format'); if (r.listing_format !== 'FIXED_PRICE') throw new Error('Variation listing RPC listing_format is invalid.'); if (r.selector_name !== 'Card') throw new Error('Variation listing RPC selector_name is invalid.'); positive(r,'next_inventory_serial'); jsonObj(r,'derived_common_ebay_aspects'); if (!Array.isArray(r.condition_descriptors)) throw new Error('Variation listing RPC condition_descriptors must be an array.'); if (r.condition_description !== null) str(r,'condition_description'); if (r.description !== null) str(r,'description'); if (r.title !== null) str(r,'title'); str(r,'created_at'); str(r,'updated_at'); return r as unknown as VariationListingGroupRow;
+};
+const parseSession = (v: Json): VariationListingIntakeSessionRow => {
+  const r = record(v,'session'); str(r,'capture_source_key'); const mode = str(r,'mode'); if (!['idle','new_variation','duplicate_copy'].includes(mode)) throw new Error('Variation listing RPC session mode is invalid.'); if (r.target_group_id !== null) str(r,'target_group_id'); if (r.target_variation_id !== null) str(r,'target_variation_id'); if (mode === 'idle' && (r.target_group_id !== null || r.target_variation_id !== null)) throw new Error('Variation listing RPC idle session cannot have targets.'); if (mode === 'new_variation' && (typeof r.target_group_id !== 'string' || r.target_variation_id !== null)) throw new Error('Variation listing RPC new-variation session targets are invalid.'); if (mode === 'duplicate_copy' && (typeof r.target_group_id !== 'string' || typeof r.target_variation_id !== 'string')) throw new Error('Variation listing RPC duplicate-copy session targets are invalid.'); const price = num(r,'sticky_price_amount'); if (![0.99,1.49,1.99,2.49].includes(price)) throw new Error('Variation listing RPC sticky_price_amount is invalid.'); if (r.sticky_price_currency !== 'USD') throw new Error('Variation listing RPC sticky_price_currency must be USD.'); validateVariationListingPendingPair(r.pending_pair as Json | null); str(r,'created_at'); str(r,'updated_at'); return r as unknown as VariationListingIntakeSessionRow;
+};
+const parseVariation = (v: Json): VariationListingVariationRow => {
+  const r = record(v,'variation'); str(r,'variation_id'); str(r,'group_id'); positive(r,'inventory_serial'); integer(r,'position'); str(r,'sku'); str(r,'selector_value'); const price = num(r,'price_amount'); if (![0.99,1.49,1.99,2.49].includes(price)) throw new Error('Variation listing RPC price_amount is invalid.'); if (r.price_currency !== 'USD') throw new Error('Variation listing RPC price_currency must be USD.'); if (r.representative_copy_id !== null) str(r,'representative_copy_id'); jsonObj(r,'variation_metadata'); str(r,'created_at'); str(r,'updated_at'); return r as unknown as VariationListingVariationRow;
+};
+const parseCopy = (v: Json): VariationListingCopyRow => {
+  const r = record(v,'copy'); str(r,'copy_id'); str(r,'variation_id'); str(r,'condition_token'); str(r,'front_r2_key'); str(r,'back_r2_key'); str(r,'capture_source_key'); str(r,'capture_pair_id'); str(r,'capture_front_source_ref'); str(r,'capture_back_source_ref'); str(r,'capture_started_at'); str(r,'captured_at'); str(r,'created_at'); str(r,'updated_at'); if (!['available','unavailable'].includes(str(r,'availability_state'))) throw new Error('Variation listing RPC availability_state is invalid.'); if (r.condition_notes !== null) str(r,'condition_notes'); return r as unknown as VariationListingCopyRow;
+};
+const rpcSingle = async <T>(client: SupabaseDataClient, fn: string, args: Record<string, unknown>, missing: string): Promise<T> => unwrap((await client.rpc(fn as never, args as never).single()) as SingleResult<T>, missing);
+const same = (actual: unknown, expected: unknown, label: string): void => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`Variation listing RPC response ${label} parity mismatch.`);
+};
+const assertGroupInput = (row: VariationListingGroupRow, input: CreateVariationListingGroupInput): void => {
+  const fields: Array<[keyof CreateVariationListingGroupInput, keyof VariationListingGroupRow]> = [
+    ['groupId','group_id'], ['groupKey','group_key'], ['skuCategoryCode','sku_category_code'], ['skuBucketToken','sku_bucket_token'], ['categoryId','category_id'], ['marketplaceId','marketplace_id'], ['merchantLocationKey','merchant_location_key'], ['fulfillmentPolicyId','fulfillment_policy_id'], ['paymentPolicyId','payment_policy_id'], ['returnPolicyId','return_policy_id'], ['conditionId','condition_id'], ['conditionToken','condition_token'],
+  ];
+  for (const [arg, field] of fields) same(row[field], input[arg], field);
+};
 
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = 'VariationListingTransactionConflictError';
-    this.code = code;
-  }
-}
-
-type JsonRecord = Record<string, Json>;
-
-const OPERATION_KINDS = new Set([
-  'media_ingest',
-  'child_inventory_item_write',
-  'child_offer_write',
-  'complete_group_replace',
-  'group_publish',
-  'revision_reconcile',
-  'withdrawal',
-  'cleanup_offer',
-  'cleanup_group',
-  'cleanup_child_inventory_item',
-  'final_absence_verification',
-]);
-const OPERATION_STATES = new Set(['planned', 'started', 'confirmed_complete', 'confirmed_no_op', 'unknown']);
-const ATTEMPT_STATES = new Set(['started', 'confirmed_complete', 'confirmed_no_op', 'unknown']);
-const EVIDENCE_STATES = new Set(['present', 'proven_absent', 'unknown']);
-const GROUP_LIFECYCLE_STATES = new Set([
-  'intake',
-  'draft',
-  'review',
-  'publish-ready',
-  'publishing',
-  'active',
-  'withdrawn',
-  'abandoned',
-  'cleanup',
-  'terminal-absent',
-]);
-const LISTING_FORMATS = new Set(['FIXED_PRICE']);
-const CONDITION_TOKENS = new Set(['NEAR_MINT_OR_BETTER', 'EXCELLENT', 'VERY_GOOD', 'POOR']);
-
-function asRecord(value: Json, label: string): JsonRecord {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Variation listing RPC ${label} must be a JSON object.`);
-  }
-
-  return value as JsonRecord;
-}
-
-function requiredString(record: JsonRecord, key: string): string {
-  const value = record[key];
-  if (typeof value !== 'string') {
-    throw new Error(`Variation listing RPC field "${key}" must be a string.`);
-  }
-
-  return value;
-}
-
-function nullableString(record: JsonRecord, key: string): string | null {
-  const value = record[key];
-  if (value === null) {
-    return null;
-  }
-  if (typeof value !== 'string') {
-    throw new Error(`Variation listing RPC field "${key}" must be a string or null.`);
-  }
-
-  return value;
-}
-
-function requiredNumber(record: JsonRecord, key: string): number {
-  const value = record[key];
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`Variation listing RPC field "${key}" must be a number.`);
-  }
-
-  return value;
-}
-
-function positiveInteger(record: JsonRecord, key: string): number {
-  const value = requiredNumber(record, key);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`Variation listing RPC field "${key}" must be a positive integer.`);
-  }
-  return value;
-}
-
-function nonNegativeInteger(record: JsonRecord, key: string): number {
-  const value = requiredNumber(record, key);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`Variation listing RPC field "${key}" must be a non-negative integer.`);
-  }
-  return value;
-}
-
-function nullableNumber(record: JsonRecord, key: string): number | null {
-  const value = record[key];
-  if (value === null) {
-    return null;
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`Variation listing RPC field "${key}" must be a number or null.`);
-  }
-
-  return value;
-}
-
-function nullablePositiveInteger(record: JsonRecord, key: string): number | null {
-  const value = nullableNumber(record, key);
-  if (value !== null && (!Number.isInteger(value) || value < 1)) {
-    throw new Error(`Variation listing RPC field "${key}" must be a positive integer or null.`);
-  }
-  return value;
-}
-
-function requiredBoolean(record: JsonRecord, key: string): boolean {
-  const value = record[key];
-  if (typeof value !== 'boolean') {
-    throw new Error(`Variation listing RPC field "${key}" must be a boolean.`);
-  }
-
-  return value;
-}
-
-function requiredJson(record: JsonRecord, key: string): Json {
-  const value = record[key];
-  if (value === null || value === undefined) {
-    throw new Error(`Variation listing RPC field "${key}" must be present.`);
-  }
-
-  return value;
-}
-
-function nullableJson(record: JsonRecord, key: string): Json | null {
-  if (!Object.prototype.hasOwnProperty.call(record, key)) {
-    throw new Error(`Variation listing RPC field "${key}" must be present.`);
-  }
-  const value = record[key];
-  if (value === null) {
-    return null;
-  }
-
-  return value;
-}
-
-function objectJson(record: JsonRecord, key: string): Json {
-  const value = requiredJson(record, key);
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`Variation listing RPC field "${key}" must be a JSON object.`);
-  }
-  return value;
-}
-
-function nullableObjectJson(record: JsonRecord, key: string): Json | null {
-  const value = nullableJson(record, key);
-  if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
-    throw new Error(`Variation listing RPC field "${key}" must be a JSON object or null.`);
-  }
-  return value;
-}
-
-function arrayJson(record: JsonRecord, key: string): Json {
-  const value = requiredJson(record, key);
-  if (!Array.isArray(value)) {
-    throw new Error(`Variation listing RPC field "${key}" must be a JSON array.`);
-  }
-  return value;
-}
-
-function enumString(record: JsonRecord, key: string, allowed: ReadonlySet<string>): string {
-  const value = requiredString(record, key);
-  if (!allowed.has(value)) {
-    throw new Error(`Variation listing RPC field "${key}" has invalid value "${value}".`);
-  }
-  return value;
-}
-
-function nullableEnumString(
-  record: JsonRecord,
-  key: string,
-  allowed: ReadonlySet<string>
-): string | null {
-  const value = nullableString(record, key);
-  if (value !== null && !allowed.has(value)) {
-    throw new Error(`Variation listing RPC field "${key}" has invalid value "${value}".`);
-  }
-  return value;
-}
-
-function parseRevisionRow(value: Json): VariationListingRevisionRow {
-  const record = asRecord(value, 'revision');
-  return {
-    revision_id: requiredString(record, 'revision_id'),
-    group_id: requiredString(record, 'group_id'),
-    captured_desired_revision: positiveInteger(record, 'captured_desired_revision'),
-    snapshot_version: positiveInteger(record, 'snapshot_version'),
-    snapshot_digest: requiredString(record, 'snapshot_digest'),
-    snapshot: objectJson(record, 'snapshot'),
-    operation_count: positiveInteger(record, 'operation_count'),
-    captured_at: requiredString(record, 'captured_at'),
-  };
-}
-
-function parseOperationRow(value: Json): VariationListingOperationRow {
-  const record = asRecord(value, 'operation');
-  return {
-    operation_id: requiredString(record, 'operation_id'),
-    revision_id: requiredString(record, 'revision_id'),
-    sequence_no: positiveInteger(record, 'sequence_no'),
-    operation_key: requiredString(record, 'operation_key'),
-    operation_kind: enumString(record, 'operation_kind', OPERATION_KINDS),
-    target_ref: requiredString(record, 'target_ref'),
-    intent_version: positiveInteger(record, 'intent_version'),
-    intent_digest: requiredString(record, 'intent_digest'),
-    intent: objectJson(record, 'intent'),
-    current_state: enumString(record, 'current_state', OPERATION_STATES),
-    current_evidence_state: nullableEnumString(record, 'current_evidence_state', EVIDENCE_STATES),
-    current_evidence: nullableObjectJson(record, 'current_evidence'),
-    latest_attempt_number: nonNegativeInteger(record, 'latest_attempt_number'),
-    created_at: requiredString(record, 'created_at'),
-    updated_at: requiredString(record, 'updated_at'),
-  };
-}
-
-function parseAttemptRow(value: Json): VariationListingOperationAttemptRow {
-  const record = asRecord(value, 'attempt');
-  return {
-    checkpoint_id: requiredString(record, 'checkpoint_id'),
-    operation_id: requiredString(record, 'operation_id'),
-    attempt_number: positiveInteger(record, 'attempt_number'),
-    checkpoint_number: positiveInteger(record, 'checkpoint_number'),
-    state: enumString(record, 'state', ATTEMPT_STATES),
-    evidence_version: positiveInteger(record, 'evidence_version'),
-    pre_evidence: nullableObjectJson(record, 'pre_evidence'),
-    response_evidence: nullableObjectJson(record, 'response_evidence'),
-    post_evidence: nullableObjectJson(record, 'post_evidence'),
-    error_evidence: nullableObjectJson(record, 'error_evidence'),
-    remote_identity: nullableObjectJson(record, 'remote_identity'),
-    decision: nullableString(record, 'decision'),
-    observed_remote_state: nullableEnumString(record, 'observed_remote_state', EVIDENCE_STATES),
-    created_at: requiredString(record, 'created_at'),
-  };
-}
-
-function parseGroupRow(value: Json): VariationListingGroupRow {
-  const record = asRecord(value, 'group');
-  return {
-    group_id: requiredString(record, 'group_id'),
-    group_key: requiredString(record, 'group_key'),
-    sku_category_code: requiredString(record, 'sku_category_code'),
-    sku_bucket_token: requiredString(record, 'sku_bucket_token'),
-    next_inventory_serial: positiveInteger(record, 'next_inventory_serial'),
-    lifecycle_state: enumString(record, 'lifecycle_state', GROUP_LIFECYCLE_STATES),
-    recovery_required: requiredBoolean(record, 'recovery_required'),
-    selector_name: requiredString(record, 'selector_name'),
-    title: nullableString(record, 'title'),
-    description: nullableString(record, 'description'),
-    derived_common_ebay_aspects: objectJson(record, 'derived_common_ebay_aspects'),
-    category_id: requiredString(record, 'category_id'),
-    marketplace_id: requiredString(record, 'marketplace_id'),
-    listing_format: enumString(record, 'listing_format', LISTING_FORMATS),
-    merchant_location_key: requiredString(record, 'merchant_location_key'),
-    fulfillment_policy_id: requiredString(record, 'fulfillment_policy_id'),
-    payment_policy_id: requiredString(record, 'payment_policy_id'),
-    return_policy_id: requiredString(record, 'return_policy_id'),
-    condition_id: requiredString(record, 'condition_id'),
-    condition_token: enumString(record, 'condition_token', CONDITION_TOKENS),
-    condition_description: nullableString(record, 'condition_description'),
-    condition_descriptors: arrayJson(record, 'condition_descriptors'),
-    desired_revision: nonNegativeInteger(record, 'desired_revision'),
-    last_confirmed_revision: nullablePositiveInteger(record, 'last_confirmed_revision'),
-    created_at: requiredString(record, 'created_at'),
-    updated_at: requiredString(record, 'updated_at'),
-  };
-}
-
-function unwrapRpcSingle<TData>(result: SingleResult<TData>, missingMessage: string): TData {
-  if (result.error) {
-    if (
-      result.error.code === 'VR001' ||
-      result.error.code === 'VR002' ||
-      result.error.code === 'VR003' ||
-      result.error.code === 'VR004'
-    ) {
-      throw new VariationListingTransactionConflictError(result.error.code, result.error.message);
-    }
-
-    throw new Error(result.error.message);
-  }
-
-  if (result.data === null) {
-    throw new Error(missingMessage);
-  }
-
-  return result.data;
-}
-
-function assertRpcParity(condition: boolean, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(`Variation listing RPC response parity mismatch: ${message}.`);
-  }
-}
-
-function canonicalJson(value: Json): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key] ?? null)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-interface CaptureRevisionRpcRow {
-  operations: Json;
-  revision: Json;
-}
-
-interface AppendCheckpointRpcRow {
-  attempt: Json;
-  operation: Json;
-}
-
-interface ConfirmRevisionRpcRow {
-  group_row: Json;
-}
-
-async function loadAggregate(
-  client: SupabaseDataClient,
-  groupId: string
-): Promise<VariationListingAggregateSnapshot | null> {
-  const group = await getVariationListingGroupById(client, groupId);
-  if (!group) {
-    return null;
-  }
-
-  const variations = await listVariationListingVariationsByGroupId(client, groupId);
-  const copies = (
-    await Promise.all(
-      variations.map((variation) =>
-        listVariationListingCopiesByVariationId(client, variation.variationId)
-      )
-    )
-  ).flatMap((variationCopies) => variationCopies.map((copy) => copy.source));
-
-  return {
-    copies,
-    group: group.source,
-    variations: variations.map((variation) => variation.source),
-  };
-}
-
-async function captureRevision(
-  client: SupabaseDataClient,
-  input: CaptureVariationListingRevisionInput
-): Promise<CaptureVariationListingRevisionResult> {
-  const operations = input.operations.map((operation) => ({
-    operation_id: operation.operationId,
-    sequence_no: operation.sequenceNo,
-    operation_key: operation.operationKey,
-    operation_kind: operation.operationKind,
-    target_ref: operation.targetRef,
-    intent_version: operation.intentVersion,
-    intent_digest: operation.intentDigest,
-    intent: operation.intent,
-  }));
-
-  const result = (await client
-    .rpc('capture_variation_listing_revision', {
-      p_group_id: input.groupId,
-      p_revision_id: input.revisionId,
-      p_captured_desired_revision: input.capturedDesiredRevision,
-      p_snapshot_version: input.snapshotVersion,
-      p_snapshot_digest: input.snapshotDigest,
-      p_snapshot: input.snapshot,
-      p_operations: operations,
-    })
-    .single()) as SingleResult<CaptureRevisionRpcRow>;
-
-  const row = unwrapRpcSingle(result, 'Variation listing revision capture returned no row.');
-
-  if (!Array.isArray(row.operations) || row.operations.length === 0) {
-    throw new Error('Variation listing RPC field "operations" must be an array.');
-  }
-
-  const revision = parseRevisionRow(row.revision);
-  assertRpcParity(revision.revision_id === input.revisionId, 'revision id');
-  assertRpcParity(revision.group_id === input.groupId, 'revision group id');
-  assertRpcParity(
-    revision.captured_desired_revision === input.capturedDesiredRevision,
-    'captured desired revision'
-  );
-  assertRpcParity(revision.snapshot_version === input.snapshotVersion, 'snapshot version');
-  assertRpcParity(revision.snapshot_digest === input.snapshotDigest, 'snapshot digest');
-  assertRpcParity(revision.operation_count === input.operations.length, 'operation count');
-  if (row.operations.length !== revision.operation_count) {
-    throw new Error(
-      `Variation listing RPC operation count ${row.operations.length} does not match revision ${revision.operation_count}.`
-    );
-  }
-
-  const parsedOperations = row.operations.map(parseOperationRow);
-  parsedOperations.forEach((operation, index) => {
-    const expected = input.operations[index];
-    assertRpcParity(Boolean(expected), `operation ${index + 1} exists`);
-    if (!expected) return;
-    assertRpcParity(operation.operation_id === expected.operationId, `operation ${index + 1} id`);
-    assertRpcParity(operation.revision_id === input.revisionId, `operation ${index + 1} revision id`);
-    assertRpcParity(operation.sequence_no === expected.sequenceNo, `operation ${index + 1} sequence`);
-    assertRpcParity(operation.operation_key === expected.operationKey, `operation ${index + 1} key`);
-    assertRpcParity(operation.operation_kind === expected.operationKind, `operation ${index + 1} kind`);
-    assertRpcParity(operation.target_ref === expected.targetRef, `operation ${index + 1} target`);
-    assertRpcParity(
-      operation.intent_version === expected.intentVersion,
-      `operation ${index + 1} intent version`
-    );
-    assertRpcParity(
-      operation.intent_digest === expected.intentDigest,
-      `operation ${index + 1} intent digest`
-    );
-    assertRpcParity(
-      canonicalJson(operation.intent) === canonicalJson(expected.intent),
-      `operation ${index + 1} intent`
-    );
-  });
-
-  return { revision, operations: parsedOperations };
-}
-
-async function appendJournalCheckpoint(
-  client: SupabaseDataClient,
-  input: AppendVariationListingJournalCheckpointInput
-): Promise<AppendVariationListingJournalCheckpointResult> {
-  const result = (await client
-    .rpc('append_variation_listing_journal_checkpoint', {
-      p_operation_id: input.operationId,
-      p_checkpoint_id: input.checkpointId,
-      p_attempt_number: input.attemptNumber,
-      p_checkpoint_number: input.checkpointNumber,
-      p_state: input.state,
-      p_evidence_version: input.evidenceVersion,
-      p_pre_evidence: input.preEvidence ?? null,
-      p_response_evidence: input.responseEvidence ?? null,
-      p_post_evidence: input.postEvidence ?? null,
-      p_error_evidence: input.errorEvidence ?? null,
-      p_remote_identity: input.remoteIdentity ?? null,
-      p_decision: input.decision ?? null,
-      p_observed_remote_state: input.observedRemoteState ?? null,
-      p_current_state: input.currentState,
-      p_current_evidence_state: input.currentEvidenceState ?? null,
-      p_current_evidence: input.currentEvidence ?? null,
-    })
-    .single()) as SingleResult<AppendCheckpointRpcRow>;
-
-  const row = unwrapRpcSingle(result, 'Variation listing journal checkpoint returned no row.');
-
-  const attempt = parseAttemptRow(row.attempt);
-  const operation = parseOperationRow(row.operation);
-  const expectedObservedState = input.observedRemoteState ?? null;
-  const expectedCurrentEvidenceState = input.currentEvidenceState ?? null;
-  assertRpcParity(attempt.checkpoint_id === input.checkpointId, 'checkpoint id');
-  assertRpcParity(attempt.operation_id === input.operationId, 'attempt operation id');
-  assertRpcParity(attempt.attempt_number === input.attemptNumber, 'attempt number');
-  assertRpcParity(attempt.checkpoint_number === input.checkpointNumber, 'checkpoint number');
-  assertRpcParity(attempt.state === input.state, 'attempt state');
-  assertRpcParity(attempt.observed_remote_state === expectedObservedState, 'observed remote state');
-  assertRpcParity(operation.operation_id === input.operationId, 'operation id');
-  assertRpcParity(operation.latest_attempt_number === input.attemptNumber, 'latest attempt number');
-  assertRpcParity(operation.current_state === input.currentState, 'current state');
-  assertRpcParity(
-    operation.current_evidence_state === expectedCurrentEvidenceState,
-    'current evidence state'
-  );
-  assertRpcParity(operation.current_state === attempt.state, 'operation/attempt state');
-  assertRpcParity(
-    operation.current_evidence_state === attempt.observed_remote_state,
-    'operation/attempt evidence state'
-  );
-
-  return {
-    attempt,
-    operation,
-  };
-}
-
-async function confirmRevision(
-  client: SupabaseDataClient,
-  input: ConfirmVariationListingRevisionInput
-): Promise<VariationListingGroupRow> {
-  const result = (await client
-    .rpc('confirm_variation_listing_revision', {
-      p_group_id: input.groupId,
-      p_expected_previous_confirmed_revision: input.expectedPreviousConfirmedRevision ?? null,
-      p_confirmed_revision: input.confirmedRevision,
-    })
-    .single()) as SingleResult<ConfirmRevisionRpcRow>;
-
-  const row = unwrapRpcSingle(result, 'Variation listing confirmation returned no row.');
-  const group = parseGroupRow(row.group_row);
-  assertRpcParity(group.group_id === input.groupId, 'confirmed group id');
-  assertRpcParity(
-    group.last_confirmed_revision === input.confirmedRevision,
-    'confirmed revision watermark'
-  );
-  return group;
-}
-
-export function createSupabaseVariationListingTransactionGateway(
-  client: SupabaseDataClient
-): VariationListingTransactionGateway {
-  return {
-    appendJournalCheckpoint: (input) => appendJournalCheckpoint(client, input),
-    captureRevision: (input) => captureRevision(client, input),
-    confirmRevision: (input) => confirmRevision(client, input),
-    loadAggregate: (groupId) => loadAggregate(client, groupId),
-  };
-}
+async function loadAggregate(client: SupabaseDataClient, groupId: string): Promise<VariationListingAggregateSnapshot | null> { const g = await getVariationListingGroupById(client, groupId); if (!g) return null; if (g.groupId !== groupId || g.source.group_id !== groupId) throw new Error('Variation listing aggregate group identity parity mismatch.'); const vars = await listVariationListingVariationsByGroupId(client, groupId); for (const v of vars) { if (v.groupId !== groupId || v.source.group_id !== groupId) throw new Error('Variation listing aggregate variation identity parity mismatch.'); } const copies = (await Promise.all(vars.map(v => listVariationListingCopiesByVariationId(client, v.variationId)))).flatMap(x => x.map(c => { if (!vars.some(v => v.variationId === c.variationId) || c.source.variation_id !== c.variationId) throw new Error('Variation listing aggregate copy identity parity mismatch.'); return c.source; })); return { group: g.source, variations: vars.map(v => v.source), copies }; }
+async function captureRevision(client: SupabaseDataClient, input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult> { const operationPlan = input.operationPlan.map(op => ({ sequence_no: op.sequenceNo, operation_key: op.operationKey, operation_kind: op.operationKind, target_ref: op.targetRef, intent_version: op.intentVersion, intent_digest: op.intentDigest, intent: op.intent })); const row = await rpcSingle<{ revision: Json }>(client, 'capture_variation_listing_revision', { p_group_id: input.groupId, p_revision_id: input.revisionId, p_captured_desired_revision: input.capturedDesiredRevision, p_snapshot_version: input.snapshotVersion, p_snapshot_digest: input.snapshotDigest, p_snapshot: input.snapshot, p_operation_plan: operationPlan }, 'Variation listing revision capture returned no row.'); const revision = parseRevision(row.revision); if (revision.revision_id !== input.revisionId || revision.group_id !== input.groupId || revision.captured_desired_revision !== input.capturedDesiredRevision || revision.snapshot_version !== input.snapshotVersion || revision.snapshot_digest !== input.snapshotDigest || revision.operation_count !== input.operationPlan.length) throw new Error('Variation listing RPC response parity mismatch.'); same(revision.snapshot, input.snapshot, 'snapshot'); same(revision.operation_plan, operationPlan, 'operation_plan'); return { revision }; }
+async function appendJournalCheckpoint(client: SupabaseDataClient, input: AppendVariationListingJournalCheckpointInput): Promise<AppendVariationListingJournalCheckpointResult> { const row = await rpcSingle<{ checkpoint: Json }>(client, 'append_variation_listing_journal_checkpoint', { p_revision_id: input.revisionId, p_operation_key: input.operationKey, p_checkpoint_id: input.checkpointId, p_attempt_number: input.attemptNumber, p_checkpoint_number: input.checkpointNumber, p_state: input.state, p_observed_remote_state: input.observedRemoteState ?? null, p_evidence: input.evidence }, 'Variation listing journal checkpoint returned no row.'); const checkpoint = parseCheckpoint(row.checkpoint); if (checkpoint.revision_id !== input.revisionId || checkpoint.operation_key !== input.operationKey || checkpoint.checkpoint_id !== input.checkpointId || checkpoint.attempt_number !== input.attemptNumber || checkpoint.checkpoint_number !== input.checkpointNumber || checkpoint.state !== input.state || checkpoint.observed_remote_state !== (input.observedRemoteState ?? null)) throw new Error('Variation listing RPC response parity mismatch.'); same(checkpoint.evidence, input.evidence, 'evidence'); return { checkpoint }; }
+async function confirmRevision(client: SupabaseDataClient, input: ConfirmVariationListingRevisionInput) { const row = await rpcSingle<{ group_row: Json }>(client, 'confirm_variation_listing_revision', { p_group_id: input.groupId, p_expected_previous_confirmed_revision: input.expectedPreviousConfirmedRevision, p_confirmed_revision: input.confirmedRevision }, 'Variation listing confirmation returned no row.'); const group = parseGroup(row.group_row); if (group.group_id !== input.groupId || group.last_confirmed_revision !== input.confirmedRevision) throw new Error('Variation listing RPC response parity mismatch.'); return group; }
+const mutation = async <T>(client: SupabaseDataClient, fn: string, args: Record<string, unknown>, key: string): Promise<T> => { const row = await rpcSingle<Record<string, Json>>(client, fn, args, `Variation listing ${fn} returned no row.`); return row[key] as unknown as T; };
+export function createSupabaseVariationListingTransactionGateway(client: SupabaseDataClient): VariationListingTransactionGateway { return {
+  loadAggregate: id => loadAggregate(client,id), captureRevision: i => captureRevision(client,i), appendJournalCheckpoint: i => appendJournalCheckpoint(client,i), confirmRevision: i => confirmRevision(client,i),
+  createGroup: async (i: CreateVariationListingGroupInput) => { const group = parseGroup(await mutation<Json>(client,'create_variation_listing_group',{ p_group_id:i.groupId,p_group_key:i.groupKey,p_sku_category_code:i.skuCategoryCode,p_sku_bucket_token:i.skuBucketToken,p_category_id:i.categoryId,p_marketplace_id:i.marketplaceId,p_merchant_location_key:i.merchantLocationKey,p_fulfillment_policy_id:i.fulfillmentPolicyId,p_payment_policy_id:i.paymentPolicyId,p_return_policy_id:i.returnPolicyId,p_condition_id:i.conditionId,p_condition_token:i.conditionToken },'group_row')); assertGroupInput(group, i); return group; },
+  configureIntake: async (i: ConfigureVariationListingIntakeInput) => { const session = parseSession(await mutation<Json>(client,'configure_variation_listing_intake',{p_capture_source_key:i.captureSourceKey,p_mode:i.mode,p_target_group_id:i.targetGroupId,p_target_variation_id:i.targetVariationId,p_sticky_price_amount:i.stickyPriceAmount},'session_row')); if (session.capture_source_key !== i.captureSourceKey || session.mode !== i.mode || session.target_group_id !== i.targetGroupId || session.target_variation_id !== i.targetVariationId || session.sticky_price_amount !== i.stickyPriceAmount) throw new Error('Variation listing RPC response parity mismatch.'); return session; },
+  startIntakePair: async (i: StartVariationListingIntakePairInput) => { const session = parseSession(await mutation<Json>(client,'start_variation_listing_intake_pair',{p_capture_source_key:i.captureSourceKey,p_pair_id:i.pairId,p_front_source_ref:i.frontSourceRef,p_started_at:i.startedAt},'session_row')); const pending = validateVariationListingPendingPair(session.pending_pair); if (session.capture_source_key !== i.captureSourceKey || !pending || pending.pair_id !== i.pairId || pending.mode !== session.mode || pending.target_group_id !== session.target_group_id || pending.target_variation_id !== session.target_variation_id || pending.price_amount !== session.sticky_price_amount || pending.price_currency !== session.sticky_price_currency || pending.front_source_ref !== i.frontSourceRef || pending.started_at !== i.startedAt) throw new Error('Variation listing RPC response parity mismatch.'); return session; },
+  discardIntakePair: async source => { const session = parseSession(await mutation<Json>(client,'discard_variation_listing_intake_pair',{p_capture_source_key:source},'session_row')); if (session.capture_source_key !== source || session.pending_pair !== null) throw new Error('Variation listing RPC response parity mismatch.'); return session; },
+  completeNewVariation: async (i: CompleteVariationListingNewVariationInput) => { const r = await rpcSingle<{group_row:Json;variation_row:Json;copy_row:Json}>(client,'complete_variation_listing_new_variation',{p_capture_source_key:i.captureSourceKey,p_copy_id:i.copyId,p_variation_id:i.variationId,p_capture_pair_id:i.capturePairId,p_condition_token:i.conditionToken,p_selector_value:i.selectorValue,p_variation_metadata:i.variationMetadata,p_front_r2_key:i.frontR2Key,p_back_r2_key:i.backR2Key,p_back_source_ref:i.backSourceRef,p_captured_at:i.capturedAt ?? null},'Variation listing completion returned no row.'); const group = parseGroup(r.group_row); const variation = parseVariation(r.variation_row); const copy = parseCopy(r.copy_row); if (variation.variation_id !== i.variationId || copy.copy_id !== i.copyId || copy.variation_id !== i.variationId || copy.capture_pair_id !== i.capturePairId || copy.capture_source_key !== i.captureSourceKey || copy.condition_token !== i.conditionToken || copy.front_r2_key !== i.frontR2Key || copy.back_r2_key !== i.backR2Key || copy.capture_back_source_ref !== i.backSourceRef || variation.group_id !== group.group_id) throw new Error('Variation listing RPC response parity mismatch.'); same(variation.selector_value, i.selectorValue, 'selector_value'); same(variation.variation_metadata, i.variationMetadata, 'variation_metadata'); return {group,variation,copy}; },
+  completeDuplicateCopy: async (i: CompleteVariationListingDuplicateCopyInput) => { const r = await rpcSingle<{group_row:Json;copy_row:Json}>(client,'complete_variation_listing_duplicate_copy',{p_capture_source_key:i.captureSourceKey,p_copy_id:i.copyId,p_capture_pair_id:i.capturePairId,p_variation_id:i.variationId,p_condition_token:i.conditionToken,p_front_r2_key:i.frontR2Key,p_back_r2_key:i.backR2Key,p_back_source_ref:i.backSourceRef,p_captured_at:i.capturedAt ?? null},'Variation listing completion returned no row.'); const group = parseGroup(r.group_row); const copy = parseCopy(r.copy_row); if (copy.copy_id !== i.copyId || copy.variation_id !== i.variationId || copy.capture_pair_id !== i.capturePairId || copy.capture_source_key !== i.captureSourceKey || copy.condition_token !== i.conditionToken || copy.front_r2_key !== i.frontR2Key || copy.back_r2_key !== i.backR2Key || copy.capture_back_source_ref !== i.backSourceRef) throw new Error('Variation listing RPC response parity mismatch.'); return {group,copy}; },
+}; }

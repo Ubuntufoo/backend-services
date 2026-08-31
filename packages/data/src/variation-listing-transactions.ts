@@ -2,8 +2,9 @@ import type {
   Json,
   VariationListingCopyRow,
   VariationListingGroupRow,
-  VariationListingOperationAttemptRow,
-  VariationListingOperationRow,
+  VariationListingIntakeSessionRow,
+  VariationListingPublishingCheckpointRow,
+  VariationListingRevisionPlanOperation,
   VariationListingRevisionRow,
   VariationListingVariationRow,
 } from './database.js';
@@ -18,9 +19,8 @@ export interface VariationListingRevisionPlanOperationInput {
   intent: Json;
   intentDigest: string;
   intentVersion: number;
-  operationId: string;
   operationKey: string;
-  operationKind: VariationListingOperationRow['operation_kind'];
+  operationKind: string;
   sequenceNo: number;
   targetRef: string;
 }
@@ -28,7 +28,7 @@ export interface VariationListingRevisionPlanOperationInput {
 export interface CaptureVariationListingRevisionInput {
   capturedDesiredRevision: number;
   groupId: string;
-  operations: VariationListingRevisionPlanOperationInput[];
+  operationPlan: VariationListingRevisionPlanOperationInput[];
   revisionId: string;
   snapshot: Json;
   snapshotDigest: string;
@@ -36,7 +36,6 @@ export interface CaptureVariationListingRevisionInput {
 }
 
 export interface CaptureVariationListingRevisionResult {
-  operations: VariationListingOperationRow[];
   revision: VariationListingRevisionRow;
 }
 
@@ -44,30 +43,77 @@ export interface AppendVariationListingJournalCheckpointInput {
   attemptNumber: number;
   checkpointId: string;
   checkpointNumber: number;
-  currentEvidence: Json | null;
-  currentEvidenceState: VariationListingOperationRow['current_evidence_state'];
-  currentState: VariationListingOperationRow['current_state'];
-  decision?: string | null;
-  errorEvidence?: Json | null;
-  evidenceVersion: number;
-  observedRemoteState?: VariationListingOperationAttemptRow['observed_remote_state'];
-  operationId: string;
-  postEvidence?: Json | null;
-  preEvidence?: Json | null;
-  remoteIdentity?: Json | null;
-  responseEvidence?: Json | null;
-  state: VariationListingOperationAttemptRow['state'];
+  evidence: Json;
+  observedRemoteState?: 'present' | 'proven_absent' | 'unknown' | null;
+  operationKey: string;
+  revisionId: string;
+  state: 'started' | 'unknown' | 'confirmed_complete' | 'confirmed_no_op';
 }
 
 export interface AppendVariationListingJournalCheckpointResult {
-  attempt: VariationListingOperationAttemptRow;
-  operation: VariationListingOperationRow;
+  checkpoint: VariationListingPublishingCheckpointRow;
 }
 
 export interface ConfirmVariationListingRevisionInput {
   confirmedRevision: number;
   expectedPreviousConfirmedRevision: number | null;
   groupId: string;
+}
+
+export interface CreateVariationListingGroupInput {
+  categoryId: string;
+  conditionId: string;
+  conditionToken: string;
+  fulfillmentPolicyId: string;
+  groupId: string;
+  groupKey: string;
+  marketplaceId: string;
+  merchantLocationKey: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+  skuBucketToken: string;
+  skuCategoryCode: string;
+}
+
+export interface ConfigureVariationListingIntakeInput {
+  captureSourceKey: string;
+  mode: 'idle' | 'new_variation' | 'duplicate_copy';
+  stickyPriceAmount: number;
+  targetGroupId: string | null;
+  targetVariationId: string | null;
+}
+
+export interface StartVariationListingIntakePairInput {
+  captureSourceKey: string;
+  frontSourceRef: string;
+  pairId: string;
+  startedAt: string;
+}
+
+export interface CompleteVariationListingNewVariationInput {
+  backR2Key: string;
+  backSourceRef: string;
+  capturePairId: string;
+  captureSourceKey: string;
+  capturedAt?: string;
+  conditionToken: string;
+  copyId: string;
+  frontR2Key: string;
+  selectorValue: string;
+  variationId: string;
+  variationMetadata: Json;
+}
+
+export interface CompleteVariationListingDuplicateCopyInput {
+  backR2Key: string;
+  backSourceRef: string;
+  capturePairId: string;
+  captureSourceKey: string;
+  capturedAt?: string;
+  conditionToken: string;
+  copyId: string;
+  frontR2Key: string;
+  variationId: string;
 }
 
 export interface VariationListingTransactionGateway {
@@ -77,260 +123,183 @@ export interface VariationListingTransactionGateway {
   captureRevision(
     input: CaptureVariationListingRevisionInput
   ): Promise<CaptureVariationListingRevisionResult>;
+  completeDuplicateCopy(
+    input: CompleteVariationListingDuplicateCopyInput
+  ): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }>;
+  completeNewVariation(
+    input: CompleteVariationListingNewVariationInput
+  ): Promise<{
+    copy: VariationListingCopyRow;
+    group: VariationListingGroupRow;
+    variation: VariationListingVariationRow;
+  }>;
+  configureIntake(
+    input: ConfigureVariationListingIntakeInput
+  ): Promise<VariationListingIntakeSessionRow>;
   confirmRevision(input: ConfirmVariationListingRevisionInput): Promise<VariationListingGroupRow>;
+  createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
+  discardIntakePair(captureSourceKey: string): Promise<VariationListingIntakeSessionRow>;
   loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;
+  startIntakePair(
+    input: StartVariationListingIntakePairInput
+  ): Promise<VariationListingIntakeSessionRow>;
 }
 
 export interface VariationListingJournalInspection {
-  hasConflictingProjection: boolean;
   hasUnknownHistory: boolean;
   latestAttemptNumber: number;
-  latestCheckpoint: VariationListingOperationAttemptRow | null;
+  latestCheckpoint: VariationListingPublishingCheckpointRow | null;
   requiresReconciliation: boolean;
 }
 
-const OPERATION_STATES = new Set(['planned', 'started', 'confirmed_complete', 'confirmed_no_op', 'unknown']);
-const ATTEMPT_STATES = new Set(['started', 'confirmed_complete', 'confirmed_no_op', 'unknown']);
-const EVIDENCE_STATES = new Set(['present', 'proven_absent', 'unknown']);
-const OPERATION_KINDS = new Set([
-  'media_ingest',
-  'child_inventory_item_write',
-  'child_offer_write',
-  'complete_group_replace',
-  'group_publish',
-  'revision_reconcile',
-  'withdrawal',
-  'cleanup_offer',
-  'cleanup_group',
-  'cleanup_child_inventory_item',
-  'final_absence_verification',
+const CHECKPOINT_STATES = new Set([
+  'started',
+  'unknown',
+  'confirmed_complete',
+  'confirmed_no_op',
 ]);
+const EVIDENCE_STATES = new Set(['present', 'proven_absent', 'unknown']);
+const TERMINAL_STATES = new Set(['confirmed_complete', 'confirmed_no_op']);
 const READ_ONLY_OPERATION_KINDS = new Set(['revision_reconcile', 'final_absence_verification']);
 
-function assertEnum(value: string | null, allowed: ReadonlySet<string>, label: string): void {
-  if (value !== null && !allowed.has(value)) {
-    throw new Error(`Variation listing journal ${label} has invalid value "${value}".`);
-  }
-}
-
-function assertRequiredEnum(value: string | null, allowed: ReadonlySet<string>, label: string): void {
-  if (value === null || !allowed.has(value)) {
-    throw new Error(`Variation listing journal ${label} has invalid value "${String(value)}".`);
-  }
-}
-
 function compareCheckpointOrder(
-  left: VariationListingOperationAttemptRow,
-  right: VariationListingOperationAttemptRow
+  left: VariationListingPublishingCheckpointRow,
+  right: VariationListingPublishingCheckpointRow
 ): number {
-  if (left.attempt_number !== right.attempt_number) {
-    return left.attempt_number - right.attempt_number;
-  }
+  return (
+    left.attempt_number - right.attempt_number ||
+    left.checkpoint_number - right.checkpoint_number
+  );
+}
 
-  return left.checkpoint_number - right.checkpoint_number;
+function hasExactRemoteEvidence(checkpoint: VariationListingPublishingCheckpointRow): boolean {
+  return (
+    checkpoint.observed_remote_state === 'present' ||
+    checkpoint.observed_remote_state === 'proven_absent'
+  );
 }
 
 export function inspectVariationListingJournal(
-  operation: VariationListingOperationRow,
-  attempts: readonly VariationListingOperationAttemptRow[]
+  operation: VariationListingRevisionPlanOperation,
+  checkpoints: readonly VariationListingPublishingCheckpointRow[]
 ): VariationListingJournalInspection {
-  assertRequiredEnum(operation.current_state, OPERATION_STATES, 'operation state');
-  assertEnum(operation.current_evidence_state, EVIDENCE_STATES, 'operation evidence state');
-  assertEnum(operation.operation_kind, OPERATION_KINDS, 'operation kind');
+  const ordered = [...checkpoints].sort(compareCheckpointOrder);
 
-  if (!Number.isInteger(operation.latest_attempt_number) || operation.latest_attempt_number < 0) {
-    throw new Error('Variation listing operation latest attempt number must be a non-negative integer.');
-  }
-
-  for (const attempt of attempts) {
+  for (const checkpoint of ordered) {
     if (
-      attempt.operation_id !== operation.operation_id ||
-      !Number.isInteger(attempt.attempt_number) ||
-      attempt.attempt_number < 1 ||
-      !Number.isInteger(attempt.checkpoint_number) ||
-      attempt.checkpoint_number < 1
+      checkpoint.operation_key !== operation.operation_key ||
+      !Number.isInteger(checkpoint.attempt_number) ||
+      checkpoint.attempt_number < 1 ||
+      !Number.isInteger(checkpoint.checkpoint_number) ||
+      checkpoint.checkpoint_number < 1 ||
+      !CHECKPOINT_STATES.has(checkpoint.state) ||
+      (checkpoint.observed_remote_state !== null &&
+        !EVIDENCE_STATES.has(checkpoint.observed_remote_state))
     ) {
       throw new Error(
-        `Variation listing operation ${operation.operation_id} history contains invalid attempt identity/numbering.`
+        `Variation listing operation ${operation.operation_key} history contains an invalid checkpoint.`
       );
     }
-    assertRequiredEnum(attempt.state, ATTEMPT_STATES, 'attempt state');
-    assertEnum(attempt.observed_remote_state, EVIDENCE_STATES, 'observed remote state');
+
+    if (checkpoint.state === 'started' && checkpoint.observed_remote_state !== null) {
+      throw new Error('Variation listing started checkpoint cannot claim remote evidence.');
+    }
+    if (checkpoint.state === 'unknown' && checkpoint.observed_remote_state !== 'unknown') {
+      throw new Error('Variation listing unknown checkpoint requires ambiguity evidence.');
+    }
+    if (TERMINAL_STATES.has(checkpoint.state) && !hasExactRemoteEvidence(checkpoint)) {
+      throw new Error('Variation listing terminal checkpoint requires exact remote evidence.');
+    }
   }
 
-  for (let index = 1; index < attempts.length; index += 1) {
-    const previous = attempts[index - 1];
-    const current = attempts[index];
-
-    if (!previous || !current || compareCheckpointOrder(previous, current) >= 0) {
+  const first = ordered[0];
+  if (first) {
+    if (first.attempt_number !== 1 || first.checkpoint_number !== 1) {
+      throw new Error('Variation listing journal history must begin at attempt 1/checkpoint 1.');
+    }
+    if (!READ_ONLY_OPERATION_KINDS.has(operation.operation_kind) && first.state !== 'started') {
       throw new Error(
-        'Variation listing journal attempts must be strictly ordered by attempt/checkpoint.'
+        `Variation listing mutation operation ${operation.operation_key} must begin with a started checkpoint.`
       );
     }
+  }
+
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    if (!previous || !current) continue;
 
     const contiguous =
       (current.attempt_number === previous.attempt_number &&
         current.checkpoint_number === previous.checkpoint_number + 1) ||
-      (current.attempt_number === previous.attempt_number + 1 && current.checkpoint_number === 1);
+      (current.attempt_number === previous.attempt_number + 1 &&
+        current.checkpoint_number === 1);
     if (!contiguous) {
       throw new Error(
-        'Variation listing journal attempts must use contiguous attempt/checkpoint numbers.'
-      );
-    }
-  }
-
-  if (attempts.length > 0) {
-    const first = attempts[0];
-    if (!first || first.operation_id !== operation.operation_id) {
-      throw new Error(
-        `Variation listing operation ${operation.operation_id} history contains an attempt for another operation.`
-      );
-    }
-    if (first.attempt_number !== 1 || first.checkpoint_number !== 1) {
-      throw new Error('Variation listing journal history must begin at attempt 1/checkpoint 1.');
-    }
-    assertEnum(first.state, ATTEMPT_STATES, 'attempt state');
-    assertEnum(first.observed_remote_state, EVIDENCE_STATES, 'observed remote state');
-
-    // Every mutating operation must durably mark the external request as
-    // started before recording an outcome. Read-only reconciliation may begin
-    // with an exact terminal observation because it does not issue a mutation.
-    if (!READ_ONLY_OPERATION_KINDS.has(operation.operation_kind) && first.state !== 'started') {
-      throw new Error(
-        `Variation listing mutation operation ${operation.operation_id} must begin with a started checkpoint.`
-      );
-    }
-    if (
-      (first.state === 'confirmed_complete' || first.state === 'confirmed_no_op') &&
-      (first.observed_remote_state !== 'present' && first.observed_remote_state !== 'proven_absent')
-    ) {
-      throw new Error(
-        `Variation listing terminal checkpoint for ${operation.operation_id} requires exact remote evidence.`
-      );
-    }
-  }
-
-  // Mirror the database transition matrix over the complete durable history:
-  // started may resolve only at the next checkpoint of that same attempt;
-  // unknown may resolve only at checkpoint 1 of the next attempt with exact
-  // present/proven_absent evidence; terminal outcomes cannot be reopened.
-  for (let index = 1; index < attempts.length; index += 1) {
-    const previous = attempts[index - 1];
-    const current = attempts[index];
-    if (!previous || !current) continue;
-
-    const terminal = (state: VariationListingOperationAttemptRow['state']) =>
-      state === 'confirmed_complete' || state === 'confirmed_no_op';
-    const previousAmbiguous =
-      previous.state === 'unknown' || previous.observed_remote_state === 'unknown';
-
-    if (
-      terminal(current.state) &&
-      current.observed_remote_state !== 'present' &&
-      current.observed_remote_state !== 'proven_absent'
-    ) {
-      throw new Error(
-        `Variation listing terminal checkpoint for ${operation.operation_id} requires exact remote evidence.`
+        'Variation listing journal checkpoints must use contiguous attempt/checkpoint numbers.'
       );
     }
 
     if (previous.state === 'started') {
       if (
         current.attempt_number !== previous.attempt_number ||
-        current.checkpoint_number !== previous.checkpoint_number + 1 ||
-        (current.state !== 'unknown' && !terminal(current.state))
+        (current.state !== 'unknown' && !TERMINAL_STATES.has(current.state))
       ) {
         throw new Error(
-          `Variation listing operation ${operation.operation_id} started checkpoint must resolve on the same attempt before retry.`
+          `Variation listing operation ${operation.operation_key} started checkpoint must resolve on the same attempt before retry.`
         );
       }
-    } else if (previousAmbiguous) {
+    } else if (
+      previous.state === 'unknown' ||
+      previous.observed_remote_state === 'unknown'
+    ) {
       if (
         current.attempt_number !== previous.attempt_number + 1 ||
         current.checkpoint_number !== 1 ||
-        !terminal(current.state) ||
-        (current.observed_remote_state !== 'present' && current.observed_remote_state !== 'proven_absent')
+        !TERMINAL_STATES.has(current.state) ||
+        !hasExactRemoteEvidence(current)
       ) {
         throw new Error(
-          `Variation listing operation ${operation.operation_id} ambiguous outcome requires an exact reconciliation checkpoint.`
+          `Variation listing operation ${operation.operation_key} ambiguous outcome requires an exact reconciliation checkpoint.`
         );
       }
-    } else if (terminal(previous.state)) {
+    } else if (TERMINAL_STATES.has(previous.state)) {
       throw new Error(
-        `Variation listing operation ${operation.operation_id} is terminal and cannot be reopened.`
+        `Variation listing operation ${operation.operation_key} is terminal and cannot be reopened.`
       );
     }
   }
 
-  const latestCheckpoint = attempts.at(-1) ?? null;
-  const latestAttemptNumber = latestCheckpoint?.attempt_number ?? 0;
-
-  if (
-    latestCheckpoint === null &&
-    (operation.current_state !== 'planned' ||
-      operation.current_evidence_state !== null ||
-      operation.current_evidence !== null)
-  ) {
-    throw new Error(
-      `Variation listing operation ${operation.operation_id} has a non-planned projection without durable checkpoint history.`
-    );
-  }
-
-  if (operation.latest_attempt_number !== latestAttemptNumber) {
-    throw new Error(
-      `Variation listing operation ${operation.operation_id} projection attempt ${operation.latest_attempt_number} does not match append-only history ${latestAttemptNumber}.`
-    );
-  }
-
-  const hasUnknownHistory = attempts.some(
-    (attempt) => attempt.state === 'unknown' || attempt.observed_remote_state === 'unknown'
-  );
-
-  // A durable attempt that is still in flight (started) or whose outcome is
-  // ambiguous (unknown) is unresolved; only a confirmed checkpoint with exact
-  // evidence resolves the latest durable state. Historical unknown evidence is
-  // preserved forever but does not permanently block continuation once a later
-  // exact reconciliation checkpoint resolves the current state.
-  const latestStateUnresolved = Boolean(
-    latestCheckpoint &&
-    (latestCheckpoint.state === 'started' ||
-      latestCheckpoint.state === 'unknown' ||
-      latestCheckpoint.observed_remote_state === 'unknown')
-  );
-  const projectionUnknown =
-    operation.current_state === 'unknown' || operation.current_evidence_state === 'unknown';
-  const hasConflictingProjection = Boolean(
-    latestCheckpoint &&
-    (operation.current_state !== latestCheckpoint.state ||
-      operation.current_evidence_state !== latestCheckpoint.observed_remote_state)
-  );
-
+  const latestCheckpoint = ordered.at(-1) ?? null;
   return {
-    hasConflictingProjection,
-    hasUnknownHistory,
-    latestAttemptNumber,
+    hasUnknownHistory: ordered.some(
+      (checkpoint) =>
+        checkpoint.state === 'unknown' || checkpoint.observed_remote_state === 'unknown'
+    ),
+    latestAttemptNumber: latestCheckpoint?.attempt_number ?? 0,
     latestCheckpoint,
     requiresReconciliation: Boolean(
-      latestStateUnresolved || projectionUnknown || hasConflictingProjection
+      latestCheckpoint &&
+        (latestCheckpoint.state === 'started' ||
+          latestCheckpoint.state === 'unknown' ||
+          latestCheckpoint.observed_remote_state === 'unknown')
     ),
   };
 }
 
 export function assertVariationListingJournalCanContinue(
-  operation: VariationListingOperationRow,
-  attempts: readonly VariationListingOperationAttemptRow[]
+  operation: VariationListingRevisionPlanOperation,
+  checkpoints: readonly VariationListingPublishingCheckpointRow[]
 ): void {
-  const inspection = inspectVariationListingJournal(operation, attempts);
-
+  const inspection = inspectVariationListingJournal(operation, checkpoints);
   if (inspection.requiresReconciliation) {
     throw new Error(
-      `Variation listing operation ${operation.operation_id} requires exact reconciliation before another remote mutation.`
+      `Variation listing operation ${operation.operation_key} requires exact reconciliation before another remote mutation.`
     );
   }
-
-  if (inspection.latestCheckpoint?.state === 'confirmed_complete' || inspection.latestCheckpoint?.state === 'confirmed_no_op') {
+  if (inspection.latestCheckpoint && TERMINAL_STATES.has(inspection.latestCheckpoint.state)) {
     throw new Error(
-      `Variation listing operation ${operation.operation_id} is terminal and cannot be reopened for another remote mutation.`
+      `Variation listing operation ${operation.operation_key} is terminal and cannot be reopened for another remote mutation.`
     );
   }
 }

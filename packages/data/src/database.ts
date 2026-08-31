@@ -133,10 +133,17 @@ export type VariationListingRevisionRow = TableRow<'variation_listing_revisions'
 export type VariationListingRevisionInsert = TableInsert<'variation_listing_revisions'>;
 export type VariationListingRevisionUpdate = TableUpdate<'variation_listing_revisions'>;
 
-export type VariationListingOperationRow = TableRow<'variation_listing_operations'>;
-export type VariationListingOperationInsert = TableInsert<'variation_listing_operations'>;
-export type VariationListingOperationUpdate = TableUpdate<'variation_listing_operations'>;
+export type VariationListingPublishingCheckpointRow = TableRow<'variation_listing_publishing_checkpoints'>;
+export type VariationListingPublishingCheckpointInsert = TableInsert<'variation_listing_publishing_checkpoints'>;
+export type VariationListingPublishingCheckpointUpdate = TableUpdate<'variation_listing_publishing_checkpoints'>;
 
-export type VariationListingOperationAttemptRow = TableRow<'variation_listing_operation_attempts'>;
-export type VariationListingOperationAttemptInsert = TableInsert<'variation_listing_operation_attempts'>;
-export type VariationListingOperationAttemptUpdate = TableUpdate<'variation_listing_operation_attempts'>;
+/** Immutable operation intent embedded in a captured revision. */
+export interface VariationListingRevisionPlanOperation {
+  sequence_no: number;
+  operation_key: string;
+  operation_kind: string;
+  target_ref: string;
+  intent_version: number;
+  intent_digest: string;
+  intent: Json;
+}

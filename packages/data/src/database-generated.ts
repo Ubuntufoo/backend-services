@@ -680,7 +680,6 @@ export type Database = {
           capture_back_source_ref: string;
           capture_front_source_ref: string;
           capture_pair_id: string;
-          capture_session_version: number;
           capture_source_key: string;
           capture_started_at: string;
           captured_at: string;
@@ -698,7 +697,6 @@ export type Database = {
           capture_back_source_ref: string;
           capture_front_source_ref: string;
           capture_pair_id: string;
-          capture_session_version: number;
           capture_source_key: string;
           capture_started_at: string;
           captured_at?: string;
@@ -716,7 +714,6 @@ export type Database = {
           capture_back_source_ref?: string;
           capture_front_source_ref?: string;
           capture_pair_id?: string;
-          capture_session_version?: number;
           capture_source_key?: string;
           capture_started_at?: string;
           captured_at?: string;
@@ -759,7 +756,6 @@ export type Database = {
           merchant_location_key: string;
           next_inventory_serial: number;
           payment_policy_id: string;
-          recovery_required: boolean;
           return_policy_id: string;
           selector_name: string;
           sku_bucket_token: string;
@@ -787,7 +783,6 @@ export type Database = {
           merchant_location_key: string;
           next_inventory_serial?: number;
           payment_policy_id: string;
-          recovery_required?: boolean;
           return_policy_id: string;
           selector_name?: string;
           sku_bucket_token: string;
@@ -815,7 +810,6 @@ export type Database = {
           merchant_location_key?: string;
           next_inventory_serial?: number;
           payment_policy_id?: string;
-          recovery_required?: boolean;
           return_policy_id?: string;
           selector_name?: string;
           sku_bucket_token?: string;
@@ -830,16 +824,7 @@ export type Database = {
           capture_source_key: string;
           created_at: string;
           mode: string;
-          pending_pair_front_source_ref: string | null;
-          pending_pair_id: string | null;
-          pending_pair_mode: string | null;
-          pending_pair_price_amount: number | null;
-          pending_pair_price_currency: string | null;
-          pending_pair_session_version: number | null;
-          pending_pair_started_at: string | null;
-          pending_pair_target_group_id: string | null;
-          pending_pair_target_variation_id: string | null;
-          session_version: number;
+          pending_pair: Json | null;
           sticky_price_amount: number;
           sticky_price_currency: string;
           target_group_id: string | null;
@@ -850,16 +835,7 @@ export type Database = {
           capture_source_key: string;
           created_at?: string;
           mode?: string;
-          pending_pair_front_source_ref?: string | null;
-          pending_pair_id?: string | null;
-          pending_pair_mode?: string | null;
-          pending_pair_price_amount?: number | null;
-          pending_pair_price_currency?: string | null;
-          pending_pair_session_version?: number | null;
-          pending_pair_started_at?: string | null;
-          pending_pair_target_group_id?: string | null;
-          pending_pair_target_variation_id?: string | null;
-          session_version?: number;
+          pending_pair?: Json | null;
           sticky_price_amount?: number;
           sticky_price_currency?: string;
           target_group_id?: string | null;
@@ -870,16 +846,7 @@ export type Database = {
           capture_source_key?: string;
           created_at?: string;
           mode?: string;
-          pending_pair_front_source_ref?: string | null;
-          pending_pair_id?: string | null;
-          pending_pair_mode?: string | null;
-          pending_pair_price_amount?: number | null;
-          pending_pair_price_currency?: string | null;
-          pending_pair_session_version?: number | null;
-          pending_pair_started_at?: string | null;
-          pending_pair_target_group_id?: string | null;
-          pending_pair_target_variation_id?: string | null;
-          session_version?: number;
+          pending_pair?: Json | null;
           sticky_price_amount?: number;
           sticky_price_currency?: string;
           target_group_id?: string | null;
@@ -887,20 +854,6 @@ export type Database = {
           updated_at?: string;
         };
         Relationships: [
-          {
-            foreignKeyName: 'variation_listing_intake_sessions_pending_pair_group_fkey';
-            columns: ['pending_pair_target_group_id'];
-            isOneToOne: false;
-            referencedRelation: 'variation_listing_groups';
-            referencedColumns: ['group_id'];
-          },
-          {
-            foreignKeyName: 'variation_listing_intake_sessions_pending_variation_group_fkey';
-            columns: ['pending_pair_target_group_id', 'pending_pair_target_variation_id'];
-            isOneToOne: false;
-            referencedRelation: 'variation_listing_variations';
-            referencedColumns: ['group_id', 'variation_id'];
-          },
           {
             foreignKeyName: 'variation_listing_intake_sessions_target_group_id_fkey';
             columns: ['target_group_id'];
@@ -917,21 +870,16 @@ export type Database = {
           },
         ];
       };
-      variation_listing_operation_attempts: {
+      variation_listing_publishing_checkpoints: {
         Row: {
           attempt_number: number;
           checkpoint_id: string;
           checkpoint_number: number;
           created_at: string;
-          decision: string | null;
-          error_evidence: Json | null;
-          evidence_version: number;
-          operation_id: string;
-          post_evidence: Json | null;
-          pre_evidence: Json | null;
+          evidence: Json;
           observed_remote_state: string | null;
-          remote_identity: Json | null;
-          response_evidence: Json | null;
+          operation_key: string;
+          revision_id: string;
           state: string;
         };
         Insert: {
@@ -939,15 +887,10 @@ export type Database = {
           checkpoint_id: string;
           checkpoint_number: number;
           created_at?: string;
-          decision?: string | null;
-          error_evidence?: Json | null;
-          evidence_version: number;
+          evidence: Json;
           observed_remote_state?: string | null;
-          operation_id: string;
-          post_evidence?: Json | null;
-          pre_evidence?: Json | null;
-          remote_identity?: Json | null;
-          response_evidence?: Json | null;
+          operation_key: string;
+          revision_id: string;
           state: string;
         };
         Update: {
@@ -955,82 +898,15 @@ export type Database = {
           checkpoint_id?: string;
           checkpoint_number?: number;
           created_at?: string;
-          decision?: string | null;
-          error_evidence?: Json | null;
-          evidence_version?: number;
+          evidence?: Json;
           observed_remote_state?: string | null;
-          operation_id?: string;
-          post_evidence?: Json | null;
-          pre_evidence?: Json | null;
-          remote_identity?: Json | null;
-          response_evidence?: Json | null;
+          operation_key?: string;
+          revision_id?: string;
           state?: string;
         };
         Relationships: [
           {
-            foreignKeyName: 'variation_listing_operation_attempts_operation_id_fkey';
-            columns: ['operation_id'];
-            isOneToOne: false;
-            referencedRelation: 'variation_listing_operations';
-            referencedColumns: ['operation_id'];
-          },
-        ];
-      };
-      variation_listing_operations: {
-        Row: {
-          created_at: string;
-          current_evidence: Json | null;
-          current_evidence_state: string | null;
-          current_state: string;
-          intent: Json;
-          intent_digest: string;
-          intent_version: number;
-          latest_attempt_number: number;
-          operation_id: string;
-          operation_kind: string;
-          operation_key: string;
-          revision_id: string;
-          sequence_no: number;
-          target_ref: string;
-          updated_at: string;
-        };
-        Insert: {
-          created_at?: string;
-          current_evidence?: Json | null;
-          current_evidence_state?: string | null;
-          current_state?: string;
-          intent: Json;
-          intent_digest: string;
-          intent_version: number;
-          latest_attempt_number?: number;
-          operation_id: string;
-          operation_kind: string;
-          operation_key: string;
-          revision_id: string;
-          sequence_no: number;
-          target_ref: string;
-          updated_at?: string;
-        };
-        Update: {
-          created_at?: string;
-          current_evidence?: Json | null;
-          current_evidence_state?: string | null;
-          current_state?: string;
-          intent?: Json;
-          intent_digest?: string;
-          intent_version?: number;
-          latest_attempt_number?: number;
-          operation_id?: string;
-          operation_kind?: string;
-          operation_key?: string;
-          revision_id?: string;
-          sequence_no?: number;
-          target_ref?: string;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: 'variation_listing_operations_revision_id_fkey';
+            foreignKeyName: 'variation_listing_publishing_checkpoints_revision_id_fkey';
             columns: ['revision_id'];
             isOneToOne: false;
             referencedRelation: 'variation_listing_revisions';
@@ -1044,6 +920,7 @@ export type Database = {
           captured_desired_revision: number;
           group_id: string;
           operation_count: number;
+          operation_plan: Json;
           revision_id: string;
           snapshot: Json;
           snapshot_digest: string;
@@ -1054,6 +931,7 @@ export type Database = {
           captured_desired_revision: number;
           group_id: string;
           operation_count: number;
+          operation_plan: Json;
           revision_id: string;
           snapshot: Json;
           snapshot_digest: string;
@@ -1064,6 +942,7 @@ export type Database = {
           captured_desired_revision?: number;
           group_id?: string;
           operation_count?: number;
+          operation_plan?: Json;
           revision_id?: string;
           snapshot?: Json;
           snapshot_digest?: string;
@@ -1149,37 +1028,59 @@ export type Database = {
           p_attempt_number: number;
           p_checkpoint_id: string;
           p_checkpoint_number: number;
-          p_current_evidence: Json | null;
-          p_current_evidence_state: string | null;
-          p_current_state: string;
-          p_decision: string | null;
-          p_error_evidence: Json | null;
-          p_evidence_version: number;
+          p_evidence: Json;
           p_observed_remote_state: string | null;
-          p_operation_id: string;
-          p_post_evidence: Json | null;
-          p_pre_evidence: Json | null;
-          p_remote_identity: Json | null;
-          p_response_evidence: Json | null;
+          p_operation_key: string;
+          p_revision_id: string;
           p_state: string;
         };
-        Returns: {
-          attempt: Json;
-          operation: Json;
-        }[];
+        Returns: { checkpoint: Json }[];
+      };
+      create_variation_listing_group: {
+        Args: {
+          p_category_id: string;
+          p_condition_id: string;
+          p_condition_token: string;
+          p_fulfillment_policy_id: string;
+          p_group_id: string;
+          p_group_key: string;
+          p_marketplace_id: string;
+          p_merchant_location_key: string;
+          p_payment_policy_id: string;
+          p_return_policy_id: string;
+          p_sku_bucket_token: string;
+          p_sku_category_code: string;
+        };
+        Returns: { group_row: Json }[];
+      };
+      configure_variation_listing_intake: {
+        Args: { p_capture_source_key: string; p_mode: string; p_sticky_price_amount: number; p_target_group_id: string | null; p_target_variation_id: string | null };
+        Returns: { session_row: Json }[];
+      };
+      start_variation_listing_intake_pair: {
+        Args: { p_capture_source_key: string; p_pair_id: string; p_front_source_ref: string; p_started_at: string };
+        Returns: { session_row: Json }[];
+      };
+      discard_variation_listing_intake_pair: { Args: { p_capture_source_key: string }; Returns: { session_row: Json }[] };
+      complete_variation_listing_new_variation: {
+        Args: { p_capture_source_key: string; p_copy_id: string; p_variation_id: string; p_capture_pair_id: string; p_condition_token: string; p_selector_value: string; p_variation_metadata: Json; p_front_r2_key: string; p_back_r2_key: string; p_back_source_ref: string; p_captured_at: string | null };
+        Returns: { group_row: Json; variation_row: Json; copy_row: Json }[];
+      };
+      complete_variation_listing_duplicate_copy: {
+        Args: { p_capture_source_key: string; p_copy_id: string; p_capture_pair_id: string; p_variation_id: string; p_condition_token: string; p_front_r2_key: string; p_back_r2_key: string; p_back_source_ref: string; p_captured_at: string | null };
+        Returns: { group_row: Json; copy_row: Json }[];
       };
       capture_variation_listing_revision: {
         Args: {
           p_captured_desired_revision: number;
           p_group_id: string;
-          p_operations: Json;
+          p_operation_plan: Json;
           p_revision_id: string;
           p_snapshot: Json;
           p_snapshot_digest: string;
           p_snapshot_version: number;
         };
         Returns: {
-          operations: Json;
           revision: Json;
         }[];
       };
