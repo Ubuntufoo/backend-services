@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Disposable YP2.7b RPC seam validation.  Applies the YP2.4 + YP2.5 + RPC
- * migrations to a throwaway PostgreSQL container and proves the three RPC
- * functions against the already-applied database contract.  Never connects to
- * a hosted database or mutates eBay.
+ * Disposable YP2.7b RPC seam and YP2.7c ACL remediation validation. Applies
+ * the YP2.4 + YP2.5 + RPC migrations to a throwaway PostgreSQL container and
+ * proves the three RPC functions plus the hosted-default-ACL correction.
+ * Never connects to a hosted database or mutates eBay.
  */
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -25,6 +25,14 @@ const rpcMigrationPath = new URL(
 );
 const rpcRollbackPath = new URL(
   'supabase/rollbacks/20260830014853_create_variation_listing_rpc_seam.rollback.sql',
+  root
+);
+const aclRemediationMigrationPath = new URL(
+  'supabase/migrations/20260831142123_revoke_variation_listing_rpc_execute.sql',
+  root
+);
+const aclRemediationRollbackPath = new URL(
+  'supabase/rollbacks/20260831142123_revoke_variation_listing_rpc_execute.rollback.sql',
   root
 );
 
@@ -470,6 +478,66 @@ select assert_true((select definition from pg_views where schemaname = 'public' 
 select assert_true(to_regprocedure('public.set_row_updated_at()') is not null, 'rollback preserved shared helper');
 `;
 
+const aclRemediationPostAssertions = `
+select assert_true(not has_function_privilege('anon', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'anon cannot execute capture after ACL remediation');
+select assert_true(not has_function_privilege('anon', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'anon cannot execute append after ACL remediation');
+select assert_true(not has_function_privilege('anon', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'anon cannot execute confirm after ACL remediation');
+select assert_true(not has_function_privilege('authenticated', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'authenticated cannot execute capture after ACL remediation');
+select assert_true(not has_function_privilege('authenticated', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'authenticated cannot execute append after ACL remediation');
+select assert_true(not has_function_privilege('authenticated', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'authenticated cannot execute confirm after ACL remediation');
+select assert_true(has_function_privilege('service_role', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'service_role can execute capture after ACL remediation');
+select assert_true(has_function_privilege('service_role', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'service_role can execute append after ACL remediation');
+select assert_true(has_function_privilege('service_role', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'service_role can execute confirm after ACL remediation');
+select assert_true(not has_function_privilege('public', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'PUBLIC cannot execute capture after ACL remediation');
+select assert_true(not has_function_privilege('public', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'PUBLIC cannot execute append after ACL remediation');
+select assert_true(not has_function_privilege('public', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'PUBLIC cannot execute confirm after ACL remediation');
+select assert_true((select count(*) from pg_proc where oid in (to_regprocedure('public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)'), to_regprocedure('public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)'), to_regprocedure('public.confirm_variation_listing_revision(uuid, bigint, bigint)'))) = 3, 'ACL remediation preserves exact RPC signatures');
+select assert_true((select bool_and(prosecdef) from pg_proc where oid in (to_regprocedure('public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)'), to_regprocedure('public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)'), to_regprocedure('public.confirm_variation_listing_revision(uuid, bigint, bigint)'))) is true, 'ACL remediation preserves SECURITY DEFINER');
+select assert_true((select bool_and(proconfig @> array['search_path=pg_catalog, public, pg_temp']) from pg_proc where oid in (to_regprocedure('public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)'), to_regprocedure('public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)'), to_regprocedure('public.confirm_variation_listing_revision(uuid, bigint, bigint)'))) is true, 'ACL remediation preserves pinned search_path');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_revisions', 'INSERT'), 'ACL remediation preserves revision INSERT revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operations', 'INSERT'), 'ACL remediation preserves operation INSERT revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operations', 'UPDATE'), 'ACL remediation preserves operation UPDATE revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'INSERT'), 'ACL remediation preserves attempt INSERT revoke');
+select assert_true(has_table_privilege('service_role', 'public.variation_listing_revisions', 'SELECT'), 'ACL remediation preserves revision SELECT');
+select assert_true(has_table_privilege('service_role', 'public.variation_listing_operations', 'SELECT'), 'ACL remediation preserves operation SELECT');
+select assert_true(has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'SELECT'), 'ACL remediation preserves attempt SELECT');
+select assert_true((select count(*) from pg_class where relname like 'variation_listing_%' and relkind = 'r') = 7, 'ACL remediation adds no table');
+select assert_true((select count(*) from pg_views where schemaname = 'public') = 1, 'ACL remediation adds no view');
+select assert_true((select count(*) from pg_policies where schemaname = 'public') = 0, 'ACL remediation adds no policy');
+select assert_true((select bool_and(relrowsecurity) from pg_class where relname like 'variation_listing_%' and relkind = 'r') is true, 'ACL remediation preserves table RLS');
+select assert_true(to_regprocedure('public.validate_variation_listing_group_guarded_update()') is not null, 'ACL remediation preserves YP2.4 group guard');
+select assert_true(to_regprocedure('public.validate_variation_listing_variation_aggregate_write()') is not null, 'ACL remediation preserves YP2.4 variation guard');
+select assert_true(to_regprocedure('public.validate_variation_listing_copy_aggregate_write()') is not null, 'ACL remediation preserves YP2.4 copy guard');
+select assert_true(to_regprocedure('public.prevent_variation_listing_operation_attempt_mutation()') is not null, 'ACL remediation preserves YP2.5 append-only trigger');
+select assert_true((select count(*) from pg_constraint where conname = 'variation_listing_groups_revision_watermark_check') = 1, 'ACL remediation preserves YP2.4 watermark constraint');
+select assert_true((select count(*) from pg_constraint where conname = 'variation_listing_operation_attempts_operation_attempt_checkpoint_key') = 1, 'ACL remediation preserves YP2.5 checkpoint uniqueness');
+select assert_true((select definition from pg_views where schemaname = 'public' and viewname = 'sentinel_shared_view') like '%yp2.7b-sentinel%', 'ACL remediation preserves shared view');
+select assert_true(to_regprocedure('public.set_row_updated_at()') is not null, 'ACL remediation preserves shared updated-at helper');
+`;
+
+const aclRemediationRollbackAssertions = `
+select assert_true(has_function_privilege('anon', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'rollback restores anon capture execute');
+select assert_true(has_function_privilege('anon', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'rollback restores anon append execute');
+select assert_true(has_function_privilege('anon', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'rollback restores anon confirm execute');
+select assert_true(has_function_privilege('authenticated', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'rollback restores authenticated capture execute');
+select assert_true(has_function_privilege('authenticated', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'rollback restores authenticated append execute');
+select assert_true(has_function_privilege('authenticated', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'rollback restores authenticated confirm execute');
+select assert_true(has_function_privilege('service_role', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'rollback preserves service_role capture execute');
+select assert_true(has_function_privilege('service_role', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'rollback preserves service_role append execute');
+select assert_true(has_function_privilege('service_role', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'rollback preserves service_role confirm execute');
+select assert_true(not has_function_privilege('public', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'rollback preserves PUBLIC capture revoke');
+select assert_true(not has_function_privilege('public', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'rollback preserves PUBLIC append revoke');
+select assert_true(not has_function_privilege('public', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'rollback preserves PUBLIC confirm revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_revisions', 'INSERT'), 'rollback preserves revision INSERT revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operations', 'INSERT'), 'rollback preserves operation INSERT revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operations', 'UPDATE'), 'rollback preserves operation UPDATE revoke');
+select assert_true(not has_table_privilege('service_role', 'public.variation_listing_operation_attempts', 'INSERT'), 'rollback preserves attempt INSERT revoke');
+select assert_true((select count(*) from pg_class where relname like 'variation_listing_%' and relkind = 'r') = 7, 'rollback adds no table');
+select assert_true((select count(*) from pg_views where schemaname = 'public') = 1, 'rollback adds no view');
+select assert_true((select count(*) from pg_policies where schemaname = 'public') = 0, 'rollback adds no policy');
+select assert_true(to_regprocedure('public.set_row_updated_at()') is not null, 'rollback preserves shared updated-at helper');
+`;
+
 async function main() {
   let started = false;
   try {
@@ -498,8 +566,52 @@ async function main() {
     const journalMigration = await readFile(journalMigrationPath, 'utf8');
     const rpcMigration = await readFile(rpcMigrationPath, 'utf8');
     const rpcRollback = await readFile(rpcRollbackPath, 'utf8');
+    const aclRemediationMigration = await readFile(aclRemediationMigrationPath, 'utf8');
+    const aclRemediationRollback = await readFile(aclRemediationRollbackPath, 'utf8');
 
     await psql('postgres', bootstrap + migration + journalMigration + rpcMigration + assertions);
+
+    // Reproduce the hosted default ACL condition, then apply and verify the
+    // narrow remediation. The baseline proves that only ACLs change.
+    await psql(
+      'postgres',
+      `create temporary table rpc_acl_baseline as
+select p.oid as function_oid,
+       pg_get_function_identity_arguments(p.oid) as identity_arguments,
+       pg_get_functiondef(p.oid) as definition,
+       p.prosecdef,
+       p.proconfig
+from pg_proc p
+join (values
+  (to_regprocedure('public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)')::oid),
+  (to_regprocedure('public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)')::oid),
+  (to_regprocedure('public.confirm_variation_listing_revision(uuid, bigint, bigint)')::oid)
+) as target(function_oid) on target.function_oid = p.oid;
+select assert_true((select count(*) = 3 from rpc_acl_baseline), 'ACL baseline captured all three RPCs');
+
+grant execute on function public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb) to anon, authenticated;
+grant execute on function public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb) to anon, authenticated;
+grant execute on function public.confirm_variation_listing_revision(uuid, bigint, bigint) to anon, authenticated;
+select assert_true(has_function_privilege('anon', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'simulated anon capture execute grant exists');
+select assert_true(has_function_privilege('anon', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'simulated anon append execute grant exists');
+select assert_true(has_function_privilege('anon', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'simulated anon confirm execute grant exists');
+select assert_true(has_function_privilege('authenticated', 'public.capture_variation_listing_revision(uuid, uuid, bigint, integer, text, jsonb, jsonb)', 'execute'), 'simulated authenticated capture execute grant exists');
+select assert_true(has_function_privilege('authenticated', 'public.append_variation_listing_journal_checkpoint(uuid, uuid, integer, integer, text, integer, jsonb, jsonb, jsonb, jsonb, jsonb, text, text, text, text, jsonb)', 'execute'), 'simulated authenticated append execute grant exists');
+select assert_true(has_function_privilege('authenticated', 'public.confirm_variation_listing_revision(uuid, bigint, bigint)', 'execute'), 'simulated authenticated confirm execute grant exists');
+
+${aclRemediationMigration}
+select assert_true((select count(*) from rpc_acl_baseline b
+  where pg_get_functiondef(b.function_oid) = b.definition
+    and pg_get_function_identity_arguments(b.function_oid) is not distinct from b.identity_arguments
+    and (select p.prosecdef from pg_proc p where p.oid = b.function_oid) is not distinct from b.prosecdef
+    and (select p.proconfig from pg_proc p where p.oid = b.function_oid) is not distinct from b.proconfig) = 3, 'ACL remediation preserves RPC definitions and security posture');
+${aclRemediationPostAssertions}`
+    );
+
+    // Rollback must restore only the simulated browser-role grants; reapply
+    // the remediation before continuing with the existing RPC rollback proof.
+    await psql('postgres', aclRemediationRollback + aclRemediationRollbackAssertions);
+    await psql('postgres', aclRemediationMigration + aclRemediationPostAssertions);
 
     // Deterministic lock-order proof. A holder keeps the owning group locked;
     // its pg_sleep query is polled as an explicit acquisition barrier. Append
@@ -591,7 +703,7 @@ select assert_true((select last_confirmed_revision is null from public.variation
       "select assert_true(to_regprocedure('public.confirm_variation_listing_revision(uuid, bigint, bigint)') is not null, 'RPC reapply succeeds');\nselect assert_true(not has_table_privilege('service_role', 'public.variation_listing_operations', 'UPDATE'), 'reapply revokes direct projection grant again');\nselect assert_true(to_regclass('public.variation_listing_variations') is not null, 'reapply preserves variations');\nselect assert_true(to_regclass('public.variation_listing_copies') is not null, 'reapply preserves copies');\nselect assert_true(to_regprocedure('public.validate_variation_listing_group_guarded_update()') is not null, 'reapply preserves group guard');\nselect assert_true((select count(*) >= 1 from public.variation_listing_groups), 'reapply preserves group data');\nselect assert_true((select count(*) >= 1 from public.variation_listing_variations), 'reapply preserves variation data');\nselect assert_true((select count(*) >= 1 from public.variation_listing_copies), 'reapply preserves copy data');"
     );
 
-    console.log('YP2.7b variation-listing RPC seam validation: passed');
+    console.log('YP2.7c variation-listing RPC ACL remediation validation: passed');
   } finally {
     if (started) {
       try {
@@ -604,6 +716,6 @@ select assert_true((select last_confirmed_revision is null from public.variation
 }
 
 main().catch((error) => {
-  console.error(`YP2.7b variation-listing RPC seam validation: failed\n${error.message}`);
+  console.error(`YP2.7c variation-listing RPC ACL remediation validation: failed\n${error.message}`);
   process.exitCode = 1;
 });
