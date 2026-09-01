@@ -3,3 +3,6 @@ export * from './generate-listing-draft.js';
 export * from './gemini-model-router.js';
 export * from './parse-generated-draft.js';
 export * from './trading-card-id-resolver.js';
+export * from './variation-listing-identity-contracts.js';
+export * from './variation-listing-identity-prompt.js';
+export * from './variation-listing-identity.js';

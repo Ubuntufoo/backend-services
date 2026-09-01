@@ -233,7 +233,7 @@ describe('generateListingDraft', () => {
     expect(request.prompt).toContain(
       'Do not return collector shorthand such as NM-MT, EX-MT, VG-EX, MT, NM, EX, VG, FR, or PR.'
     );
-    expect(request.prompt).toContain('canonical order: [validated year] [set]');
+    expect(request.prompt).toContain('canonical order: [validated year or season prefix] [set]');
     expect(request.prompt).toContain(
       'A team may appear last only when positively evidenced by a visible team name, logo, or wordmark'
     );
@@ -281,6 +281,7 @@ describe('generateListingDraft', () => {
         aspects: 0.84,
       },
       yearEvidence: null,
+      seasonEvidence: null,
       serialEvidence: null,
       warnings: [
         'Condition cannot be confirmed from photos alone.',
@@ -512,6 +513,7 @@ describe('generateListingDraft', () => {
         Sport: 'Baseball',
       },
       yearEvidence: null,
+      seasonEvidence: null,
       serialEvidence: null,
       priceSuggestion: null,
       confidence: {},
