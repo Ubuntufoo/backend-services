@@ -210,6 +210,7 @@ export {
   updateOrder,
 } from './repositories/orders.js';
 export {
+  getVariationListingCopyByCapturePairId,
   getVariationListingCopyById,
   getVariationListingGroupById,
   getVariationListingIntakeSessionBySourceKey,
@@ -255,6 +256,7 @@ export {
 export {
   VariationListingTransactionConflictError,
   createSupabaseVariationListingTransactionGateway,
+  variationListingJsonSemanticallyEqual,
 } from './variation-listing-rpc.js';
 export {
   ListingWorkflowStateError,
