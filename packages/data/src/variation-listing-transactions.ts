@@ -60,6 +60,14 @@ export interface ConfirmVariationListingRevisionInput {
   groupId: string;
 }
 
+export interface ApplyVariationListingGroupReviewDraftInput {
+  derivedCommonEbayAspects: Json;
+  description: string;
+  expectedDesiredRevision: number;
+  groupId: string;
+  title: string;
+}
+
 export interface CreateVariationListingGroupInput {
   categoryId: string;
   conditionId: string;
@@ -137,6 +145,9 @@ export interface VariationListingTransactionGateway {
     input: ConfigureVariationListingIntakeInput
   ): Promise<VariationListingIntakeSessionRow>;
   confirmRevision(input: ConfirmVariationListingRevisionInput): Promise<VariationListingGroupRow>;
+  applyGroupReviewDraft(
+    input: ApplyVariationListingGroupReviewDraftInput
+  ): Promise<VariationListingGroupRow>;
   createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
   discardIntakePair(captureSourceKey: string): Promise<VariationListingIntakeSessionRow>;
   loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;

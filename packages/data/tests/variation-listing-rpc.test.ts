@@ -40,3 +40,22 @@ describe('variation listing JSON semantic equality', () => {
     expect(variationListingJsonSemanticallyEqual(JSON.parse('{"__proto__":1}'), {})).toBe(false);
   });
 });
+
+describe('YP4.2b group review-draft RPC', () => {
+  const group = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:3, last_confirmed_revision:null, lifecycle_state:'review', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:2, derived_common_ebay_aspects:{Manufacturer:'Topps',Year:'2024'}, condition_descriptors:[], condition_description:null, description:'Approved description', title:'Approved title', created_at:'now', updated_at:'now',
+  };
+
+  it('maps narrow args and verifies trimmed/parity response with semantic aspects', async () => {
+    const aspects = { Year:'2024', Manufacturer:'Topps' };
+    const c = clientFor('apply_variation_listing_group_review_draft', { group_row: group }, args => {
+      expect(args).toEqual({ p_group_id:'g', p_expected_desired_revision:2, p_title:'Approved title', p_description:'Approved description', p_derived_common_ebay_aspects:aspects });
+    });
+    await expect(createSupabaseVariationListingTransactionGateway(c).applyGroupReviewDraft({ groupId:'g', expectedDesiredRevision:2, title:'  Approved title ', description:' Approved description ', derivedCommonEbayAspects:{ Manufacturer:'Topps', Year:'2024' } })).resolves.toMatchObject({ group_id:'g', lifecycle_state:'review', desired_revision:3 });
+  });
+
+  it('maps VR001 stale-CAS conflicts', async () => {
+    const c = { rpc: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data:null, error:{ code:'VR001', message:'stale' } })) })) } as unknown as SupabaseDataClient;
+    await expect(createSupabaseVariationListingTransactionGateway(c).applyGroupReviewDraft({ groupId:'g', expectedDesiredRevision:2, title:'Title', description:'Description', derivedCommonEbayAspects:{} })).rejects.toMatchObject({ name:'VariationListingTransactionConflictError', code:'VR001' });
+  });
+});

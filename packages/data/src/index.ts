@@ -243,6 +243,7 @@ export {
   type CaptureVariationListingRevisionInput,
   type CaptureVariationListingRevisionResult,
   type ConfirmVariationListingRevisionInput,
+  type ApplyVariationListingGroupReviewDraftInput,
   type VariationListingAggregateSnapshot,
   type VariationListingJournalInspection,
   type VariationListingRevisionPlanOperationInput,
