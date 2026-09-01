@@ -87,3 +87,29 @@ describe('YP4.3 manual variation price RPC', () => {
     await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:1.99 })).rejects.toMatchObject({ name:'VariationListingTransactionConflictError', code:'VR001' });
   });
 });
+
+
+describe('YP5.3 Slice A active staging RPCs', () => {
+  const activeGroup = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:8, last_confirmed_revision:7, lifecycle_state:'active', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:3, derived_common_ebay_aspects:{}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'now', updated_at:'now',
+  };
+  const variation = {
+    variation_id:'v', group_id:'g', inventory_serial:1, position:0, sku:'BSKBL-BucketA-000001', selector_value:'Card A', price_amount:1.99, price_currency:'USD', representative_copy_id:'copy-b', variation_metadata:{}, created_at:'now', updated_at:'now',
+  };
+  const copy = { copy_id:'copy-a', variation_id:'v', condition_token:'EXCELLENT', front_r2_key:'front', back_r2_key:'back', capture_source_key:'camera', capture_pair_id:'pair', capture_front_source_ref:'front-source', capture_back_source_ref:'back-source', capture_started_at:'now', captured_at:'now', created_at:'now', updated_at:'now', availability_state:'unavailable', condition_notes:null };
+
+  it('maps active manual price staging while preserving returned active/confirmed state', async () => {
+    const c = clientFor('update_variation_listing_manual_price', { group_row:activeGroup, variation_row:variation }, args => expect(args).toEqual({p_group_id:'g',p_variation_id:'v',p_expected_desired_revision:7,p_price_amount:1.99}));
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({groupId:'g',variationId:'v',expectedDesiredRevision:7,priceAmount:1.99})).resolves.toMatchObject({group:{lifecycle_state:'active',last_confirmed_revision:7,desired_revision:8}});
+  });
+
+  it('maps copy availability staging', async () => {
+    const c = clientFor('update_variation_listing_copy_availability', { group_row:activeGroup, copy_row:copy }, args => expect(args).toEqual({p_group_id:'g',p_variation_id:'v',p_copy_id:'copy-a',p_expected_desired_revision:7,p_availability_state:'unavailable'}));
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateCopyAvailability({groupId:'g',variationId:'v',copyId:'copy-a',expectedDesiredRevision:7,availabilityState:'unavailable'})).resolves.toMatchObject({group:{last_confirmed_revision:7},copy:{availability_state:'unavailable'}});
+  });
+
+  it('maps representative-copy staging', async () => {
+    const c = clientFor('update_variation_listing_representative_copy', { group_row:activeGroup, variation_row:variation }, args => expect(args).toEqual({p_group_id:'g',p_variation_id:'v',p_copy_id:'copy-b',p_expected_desired_revision:7}));
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateRepresentativeCopy({groupId:'g',variationId:'v',copyId:'copy-b',expectedDesiredRevision:7})).resolves.toMatchObject({group:{last_confirmed_revision:7},variation:{representative_copy_id:'copy-b'}});
+  });
+});

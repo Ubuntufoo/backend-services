@@ -1094,6 +1094,22 @@ export type Database = {
           group_row: Json;
         }[];
       };
+      update_variation_listing_copy_availability: {
+        Args: { p_group_id: string; p_variation_id: string; p_copy_id: string; p_expected_desired_revision: number; p_availability_state: string };
+        Returns: { group_row: Json; copy_row: Json }[];
+      };
+      update_variation_listing_representative_copy: {
+        Args: { p_group_id: string; p_variation_id: string; p_copy_id: string; p_expected_desired_revision: number };
+        Returns: { group_row: Json; variation_row: Json }[];
+      };
+      update_variation_listing_manual_price: {
+        Args: { p_group_id: string; p_variation_id: string; p_expected_desired_revision: number; p_price_amount: number };
+        Returns: { group_row: Json; variation_row: Json }[];
+      };
+      apply_variation_listing_group_review_draft: {
+        Args: { p_group_id: string; p_expected_desired_revision: number; p_title: string; p_description: string; p_derived_common_ebay_aspects: Json };
+        Returns: { group_row: Json }[];
+      };
       jsonb_text_array: {
         Args: { input: Json };
         Returns: string[];

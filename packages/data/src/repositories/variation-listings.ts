@@ -107,12 +107,12 @@ export function mapVariationListingPublishingCheckpointRow(row: VariationListing
   const evidence = validateVariationListingCheckpointEvidence(row.evidence);
   positiveInteger(row.attempt_number, 'checkpoint attempt_number');
   positiveInteger(row.checkpoint_number, 'checkpoint checkpoint_number');
-  if (!['started','unknown','confirmed_complete','confirmed_no_op'].includes(row.state)) throw new Error('Variation listing checkpoint state is invalid.');
+  if (!['started','unknown','retry_authorized','retry_exhausted','confirmed_complete','confirmed_no_op'].includes(row.state)) throw new Error('Variation listing checkpoint state is invalid.');
   if (row.observed_remote_state !== null && !['present','proven_absent','unknown'].includes(row.observed_remote_state)) throw new Error('Variation listing checkpoint observed_remote_state is invalid.');
   if (row.state === 'started' && row.observed_remote_state !== null) throw new Error('Variation listing started checkpoint cannot claim remote evidence.');
   if (row.state === 'unknown' && row.observed_remote_state !== 'unknown') throw new Error('Variation listing unknown checkpoint requires ambiguity evidence.');
-  if ((row.state === 'confirmed_complete' || row.state === 'confirmed_no_op') && row.observed_remote_state !== 'present' && row.observed_remote_state !== 'proven_absent') throw new Error('Variation listing terminal checkpoint requires exact remote evidence.');
-  if ((row.state === 'unknown' || row.state === 'confirmed_complete' || row.state === 'confirmed_no_op') && Object.keys(evidence).length === 0) throw new Error('Variation listing resolved checkpoint requires non-empty evidence.');
+  if (['retry_authorized','retry_exhausted','confirmed_complete','confirmed_no_op'].includes(row.state) && row.observed_remote_state !== 'present' && row.observed_remote_state !== 'proven_absent') throw new Error('Variation listing resolved checkpoint requires exact remote evidence.');
+  if ((row.state === 'unknown' || row.state === 'retry_authorized' || row.state === 'retry_exhausted' || row.state === 'confirmed_complete' || row.state === 'confirmed_no_op') && Object.keys(evidence).length === 0) throw new Error('Variation listing resolved checkpoint requires non-empty evidence.');
   return { attemptNumber: row.attempt_number, checkpointId: row.checkpoint_id, checkpointNumber: row.checkpoint_number, evidence: evidence as Record<string, unknown>, observedRemoteState: row.observed_remote_state, operationKey: row.operation_key, revisionId: row.revision_id, source: row, state: row.state };
 }
 

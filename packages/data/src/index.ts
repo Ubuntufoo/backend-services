@@ -250,6 +250,8 @@ export {
   type ConfirmVariationListingRevisionInput,
   type ApplyVariationListingGroupReviewDraftInput,
   type UpdateVariationListingManualPriceInput,
+  type UpdateVariationListingCopyAvailabilityInput,
+  type UpdateVariationListingRepresentativeCopyInput,
   type VariationListingAggregateSnapshot,
   type VariationListingJournalInspection,
   type VariationListingRevisionPlanOperationInput,

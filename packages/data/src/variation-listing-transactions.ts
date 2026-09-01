@@ -48,7 +48,7 @@ export interface AppendVariationListingJournalCheckpointInput {
   observedRemoteState?: 'present' | 'proven_absent' | 'unknown' | null;
   operationKey: string;
   revisionId: string;
-  state: 'started' | 'unknown' | 'confirmed_complete' | 'confirmed_no_op';
+  state: 'started' | 'unknown' | 'retry_authorized' | 'retry_exhausted' | 'confirmed_complete' | 'confirmed_no_op';
 }
 
 export interface AppendVariationListingJournalCheckpointResult {
@@ -73,6 +73,21 @@ export interface UpdateVariationListingManualPriceInput {
   expectedDesiredRevision: number;
   groupId: string;
   priceAmount: VariationListingManualPriceAmount;
+  variationId: string;
+}
+
+export interface UpdateVariationListingCopyAvailabilityInput {
+  availabilityState: 'available' | 'unavailable';
+  copyId: string;
+  expectedDesiredRevision: number;
+  groupId: string;
+  variationId: string;
+}
+
+export interface UpdateVariationListingRepresentativeCopyInput {
+  copyId: string;
+  expectedDesiredRevision: number;
+  groupId: string;
   variationId: string;
 }
 
@@ -159,6 +174,12 @@ export interface VariationListingTransactionGateway {
   updateVariationPrice(
     input: UpdateVariationListingManualPriceInput
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+  updateCopyAvailability(
+    input: UpdateVariationListingCopyAvailabilityInput
+  ): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }>;
+  updateRepresentativeCopy(
+    input: UpdateVariationListingRepresentativeCopyInput
+  ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
   createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
   discardIntakePair(captureSourceKey: string): Promise<VariationListingIntakeSessionRow>;
   loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;
@@ -172,11 +193,15 @@ export interface VariationListingJournalInspection {
   latestAttemptNumber: number;
   latestCheckpoint: VariationListingPublishingCheckpointRow | null;
   requiresReconciliation: boolean;
+  retryAuthorized: boolean;
+  retryExhausted: boolean;
 }
 
 const CHECKPOINT_STATES = new Set([
   'started',
   'unknown',
+  'retry_authorized',
+  'retry_exhausted',
   'confirmed_complete',
   'confirmed_no_op',
 ]);
@@ -229,8 +254,13 @@ export function inspectVariationListingJournal(
     if (checkpoint.state === 'unknown' && checkpoint.observed_remote_state !== 'unknown') {
       throw new Error('Variation listing unknown checkpoint requires ambiguity evidence.');
     }
-    if (TERMINAL_STATES.has(checkpoint.state) && !hasExactRemoteEvidence(checkpoint)) {
-      throw new Error('Variation listing terminal checkpoint requires exact remote evidence.');
+    if (
+      (TERMINAL_STATES.has(checkpoint.state) ||
+        checkpoint.state === 'retry_authorized' ||
+        checkpoint.state === 'retry_exhausted') &&
+      !hasExactRemoteEvidence(checkpoint)
+    ) {
+      throw new Error('Variation listing resolved checkpoint requires exact remote evidence.');
     }
   }
 
@@ -239,7 +269,13 @@ export function inspectVariationListingJournal(
     if (first.attempt_number !== 1 || first.checkpoint_number !== 1) {
       throw new Error('Variation listing journal history must begin at attempt 1/checkpoint 1.');
     }
-    if (!READ_ONLY_OPERATION_KINDS.has(operation.operation_kind) && first.state !== 'started') {
+    if (READ_ONLY_OPERATION_KINDS.has(operation.operation_kind)) {
+      if (first.state !== 'started' && !TERMINAL_STATES.has(first.state)) {
+        throw new Error(
+          `Variation listing read-only operation ${operation.operation_key} must begin with started or terminal checkpoint.`
+        );
+      }
+    } else if (first.state !== 'started') {
       throw new Error(
         `Variation listing mutation operation ${operation.operation_key} must begin with a started checkpoint.`
       );
@@ -263,9 +299,15 @@ export function inspectVariationListingJournal(
     }
 
     if (previous.state === 'started') {
+      const isBoundedReplay = ordered
+        .slice(0, index)
+        .some((checkpoint) => checkpoint.state === 'retry_authorized');
+      const allowedStartedResolution = isBoundedReplay
+        ? current.state === 'unknown' || current.state === 'confirmed_complete'
+        : current.state === 'unknown' || TERMINAL_STATES.has(current.state);
       if (
         current.attempt_number !== previous.attempt_number ||
-        (current.state !== 'unknown' && !TERMINAL_STATES.has(current.state))
+        !allowedStartedResolution
       ) {
         throw new Error(
           `Variation listing operation ${operation.operation_key} started checkpoint must resolve on the same attempt before retry.`
@@ -275,17 +317,33 @@ export function inspectVariationListingJournal(
       previous.state === 'unknown' ||
       previous.observed_remote_state === 'unknown'
     ) {
+      const priorRetryAuthorized = ordered
+        .slice(0, index)
+        .some((checkpoint) => checkpoint.state === 'retry_authorized');
+      const allowedResolutionStates = priorRetryAuthorized
+        ? new Set(['confirmed_complete', 'retry_exhausted'])
+        : new Set(['confirmed_complete', 'confirmed_no_op', 'retry_authorized']);
       if (
         current.attempt_number !== previous.attempt_number + 1 ||
         current.checkpoint_number !== 1 ||
-        !TERMINAL_STATES.has(current.state) ||
+        !allowedResolutionStates.has(current.state) ||
         !hasExactRemoteEvidence(current)
       ) {
         throw new Error(
-          `Variation listing operation ${operation.operation_key} ambiguous outcome requires an exact reconciliation checkpoint.`
+          `Variation listing operation ${operation.operation_key} ambiguous outcome requires an exact bounded reconciliation checkpoint.`
         );
       }
-    } else if (TERMINAL_STATES.has(previous.state)) {
+    } else if (previous.state === 'retry_authorized') {
+      if (
+        current.attempt_number !== previous.attempt_number ||
+        current.checkpoint_number !== previous.checkpoint_number + 1 ||
+        current.state !== 'started'
+      ) {
+        throw new Error(
+          `Variation listing operation ${operation.operation_key} retry authorization permits exactly one started replay.`
+        );
+      }
+    } else if (TERMINAL_STATES.has(previous.state) || previous.state === 'retry_exhausted') {
       throw new Error(
         `Variation listing operation ${operation.operation_key} is terminal and cannot be reopened.`
       );
@@ -306,6 +364,8 @@ export function inspectVariationListingJournal(
           latestCheckpoint.state === 'unknown' ||
           latestCheckpoint.observed_remote_state === 'unknown')
     ),
+    retryAuthorized: latestCheckpoint?.state === 'retry_authorized',
+    retryExhausted: latestCheckpoint?.state === 'retry_exhausted',
   };
 }
 
@@ -317,6 +377,11 @@ export function assertVariationListingJournalCanContinue(
   if (inspection.requiresReconciliation) {
     throw new Error(
       `Variation listing operation ${operation.operation_key} requires exact reconciliation before another remote mutation.`
+    );
+  }
+  if (inspection.retryExhausted) {
+    throw new Error(
+      `Variation listing operation ${operation.operation_key} exhausted its one bounded replay.`
     );
   }
   if (inspection.latestCheckpoint && TERMINAL_STATES.has(inspection.latestCheckpoint.state)) {

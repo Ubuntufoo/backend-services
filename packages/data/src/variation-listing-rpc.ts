@@ -2,7 +2,7 @@ import type { SupabaseDataClient } from './client.js';
 import type { Json, VariationListingCopyRow, VariationListingGroupRow, VariationListingIntakeSessionRow, VariationListingPublishingCheckpointRow, VariationListingRevisionRow, VariationListingVariationRow } from './database.js';
 import { getVariationListingGroupById, listVariationListingCopiesByVariationId, listVariationListingVariationsByGroupId, validateVariationListingCheckpointEvidence, validateVariationListingOperationPlan, validateVariationListingPendingPair } from './repositories/variation-listings.js';
 import type { SingleResult } from './repositories/shared.js';
-import type { AppendVariationListingJournalCheckpointInput, AppendVariationListingJournalCheckpointResult, ApplyVariationListingGroupReviewDraftInput, UpdateVariationListingManualPriceInput, CaptureVariationListingRevisionInput, CaptureVariationListingRevisionResult, ConfirmVariationListingRevisionInput, CreateVariationListingGroupInput, ConfigureVariationListingIntakeInput, StartVariationListingIntakePairInput, CompleteVariationListingNewVariationInput, CompleteVariationListingDuplicateCopyInput, VariationListingAggregateSnapshot, VariationListingTransactionGateway } from './variation-listing-transactions.js';
+import type { AppendVariationListingJournalCheckpointInput, AppendVariationListingJournalCheckpointResult, ApplyVariationListingGroupReviewDraftInput, UpdateVariationListingManualPriceInput, UpdateVariationListingCopyAvailabilityInput, UpdateVariationListingRepresentativeCopyInput, CaptureVariationListingRevisionInput, CaptureVariationListingRevisionResult, ConfirmVariationListingRevisionInput, CreateVariationListingGroupInput, ConfigureVariationListingIntakeInput, StartVariationListingIntakePairInput, CompleteVariationListingNewVariationInput, CompleteVariationListingDuplicateCopyInput, VariationListingAggregateSnapshot, VariationListingTransactionGateway } from './variation-listing-transactions.js';
 import { isVariationListingManualPriceAmount } from './variation-listing-pricing.js';
 
 export class VariationListingTransactionConflictError extends Error { readonly code: string; constructor(code: string, message: string) { super(message); this.name = 'VariationListingTransactionConflictError'; this.code = code; } }
@@ -26,14 +26,14 @@ const parseRevision = (v: Json): VariationListingRevisionRow => {
 const parseCheckpoint = (v: Json): VariationListingPublishingCheckpointRow => {
   const r = record(v, 'checkpoint');
   const state = str(r, 'state');
-  if (!['started','unknown','confirmed_complete','confirmed_no_op'].includes(state)) throw new Error('Variation listing RPC checkpoint state is invalid.');
+  if (!['started','unknown','retry_authorized','retry_exhausted','confirmed_complete','confirmed_no_op'].includes(state)) throw new Error('Variation listing RPC checkpoint state is invalid.');
   const observed = nullableStr(r, 'observed_remote_state');
   if (observed !== null && !['present','proven_absent','unknown'].includes(observed)) throw new Error('Variation listing RPC observed_remote_state is invalid.');
   if (state === 'started' && observed !== null) throw new Error('Variation listing RPC started checkpoint cannot claim remote evidence.');
   if (state === 'unknown' && observed !== 'unknown') throw new Error('Variation listing RPC unknown checkpoint requires ambiguity evidence.');
-  if ((state === 'confirmed_complete' || state === 'confirmed_no_op') && (observed !== 'present' && observed !== 'proven_absent')) throw new Error('Variation listing RPC terminal checkpoint requires exact remote evidence.');
+  if (['retry_authorized','retry_exhausted','confirmed_complete','confirmed_no_op'].includes(state) && (observed !== 'present' && observed !== 'proven_absent')) throw new Error('Variation listing RPC resolved checkpoint requires exact remote evidence.');
   const evidence = validateVariationListingCheckpointEvidence(r.evidence);
-  if ((state === 'unknown' || state === 'confirmed_complete' || state === 'confirmed_no_op') && Object.keys(evidence).length === 0) throw new Error('Variation listing RPC resolved checkpoint requires non-empty evidence.');
+  if ((state === 'unknown' || state === 'retry_authorized' || state === 'retry_exhausted' || state === 'confirmed_complete' || state === 'confirmed_no_op') && Object.keys(evidence).length === 0) throw new Error('Variation listing RPC resolved checkpoint requires non-empty evidence.');
   return { checkpoint_id: str(r,'checkpoint_id'), revision_id: str(r,'revision_id'), operation_key: str(r,'operation_key'), attempt_number: positive(r,'attempt_number'), checkpoint_number: positive(r,'checkpoint_number'), state, observed_remote_state: observed, evidence, created_at: str(r,'created_at') } as VariationListingPublishingCheckpointRow;
 };
 const parseGroup = (v: Json): VariationListingGroupRow => {
@@ -117,9 +117,39 @@ async function updateVariationPrice(client: SupabaseDataClient, input: UpdateVar
   if (group.group_id !== input.groupId || group.desired_revision !== input.expectedDesiredRevision + 1 || variation.group_id !== input.groupId || variation.variation_id !== input.variationId || variation.price_amount !== input.priceAmount || variation.price_currency !== 'USD') throw new Error('Variation listing RPC response parity mismatch.');
   return { group, variation };
 }
+
+async function updateCopyAvailability(client: SupabaseDataClient, input: UpdateVariationListingCopyAvailabilityInput): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }> {
+  if (!Number.isInteger(input.expectedDesiredRevision) || input.expectedDesiredRevision < 0) throw new Error('Variation listing copy availability expected revision must be a non-negative integer.');
+  if (input.availabilityState !== 'available' && input.availabilityState !== 'unavailable') throw new Error('Variation listing copy availability state is invalid.');
+  const row = await rpcSingle<{ group_row: Json; copy_row: Json }>(client, 'update_variation_listing_copy_availability', {
+    p_group_id: input.groupId,
+    p_variation_id: input.variationId,
+    p_copy_id: input.copyId,
+    p_expected_desired_revision: input.expectedDesiredRevision,
+    p_availability_state: input.availabilityState,
+  }, 'Variation listing copy availability update returned no row.');
+  const group = parseGroup(row.group_row);
+  const copy = parseCopy(row.copy_row);
+  if (group.group_id !== input.groupId || group.desired_revision !== input.expectedDesiredRevision + 1 || copy.copy_id !== input.copyId || copy.variation_id !== input.variationId || copy.availability_state !== input.availabilityState) throw new Error('Variation listing RPC response parity mismatch.');
+  return { group, copy };
+}
+
+async function updateRepresentativeCopy(client: SupabaseDataClient, input: UpdateVariationListingRepresentativeCopyInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }> {
+  if (!Number.isInteger(input.expectedDesiredRevision) || input.expectedDesiredRevision < 0) throw new Error('Variation listing representative copy expected revision must be a non-negative integer.');
+  const row = await rpcSingle<{ group_row: Json; variation_row: Json }>(client, 'update_variation_listing_representative_copy', {
+    p_group_id: input.groupId,
+    p_variation_id: input.variationId,
+    p_copy_id: input.copyId,
+    p_expected_desired_revision: input.expectedDesiredRevision,
+  }, 'Variation listing representative copy update returned no row.');
+  const group = parseGroup(row.group_row);
+  const variation = parseVariation(row.variation_row);
+  if (group.group_id !== input.groupId || group.desired_revision !== input.expectedDesiredRevision + 1 || variation.group_id !== input.groupId || variation.variation_id !== input.variationId || variation.representative_copy_id !== input.copyId) throw new Error('Variation listing RPC response parity mismatch.');
+  return { group, variation };
+}
 const mutation = async <T>(client: SupabaseDataClient, fn: string, args: Record<string, unknown>, key: string): Promise<T> => { const row = await rpcSingle<Record<string, Json>>(client, fn, args, `Variation listing ${fn} returned no row.`); return row[key] as unknown as T; };
 export function createSupabaseVariationListingTransactionGateway(client: SupabaseDataClient): VariationListingTransactionGateway { return {
-  loadAggregate: id => loadAggregate(client,id), captureRevision: i => captureRevision(client,i), appendJournalCheckpoint: i => appendJournalCheckpoint(client,i), confirmRevision: i => confirmRevision(client,i), applyGroupReviewDraft: i => applyGroupReviewDraft(client,i), updateVariationPrice: i => updateVariationPrice(client,i),
+  loadAggregate: id => loadAggregate(client,id), captureRevision: i => captureRevision(client,i), appendJournalCheckpoint: i => appendJournalCheckpoint(client,i), confirmRevision: i => confirmRevision(client,i), applyGroupReviewDraft: i => applyGroupReviewDraft(client,i), updateVariationPrice: i => updateVariationPrice(client,i), updateCopyAvailability: i => updateCopyAvailability(client,i), updateRepresentativeCopy: i => updateRepresentativeCopy(client,i),
   createGroup: async (i: CreateVariationListingGroupInput) => { const group = parseGroup(await mutation<Json>(client,'create_variation_listing_group',{ p_group_id:i.groupId,p_group_key:i.groupKey,p_sku_category_code:i.skuCategoryCode,p_sku_bucket_token:i.skuBucketToken,p_category_id:i.categoryId,p_marketplace_id:i.marketplaceId,p_merchant_location_key:i.merchantLocationKey,p_fulfillment_policy_id:i.fulfillmentPolicyId,p_payment_policy_id:i.paymentPolicyId,p_return_policy_id:i.returnPolicyId,p_condition_id:i.conditionId,p_condition_token:i.conditionToken },'group_row')); assertGroupInput(group, i); return group; },
   configureIntake: async (i: ConfigureVariationListingIntakeInput) => { const session = parseSession(await mutation<Json>(client,'configure_variation_listing_intake',{p_capture_source_key:i.captureSourceKey,p_mode:i.mode,p_target_group_id:i.targetGroupId,p_target_variation_id:i.targetVariationId,p_sticky_price_amount:i.stickyPriceAmount},'session_row')); if (session.capture_source_key !== i.captureSourceKey || session.mode !== i.mode || session.target_group_id !== i.targetGroupId || session.target_variation_id !== i.targetVariationId || session.sticky_price_amount !== i.stickyPriceAmount) throw new Error('Variation listing RPC response parity mismatch.'); return session; },
   startIntakePair: async (i: StartVariationListingIntakePairInput) => { const session = parseSession(await mutation<Json>(client,'start_variation_listing_intake_pair',{p_capture_source_key:i.captureSourceKey,p_pair_id:i.pairId,p_front_source_ref:i.frontSourceRef,p_started_at:i.startedAt},'session_row')); const pending = validateVariationListingPendingPair(session.pending_pair); if (session.capture_source_key !== i.captureSourceKey || !pending || pending.pair_id !== i.pairId || pending.mode !== session.mode || pending.target_group_id !== session.target_group_id || pending.target_variation_id !== session.target_variation_id || pending.price_amount !== session.sticky_price_amount || pending.price_currency !== session.sticky_price_currency || pending.front_source_ref !== i.frontSourceRef) throw new Error('Variation listing RPC response parity mismatch.'); sameInstant(pending.started_at as string, i.startedAt, 'started_at'); return session; },
