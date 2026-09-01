@@ -5,4 +5,5 @@ export * from './image-grouping.js';
 export * from './listing-id.js';
 export * from './process-image-batch.js';
 export * from './processed-paths.js';
+export * from './variation-listing-intake.js';
 export * from './watcher-runtime.js';
