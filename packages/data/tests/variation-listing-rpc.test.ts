@@ -59,3 +59,31 @@ describe('YP4.2b group review-draft RPC', () => {
     await expect(createSupabaseVariationListingTransactionGateway(c).applyGroupReviewDraft({ groupId:'g', expectedDesiredRevision:2, title:'Title', description:'Description', derivedCommonEbayAspects:{} })).rejects.toMatchObject({ name:'VariationListingTransactionConflictError', code:'VR001' });
   });
 });
+
+
+describe('YP4.3 manual variation price RPC', () => {
+  const group = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:4, last_confirmed_revision:null, lifecycle_state:'review', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:2, derived_common_ebay_aspects:{}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'now', updated_at:'now',
+  };
+  const variation = {
+    variation_id:'v', group_id:'g', inventory_serial:1, position:0, sku:'BSKBL-BucketA-000001', selector_value:'Card A', price_amount:1.99, price_currency:'USD', representative_copy_id:'c', variation_metadata:{}, created_at:'now', updated_at:'now',
+  };
+
+  it('maps narrow args and verifies returned group/variation parity', async () => {
+    const c = clientFor('update_variation_listing_manual_price', { group_row:group, variation_row:variation }, args => {
+      expect(args).toEqual({ p_group_id:'g', p_variation_id:'v', p_expected_desired_revision:3, p_price_amount:1.99 });
+    });
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:1.99 })).resolves.toMatchObject({ group:{group_id:'g',desired_revision:4}, variation:{variation_id:'v',price_amount:1.99,price_currency:'USD'} });
+  });
+
+  it('fails before RPC invocation for an unsupported runtime price', async () => {
+    const c = clientFor('update_variation_listing_manual_price', { group_row:group, variation_row:variation });
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:2.99 as never })).rejects.toThrow(/price edit amount/);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
+
+  it('maps VR001 stale-CAS conflicts', async () => {
+    const c = { rpc: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data:null, error:{ code:'VR001', message:'stale' } })) })) } as unknown as SupabaseDataClient;
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:1.99 })).rejects.toMatchObject({ name:'VariationListingTransactionConflictError', code:'VR001' });
+  });
+});

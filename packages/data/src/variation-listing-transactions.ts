@@ -8,6 +8,7 @@ import type {
   VariationListingRevisionRow,
   VariationListingVariationRow,
 } from './database.js';
+import type { VariationListingManualPriceAmount } from './variation-listing-pricing.js';
 
 export interface VariationListingAggregateSnapshot {
   copies: VariationListingCopyRow[];
@@ -68,6 +69,13 @@ export interface ApplyVariationListingGroupReviewDraftInput {
   title: string;
 }
 
+export interface UpdateVariationListingManualPriceInput {
+  expectedDesiredRevision: number;
+  groupId: string;
+  priceAmount: VariationListingManualPriceAmount;
+  variationId: string;
+}
+
 export interface CreateVariationListingGroupInput {
   categoryId: string;
   conditionId: string;
@@ -86,7 +94,7 @@ export interface CreateVariationListingGroupInput {
 export interface ConfigureVariationListingIntakeInput {
   captureSourceKey: string;
   mode: 'idle' | 'new_variation' | 'duplicate_copy';
-  stickyPriceAmount: number;
+  stickyPriceAmount: VariationListingManualPriceAmount;
   targetGroupId: string | null;
   targetVariationId: string | null;
 }
@@ -148,6 +156,9 @@ export interface VariationListingTransactionGateway {
   applyGroupReviewDraft(
     input: ApplyVariationListingGroupReviewDraftInput
   ): Promise<VariationListingGroupRow>;
+  updateVariationPrice(
+    input: UpdateVariationListingManualPriceInput
+  ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
   createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
   discardIntakePair(captureSourceKey: string): Promise<VariationListingIntakeSessionRow>;
   loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;

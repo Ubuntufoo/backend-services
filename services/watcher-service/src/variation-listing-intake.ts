@@ -3,13 +3,16 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import {
+  VARIATION_LISTING_MANUAL_PRICE_AMOUNTS,
   createSupabaseServiceClient,
   getVariationListingIntakeSessionBySourceKey,
+  isVariationListingManualPriceAmount,
   uploadImage,
   type Json,
   type SupabaseDataClient,
   type UploadImageResult,
   type VariationListingIntakeSession,
+  type VariationListingManualPriceAmount,
 } from '@ebay-inventory/data';
 
 import {
@@ -18,7 +21,9 @@ import {
 } from './config/image-extensions.js';
 import type { WatcherImageDescriptor } from './image-grouping.js';
 
-export const VARIATION_LISTING_MANUAL_PRICE_AMOUNTS = [0.99, 1.49, 1.99, 2.49] as const;
+export { VARIATION_LISTING_MANUAL_PRICE_AMOUNTS };
+export type { VariationListingManualPriceAmount };
+
 export const VARIATION_LISTING_COPY_CONDITION_TOKENS = [
   'NEAR_MINT_OR_BETTER',
   'EXCELLENT',
@@ -26,8 +31,6 @@ export const VARIATION_LISTING_COPY_CONDITION_TOKENS = [
   'POOR',
 ] as const;
 
-export type VariationListingManualPriceAmount =
-  (typeof VARIATION_LISTING_MANUAL_PRICE_AMOUNTS)[number];
 export type VariationListingCopyConditionToken =
   (typeof VARIATION_LISTING_COPY_CONDITION_TOKENS)[number];
 export type VariationListingPendingMode = 'new_variation' | 'duplicate_copy';
@@ -157,7 +160,6 @@ export interface StoreVariationListingCompletionDependencies {
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PRICE_SET = new Set<number>(VARIATION_LISTING_MANUAL_PRICE_AMOUNTS);
 const CONDITION_SET = new Set<string>(VARIATION_LISTING_COPY_CONDITION_TOKENS);
 
 function fail(message: string): never {
@@ -180,10 +182,10 @@ function requireUuid(value: unknown, label: string): string {
 }
 
 function requirePrice(value: unknown, label: string): VariationListingManualPriceAmount {
-  if (typeof value !== 'number' || !PRICE_SET.has(value)) {
+  if (!isVariationListingManualPriceAmount(value)) {
     return fail(`${label} must be one of ${VARIATION_LISTING_MANUAL_PRICE_AMOUNTS.join(', ')}.`);
   }
-  return value as VariationListingManualPriceAmount;
+  return value;
 }
 
 function normalizeInstant(value: string | Date, label: string): string {

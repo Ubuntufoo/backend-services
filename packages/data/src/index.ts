@@ -236,6 +236,11 @@ export {
   type VariationListingVariation,
 } from './repositories/variation-listings.js';
 export {
+  VARIATION_LISTING_MANUAL_PRICE_AMOUNTS,
+  isVariationListingManualPriceAmount,
+  type VariationListingManualPriceAmount,
+} from './variation-listing-pricing.js';
+export {
   assertVariationListingJournalCanContinue,
   inspectVariationListingJournal,
   type AppendVariationListingJournalCheckpointInput,
@@ -244,6 +249,7 @@ export {
   type CaptureVariationListingRevisionResult,
   type ConfirmVariationListingRevisionInput,
   type ApplyVariationListingGroupReviewDraftInput,
+  type UpdateVariationListingManualPriceInput,
   type VariationListingAggregateSnapshot,
   type VariationListingJournalInspection,
   type VariationListingRevisionPlanOperationInput,
