@@ -607,6 +607,18 @@ function cleanupOperation(
   };
 }
 
+function durableCleanupOperationPlan(frozen: VariationListingFrozenCleanupRevision): Json {
+  return asJson(frozen.captureInput.operationPlan.map((operation) => ({
+    intent: operation.intent,
+    intent_digest: operation.intentDigest,
+    intent_version: operation.intentVersion,
+    operation_key: operation.operationKey,
+    operation_kind: operation.operationKind,
+    sequence_no: operation.sequenceNo,
+    target_ref: operation.targetRef,
+  })));
+}
+
 function cleanupHistory(
   frozen: VariationListingFrozenCleanupRevision,
   rows: readonly VariationListingPublishingCheckpointRow[]
@@ -853,6 +865,70 @@ async function executeFinalAbsence(
   await appendCleanupCheckpoint(input, history, key, { attemptNumber: 1, checkpointNumber: 1, evidence: absence.evidence, observedRemoteState: absence.observed, state: 'confirmed_complete' });
 }
 
+export interface VariationListingWithdrawalExecutionResult {
+  lifecycleState: 'withdrawn';
+  revisionId: string;
+}
+
+/** Execute only the frozen withdrawal operation and durably stop at withdrawn.
+ * The same immutable cleanup revision remains resumable by executeVariationListingCleanup.
+ */
+export async function executeVariationListingWithdrawal(
+  input: VariationListingCleanupExecutionInput
+): Promise<VariationListingWithdrawalExecutionResult> {
+  const aggregate = await input.transaction.loadAggregate(input.frozen.captureInput.groupId);
+  if (!aggregate ||
+      aggregate.group.desired_revision !== input.frozen.captureInput.capturedDesiredRevision ||
+      aggregate.group.last_confirmed_revision !== input.frozen.expectedPreviousConfirmedRevision) {
+    throw new Error('Variation listing withdrawal frozen intent is stale against the current durable aggregate.');
+  }
+  const snapshot = input.frozen.captureInput.snapshot as unknown as VariationListingCleanupSnapshot;
+  if (snapshot.planVersion !== CLEANUP_PLAN_VERSION || input.frozen.captureInput.snapshotDigest !== digestJson(asJson(snapshot))) {
+    throw new Error('Variation listing withdrawal frozen snapshot integrity check failed.');
+  }
+  const withdrawal = input.frozen.captureInput.operationPlan.find((operation) => operation.operationKey === 'withdraw-group');
+  if (!withdrawal || withdrawal.operationKind !== 'withdrawal') {
+    throw new Error('Variation listing withdrawal requires one frozen withdrawal operation.');
+  }
+  const existingRevision = await input.journal.loadRevision(input.frozen.captureInput.revisionId);
+  if (existingRevision) {
+    if (existingRevision.group_id !== input.frozen.captureInput.groupId ||
+        existingRevision.captured_desired_revision !== input.frozen.captureInput.capturedDesiredRevision ||
+        existingRevision.snapshot_version !== input.frozen.captureInput.snapshotVersion ||
+        existingRevision.snapshot_digest !== input.frozen.captureInput.snapshotDigest ||
+        existingRevision.operation_count !== input.frozen.captureInput.operationPlan.length ||
+        canonicalJson(existingRevision.snapshot) !== canonicalJson(input.frozen.captureInput.snapshot) ||
+        canonicalJson(existingRevision.operation_plan) !== canonicalJson(durableCleanupOperationPlan(input.frozen))) {
+      throw new Error('Variation listing withdrawal durable revision does not match the frozen intent.');
+    }
+  } else {
+    await input.transaction.captureRevision(input.frozen.captureInput);
+  }
+  const history = cleanupHistory(input.frozen, await input.journal.listCheckpoints(input.frozen.captureInput.revisionId));
+  await runCleanupMutation(input, history, withdrawal.operationKey,
+    async () => {
+      const state = await readCleanupOwnedState(snapshot, input.remote);
+      if (!state.group || [...state.offers.values()].some((offer) => offer.status === 'PUBLISHED' && offer.lifecycleClass === 'active')) return null;
+      return { evidence: asJson({ groupKey: snapshot.groupKey, state: 'withdrawn' }), observed: 'present' };
+    },
+    async () => {
+      const state = await readCleanupOwnedState(snapshot, input.remote);
+      const active = [...state.offers.values()].filter((offer) => offer.status === 'PUBLISHED' && offer.lifecycleClass === 'active');
+      return state.group && active.length > 0
+        ? { evidence: asJson({ groupKey: snapshot.groupKey, listingId: snapshot.ownedRemote.listingId, state: 'active' }), observed: 'present' }
+        : null;
+    },
+    () => input.mutations.withdrawInventoryItemGroup(snapshot.groupKey));
+  await input.transaction.advanceCleanupLifecycle({
+    expectedDesiredRevision: input.frozen.captureInput.capturedDesiredRevision,
+    expectedPreviousConfirmedRevision: input.frozen.expectedPreviousConfirmedRevision,
+    groupId: input.frozen.captureInput.groupId,
+    revisionId: input.frozen.captureInput.revisionId,
+    targetLifecycle: 'withdrawn',
+  });
+  return { lifecycleState: 'withdrawn', revisionId: input.frozen.captureInput.revisionId };
+}
+
 export async function executeVariationListingCleanup(
   input: VariationListingCleanupExecutionInput
 ): Promise<VariationListingCleanupExecutionResult> {
@@ -884,15 +960,7 @@ export async function executeVariationListingCleanup(
       existingRevision.snapshot_version !== input.frozen.captureInput.snapshotVersion ||
       existingRevision.snapshot_digest !== input.frozen.captureInput.snapshotDigest ||
       canonicalJson(existingRevision.snapshot) !== canonicalJson(input.frozen.captureInput.snapshot) ||
-      canonicalJson(existingRevision.operation_plan) !== canonicalJson(asJson(input.frozen.captureInput.operationPlan.map((operation) => ({
-        intent: operation.intent,
-        intent_digest: operation.intentDigest,
-        intent_version: operation.intentVersion,
-        operation_key: operation.operationKey,
-        operation_kind: operation.operationKind,
-        sequence_no: operation.sequenceNo,
-        target_ref: operation.targetRef,
-      }))))) {
+      canonicalJson(existingRevision.operation_plan) !== canonicalJson(durableCleanupOperationPlan(input.frozen))) {
       throw new Error('Variation listing cleanup durable revision does not match the frozen intent.');
     }
   } else {

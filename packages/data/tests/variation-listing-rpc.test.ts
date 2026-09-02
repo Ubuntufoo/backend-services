@@ -163,3 +163,33 @@ describe('YP5.4 cleanup lifecycle RPC', () => {
     expect(c.rpc).not.toHaveBeenCalled();
   });
 });
+
+
+describe('YP6.2 publish-ready lifecycle RPC', () => {
+  const group = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'4000', condition_token:'VERY_GOOD', desired_revision:4, last_confirmed_revision:null, lifecycle_state:'publish-ready', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:3, derived_common_ebay_aspects:{Sport:['Basketball']}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'now', updated_at:'now',
+  };
+
+  it('maps the exact lifecycle CAS without advancing desired revision', async () => {
+    const c = clientFor('mark_variation_listing_publish_ready', { group_row:group }, args => expect(args).toEqual({ p_group_id:'g', p_expected_desired_revision:4 }));
+    await expect(createSupabaseVariationListingTransactionGateway(c).markPublishReady({ groupId:'g', expectedDesiredRevision:4 })).resolves.toMatchObject({ group_id:'g', desired_revision:4, last_confirmed_revision:null, lifecycle_state:'publish-ready' });
+  });
+
+  it('rejects non-positive revision before RPC invocation', async () => {
+    const c = clientFor('mark_variation_listing_publish_ready', { group_row:group });
+    await expect(createSupabaseVariationListingTransactionGateway(c).markPublishReady({ groupId:'g', expectedDesiredRevision:0 })).rejects.toThrow(/positive integer/);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('YP6.2 action revision reservation RPC', () => {
+  const group = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'4000', condition_token:'VERY_GOOD', desired_revision:5, last_confirmed_revision:4, lifecycle_state:'active', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:3, derived_common_ebay_aspects:{Sport:['Basketball']}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'now', updated_at:'now',
+  };
+
+  it('reserves exactly one new desired revision through CAS', async () => {
+    const c = clientFor('reserve_variation_listing_action_revision', { group_row:group }, args => expect(args).toEqual({ p_group_id:'g', p_expected_desired_revision:4 }));
+    await expect(createSupabaseVariationListingTransactionGateway(c).reserveActionRevision({ groupId:'g', expectedDesiredRevision:4 })).resolves.toMatchObject({ group_id:'g', desired_revision:5, last_confirmed_revision:4 });
+  });
+});

@@ -1,7 +1,7 @@
 import type { Json, VariationListingAggregateSnapshot, VariationListingCopyRow, VariationListingGroupRow, VariationListingPublishingCheckpointRow, VariationListingRevisionRow, VariationListingVariationRow } from '@ebay-inventory/data';
 import { describe, expect, it } from 'vitest';
 
-import { abandonUntouchedVariationListingGroup, executeVariationListingCleanup, freezeVariationListingCleanupRevision, prepareVariationListingCleanupPlan } from '@/ebay/variation-listing-cleanup.js';
+import { abandonUntouchedVariationListingGroup, executeVariationListingCleanup, executeVariationListingWithdrawal, freezeVariationListingCleanupRevision, prepareVariationListingCleanupPlan } from '@/ebay/variation-listing-cleanup.js';
 import { buildVariationListingInventoryPayloadBundle, type VariationListingRepresentativeImage } from '@/ebay/variation-listing-payloads.js';
 import type { VariationListingPublicationReadGateway, VariationListingRemoteOffer } from '@/ebay/variation-listing-publication.js';
 
@@ -287,6 +287,71 @@ describe('YP5.4 variation listing cleanup planning', () => {
       remote: { async getInventoryItemGroup() { return { state: 'proven_absent' as const }; } },
       transaction: { loadAggregate: async () => allocated, abandonUntouchedGroup: async () => ({ ...allocated.group, lifecycle_state: 'abandoned' }) },
     })).rejects.toThrow('empty revision-0 intake group');
+  });
+
+  it('rejects withdrawal resume when the durable operation plan differs from the frozen intent', async () => {
+    const current = bundle(['A', 'B']);
+    const remote = remoteState({
+      bundles: [current],
+      groupBundleIndex: 0,
+      items: ['SKU-A', 'SKU-B'],
+      offers: { 'SKU-A': offerFor(current, 'SKU-A'), 'SKU-B': offerFor(current, 'SKU-B') },
+    });
+    const plan = await prepareVariationListingCleanupPlan({
+      ownedBundles: [current],
+      ownedRemote: ownedRemote(['SKU-A', 'SKU-B']),
+      protection: { state: 'clear' },
+      remote,
+    });
+    const frozen = freezeVariationListingCleanupRevision({
+      capturedDesiredRevision: 1,
+      expectedPreviousConfirmedRevision: 1,
+      groupId: 'group-1',
+      plan,
+      revisionId: 'withdrawal-revision-plan-mismatch',
+    });
+    const operationPlan = frozen.captureInput.operationPlan.map((operation) => ({
+      intent: operation.intent,
+      intent_digest: operation.intentDigest,
+      intent_version: operation.intentVersion,
+      operation_key: operation.operationKey,
+      operation_kind: operation.operationKind,
+      sequence_no: operation.sequenceNo,
+      target_ref: operation.targetRef,
+    }));
+    operationPlan[0] = { ...operationPlan[0]!, target_ref: 'FOREIGN-GROUP' };
+    const durableRevision = {
+      captured_at: timestamp,
+      captured_desired_revision: frozen.captureInput.capturedDesiredRevision,
+      group_id: frozen.captureInput.groupId,
+      operation_count: operationPlan.length,
+      operation_plan: operationPlan,
+      revision_id: frozen.captureInput.revisionId,
+      snapshot: frozen.captureInput.snapshot,
+      snapshot_digest: frozen.captureInput.snapshotDigest,
+      snapshot_version: frozen.captureInput.snapshotVersion,
+    } as unknown as VariationListingRevisionRow;
+
+    await expect(executeVariationListingWithdrawal({
+      frozen,
+      remote,
+      journal: {
+        listCheckpoints: async () => [],
+        loadRevision: async () => durableRevision,
+      },
+      mutations: {
+        withdrawInventoryItemGroup: async () => {},
+        deleteOffer: async () => {},
+        deleteInventoryItemGroup: async () => {},
+        deleteInventoryItem: async () => {},
+      },
+      transaction: {
+        loadAggregate: async () => aggregate(['A', 'B']),
+        captureRevision: async () => ({ revision: durableRevision }),
+        appendJournalCheckpoint: async () => { throw new Error('checkpoint append must not run'); },
+        advanceCleanupLifecycle: async () => { throw new Error('lifecycle advance must not run'); },
+      },
+    })).rejects.toThrow('withdrawal durable revision does not match the frozen intent');
   });
 
   it('journals active withdrawal then exact reverse cleanup and terminal absence without deleting Media', async () => {

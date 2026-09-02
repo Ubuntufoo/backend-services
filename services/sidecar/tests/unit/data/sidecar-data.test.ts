@@ -58,6 +58,13 @@ const listVariationListingPublishingCheckpointsByRevisionIdMock = vi.fn();
 const variationLoadAggregateMock = vi.fn();
 const variationCreateGroupMock = vi.fn();
 const variationApplyGroupReviewDraftMock = vi.fn();
+const variationMarkPublishReadyMock = vi.fn();
+const variationReserveActionRevisionMock = vi.fn();
+const variationCaptureRevisionMock = vi.fn();
+const variationAppendJournalCheckpointMock = vi.fn();
+const variationConfirmRevisionMock = vi.fn();
+const variationAdvanceCleanupLifecycleMock = vi.fn();
+const variationAbandonUntouchedGroupMock = vi.fn();
 const variationUpdatePriceMock = vi.fn();
 const variationUpdateCopyAvailabilityMock = vi.fn();
 const variationUpdateRepresentativeCopyMock = vi.fn();
@@ -121,6 +128,13 @@ describe('sidecar data access', () => {
       loadAggregate: variationLoadAggregateMock,
       createGroup: variationCreateGroupMock,
       applyGroupReviewDraft: variationApplyGroupReviewDraftMock,
+      markPublishReady: variationMarkPublishReadyMock,
+      reserveActionRevision: variationReserveActionRevisionMock,
+      captureRevision: variationCaptureRevisionMock,
+      appendJournalCheckpoint: variationAppendJournalCheckpointMock,
+      confirmRevision: variationConfirmRevisionMock,
+      advanceCleanupLifecycle: variationAdvanceCleanupLifecycleMock,
+      abandonUntouchedGroup: variationAbandonUntouchedGroupMock,
       updateVariationPrice: variationUpdatePriceMock,
       updateCopyAvailability: variationUpdateCopyAvailabilityMock,
       updateRepresentativeCopy: variationUpdateRepresentativeCopyMock,
@@ -171,6 +185,13 @@ describe('sidecar data access', () => {
       description: 'Description',
       derivedCommonEbayAspects: { Sport: ['Basketball'] },
     });
+    await dataAccess.variationListings.markPublishReady({ groupId, expectedDesiredRevision: 2 });
+    await dataAccess.variationListings.reserveActionRevision({ groupId, expectedDesiredRevision: 2 });
+    await dataAccess.variationListings.captureRevision({ groupId, revisionId, capturedDesiredRevision: 2, snapshotVersion: 1, snapshotDigest: 'a'.repeat(64), snapshot: {}, operationPlan: [] });
+    await dataAccess.variationListings.appendJournalCheckpoint({ revisionId, operationKey: 'op', checkpointId: copyId, attemptNumber: 1, checkpointNumber: 1, state: 'started', evidence: {} });
+    await dataAccess.variationListings.confirmRevision({ groupId, expectedPreviousConfirmedRevision: null, confirmedRevision: 2 });
+    await dataAccess.variationListings.advanceCleanupLifecycle({ groupId, revisionId, expectedDesiredRevision: 2, expectedPreviousConfirmedRevision: null, targetLifecycle: 'abandoned' });
+    await dataAccess.variationListings.abandonUntouchedGroup({ groupId, expectedDesiredRevision: 0 });
     await dataAccess.variationListings.updateVariationPrice({
       groupId,
       variationId,
@@ -198,6 +219,13 @@ describe('sidecar data access', () => {
     expect(listVariationListingPublishingCheckpointsByRevisionIdMock).toHaveBeenCalledWith(client, revisionId);
     expect(variationCreateGroupMock).toHaveBeenCalledWith(expect.objectContaining({ groupId, groupKey: 'VL-G-11111111111141118111111111111111' }));
     expect(variationApplyGroupReviewDraftMock).toHaveBeenCalledWith(expect.objectContaining({ groupId, expectedDesiredRevision: 1 }));
+    expect(variationMarkPublishReadyMock).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 2 });
+    expect(variationReserveActionRevisionMock).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 2 });
+    expect(variationCaptureRevisionMock).toHaveBeenCalledWith(expect.objectContaining({ groupId, revisionId, capturedDesiredRevision: 2 }));
+    expect(variationAppendJournalCheckpointMock).toHaveBeenCalledWith(expect.objectContaining({ revisionId, operationKey: 'op' }));
+    expect(variationConfirmRevisionMock).toHaveBeenCalledWith({ groupId, expectedPreviousConfirmedRevision: null, confirmedRevision: 2 });
+    expect(variationAdvanceCleanupLifecycleMock).toHaveBeenCalledWith(expect.objectContaining({ groupId, revisionId, targetLifecycle: 'abandoned' }));
+    expect(variationAbandonUntouchedGroupMock).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 0 });
     expect(variationUpdatePriceMock).toHaveBeenCalledWith({ groupId, variationId, expectedDesiredRevision: 1, priceAmount: 1.99 });
     expect(variationUpdateCopyAvailabilityMock).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 1, availabilityState: 'available' });
     expect(variationUpdateRepresentativeCopyMock).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 1 });

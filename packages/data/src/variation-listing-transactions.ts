@@ -69,6 +69,16 @@ export interface ApplyVariationListingGroupReviewDraftInput {
   title: string;
 }
 
+export interface MarkVariationListingPublishReadyInput {
+  expectedDesiredRevision: number;
+  groupId: string;
+}
+
+export interface ReserveVariationListingActionRevisionInput {
+  expectedDesiredRevision: number;
+  groupId: string;
+}
+
 export interface UpdateVariationListingManualPriceInput {
   expectedDesiredRevision: number;
   groupId: string;
@@ -195,6 +205,12 @@ export interface VariationListingTransactionGateway {
   confirmRevision(input: ConfirmVariationListingRevisionInput): Promise<VariationListingGroupRow>;
   applyGroupReviewDraft(
     input: ApplyVariationListingGroupReviewDraftInput
+  ): Promise<VariationListingGroupRow>;
+  markPublishReady(
+    input: MarkVariationListingPublishReadyInput
+  ): Promise<VariationListingGroupRow>;
+  reserveActionRevision(
+    input: ReserveVariationListingActionRevisionInput
   ): Promise<VariationListingGroupRow>;
   updateVariationPrice(
     input: UpdateVariationListingManualPriceInput

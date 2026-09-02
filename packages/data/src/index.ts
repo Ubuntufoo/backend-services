@@ -251,6 +251,8 @@ export {
   type CaptureVariationListingRevisionResult,
   type ConfirmVariationListingRevisionInput,
   type ApplyVariationListingGroupReviewDraftInput,
+  type MarkVariationListingPublishReadyInput,
+  type ReserveVariationListingActionRevisionInput,
   type UpdateVariationListingManualPriceInput,
   type UpdateVariationListingCopyAvailabilityInput,
   type UpdateVariationListingRepresentativeCopyInput,

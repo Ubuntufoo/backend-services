@@ -87,6 +87,14 @@ import {
   type MarkAiModelAttemptFailedInput,
   type MarkAiModelAttemptSucceededInput,
   type ApplyVariationListingGroupReviewDraftInput,
+  type MarkVariationListingPublishReadyInput,
+  type CaptureVariationListingRevisionInput,
+  type CaptureVariationListingRevisionResult,
+  type AppendVariationListingJournalCheckpointInput,
+  type AppendVariationListingJournalCheckpointResult,
+  type ConfirmVariationListingRevisionInput,
+  type AdvanceVariationListingCleanupLifecycleInput,
+  type AbandonUntouchedVariationListingGroupInput,
   type CreateVariationListingGroupInput,
   type UpdateVariationListingCopyAvailabilityInput,
   type UpdateVariationListingManualPriceInput,
@@ -184,6 +192,13 @@ export interface SidecarDataAccess {
     listCheckpointsByRevisionId(revisionId: string): Promise<VariationListingPublishingCheckpoint[]>;
     createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
     applyGroupReviewDraft(input: ApplyVariationListingGroupReviewDraftInput): Promise<VariationListingGroupRow>;
+    markPublishReady(input: MarkVariationListingPublishReadyInput): Promise<VariationListingGroupRow>;
+    reserveActionRevision(input: import('@ebay-inventory/data').ReserveVariationListingActionRevisionInput): Promise<VariationListingGroupRow>;
+    captureRevision(input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult>;
+    appendJournalCheckpoint(input: AppendVariationListingJournalCheckpointInput): Promise<AppendVariationListingJournalCheckpointResult>;
+    confirmRevision(input: ConfirmVariationListingRevisionInput): Promise<VariationListingGroupRow>;
+    advanceCleanupLifecycle(input: AdvanceVariationListingCleanupLifecycleInput): Promise<VariationListingGroupRow>;
+    abandonUntouchedGroup(input: AbandonUntouchedVariationListingGroupInput): Promise<VariationListingGroupRow>;
     updateVariationPrice(input: UpdateVariationListingManualPriceInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
     updateCopyAvailability(input: UpdateVariationListingCopyAvailabilityInput): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }>;
     updateRepresentativeCopy(input: UpdateVariationListingRepresentativeCopyInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
@@ -272,6 +287,13 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       listCheckpointsByRevisionId: async (revisionId) => await listVariationListingPublishingCheckpointsByRevisionId(client, revisionId),
       createGroup: async (input) => await variationListingTransactions.createGroup(input),
       applyGroupReviewDraft: async (input) => await variationListingTransactions.applyGroupReviewDraft(input),
+      markPublishReady: async (input) => await variationListingTransactions.markPublishReady(input),
+      reserveActionRevision: async (input) => await variationListingTransactions.reserveActionRevision(input),
+      captureRevision: async (input) => await variationListingTransactions.captureRevision(input),
+      appendJournalCheckpoint: async (input) => await variationListingTransactions.appendJournalCheckpoint(input),
+      confirmRevision: async (input) => await variationListingTransactions.confirmRevision(input),
+      advanceCleanupLifecycle: async (input) => await variationListingTransactions.advanceCleanupLifecycle(input),
+      abandonUntouchedGroup: async (input) => await variationListingTransactions.abandonUntouchedGroup(input),
       updateVariationPrice: async (input) => await variationListingTransactions.updateVariationPrice(input),
       updateCopyAvailability: async (input) => await variationListingTransactions.updateCopyAvailability(input),
       updateRepresentativeCopy: async (input) => await variationListingTransactions.updateRepresentativeCopy(input),

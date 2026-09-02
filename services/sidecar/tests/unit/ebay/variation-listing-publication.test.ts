@@ -73,6 +73,7 @@ function testHarness(withMedia = false) {
   let mutations = 0;
   let confirmations = 0;
   let lastConfirmedRevision: number | null = null;
+  let capturedRevision: VariationListingRevisionRow | null = null;
   let failItem = false;
   const remote = {
     async getInventoryItem(sku: string) { return items.has(sku) ? { state: 'present' as const, value: items.get(sku)! } : { state: 'proven_absent' as const }; },
@@ -122,7 +123,18 @@ function testHarness(withMedia = false) {
   };
   const transaction = {
     async captureRevision(input: typeof plan.captureInput) {
-      return { revision: { revision_id: input.revisionId, snapshot_digest: input.snapshotDigest, operation_plan: input.operationPlan.map((operation) => ({ intent: operation.intent, intent_digest: operation.intentDigest, intent_version: operation.intentVersion, operation_key: operation.operationKey, operation_kind: operation.operationKind, sequence_no: operation.sequenceNo, target_ref: operation.targetRef })) } as VariationListingRevisionRow };
+      capturedRevision = {
+        revision_id: input.revisionId,
+        group_id: input.groupId,
+        captured_desired_revision: input.capturedDesiredRevision,
+        snapshot_version: input.snapshotVersion,
+        snapshot_digest: input.snapshotDigest,
+        snapshot: input.snapshot,
+        operation_plan: input.operationPlan.map((operation) => ({ intent: operation.intent, intent_digest: operation.intentDigest, intent_version: operation.intentVersion, operation_key: operation.operationKey, operation_kind: operation.operationKind, sequence_no: operation.sequenceNo, target_ref: operation.targetRef })),
+        operation_count: input.operationPlan.length,
+        captured_at: '2026-09-01T00:00:00Z',
+      } as VariationListingRevisionRow;
+      return { revision: capturedRevision };
     },
     async loadAggregate(_groupId: string) {
       return { ...plan.snapshot.aggregate, group: { ...plan.snapshot.aggregate.group, last_confirmed_revision: lastConfirmedRevision } };
@@ -141,7 +153,7 @@ function testHarness(withMedia = false) {
   return {
     group: () => group, items, journalRows, media, mutations: () => mutations, confirmations: () => confirmations,
     bundle, plan, remote, setFailItem: (value: boolean) => { failItem = value; }, mutationsApi, transaction,
-    execute: () => executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows] }, mutations: mutationsApi, remote, transaction, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() }),
+    execute: () => executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows], loadRevision: async () => capturedRevision }, mutations: mutationsApi, remote, transaction, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() }),
   };
 }
 

@@ -443,9 +443,13 @@ export interface VariationListingPublicationJournalReader {
   listCheckpoints(revisionId: string): Promise<VariationListingPublishingCheckpointRow[]>;
 }
 
+export interface VariationListingPublicationRevisionReader {
+  loadRevision(revisionId: string): Promise<import('@ebay-inventory/data').VariationListingRevisionRow | null>;
+}
+
 export interface VariationListingPublicationExecutionInput {
   frozen: VariationListingFrozenPublicationRevision;
-  journal: VariationListingPublicationJournalReader;
+  journal: VariationListingPublicationJournalReader & VariationListingPublicationRevisionReader;
   mutations: VariationListingPublicationMutationGateway;
   remote: VariationListingPublicationRemoteGateway;
   transaction: Pick<
@@ -786,22 +790,27 @@ function exactOfferEvidence(
 export async function executeVariationListingPublication(
   input: VariationListingPublicationExecutionInput
 ): Promise<VariationListingPublicationExecutionResult> {
-  const captured = await input.transaction.captureRevision(input.frozen.captureInput);
+  const durableOperationPlan = input.frozen.captureInput.operationPlan.map((operation) => ({
+    intent: operation.intent,
+    intent_digest: operation.intentDigest,
+    intent_version: operation.intentVersion,
+    operation_key: operation.operationKey,
+    operation_kind: operation.operationKind,
+    sequence_no: operation.sequenceNo,
+    target_ref: operation.targetRef,
+  }));
+  const existing = await input.journal.loadRevision(input.frozen.captureInput.revisionId);
+  const captured = existing
+    ? { revision: existing }
+    : await input.transaction.captureRevision(input.frozen.captureInput);
   if (
     captured.revision.revision_id !== input.frozen.captureInput.revisionId ||
+    captured.revision.group_id !== input.frozen.captureInput.groupId ||
+    captured.revision.captured_desired_revision !== input.frozen.captureInput.capturedDesiredRevision ||
+    captured.revision.snapshot_version !== input.frozen.captureInput.snapshotVersion ||
     captured.revision.snapshot_digest !== input.frozen.captureInput.snapshotDigest ||
-    canonicalJson(captured.revision.operation_plan) !==
-      canonicalJson(
-        input.frozen.captureInput.operationPlan.map((operation) => ({
-          intent: operation.intent,
-          intent_digest: operation.intentDigest,
-          intent_version: operation.intentVersion,
-          operation_key: operation.operationKey,
-          operation_kind: operation.operationKind,
-          sequence_no: operation.sequenceNo,
-          target_ref: operation.targetRef,
-        }))
-      )
+    canonicalJson(captured.revision.snapshot) !== canonicalJson(input.frozen.captureInput.snapshot) ||
+    canonicalJson(captured.revision.operation_plan) !== canonicalJson(durableOperationPlan)
   ) {
     throw new Error('Captured variation listing revision does not exactly match the frozen publication plan.');
   }

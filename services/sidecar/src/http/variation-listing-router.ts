@@ -11,6 +11,15 @@ import { Router, type Request, type Response } from 'express';
 import type { ZodType } from 'zod';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+import {
+  createVariationListingActionService,
+  VariationListingActionError,
+  type VariationListingActionDataAccess,
+} from '@/ebay/variation-listing-actions.js';
+import {
+  subscribeVariationListingActionEvents,
+  type VariationListingActionName,
+} from '@/ebay/variation-listing-action-events.js';
 import { getSidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   buildVariationListingGroupReviewInputFromAggregate,
@@ -25,14 +34,41 @@ import {
   variationListingCopyIdParamsSchema,
   variationListingGroupIdParamsSchema,
   variationListingVariationIdParamsSchema,
+  variationListingRevisionActionRequestSchema,
+  variationListingQuantityActionRequestSchema,
+  variationListingRetryActionRequestSchema,
   type CreateVariationListingGroupRequest,
 } from '@/schemas/variation-listing-api.js';
 
-export type VariationListingApiDataAccess = SidecarDataAccess['variationListings'];
+export type VariationListingApiDataAccess = Pick<
+  SidecarDataAccess['variationListings'],
+  | 'listGroups'
+  | 'loadAggregate'
+  | 'listRevisionsByGroupId'
+  | 'listCheckpointsByRevisionId'
+  | 'createGroup'
+  | 'applyGroupReviewDraft'
+  | 'updateVariationPrice'
+  | 'updateCopyAvailability'
+  | 'updateRepresentativeCopy'
+>;
 
 export interface VariationListingApiRouterOptions {
   dataAccess?: VariationListingApiDataAccess;
+  actionDataAccess?: VariationListingActionDataAccess;
   createId?: () => string;
+  actions?: VariationListingApiActions;
+}
+
+
+export interface VariationListingApiActions {
+  publish(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+  publishChanges(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+  retry(groupId: string): Promise<unknown>;
+  quantity(groupId: string, input: { variationId: string; copyId: string; expectedDesiredRevision: number; availabilityState: 'available' | 'unavailable' }): Promise<unknown>;
+  withdraw(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+  abandon(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+  cleanup(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
 }
 
 function parseOrSend<T>(res: Response, schema: ZodType<T>, value: unknown): T | undefined {
@@ -48,7 +84,62 @@ function parseOrSend<T>(res: Response, schema: ZodType<T>, value: unknown): T | 
   return undefined;
 }
 
+function parseActionOrSend<T>(
+  res: Response,
+  action: VariationListingActionName,
+  groupId: string,
+  schema: ZodType<T>,
+  value: unknown
+): T | undefined {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  res.status(400).json({
+    error: 'invalid_request',
+    status: {
+      action,
+      affected: { groupId },
+      category: 'validation',
+      code: 'invalid_request',
+      issues: result.error.issues.map((issue) => ({
+        field: issue.path.join('.') || undefined,
+        message: issue.message,
+      })),
+      recommendedActions: ['correct_request', 'retry_action'],
+      remoteState: 'known_unchanged',
+      requiresReconciliation: false,
+      retryStatus: 'not_applicable',
+      severity: 'error',
+      stage: 'request_validation',
+      summary: 'The action request is invalid. Correct the highlighted fields before retrying.',
+      userActionRequired: true,
+    },
+  });
+  return undefined;
+}
+
+function groupRefreshWarning(action: VariationListingActionName, groupId: string) {
+  return {
+    action,
+    affected: { groupId },
+    category: 'system' as const,
+    code: 'group_refresh_required',
+    issues: [],
+    recommendedActions: ['refresh_group', 'do_not_retry_action'],
+    remoteState: action === 'quantity' ? 'known_unchanged' as const : 'known_changed' as const,
+    requiresReconciliation: false,
+    retryStatus: 'not_applicable' as const,
+    severity: 'warning' as const,
+    stage: 'response_refresh',
+    summary: 'The action completed, but refreshed group state could not be loaded. Do not repeat the action; refresh the group instead.',
+    userActionRequired: true,
+  };
+}
+
 function sendError(res: Response, error: unknown): void {
+  if (error instanceof VariationListingActionError) {
+    res.status(error.httpStatus).json({ error: error.status.code, status: error.status });
+    return;
+  }
   if (error instanceof VariationListingTransactionConflictError) {
     res.status(409).json({ error: 'variation_listing_state_stale', message: error.message });
     return;
@@ -267,6 +358,95 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   const router = Router();
   const getDataAccess = (): VariationListingApiDataAccess =>
     options.dataAccess ?? getSidecarDataAccess().variationListings;
+  let cachedActions: VariationListingApiActions | undefined = options.actions;
+  const getActions = (): VariationListingApiActions => {
+    cachedActions ??= createVariationListingActionService({
+      data: options.actionDataAccess ?? getSidecarDataAccess().variationListings,
+    });
+    return cachedActions;
+  };
+
+  router.get('/:groupId/actions/events', (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    res.write(`event: ready\ndata: ${JSON.stringify({ groupId: params.groupId })}\n\n`);
+    const unsubscribe = subscribeVariationListingActionEvents(params.groupId, (event) => {
+      res.write(`event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+    req.on('close', unsubscribe);
+  });
+
+  const actionResponse = async (
+    res: Response,
+    action: VariationListingActionName,
+    groupId: string,
+    result: unknown
+  ) => {
+    const dataAccess = getDataAccess();
+    try {
+      const aggregate = await dataAccess.loadAggregate(groupId);
+      if (!aggregate) throw new Error('Variation listing group was unavailable during post-action refresh.');
+      res.json({ action: result, group: await serializeAggregate(dataAccess, aggregate) });
+    } catch {
+      console.error(`Variation listing post-action group refresh failed for ${action} group ${groupId}.`);
+      res.status(200).json({
+        action: result,
+        group: null,
+        warning: groupRefreshWarning(action, groupId),
+      });
+    }
+  };
+
+  router.post('/:groupId/actions/publish', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    const body = parseActionOrSend(res, 'publish', params.groupId, variationListingRevisionActionRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => await actionResponse(res, 'publish', params.groupId, await getActions().publish(params.groupId, body.expectedDesiredRevision)));
+  });
+
+  router.post('/:groupId/actions/publish-changes', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    const body = parseActionOrSend(res, 'publish_changes', params.groupId, variationListingRevisionActionRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => await actionResponse(res, 'publish_changes', params.groupId, await getActions().publishChanges(params.groupId, body.expectedDesiredRevision)));
+  });
+
+  router.post('/:groupId/actions/retry', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    const body = parseActionOrSend(res, 'retry', params.groupId, variationListingRetryActionRequestSchema, req.body ?? {});
+    if (!body) return;
+    return await runRoute(res, async () => await actionResponse(res, 'retry', params.groupId, await getActions().retry(params.groupId)));
+  });
+
+  router.post('/:groupId/actions/quantity', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    const body = parseActionOrSend(res, 'quantity', params.groupId, variationListingQuantityActionRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => await actionResponse(res, 'quantity', params.groupId, await getActions().quantity(params.groupId, body)));
+  });
+
+  for (const [route, action] of [
+    ['withdraw', 'withdraw'],
+    ['abandon', 'abandon'],
+    ['cleanup', 'cleanup'],
+  ] as const) {
+    router.post(`/:groupId/actions/${route}`, async (req: Request, res: Response) => {
+      const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+      if (!params) return;
+      const body = parseActionOrSend(res, action, params.groupId, variationListingRevisionActionRequestSchema, req.body);
+      if (!body) return;
+      return await runRoute(res, async () => await actionResponse(res, action, params.groupId, await getActions()[action](params.groupId, body.expectedDesiredRevision)));
+    });
+  }
 
   router.get('/', async (_req: Request, res: Response) =>
     await runRoute(res, async () => {

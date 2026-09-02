@@ -1127,6 +1127,14 @@ export type Database = {
         Args: { p_group_id: string; p_expected_desired_revision: number; p_title: string; p_description: string; p_derived_common_ebay_aspects: Json };
         Returns: { group_row: Json }[];
       };
+      mark_variation_listing_publish_ready: {
+        Args: { p_group_id: string; p_expected_desired_revision: number };
+        Returns: { group_row: Json }[];
+      };
+      reserve_variation_listing_action_revision: {
+        Args: { p_group_id: string; p_expected_desired_revision: number };
+        Returns: { group_row: Json }[];
+      };
       jsonb_text_array: {
         Args: { input: Json };
         Returns: string[];
