@@ -7,4 +7,6 @@ export * from './process-image-batch.js';
 export * from './processed-paths.js';
 export * from './variation-listing-intake.js';
 export * from './variation-listing-persistence.js';
+export * from './variation-listing-runtime.js';
+export * from './variation-listing-sidecar.js';
 export * from './watcher-runtime.js';

@@ -33,6 +33,16 @@ Set the local incoming folder path in the repo-root env file:
 WATCHER_INCOMING_DIR=/Users/timothymurphy/image-incoming
 ```
 
+For variation-listing intake, configure one stable station/source identity in the same repo-root environment used by both Sidecar and watcher:
+
+```bash
+WATCHER_CAPTURE_SOURCE_KEY=station-main
+```
+
+When this value is absent, the watcher remains on the existing Single/Lot path and the variation intake API fails closed. When present, the watcher reads the durable variation intake session for this exact key before deciding whether each new image belongs to variation intake or the unchanged legacy path.
+
+If the watcher calls a Sidecar URL other than its default local `MCP_PORT`, set `SIDECAR_API_URL`. If that Sidecar requires a bearer token, set `SIDECAR_API_BEARER_TOKEN` for the watcher process; do not expose the token to browser code.
+
 Optional overrides:
 
 ```bash
@@ -58,6 +68,8 @@ Optional overrides:
 - Preserves grouping state across batches.
 - Ignores startup-existing files in this step.
 - Supports `single_2_image` and `lot_3_image` capture modes.
+- Variation listing does not extend the legacy capture-mode union. With `WATCHER_CAPTURE_SOURCE_KEY` configured, each image is first routed against the durable variation intake session; only `legacy` outcomes proceed to Single/Lot grouping.
+- An armed variation first image persists the durable pending pair. Its back image uses the existing variation Gemini identity, R2 ownership, and completion transaction seams; failures retain only the unprocessed retry suffix and never replay already-consumed variation images into legacy grouping.
 - Accepts `.jpg`, `.jpeg`, `.png`, and `.webp` image files (case-insensitive extension check).
 - Remains alive after batch failures. Retryable batch failures retain grouping state and retry
   inputs and pause queue draining; other failures are logged without terminating the runtime.

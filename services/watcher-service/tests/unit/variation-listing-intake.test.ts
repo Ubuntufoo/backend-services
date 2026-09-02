@@ -3,8 +3,28 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { Json, VariationListingIntakeSession } from '@ebay-inventory/data';
 
+// Keep this focused suite runnable against a checkout with stale package build output.
+// Production resolves the shared reader from @ebay-inventory/data after its build.
+vi.mock('@ebay-inventory/data', async () => {
+  const actual = await vi.importActual<typeof import('@ebay-inventory/data')>('@ebay-inventory/data');
+  return {
+    ...actual,
+    readVariationListingCaptureSourceKey: (env: { WATCHER_CAPTURE_SOURCE_KEY?: string } = process.env) => {
+      const value = env.WATCHER_CAPTURE_SOURCE_KEY;
+      if (value === undefined) return null;
+      if (value.length === 0 || value.trim() === '' || value !== value.trim()) {
+        throw new Error('WATCHER_CAPTURE_SOURCE_KEY must be a non-empty outer-trimmed string when set.');
+      }
+      return value;
+    },
+  };
+});
+
 import {
   buildVariationListingR2ImageObjectKey,
+  createWatcherServiceConfig,
+  createVariationListingRuntimeProcessor,
+  requestVariationListingIdentityHandoff,
   routeVariationListingWatcherEvent,
   storeVariationListingCompletionCandidate,
   type VariationListingWatcherEventRoute,
@@ -75,6 +95,15 @@ function completionCandidate(
 }
 
 describe('variation listing watcher routing', () => {
+  it('shares the exact configured station key without hard-coded camera identity', () => {
+    expect(
+      createWatcherServiceConfig({
+        cwd: '/repo',
+        env: { WATCHER_CAPTURE_SOURCE_KEY: 'station-main' },
+      }).variationListingCaptureSourceKey
+    ).toBe('station-main');
+  });
+
   it('leaves legacy watcher behavior authoritative when no variation session exists', async () => {
     const result = await routeVariationListingWatcherEvent(
       {
@@ -383,5 +412,146 @@ describe('variation listing image ownership and storage', () => {
     ).rejects.toThrow('R2 unavailable');
 
     expect(uploadStoredImage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('variation listing runtime retry ownership', () => {
+  it('reuses a cached storage-ready command after an ambiguous completion response', async () => {
+    const routeEvent = vi.fn(async () => completionCandidate('new_variation'));
+    const requestIdentityHandoff = vi.fn(async () => ({
+      selectorValue: '2003 Topps Tracy McGrady #1',
+      variationMetadata: { Set: 'Topps' } as Json,
+    }));
+    const command = {
+      backR2Key: 'variation-listing/group/variation/copy/back.png',
+      backSourceRef: '/incoming/back.png',
+      capturePairId: PAIR_ID,
+      captureSourceKey: 'camera-1',
+      captureStartedAt: '2026-09-01T05:00:00.000Z',
+      completionKind: 'new_variation' as const,
+      conditionToken: 'EXCELLENT' as const,
+      copyId: COPY_ID,
+      expectedDesiredRevision: 7,
+      frontR2Key: 'variation-listing/group/variation/copy/front.jpg',
+      frontSourceRef: '/incoming/front.JPG',
+      frozenPriceAmount: 1.49 as const,
+      frozenPriceCurrency: 'USD' as const,
+      selectorValue: '2003 Topps Tracy McGrady #1',
+      targetGroupId: GROUP_ID,
+      variationId: NEW_VARIATION_ID,
+      variationMetadata: { Set: 'Topps' } as Json,
+    };
+    const storeCompletionCandidate = vi.fn(async () => command);
+    const persistCompletion = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('completion response lost'))
+      .mockResolvedValueOnce({ status: 'already_completed' });
+    const processor = createVariationListingRuntimeProcessor(
+      { captureSourceKey: 'camera-1', env: {} },
+      {
+        routeEvent,
+        getGroupConditionToken: vi.fn(async () => 'EXCELLENT'),
+        requestIdentityHandoff,
+        storeCompletionCandidate,
+        persistCompletion,
+      }
+    );
+
+    await expect(processor.process('/incoming/back.png')).rejects.toThrow('completion response lost');
+    const retry = await processor.process('/incoming/back.png');
+
+    expect(retry).toMatchObject({
+      kind: 'completed',
+      completionKind: 'new_variation',
+      copyId: COPY_ID,
+      groupId: GROUP_ID,
+      status: 'already_completed',
+      variationId: NEW_VARIATION_ID,
+    });
+    expect(routeEvent).toHaveBeenCalledTimes(1);
+    expect(storeCompletionCandidate).toHaveBeenCalledTimes(1);
+    expect(persistCompletion).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('variation listing Sidecar client', () => {
+  const handoffRequest = {
+    variationId: NEW_VARIATION_ID,
+    frontSourceRef: '/incoming/front.jpg',
+    backSourceRef: '/incoming/back.jpg',
+  };
+
+  it('uses the loopback MCP_PORT default and omits Authorization without a server token', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ selectorValue: 'Card A', variationMetadata: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await requestVariationListingIdentityHandoff(handoffRequest, {
+      env: { MCP_PORT: '4311' },
+      fetch,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:4311/api/variation-listings/intake-identity',
+      expect.objectContaining({
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+      })
+    );
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).headers).not.toHaveProperty('Authorization');
+  });
+
+  it('adds Authorization only from the server-side bearer-token environment value', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ selectorValue: 'Card A', variationMetadata: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await requestVariationListingIdentityHandoff(handoffRequest, {
+      env: {
+        SIDECAR_API_URL: 'https://sidecar.example.test',
+        SIDECAR_API_BEARER_TOKEN: 'server-token',
+      },
+      fetch,
+    });
+
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer server-token',
+    });
+  });
+
+  it('rejects bearer credentials over non-loopback plaintext HTTP before making a request', async () => {
+    const fetch = vi.fn();
+
+    await expect(
+      requestVariationListingIdentityHandoff(handoffRequest, {
+        env: {
+          SIDECAR_API_URL: 'http://sidecar.example.test',
+          SIDECAR_API_BEARER_TOKEN: 'server-token',
+        },
+        fetch,
+      })
+    ).rejects.toThrow(/requires HTTPS/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the Sidecar response omits selector metadata', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ variationMetadata: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(
+      requestVariationListingIdentityHandoff(handoffRequest, { fetch })
+    ).rejects.toThrow(/selectorValue/);
   });
 });

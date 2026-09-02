@@ -9,6 +9,10 @@ import {
   WatcherBatchProcessingError,
   type ProcessIncomingImageBatchDependencies,
 } from './process-image-batch.js';
+import {
+  createVariationListingRuntimeProcessor,
+  type VariationListingRuntimeProcessor,
+} from './variation-listing-runtime.js';
 
 export interface WatcherRuntimeState {
   pendingQueue: string[];
@@ -42,6 +46,7 @@ export interface StartWatcherRuntimeInput {
   watch?: (path: string, options: WatchOptions) => WatcherRuntimeWatcher;
   processIncomingImageBatch?: typeof processIncomingImageBatch;
   processIncomingImageBatchDependencies?: ProcessIncomingImageBatchDependencies;
+  variationListingRuntimeProcessor?: VariationListingRuntimeProcessor;
 }
 
 function shouldIgnoreWatcherPath(filePath: string): boolean {
@@ -146,6 +151,20 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
   const batchDependencies =
     input.processIncomingImageBatchDependencies ??
     (input.processIncomingImageBatch ? undefined : createProcessIncomingImageBatchDependencies());
+  const captureSourceKey = config.variationListingCaptureSourceKey;
+  const variationRuntime =
+    typeof captureSourceKey === 'string' && captureSourceKey.length > 0
+      ? input.variationListingRuntimeProcessor ??
+        createVariationListingRuntimeProcessor({
+          captureSourceKey,
+          // Keep process credentials/configuration while allowing the explicit
+          // config input to override watcher-local values in tests/embedders.
+          env: {
+            ...process.env,
+            ...(input.configInput?.env ?? {}),
+          },
+        })
+      : null;
   const state: WatcherRuntimeState = {
     pendingQueue: [],
     groupingState: cloneWatcherGroupingState(
@@ -173,15 +192,42 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
           const snapshot = [...state.pendingQueue];
           state.pendingQueue.length = 0;
 
+          let variationRetryInputs: string[] = [];
           try {
-            const result = await processBatch(
-              {
-                incoming: snapshot,
-                processedDirectory: config.processedDirectory,
-                groupingState: state.groupingState,
-              },
-              batchDependencies
-            );
+            const legacyInputs: string[] = [];
+            let variationProcessedCount = 0;
+            for (const [sourceIndex, sourcePath] of snapshot.entries()) {
+              if (!variationRuntime) {
+                legacyInputs.push(sourcePath);
+                continue;
+              }
+              try {
+                const outcome = await variationRuntime.process(sourcePath);
+                if (outcome.kind === 'legacy') {
+                  legacyInputs.push(sourcePath);
+                  continue;
+                }
+                variationProcessedCount += 1;
+                logger.info(`variation_${outcome.kind}`, outcome);
+              } catch (error) {
+                variationRetryInputs = [...legacyInputs, ...snapshot.slice(sourceIndex)];
+                throw error;
+              }
+            }
+
+            const result = legacyInputs.length > 0
+              ? await processBatch(
+                  {
+                    incoming: legacyInputs,
+                    processedDirectory: config.processedDirectory,
+                    groupingState: state.groupingState,
+                  },
+                  batchDependencies
+                )
+              : {
+                  groupingState: state.groupingState,
+                  processedListings: [],
+                };
 
             state.groupingState = cloneWatcherGroupingState(result.groupingState);
             for (const processedListing of result.processedListings) {
@@ -200,6 +246,8 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
             }
             logger.info('batch_processed', {
               fileCount: snapshot.length,
+              legacyFileCount: legacyInputs.length,
+              variationProcessedCount,
               pendingGroupSize: state.groupingState.pending.length,
               pendingQueueSize: state.pendingQueue.length,
               processedListingCount: result.processedListings.length,
@@ -208,6 +256,10 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
             if (error instanceof WatcherBatchProcessingError) {
               state.groupingState = cloneWatcherGroupingState(error.groupingState);
               state.pendingQueue.unshift(...cloneWatcherInputs(error.retryInputs));
+              shouldResumeDraining = false;
+            }
+            if (!(error instanceof WatcherBatchProcessingError)) {
+              state.pendingQueue.unshift(...variationRetryInputs);
               shouldResumeDraining = false;
             }
 
@@ -219,11 +271,13 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               pendingQueueSize: state.pendingQueue.length,
               pendingGroupSize: state.groupingState.pending.length,
               retainedRetryInputCount:
-                error instanceof WatcherBatchProcessingError ? error.retryInputs.length : 0,
+                error instanceof WatcherBatchProcessingError
+                  ? error.retryInputs.length
+                  : variationRetryInputs.length,
               stack: error instanceof Error ? error.stack : undefined,
             });
 
-            if (error instanceof WatcherBatchProcessingError) {
+            if (error instanceof WatcherBatchProcessingError || variationRetryInputs.length > 0) {
               break;
             }
           }

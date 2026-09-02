@@ -24,6 +24,7 @@ import {
   getGeminiDailyUsageSummary,
   createSupabaseServiceClient,
   getAppSettings,
+  getVariationListingIntakeSessionBySourceKey,
   getActiveResearchPriceJobByListingId,
   getJobById,
   getLatestListingPriceResearchByListingId,
@@ -54,6 +55,8 @@ import {
   listVariationListingGroups,
   listVariationListingRevisionsByGroupId,
   listVariationListingPublishingCheckpointsByRevisionId,
+  mapVariationListingIntakeSessionRow,
+  requireVariationListingCaptureSourceKey,
   type AppSettingsInsert,
   type AppSettingsRow,
   type AppSettingsUpdate,
@@ -104,6 +107,8 @@ import {
   type VariationListingPublishingCheckpoint,
   type VariationListingRevision,
   type VariationListingGroupRow,
+  type VariationListingIntakeSession,
+  type ConfigureVariationListingIntakeInput,
   type VariationListingVariationRow,
   type VariationListingCopyRow,
 } from '@ebay-inventory/data';
@@ -202,6 +207,8 @@ export interface SidecarDataAccess {
     updateVariationPrice(input: UpdateVariationListingManualPriceInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
     updateCopyAvailability(input: UpdateVariationListingCopyAvailabilityInput): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }>;
     updateRepresentativeCopy(input: UpdateVariationListingRepresentativeCopyInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+    getIntakeSession(): Promise<VariationListingIntakeSession | null>;
+    configureIntake(input: Omit<ConfigureVariationListingIntakeInput, 'captureSourceKey' | 'targetVariationId'> & { targetGroupId: string | null }): Promise<VariationListingIntakeSession>;
   };
   orders: {
     hasByListingId(listingId: string): Promise<boolean>;
@@ -213,6 +220,8 @@ let cachedSidecarDataAccess: SidecarDataAccess | undefined;
 export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): SidecarDataAccess {
   const client = createSupabaseServiceClient(env);
   const variationListingTransactions = createSupabaseVariationListingTransactionGateway(client);
+  const getVariationListingCaptureSourceKey = () =>
+    requireVariationListingCaptureSourceKey(env);
 
   return {
     aiModelRoutes: {
@@ -297,6 +306,19 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       updateVariationPrice: async (input) => await variationListingTransactions.updateVariationPrice(input),
       updateCopyAvailability: async (input) => await variationListingTransactions.updateCopyAvailability(input),
       updateRepresentativeCopy: async (input) => await variationListingTransactions.updateRepresentativeCopy(input),
+      getIntakeSession: async () =>
+        await getVariationListingIntakeSessionBySourceKey(
+          client,
+          getVariationListingCaptureSourceKey()
+        ),
+      configureIntake: async (input) =>
+        mapVariationListingIntakeSessionRow(
+          await variationListingTransactions.configureIntake({
+            ...input,
+            captureSourceKey: getVariationListingCaptureSourceKey(),
+            targetVariationId: null,
+          })
+        ),
     },
     orders: {
       hasByListingId: async (listingId) => await hasOrderForListing(client, listingId),

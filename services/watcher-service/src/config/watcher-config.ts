@@ -1,5 +1,9 @@
 import { WATCHER_CAPTURE_MODES, type WatcherCaptureMode } from './capture-modes.js';
 import {
+  readVariationListingCaptureSourceKey,
+  VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR,
+} from '@ebay-inventory/data';
+import {
   WATCHER_SUPPORTED_IMAGE_EXTENSIONS,
   type WatcherSupportedImageExtension,
 } from './image-extensions.js';
@@ -17,6 +21,7 @@ export const WATCHER_DEFAULT_PROCESSED_DIRECTORY = 'processed';
 
 export interface WatcherServiceConfigEnvironment {
   WATCHER_BASE_DIR?: string;
+  [VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR]?: string;
   WATCHER_INCOMING_DIR?: string;
   WATCHER_PROCESSED_DIR?: string;
 }
@@ -30,6 +35,7 @@ export interface WatcherServiceConfig {
   baseDirectory: string;
   incomingDirectory: string;
   processedDirectory: string;
+  variationListingCaptureSourceKey: string | null;
   supportedCaptureModes: readonly WatcherCaptureMode[];
   supportedImageExtensions: readonly WatcherSupportedImageExtension[];
 }
@@ -64,6 +70,7 @@ export function createWatcherServiceConfig(
     baseDirectory,
     incomingDirectory,
     processedDirectory,
+    variationListingCaptureSourceKey: readVariationListingCaptureSourceKey(env),
     supportedCaptureModes: WATCHER_CAPTURE_MODES,
     supportedImageExtensions: WATCHER_SUPPORTED_IMAGE_EXTENSIONS,
   };

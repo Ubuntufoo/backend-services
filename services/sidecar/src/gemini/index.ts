@@ -6,6 +6,7 @@ export * from './trading-card-id-resolver.js';
 export * from './variation-listing-identity-contracts.js';
 export * from './variation-listing-identity-prompt.js';
 export * from './variation-listing-identity.js';
+export * from './variation-listing-intake-identity.js';
 export * from './variation-listing-group-review-contracts.js';
 export * from './variation-listing-group-review-prompt.js';
 export * from './variation-listing-group-review.js';

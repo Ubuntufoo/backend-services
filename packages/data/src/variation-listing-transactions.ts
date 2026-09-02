@@ -10,6 +10,41 @@ import type {
 } from './database.js';
 import type { VariationListingManualPriceAmount } from './variation-listing-pricing.js';
 
+export const VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR = 'WATCHER_CAPTURE_SOURCE_KEY' as const;
+
+export type VariationListingCaptureSourceKeyEnvironment = {
+  readonly [VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR]?: string;
+};
+
+/**
+ * Resolve the optional station/camera identity shared by the watcher and sidecar.
+ * The value is intentionally not normalized: the durable key is exact once it is set.
+ */
+export function readVariationListingCaptureSourceKey(
+  env: VariationListingCaptureSourceKeyEnvironment = process.env
+): string | null {
+  const value = env[VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR];
+  if (value === undefined) return null;
+  if (value.length === 0 || value.trim() === '' || value !== value.trim()) {
+    throw new Error(
+      `${VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR} must be a non-empty outer-trimmed string when set.`
+    );
+  }
+  return value;
+}
+
+export function requireVariationListingCaptureSourceKey(
+  env: VariationListingCaptureSourceKeyEnvironment = process.env
+): string {
+  const value = readVariationListingCaptureSourceKey(env);
+  if (value === null) {
+    throw new Error(
+      `${VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR} is required for variation-listing intake.`
+    );
+  }
+  return value;
+}
+
 export interface VariationListingAggregateSnapshot {
   copies: VariationListingCopyRow[];
   group: VariationListingGroupRow;

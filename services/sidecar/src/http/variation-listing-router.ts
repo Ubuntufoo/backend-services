@@ -4,6 +4,7 @@ import {
   VariationListingTransactionConflictError,
   type Json,
   type VariationListingAggregateSnapshot,
+  type VariationListingIntakeSession,
   type VariationListingPublishingCheckpoint,
   type VariationListingRevision,
 } from '@ebay-inventory/data';
@@ -25,8 +26,11 @@ import {
   buildVariationListingGroupReviewInputFromAggregate,
   evaluateVariationListingGroupReadiness,
 } from '@/gemini/variation-listing-group-review.js';
+import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
 import {
   createVariationListingGroupRequestSchema,
+  configureVariationListingIntakeRequestSchema,
+  generateVariationListingIntakeIdentityRequestSchema,
   updateVariationListingCopyAvailabilityRequestSchema,
   updateVariationListingPriceRequestSchema,
   updateVariationListingRepresentativeCopyRequestSchema,
@@ -46,6 +50,8 @@ export type VariationListingApiDataAccess = Pick<
   | 'loadAggregate'
   | 'listRevisionsByGroupId'
   | 'listCheckpointsByRevisionId'
+  | 'getIntakeSession'
+  | 'configureIntake'
   | 'createGroup'
   | 'applyGroupReviewDraft'
   | 'updateVariationPrice'
@@ -57,6 +63,7 @@ export interface VariationListingApiRouterOptions {
   dataAccess?: VariationListingApiDataAccess;
   actionDataAccess?: VariationListingActionDataAccess;
   createId?: () => string;
+  generateIntakeIdentity?: typeof generateVariationListingIntakeIdentityHandoff;
   actions?: VariationListingApiActions;
 }
 
@@ -145,6 +152,14 @@ function sendError(res: Response, error: unknown): void {
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
+  if (/pending pair locks intake target/i.test(message)) {
+    res.status(409).json({ error: 'variation_listing_intake_pending', message });
+    return;
+  }
+  if (/WATCHER_CAPTURE_SOURCE_KEY (?:is required|must be)/i.test(message)) {
+    res.status(503).json({ error: 'variation_listing_capture_source_unconfigured', message });
+    return;
+  }
   if (/not found/i.test(message)) {
     res.status(404).json({ error: 'not_found', message });
     return;
@@ -183,6 +198,33 @@ function serializeCopy(copy: VariationListingAggregateSnapshot['copies'][number]
     createdAt: copy.created_at,
     updatedAt: copy.updated_at,
     isRepresentative: copy.copy_id === representativeCopyId,
+  };
+}
+
+function serializeIntakeSession(session: VariationListingIntakeSession) {
+  const pendingPair = session.pendingPair;
+  return {
+    captureSourceKey: session.captureSourceKey,
+    mode: session.mode,
+    targetGroupId: session.targetGroupId,
+    targetVariationId: session.targetVariationId,
+    stickyPriceAmount: session.stickyPriceAmount,
+    stickyPriceCurrency: session.stickyPriceCurrency,
+    pendingPair: pendingPair
+      ? {
+          pairId: pendingPair.pair_id,
+          mode: pendingPair.mode,
+          targetGroupId: pendingPair.target_group_id,
+          targetVariationId: pendingPair.target_variation_id,
+          priceAmount: pendingPair.price_amount,
+          priceCurrency: pendingPair.price_currency,
+          frontSourceRef: pendingPair.front_source_ref,
+          startedAt: pendingPair.started_at,
+          expectedDesiredRevision: pendingPair.expected_desired_revision,
+        }
+      : null,
+    createdAt: session.source.created_at,
+    updatedAt: session.source.updated_at,
   };
 }
 
@@ -365,6 +407,35 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     });
     return cachedActions;
   };
+
+  router.get('/intake-session', async (_req: Request, res: Response) =>
+    await runRoute(res, async () => {
+      const session = await getDataAccess().getIntakeSession();
+      res.json({ session: session ? serializeIntakeSession(session) : null });
+    })
+  );
+
+  router.patch('/intake-session', async (req: Request, res: Response) => {
+    const body = parseOrSend(res, configureVariationListingIntakeRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => {
+      const session = await getDataAccess().configureIntake({
+        mode: body.mode,
+        targetGroupId: body.targetGroupId,
+        stickyPriceAmount: body.stickyPriceAmount,
+      });
+      res.json({ session: serializeIntakeSession(session) });
+    });
+  });
+
+  router.post('/intake-identity', async (req: Request, res: Response) => {
+    const body = parseOrSend(res, generateVariationListingIntakeIdentityRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => {
+      const handoff = await (options.generateIntakeIdentity ?? generateVariationListingIntakeIdentityHandoff)(body);
+      res.json(handoff);
+    });
+  });
 
   router.get('/:groupId/actions/events', (req: Request, res: Response) => {
     const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);

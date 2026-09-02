@@ -26,6 +26,12 @@ export interface GeminiDraftClient {
 }
 
 function sanitizeImageUrl(imageUrl: string): string {
+  if (imageUrl.toLowerCase().startsWith('data:image/')) {
+    const separator = imageUrl.indexOf(';');
+    return separator > 0
+      ? `${imageUrl.slice(0, separator)};base64,<redacted>`
+      : 'data:image/<redacted>';
+  }
   try {
     const parsed = new URL(imageUrl);
     return `${parsed.origin}${parsed.pathname}`;
@@ -58,6 +64,44 @@ function inferMimeTypeFromUrl(imageUrl: string): string | undefined {
 
 function isHttpImageUrl(imageUrl: string): boolean {
   return imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+}
+
+function isDataImageUrl(imageUrl: string): boolean {
+  return imageUrl.toLowerCase().startsWith('data:image/');
+}
+
+function isValidBase64Payload(data: string): boolean {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) {
+    return false;
+  }
+  if (data.length % 4 === 1) {
+    return false;
+  }
+  const paddingIndex = data.indexOf('=');
+  return paddingIndex < 0 || data.length % 4 === 0;
+}
+
+function buildImagePartFromDataUrl(imageUrl: string): Part {
+  const match = /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/iu.exec(imageUrl);
+  if (!match) {
+    throw formatImageUrlError(imageUrl, 'must be a base64-encoded image data URL.');
+  }
+  const mimeType = match[1]!;
+  const data = match[2]!;
+  if (!isValidBase64Payload(data)) {
+    throw formatImageUrlError(imageUrl, 'must contain valid base64 data.');
+  }
+  const bytes = Buffer.from(data, 'base64');
+  if (bytes.length === 0) {
+    throw formatImageUrlError(imageUrl, 'contains an empty image body.');
+  }
+  if (bytes.length > HTTP_IMAGE_MAX_BYTES) {
+    throw formatImageUrlError(
+      imageUrl,
+      `contains ${bytes.length} bytes and exceeds the 10 MB limit.`
+    );
+  }
+  return { inlineData: { data, mimeType } };
 }
 
 function parseMimeTypeHeader(contentType: string | null): string | undefined {
@@ -161,6 +205,10 @@ async function buildImagePartFromHttpUrl(imageUrl: string): Promise<Part> {
 }
 
 async function buildImagePart(imageUrl: string): Promise<Part> {
+  if (isDataImageUrl(imageUrl)) {
+    return buildImagePartFromDataUrl(imageUrl);
+  }
+
   if (isHttpImageUrl(imageUrl)) {
     return await buildImagePartFromHttpUrl(imageUrl);
   }

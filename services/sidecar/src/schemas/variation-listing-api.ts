@@ -21,6 +21,54 @@ const manualPriceAmountSchema = z.union([
   z.literal(2.49),
 ]);
 
+const variationListingIntakeModeSchema = z.enum(['idle', 'new_variation']);
+
+export const configureVariationListingIntakeRequestSchema = z
+  .object({
+    mode: variationListingIntakeModeSchema,
+    targetGroupId: z.string().uuid().nullable(),
+    stickyPriceAmount: manualPriceAmountSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.mode === 'idle' && value.targetGroupId !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'targetGroupId must be null while intake is idle',
+        path: ['targetGroupId'],
+      });
+    }
+    if (value.mode === 'new_variation' && value.targetGroupId === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'targetGroupId is required for new_variation intake',
+        path: ['targetGroupId'],
+      });
+    }
+  });
+
+const exactSourceRefSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value === value.trim(), 'source reference must be outer-trimmed');
+
+export const generateVariationListingIntakeIdentityRequestSchema = z
+  .object({
+    variationId: z.string().uuid(),
+    frontSourceRef: exactSourceRefSchema,
+    backSourceRef: exactSourceRefSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.frontSourceRef === value.backSourceRef) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'frontSourceRef and backSourceRef must differ',
+        path: ['backSourceRef'],
+      });
+    }
+  });
+
 export const createVariationListingGroupRequestSchema = z
   .object({
     skuCategoryCode: z.enum(['BSKBL', 'BSBL', 'OTHER']),
@@ -86,4 +134,10 @@ export const variationListingRetryActionRequestSchema = z.object({}).strict();
 
 export type CreateVariationListingGroupRequest = z.input<
   typeof createVariationListingGroupRequestSchema
+>;
+export type ConfigureVariationListingIntakeRequest = z.infer<
+  typeof configureVariationListingIntakeRequestSchema
+>;
+export type GenerateVariationListingIntakeIdentityRequest = z.infer<
+  typeof generateVariationListingIntakeIdentityRequestSchema
 >;

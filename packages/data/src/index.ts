@@ -242,6 +242,7 @@ export {
 } from './variation-listing-pricing.js';
 export {
   assertVariationListingJournalCanContinue,
+  VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR,
   type AbandonUntouchedVariationListingGroupInput,
   type AdvanceVariationListingCleanupLifecycleInput,
   inspectVariationListingJournal,
@@ -264,8 +265,11 @@ export {
   type StartVariationListingIntakePairInput,
   type CompleteVariationListingNewVariationInput,
   type CompleteVariationListingDuplicateCopyInput,
+  type VariationListingCaptureSourceKeyEnvironment,
   type VariationListingTransactionGateway,
   type VariationListingCleanupLifecycle,
+  readVariationListingCaptureSourceKey,
+  requireVariationListingCaptureSourceKey,
 } from './variation-listing-transactions.js';
 export {
   VariationListingTransactionConflictError,

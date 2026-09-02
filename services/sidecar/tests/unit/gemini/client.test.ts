@@ -12,15 +12,14 @@ const createPartFromUriMock = vi.hoisted(() =>
 );
 const generateContentMock = vi.hoisted(() => vi.fn());
 const GoogleGenAIMock = vi.hoisted(() =>
-  vi.fn(
-    class GoogleGenAI {
-      models = {
-        generateContent: generateContentMock,
-      };
-
-      constructor(_config: { apiKey: string }) {}
-    }
-  )
+  vi.fn(function GoogleGenAI(
+    this: { models: { generateContent: typeof generateContentMock } },
+    _config: { apiKey: string }
+  ) {
+    this.models = {
+      generateContent: generateContentMock,
+    };
+  })
 );
 
 interface MockFetchResponse {
@@ -102,6 +101,50 @@ describe('getGeminiDraftClient', () => {
     global.fetch = originalFetch;
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it('accepts base64 image data URLs without network fetch', async () => {
+    global.fetch = vi.fn() as typeof fetch;
+    const client = getGeminiDraftClient('gemini-api-key');
+    const prepared = await client.prepareImageParts([
+      `data:image/jpeg;base64,${Buffer.from('front').toString('base64')}`,
+    ]);
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(prepared.imageParts[0]).toEqual({
+      inlineData: {
+        data: Buffer.from('front').toString('base64'),
+        mimeType: 'image/jpeg',
+      },
+    });
+  });
+
+  it('rejects malformed base64 image data URLs without exposing their payload', async () => {
+    const client = getGeminiDraftClient('gemini-api-key');
+    const secretPayload = 'not-base64-secret';
+
+    await expect(
+      client.prepareImageParts([`data:image/jpeg;base64,${secretPayload}`])
+    ).rejects.toThrow('must be a base64-encoded image data URL');
+    await expect(
+      client.prepareImageParts([`data:image/jpeg;base64,${secretPayload}`])
+    ).rejects.not.toThrow(secretPayload);
+    await expect(
+      client.prepareImageParts([`DATA:IMAGE/JPEG;BASE64,${secretPayload}`])
+    ).rejects.not.toThrow(secretPayload);
+    await expect(
+      client.prepareImageParts(['data:image/jpeg;base64,AAAA=BBBB'])
+    ).rejects.toThrow('must contain valid base64 data');
+  });
+
+  it('rejects oversized base64 image data URLs at the 10 MB bound', async () => {
+    const client = getGeminiDraftClient('gemini-api-key');
+    const oversizedData = Buffer.alloc(10 * 1024 * 1024 + 1, 1).toString('base64');
+
+    await expect(
+      client.prepareImageParts([`data:image/jpeg;base64,${oversizedData}`])
+    ).rejects.toThrow('exceeds the 10 MB limit');
+    expect(generateContentMock).not.toHaveBeenCalled();
   });
 
   it('fetches public HTTPS image URLs and sends them as inline image data parts', async () => {

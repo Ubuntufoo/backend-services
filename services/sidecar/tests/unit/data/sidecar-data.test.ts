@@ -52,6 +52,16 @@ const createListingPriceResearchMock = vi.fn();
 const markListingPriceResearchFailedMock = vi.fn();
 const markListingPriceResearchSucceededMock = vi.fn();
 const createSupabaseVariationListingTransactionGatewayMock = vi.fn();
+const getVariationListingIntakeSessionBySourceKeyMock = vi.fn();
+const mapVariationListingIntakeSessionRowMock = vi.fn((row) => row);
+const requireVariationListingCaptureSourceKeyMock = vi.fn((env: NodeJS.ProcessEnv) => {
+  const value = env.WATCHER_CAPTURE_SOURCE_KEY;
+  if (value === undefined) throw new Error('WATCHER_CAPTURE_SOURCE_KEY is required for variation-listing intake.');
+  if (value.length === 0 || value.trim() === '' || value !== value.trim()) {
+    throw new Error('WATCHER_CAPTURE_SOURCE_KEY must be a non-empty outer-trimmed string when set.');
+  }
+  return value;
+});
 const listVariationListingGroupsMock = vi.fn();
 const listVariationListingRevisionsByGroupIdMock = vi.fn();
 const listVariationListingPublishingCheckpointsByRevisionIdMock = vi.fn();
@@ -68,6 +78,7 @@ const variationAbandonUntouchedGroupMock = vi.fn();
 const variationUpdatePriceMock = vi.fn();
 const variationUpdateCopyAvailabilityMock = vi.fn();
 const variationUpdateRepresentativeCopyMock = vi.fn();
+const variationConfigureIntakeMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
@@ -81,6 +92,9 @@ vi.mock('@ebay-inventory/data', () => ({
   createListing: createListingMock,
   createListingPriceResearch: createListingPriceResearchMock,
   createSupabaseVariationListingTransactionGateway: createSupabaseVariationListingTransactionGatewayMock,
+  getVariationListingIntakeSessionBySourceKey: getVariationListingIntakeSessionBySourceKeyMock,
+  mapVariationListingIntakeSessionRow: mapVariationListingIntakeSessionRowMock,
+  requireVariationListingCaptureSourceKey: requireVariationListingCaptureSourceKeyMock,
   deleteSandboxCleanedListing: deleteSandboxCleanedListingMock,
   deleteNeedsReviewListing: deleteNeedsReviewListingMock,
   approveListingForExport: approveListingForExportMock,
@@ -138,11 +152,27 @@ describe('sidecar data access', () => {
       updateVariationPrice: variationUpdatePriceMock,
       updateCopyAvailability: variationUpdateCopyAvailabilityMock,
       updateRepresentativeCopy: variationUpdateRepresentativeCopyMock,
+      configureIntake: variationConfigureIntakeMock,
     });
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('fails intake reads closed when the canonical capture source key is missing', async () => {
+    const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
+    const dataAccess = createSidecarDataAccess({
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+      SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+    } as NodeJS.ProcessEnv);
+
+    await expect(dataAccess.variationListings.getIntakeSession()).rejects.toThrow(
+      'WATCHER_CAPTURE_SOURCE_KEY is required for variation-listing intake.'
+    );
+    expect(getVariationListingIntakeSessionBySourceKeyMock).not.toHaveBeenCalled();
   });
 
   it('delegates every variation-listing read and mutation through the existing helpers', async () => {
@@ -152,6 +182,7 @@ describe('sidecar data access', () => {
       NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
       SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
       SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+      WATCHER_CAPTURE_SOURCE_KEY: 'station-main',
     } as NodeJS.ProcessEnv;
     const dataAccess = createSidecarDataAccess(env);
     const client = createSupabaseServiceClientMock.mock.results[0]?.value;
@@ -211,6 +242,25 @@ describe('sidecar data access', () => {
       copyId,
       expectedDesiredRevision: 1,
     });
+    const intakeSession = {
+      capture_source_key: 'station-main',
+      mode: 'idle',
+      target_group_id: null,
+      target_variation_id: null,
+      sticky_price_amount: 1.49,
+      sticky_price_currency: 'USD',
+      pending_pair: null,
+      created_at: 'now',
+      updated_at: 'now',
+    };
+    variationConfigureIntakeMock.mockResolvedValue(intakeSession);
+    getVariationListingIntakeSessionBySourceKeyMock.mockResolvedValue(intakeSession);
+    await dataAccess.variationListings.getIntakeSession();
+    await dataAccess.variationListings.configureIntake({
+      mode: 'idle',
+      targetGroupId: null,
+      stickyPriceAmount: 1.49,
+    });
 
     expect(createSupabaseVariationListingTransactionGatewayMock).toHaveBeenCalledWith(client);
     expect(listVariationListingGroupsMock).toHaveBeenCalledWith(client);
@@ -229,6 +279,14 @@ describe('sidecar data access', () => {
     expect(variationUpdatePriceMock).toHaveBeenCalledWith({ groupId, variationId, expectedDesiredRevision: 1, priceAmount: 1.99 });
     expect(variationUpdateCopyAvailabilityMock).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 1, availabilityState: 'available' });
     expect(variationUpdateRepresentativeCopyMock).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 1 });
+    expect(getVariationListingIntakeSessionBySourceKeyMock).toHaveBeenCalledWith(client, 'station-main');
+    expect(variationConfigureIntakeMock).toHaveBeenCalledWith({
+      captureSourceKey: 'station-main',
+      mode: 'idle',
+      targetGroupId: null,
+      targetVariationId: null,
+      stickyPriceAmount: 1.49,
+    });
   });
 
   it('creates one shared client and delegates listing queries through @ebay-inventory/data', async () => {

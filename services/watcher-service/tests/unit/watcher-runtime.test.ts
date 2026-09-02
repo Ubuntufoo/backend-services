@@ -85,6 +85,7 @@ describe('watcher runtime', () => {
   });
 
   it('enqueues normalized absolute paths from add events', async () => {
+    // Existing legacy-path coverage remains below; variation-specific runtime coverage is intentionally narrow.
     const fakeWatcher = new FakeWatcher();
     const logger = createLogger();
     const processIncomingImageBatch = vi.fn(async (input) => ({
@@ -122,6 +123,188 @@ describe('watcher runtime', () => {
         path: path.normalize('/watcher/incoming/photo.jpg'),
       })
     );
+  });
+
+  it('routes an armed variation image through the variation processor without touching legacy grouping', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const processIncomingImageBatch = vi.fn();
+    const variationListingRuntimeProcessor = {
+      process: vi.fn(async () => ({
+        kind: 'started' as const,
+        groupId: '11111111-1111-4111-8111-111111111111',
+        pairId: '22222222-2222-4222-8222-222222222222',
+      })),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/front.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.process).toHaveBeenCalledWith('/watcher/incoming/front.jpg');
+    expect(processIncomingImageBatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy-only behavior when no capture source key is configured, even with an injected processor', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [],
+    }));
+    const variationListingRuntimeProcessor = {
+      process: vi.fn(async () => ({ kind: 'started' as const, groupId: 'group', pairId: 'pair' })),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/front.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.process).not.toHaveBeenCalled();
+    expect(processIncomingImageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ incoming: ['/watcher/incoming/front.jpg'] }),
+      undefined
+    );
+  });
+
+  it('falls back to the unchanged legacy batch when the variation processor returns legacy', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [],
+    }));
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor: { process: vi.fn(async () => ({ kind: 'legacy' as const })) },
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/front.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(processIncomingImageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ incoming: ['/watcher/incoming/front.jpg'] }),
+      undefined
+    );
+  });
+
+  it('retains only the failed and unprocessed variation suffix for retry', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const processor = {
+      process: vi
+        .fn()
+        .mockResolvedValueOnce({ kind: 'duplicate_front' as const, pairId: 'pair-a' })
+        .mockRejectedValueOnce(new Error('variation failure')),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger,
+      processIncomingImageBatch: vi.fn(),
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/one.jpg');
+    fakeWatcher.emitAdd('/watcher/incoming/two.jpg');
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/two.jpg']);
+    expect(logger.error).toHaveBeenCalledWith(
+      'batch_failed',
+      expect.objectContaining({ retainedRetryInputCount: 1 })
+    );
+    await runtime.close();
+  });
+
+  it('retains legacy-classified prefix inputs with the failed variation suffix, excluding consumed variation images', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const processor = {
+      process: vi
+        .fn()
+        .mockResolvedValueOnce({ kind: 'legacy' as const })
+        .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group', pairId: 'pair' })
+        .mockRejectedValueOnce(new Error('variation failure')),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch: vi.fn(async () => ({
+        groupingState: createEmptyWatcherGroupingState(),
+        processedListings: [],
+      })),
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+
+    runtime.state.pendingQueue.push(
+      '/watcher/incoming/legacy.jpg',
+      '/watcher/incoming/consumed.jpg',
+      '/watcher/incoming/failed.jpg',
+      '/watcher/incoming/unprocessed.jpg'
+    );
+    fakeWatcher.emitAdd('/watcher/incoming/trigger.jpg');
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(runtime.state.pendingQueue).toEqual([
+      '/watcher/incoming/legacy.jpg',
+      '/watcher/incoming/failed.jpg',
+      '/watcher/incoming/unprocessed.jpg',
+      '/watcher/incoming/trigger.jpg',
+    ]);
+    await runtime.close();
   });
 
   it('logs completed watcher groups and persisted listing rows', async () => {
