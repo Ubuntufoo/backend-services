@@ -242,6 +242,8 @@ export {
 } from './variation-listing-pricing.js';
 export {
   assertVariationListingJournalCanContinue,
+  type AbandonUntouchedVariationListingGroupInput,
+  type AdvanceVariationListingCleanupLifecycleInput,
   inspectVariationListingJournal,
   type AppendVariationListingJournalCheckpointInput,
   type AppendVariationListingJournalCheckpointResult,
@@ -261,6 +263,7 @@ export {
   type CompleteVariationListingNewVariationInput,
   type CompleteVariationListingDuplicateCopyInput,
   type VariationListingTransactionGateway,
+  type VariationListingCleanupLifecycle,
 } from './variation-listing-transactions.js';
 export {
   VariationListingTransactionConflictError,

@@ -1023,6 +1023,23 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      abandon_untouched_variation_listing_group: {
+        Args: {
+          p_expected_desired_revision: number;
+          p_group_id: string;
+        };
+        Returns: { group_row: Json }[];
+      };
+      advance_variation_listing_cleanup_lifecycle: {
+        Args: {
+          p_expected_desired_revision: number;
+          p_expected_previous_confirmed_revision: number | null;
+          p_group_id: string;
+          p_revision_id: string;
+          p_target_lifecycle: string;
+        };
+        Returns: { group_row: Json }[];
+      };
       append_variation_listing_journal_checkpoint: {
         Args: {
           p_attempt_number: number;

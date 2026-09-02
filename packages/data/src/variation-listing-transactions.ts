@@ -147,10 +147,35 @@ export interface CompleteVariationListingDuplicateCopyInput {
   variationId: string;
 }
 
+export interface AbandonUntouchedVariationListingGroupInput {
+  expectedDesiredRevision: 0;
+  groupId: string;
+}
+
+export type VariationListingCleanupLifecycle =
+  | 'withdrawn'
+  | 'cleanup'
+  | 'abandoned'
+  | 'terminal-absent';
+
+export interface AdvanceVariationListingCleanupLifecycleInput {
+  expectedDesiredRevision: number;
+  expectedPreviousConfirmedRevision: number | null;
+  groupId: string;
+  revisionId: string;
+  targetLifecycle: VariationListingCleanupLifecycle;
+}
+
 export interface VariationListingTransactionGateway {
+  abandonUntouchedGroup(
+    input: AbandonUntouchedVariationListingGroupInput
+  ): Promise<VariationListingGroupRow>;
   appendJournalCheckpoint(
     input: AppendVariationListingJournalCheckpointInput
   ): Promise<AppendVariationListingJournalCheckpointResult>;
+  advanceCleanupLifecycle(
+    input: AdvanceVariationListingCleanupLifecycleInput
+  ): Promise<VariationListingGroupRow>;
   captureRevision(
     input: CaptureVariationListingRevisionInput
   ): Promise<CaptureVariationListingRevisionResult>;

@@ -113,3 +113,53 @@ describe('YP5.3 Slice A active staging RPCs', () => {
     await expect(createSupabaseVariationListingTransactionGateway(c).updateRepresentativeCopy({groupId:'g',variationId:'v',copyId:'copy-b',expectedDesiredRevision:7})).resolves.toMatchObject({group:{last_confirmed_revision:7},variation:{representative_copy_id:'copy-b'}});
   });
 });
+
+describe('YP5.4 untouched abandonment RPC', () => {
+  const abandonedGroup = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:0, last_confirmed_revision:null, lifecycle_state:'abandoned', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:1, derived_common_ebay_aspects:{}, condition_descriptors:[], condition_description:null, description:null, title:null, created_at:'now', updated_at:'now',
+  };
+
+  it('maps the narrow revision-0 abandonment CAS RPC', async () => {
+    const c = clientFor('abandon_untouched_variation_listing_group', { group_row: abandonedGroup }, args => {
+      expect(args).toEqual({ p_group_id:'g', p_expected_desired_revision:0 });
+    });
+    await expect(createSupabaseVariationListingTransactionGateway(c).abandonUntouchedGroup({ groupId:'g', expectedDesiredRevision:0 })).resolves.toMatchObject({ group_id:'g', desired_revision:0, last_confirmed_revision:null, lifecycle_state:'abandoned' });
+  });
+
+  it('rejects any nonzero untouched-abandonment revision before RPC invocation', async () => {
+    const c = clientFor('abandon_untouched_variation_listing_group', { group_row: abandonedGroup });
+    await expect(createSupabaseVariationListingTransactionGateway(c).abandonUntouchedGroup({ groupId:'g', expectedDesiredRevision:1 as 0 })).rejects.toThrow(/must be 0/);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('YP5.4 cleanup lifecycle RPC', () => {
+  const group = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:4, last_confirmed_revision:3, lifecycle_state:'cleanup', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:2, derived_common_ebay_aspects:{}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'now', updated_at:'now',
+  };
+
+  it('maps exact CAS lifecycle transition arguments and response', async () => {
+    const c = clientFor('advance_variation_listing_cleanup_lifecycle', { group_row: group }, args => {
+      expect(args).toEqual({
+        p_group_id:'g',
+        p_revision_id:'r',
+        p_expected_desired_revision:4,
+        p_expected_previous_confirmed_revision:3,
+        p_target_lifecycle:'cleanup',
+      });
+    });
+    await expect(createSupabaseVariationListingTransactionGateway(c).advanceCleanupLifecycle({
+      groupId:'g', revisionId:'r', expectedDesiredRevision:4,
+      expectedPreviousConfirmedRevision:3, targetLifecycle:'cleanup',
+    })).resolves.toMatchObject({ group_id:'g', lifecycle_state:'cleanup' });
+  });
+
+  it('rejects invalid lifecycle input before invoking RPC', async () => {
+    const c = clientFor('advance_variation_listing_cleanup_lifecycle', { group_row: group });
+    await expect(createSupabaseVariationListingTransactionGateway(c).advanceCleanupLifecycle({
+      groupId:'g', revisionId:'r', expectedDesiredRevision:4,
+      expectedPreviousConfirmedRevision:3, targetLifecycle:'active' as never,
+    })).rejects.toThrow(/target lifecycle/);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
+});
