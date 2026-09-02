@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { createBearerAuthMiddleware } from '@/auth/oauth-middleware.js';
 import { createMetadataRouter, getProtectedResourceMetadataUrl } from '@/auth/oauth-metadata.js';
 import { createDataApiRouter } from '@/http/data-router.js';
+import { createVariationListingApiRouter } from '@/http/variation-listing-router.js';
 import { TokenVerifier } from '@/auth/token-verifier.js';
 import { getDefaultScopes, getEbayConfig, isEbayEnabled } from '@/config/environment.js';
 import { createEbayMcpRuntime } from '@/mcp/runtime.js';
@@ -225,10 +226,15 @@ export async function createHttpMcpApp(config: HttpTransportConfig): Promise<exp
   const authMiddleware = await createAuthMiddleware(config, serverUrl);
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const dataApiRouter = createDataApiRouter({ dataAccess: config.dataAccess });
+  const variationListingApiRouter = createVariationListingApiRouter({
+    dataAccess: config.dataAccess?.variationListings,
+  });
 
   if (authMiddleware) {
+    app.use('/api/variation-listings', authMiddleware, variationListingApiRouter);
     app.use('/api', authMiddleware, dataApiRouter);
   } else {
+    app.use('/api/variation-listings', variationListingApiRouter);
     app.use('/api', dataApiRouter);
   }
 

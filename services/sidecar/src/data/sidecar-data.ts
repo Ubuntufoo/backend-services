@@ -50,6 +50,10 @@ import {
   updateJob,
   updateListing,
   updateListingWorkflowState,
+  createSupabaseVariationListingTransactionGateway,
+  listVariationListingGroups,
+  listVariationListingRevisionsByGroupId,
+  listVariationListingPublishingCheckpointsByRevisionId,
   type AppSettingsInsert,
   type AppSettingsRow,
   type AppSettingsUpdate,
@@ -82,6 +86,18 @@ import {
   type ListingWorkflowTransitionInput,
   type MarkAiModelAttemptFailedInput,
   type MarkAiModelAttemptSucceededInput,
+  type ApplyVariationListingGroupReviewDraftInput,
+  type CreateVariationListingGroupInput,
+  type UpdateVariationListingCopyAvailabilityInput,
+  type UpdateVariationListingManualPriceInput,
+  type UpdateVariationListingRepresentativeCopyInput,
+  type VariationListingAggregateSnapshot,
+  type VariationListingGroup,
+  type VariationListingPublishingCheckpoint,
+  type VariationListingRevision,
+  type VariationListingGroupRow,
+  type VariationListingVariationRow,
+  type VariationListingCopyRow,
 } from '@ebay-inventory/data';
 
 export interface SidecarDataAccess {
@@ -161,6 +177,17 @@ export interface SidecarDataAccess {
       input: Parameters<typeof markListingPriceResearchSucceeded>[1]
     ): Promise<ListingPriceResearchRow>;
   };
+  variationListings: {
+    listGroups(): Promise<VariationListingGroup[]>;
+    loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;
+    listRevisionsByGroupId(groupId: string): Promise<VariationListingRevision[]>;
+    listCheckpointsByRevisionId(revisionId: string): Promise<VariationListingPublishingCheckpoint[]>;
+    createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
+    applyGroupReviewDraft(input: ApplyVariationListingGroupReviewDraftInput): Promise<VariationListingGroupRow>;
+    updateVariationPrice(input: UpdateVariationListingManualPriceInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+    updateCopyAvailability(input: UpdateVariationListingCopyAvailabilityInput): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }>;
+    updateRepresentativeCopy(input: UpdateVariationListingRepresentativeCopyInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+  };
   orders: {
     hasByListingId(listingId: string): Promise<boolean>;
   };
@@ -170,6 +197,7 @@ let cachedSidecarDataAccess: SidecarDataAccess | undefined;
 
 export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): SidecarDataAccess {
   const client = createSupabaseServiceClient(env);
+  const variationListingTransactions = createSupabaseVariationListingTransactionGateway(client);
 
   return {
     aiModelRoutes: {
@@ -236,6 +264,17 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       updateGeminiAttemptAudit: async (jobId, audit) =>
         await setGeminiJobAttemptAudit(client, jobId, audit),
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
+    },
+    variationListings: {
+      listGroups: async () => await listVariationListingGroups(client),
+      loadAggregate: async (groupId) => await variationListingTransactions.loadAggregate(groupId),
+      listRevisionsByGroupId: async (groupId) => await listVariationListingRevisionsByGroupId(client, groupId),
+      listCheckpointsByRevisionId: async (revisionId) => await listVariationListingPublishingCheckpointsByRevisionId(client, revisionId),
+      createGroup: async (input) => await variationListingTransactions.createGroup(input),
+      applyGroupReviewDraft: async (input) => await variationListingTransactions.applyGroupReviewDraft(input),
+      updateVariationPrice: async (input) => await variationListingTransactions.updateVariationPrice(input),
+      updateCopyAvailability: async (input) => await variationListingTransactions.updateCopyAvailability(input),
+      updateRepresentativeCopy: async (input) => await variationListingTransactions.updateRepresentativeCopy(input),
     },
     orders: {
       hasByListingId: async (listingId) => await hasOrderForListing(client, listingId),

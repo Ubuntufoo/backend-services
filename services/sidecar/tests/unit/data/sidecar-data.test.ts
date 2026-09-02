@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ListingImageMetadataUpdate,
   ListingInsert,
@@ -51,6 +51,16 @@ const updateAppSettingsMock = vi.fn();
 const createListingPriceResearchMock = vi.fn();
 const markListingPriceResearchFailedMock = vi.fn();
 const markListingPriceResearchSucceededMock = vi.fn();
+const createSupabaseVariationListingTransactionGatewayMock = vi.fn();
+const listVariationListingGroupsMock = vi.fn();
+const listVariationListingRevisionsByGroupIdMock = vi.fn();
+const listVariationListingPublishingCheckpointsByRevisionIdMock = vi.fn();
+const variationLoadAggregateMock = vi.fn();
+const variationCreateGroupMock = vi.fn();
+const variationApplyGroupReviewDraftMock = vi.fn();
+const variationUpdatePriceMock = vi.fn();
+const variationUpdateCopyAvailabilityMock = vi.fn();
+const variationUpdateRepresentativeCopyMock = vi.fn();
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
@@ -63,6 +73,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createAppSettings: createAppSettingsMock,
   createListing: createListingMock,
   createListingPriceResearch: createListingPriceResearchMock,
+  createSupabaseVariationListingTransactionGateway: createSupabaseVariationListingTransactionGatewayMock,
   deleteSandboxCleanedListing: deleteSandboxCleanedListingMock,
   deleteNeedsReviewListing: deleteNeedsReviewListingMock,
   approveListingForExport: approveListingForExportMock,
@@ -86,6 +97,9 @@ vi.mock('@ebay-inventory/data', () => ({
   listStaleRunningJobs: listStaleRunningJobsMock,
   listListings: listListingsMock,
   listListingsByStatus: listListingsByStatusMock,
+  listVariationListingGroups: listVariationListingGroupsMock,
+  listVariationListingRevisionsByGroupId: listVariationListingRevisionsByGroupIdMock,
+  listVariationListingPublishingCheckpointsByRevisionId: listVariationListingPublishingCheckpointsByRevisionIdMock,
   markListingPriceResearchFailed: markListingPriceResearchFailedMock,
   markListingPriceResearchSucceeded: markListingPriceResearchSucceededMock,
   markAiModelAttemptFailed: markAiModelAttemptFailedMock,
@@ -102,8 +116,91 @@ vi.mock('@ebay-inventory/data', () => ({
 }));
 
 describe('sidecar data access', () => {
+  beforeEach(() => {
+    createSupabaseVariationListingTransactionGatewayMock.mockReturnValue({
+      loadAggregate: variationLoadAggregateMock,
+      createGroup: variationCreateGroupMock,
+      applyGroupReviewDraft: variationApplyGroupReviewDraftMock,
+      updateVariationPrice: variationUpdatePriceMock,
+      updateCopyAvailability: variationUpdateCopyAvailabilityMock,
+      updateRepresentativeCopy: variationUpdateRepresentativeCopyMock,
+    });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('delegates every variation-listing read and mutation through the existing helpers', async () => {
+    const { createSidecarDataAccess } = await import('@/data/sidecar-data.js');
+    const env = {
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      NEXT_PUBLIC_SUPABASE_URL: 'https://fmiliwxthjonjwywuqta.supabase.co',
+      SUPABASE_PROJECT_REF: 'fmiliwxthjonjwywuqta',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
+    } as NodeJS.ProcessEnv;
+    const dataAccess = createSidecarDataAccess(env);
+    const client = createSupabaseServiceClientMock.mock.results[0]?.value;
+    const groupId = '11111111-1111-4111-8111-111111111111';
+    const variationId = '22222222-2222-4222-8222-222222222222';
+    const copyId = '33333333-3333-4333-8333-333333333333';
+    const revisionId = '44444444-4444-4444-8444-444444444444';
+
+    await dataAccess.variationListings.listGroups();
+    await dataAccess.variationListings.loadAggregate(groupId);
+    await dataAccess.variationListings.listRevisionsByGroupId(groupId);
+    await dataAccess.variationListings.listCheckpointsByRevisionId(revisionId);
+    await dataAccess.variationListings.createGroup({
+      groupId,
+      groupKey: 'VL-G-11111111111141118111111111111111',
+      skuCategoryCode: 'BSKBL',
+      skuBucketToken: 'McGrady',
+      categoryId: '261328',
+      marketplaceId: 'EBAY_US',
+      merchantLocationKey: 'main',
+      fulfillmentPolicyId: 'fulfillment',
+      paymentPolicyId: 'payment',
+      returnPolicyId: 'returns',
+      conditionId: '4000',
+      conditionToken: 'VERY_GOOD',
+    });
+    await dataAccess.variationListings.applyGroupReviewDraft({
+      groupId,
+      expectedDesiredRevision: 1,
+      title: 'Cards',
+      description: 'Description',
+      derivedCommonEbayAspects: { Sport: ['Basketball'] },
+    });
+    await dataAccess.variationListings.updateVariationPrice({
+      groupId,
+      variationId,
+      expectedDesiredRevision: 1,
+      priceAmount: 1.99,
+    });
+    await dataAccess.variationListings.updateCopyAvailability({
+      groupId,
+      variationId,
+      copyId,
+      expectedDesiredRevision: 1,
+      availabilityState: 'available',
+    });
+    await dataAccess.variationListings.updateRepresentativeCopy({
+      groupId,
+      variationId,
+      copyId,
+      expectedDesiredRevision: 1,
+    });
+
+    expect(createSupabaseVariationListingTransactionGatewayMock).toHaveBeenCalledWith(client);
+    expect(listVariationListingGroupsMock).toHaveBeenCalledWith(client);
+    expect(variationLoadAggregateMock).toHaveBeenCalledWith(groupId);
+    expect(listVariationListingRevisionsByGroupIdMock).toHaveBeenCalledWith(client, groupId);
+    expect(listVariationListingPublishingCheckpointsByRevisionIdMock).toHaveBeenCalledWith(client, revisionId);
+    expect(variationCreateGroupMock).toHaveBeenCalledWith(expect.objectContaining({ groupId, groupKey: 'VL-G-11111111111141118111111111111111' }));
+    expect(variationApplyGroupReviewDraftMock).toHaveBeenCalledWith(expect.objectContaining({ groupId, expectedDesiredRevision: 1 }));
+    expect(variationUpdatePriceMock).toHaveBeenCalledWith({ groupId, variationId, expectedDesiredRevision: 1, priceAmount: 1.99 });
+    expect(variationUpdateCopyAvailabilityMock).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 1, availabilityState: 'available' });
+    expect(variationUpdateRepresentativeCopyMock).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 1 });
   });
 
   it('creates one shared client and delegates listing queries through @ebay-inventory/data', async () => {

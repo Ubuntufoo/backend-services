@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createHttpMcpApp,
   createHttpTransportConfigFromEnv,
@@ -8,6 +8,14 @@ import {
   type HttpTransportConfig,
 } from '@/mcp/http-transport.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+
+const tokenVerifierInitializeMock = vi.fn(async () => undefined);
+vi.mock('@/auth/token-verifier.js', () => ({
+  TokenVerifier: vi.fn().mockImplementation(() => ({
+    initialize: tokenVerifierInitializeMock,
+    verify: vi.fn(),
+  })),
+}));
 
 const listingRow = {
   approved_for_export_at: null,
@@ -143,6 +151,27 @@ function createDataAccess(): SidecarDataAccess {
         throw new Error('not implemented');
       },
     },
+    variationListings: {
+      listGroups: async () => [],
+      loadAggregate: async () => null,
+      listRevisionsByGroupId: async () => [],
+      listCheckpointsByRevisionId: async () => [],
+      createGroup: async () => {
+        throw new Error('not implemented');
+      },
+      applyGroupReviewDraft: async () => {
+        throw new Error('not implemented');
+      },
+      updateVariationPrice: async () => {
+        throw new Error('not implemented');
+      },
+      updateCopyAvailability: async () => {
+        throw new Error('not implemented');
+      },
+      updateRepresentativeCopy: async () => {
+        throw new Error('not implemented');
+      },
+    },
     appSettings: {
       create: async () => {
         throw new Error('not implemented');
@@ -240,6 +269,31 @@ describe('HTTP MCP transport', () => {
         },
       ],
     });
+  });
+
+  it('mounts dedicated variation-listings separately from legacy listings', async () => {
+    const dataAccess = createDataAccess();
+    const app = await createHttpMcpApp(
+      createTestConfig({ ebayEnabled: false, ebayConfig: undefined, dataAccess })
+    );
+    const response = await request(app).get('/api/variation-listings');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ groups: [] });
+  });
+
+  it('applies the same OAuth protection to variation-listings and legacy listings', async () => {
+    const dataAccess = createDataAccess();
+    const app = await createHttpMcpApp(
+      createTestConfig({ authEnabled: true, dataAccess, ebayEnabled: false, ebayConfig: undefined })
+    );
+    const variationResponse = await request(app).get('/api/variation-listings');
+    const listingsResponse = await request(app).get('/api/listings');
+
+    expect(variationResponse.status).toBe(401);
+    expect(listingsResponse.status).toBe(401);
+    expect(variationResponse.body).toMatchObject({ error: 'invalid_token' });
+    expect(listingsResponse.body).toMatchObject({ error: 'invalid_token' });
   });
 
   it('rejects session requests without a valid MCP session id', async () => {
