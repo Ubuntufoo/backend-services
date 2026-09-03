@@ -170,6 +170,7 @@ function intakeSession(
 ): VariationListingIntakeSession {
   return {
     captureSourceKey,
+    copyConditionToken: null,
     mode: 'idle',
     pendingPair: null,
     source: { created_at: now, updated_at: now } as VariationListingIntakeSession['source'],
@@ -235,6 +236,7 @@ describe('YP6.1 variation listing API router', () => {
         mode: 'new_variation',
         targetGroupId: groupId,
         targetVariationId: null,
+        copyConditionToken: null,
         stickyPriceAmount: 1.49,
         stickyPriceCurrency: 'USD',
         pendingPair: {
@@ -242,6 +244,7 @@ describe('YP6.1 variation listing API router', () => {
           mode: 'new_variation',
           targetGroupId: groupId,
           targetVariationId: null,
+          conditionToken: null,
           priceAmount: 1.49,
           priceCurrency: 'USD',
           frontSourceRef: '/incoming/front.jpg',
@@ -273,8 +276,8 @@ describe('YP6.1 variation listing API router', () => {
   });
 
   it.each([
-    ['idle', { mode: 'idle' as const, targetGroupId: null, stickyPriceAmount: 1.99 as const }],
-    ['new_variation', { mode: 'new_variation' as const, targetGroupId: groupId, stickyPriceAmount: 2.49 as const }],
+    ['idle', { mode: 'idle' as const, targetGroupId: null, targetVariationId: null, copyConditionToken: null, stickyPriceAmount: 1.99 as const }],
+    ['new_variation', { mode: 'new_variation' as const, targetGroupId: groupId, targetVariationId: null, copyConditionToken: null, stickyPriceAmount: 2.49 as const }],
   ])('configures %s through the existing intake RPC seam', async (_label, body) => {
     const access = dataAccess({ configureIntake: vi.fn(async () => intakeSession({ mode: body.mode, targetGroupId: body.targetGroupId, stickyPriceAmount: body.stickyPriceAmount })) });
     const response = await request(app(access)).patch('/api/variation-listings/intake-session').send(body);

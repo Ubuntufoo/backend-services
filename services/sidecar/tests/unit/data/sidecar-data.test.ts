@@ -259,6 +259,7 @@ describe('sidecar data access', () => {
     await dataAccess.variationListings.configureIntake({
       mode: 'idle',
       targetGroupId: null,
+      copyConditionToken: null,
       stickyPriceAmount: 1.49,
     });
 
@@ -284,7 +285,7 @@ describe('sidecar data access', () => {
       captureSourceKey: 'station-main',
       mode: 'idle',
       targetGroupId: null,
-      targetVariationId: null,
+      copyConditionToken: null,
       stickyPriceAmount: 1.49,
     });
   });

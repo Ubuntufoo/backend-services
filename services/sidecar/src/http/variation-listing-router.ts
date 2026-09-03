@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   VariationListingTransactionConflictError,
+  buildPublicImageUrl,
   type Json,
   type VariationListingAggregateSnapshot,
   type VariationListingIntakeSession,
@@ -184,6 +185,11 @@ function groupKeyFromId(groupId: string): string {
   return `VL-G-${groupId.replaceAll('-', '').toUpperCase()}`;
 }
 
+function publicImageUrlForObjectKey(objectKey: string): string | null {
+  const publicBaseUrl = process.env.R2_PUBLIC_BASE_URL?.trim();
+  return publicBaseUrl ? buildPublicImageUrl(publicBaseUrl, objectKey) : null;
+}
+
 function serializeCopy(copy: VariationListingAggregateSnapshot['copies'][number], representativeCopyId: string | null) {
   return {
     copyId: copy.copy_id,
@@ -192,6 +198,8 @@ function serializeCopy(copy: VariationListingAggregateSnapshot['copies'][number]
     conditionNotes: copy.condition_notes,
     frontR2Key: copy.front_r2_key,
     backR2Key: copy.back_r2_key,
+    frontImageUrl: publicImageUrlForObjectKey(copy.front_r2_key),
+    backImageUrl: publicImageUrlForObjectKey(copy.back_r2_key),
     captureSourceKey: copy.capture_source_key,
     capturePairId: copy.capture_pair_id,
     capturedAt: copy.captured_at,
@@ -208,6 +216,7 @@ function serializeIntakeSession(session: VariationListingIntakeSession) {
     mode: session.mode,
     targetGroupId: session.targetGroupId,
     targetVariationId: session.targetVariationId,
+    copyConditionToken: session.copyConditionToken,
     stickyPriceAmount: session.stickyPriceAmount,
     stickyPriceCurrency: session.stickyPriceCurrency,
     pendingPair: pendingPair
@@ -216,6 +225,7 @@ function serializeIntakeSession(session: VariationListingIntakeSession) {
           mode: pendingPair.mode,
           targetGroupId: pendingPair.target_group_id,
           targetVariationId: pendingPair.target_variation_id,
+          conditionToken: pendingPair.condition_token ?? null,
           priceAmount: pendingPair.price_amount,
           priceCurrency: pendingPair.price_currency,
           frontSourceRef: pendingPair.front_source_ref,
@@ -422,6 +432,8 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
       const session = await getDataAccess().configureIntake({
         mode: body.mode,
         targetGroupId: body.targetGroupId,
+        targetVariationId: body.targetVariationId ?? null,
+        copyConditionToken: body.copyConditionToken ?? null,
         stickyPriceAmount: body.stickyPriceAmount,
       });
       res.json({ session: serializeIntakeSession(session) });

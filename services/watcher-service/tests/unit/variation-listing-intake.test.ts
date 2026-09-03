@@ -9,6 +9,12 @@ vi.mock('@ebay-inventory/data', async () => {
   const actual = await vi.importActual<typeof import('@ebay-inventory/data')>('@ebay-inventory/data');
   return {
     ...actual,
+    VARIATION_LISTING_COPY_CONDITION_TOKENS: [
+      'NEAR_MINT_OR_BETTER',
+      'EXCELLENT',
+      'VERY_GOOD',
+      'POOR',
+    ] as const,
     readVariationListingCaptureSourceKey: (env: { WATCHER_CAPTURE_SOURCE_KEY?: string } = process.env) => {
       const value = env.WATCHER_CAPTURE_SOURCE_KEY;
       if (value === undefined) return null;
@@ -41,6 +47,7 @@ function createSession(
 ): VariationListingIntakeSession {
   return {
     captureSourceKey: 'camera-1',
+    copyConditionToken: null,
     mode: 'new_variation',
     pendingPair: null,
     source: {} as VariationListingIntakeSession['source'],
@@ -58,6 +65,7 @@ function pendingPair(mode: 'new_variation' | 'duplicate_copy' = 'new_variation')
     mode,
     target_group_id: GROUP_ID,
     target_variation_id: mode === 'duplicate_copy' ? VARIATION_ID : null,
+    condition_token: mode === 'duplicate_copy' ? 'EXCELLENT' : null,
     price_amount: 1.49,
     price_currency: 'USD',
     front_source_ref: '/incoming/front.JPG',
@@ -90,6 +98,7 @@ function completionCandidate(
       startedAt: '2026-09-01T05:00:00.000Z',
       targetGroupId: GROUP_ID,
       targetVariationId: completionKind === 'duplicate_copy' ? VARIATION_ID : null,
+      conditionToken: completionKind === 'duplicate_copy' ? 'EXCELLENT' : null,
     },
   };
 }
@@ -135,6 +144,7 @@ describe('variation listing watcher routing', () => {
     expect(result).toEqual({
       captureSourceKey: 'camera-1',
       frontSourceRef: '/incoming/front.JPG',
+      frozenConditionToken: null,
       frozenMode: 'new_variation',
       frozenPriceAmount: 1.49,
       frozenPriceCurrency: 'USD',
@@ -191,6 +201,31 @@ describe('variation listing watcher routing', () => {
         frontSourceRef: '/incoming/front.JPG',
         targetGroupId: GROUP_ID,
       },
+    });
+  });
+
+  it('routes duplicate completion with the durable frozen condition', async () => {
+    const result = await routeVariationListingWatcherEvent(
+      {
+        captureSourceKey: 'camera-1',
+        image: { path: '/incoming/back.png' },
+      },
+      {
+        sessionReader: sessionReader(
+          createSession({
+            mode: 'duplicate_copy',
+            targetVariationId: VARIATION_ID,
+            copyConditionToken: 'EXCELLENT',
+            pendingPair: pendingPair('duplicate_copy') as Record<string, unknown>,
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: 'completion_candidate',
+      completionKind: 'duplicate_copy',
+      pendingPair: { conditionToken: 'EXCELLENT' },
     });
   });
 
@@ -322,7 +357,7 @@ describe('variation listing image ownership and storage', () => {
       completionCandidate('duplicate_copy'),
       {
         completionKind: 'duplicate_copy',
-        conditionToken: 'NEAR_MINT_OR_BETTER',
+        conditionToken: 'EXCELLENT',
       },
       {
         createId: () => COPY_ID,
@@ -378,7 +413,7 @@ describe('variation listing image ownership and storage', () => {
         completionCandidate('duplicate_copy'),
         {
           completionKind: 'duplicate_copy',
-          conditionToken: 'VERY_GOOD',
+          conditionToken: 'EXCELLENT',
           capturedAt: capturedAt as unknown as string,
         },
         {
@@ -401,7 +436,7 @@ describe('variation listing image ownership and storage', () => {
         completionCandidate('duplicate_copy'),
         {
           completionKind: 'duplicate_copy',
-          conditionToken: 'VERY_GOOD',
+          conditionToken: 'EXCELLENT',
         },
         {
           createId: () => COPY_ID,

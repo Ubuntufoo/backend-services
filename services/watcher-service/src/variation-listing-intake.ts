@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import {
+  VARIATION_LISTING_COPY_CONDITION_TOKENS,
   VARIATION_LISTING_MANUAL_PRICE_AMOUNTS,
   createSupabaseServiceClient,
   getVariationListingIntakeSessionBySourceKey,
@@ -12,6 +13,7 @@ import {
   type SupabaseDataClient,
   type UploadImageResult,
   type VariationListingIntakeSession,
+  type VariationListingCopyConditionToken,
   type VariationListingManualPriceAmount,
 } from '@ebay-inventory/data';
 
@@ -24,18 +26,12 @@ import type { WatcherImageDescriptor } from './image-grouping.js';
 export { VARIATION_LISTING_MANUAL_PRICE_AMOUNTS };
 export type { VariationListingManualPriceAmount };
 
-export const VARIATION_LISTING_COPY_CONDITION_TOKENS = [
-  'NEAR_MINT_OR_BETTER',
-  'EXCELLENT',
-  'VERY_GOOD',
-  'POOR',
-] as const;
-
-export type VariationListingCopyConditionToken =
-  (typeof VARIATION_LISTING_COPY_CONDITION_TOKENS)[number];
+export { VARIATION_LISTING_COPY_CONDITION_TOKENS };
+export type { VariationListingCopyConditionToken };
 export type VariationListingPendingMode = 'new_variation' | 'duplicate_copy';
 
 export interface VariationListingWatcherPendingPair {
+  conditionToken: VariationListingCopyConditionToken | null;
   expectedDesiredRevision: number;
   frontSourceRef: string;
   mode: VariationListingPendingMode;
@@ -62,6 +58,7 @@ export type VariationListingWatcherEventRoute =
       captureSourceKey: string;
       frontSourceRef: string;
       frozenMode: VariationListingPendingMode;
+      frozenConditionToken: VariationListingCopyConditionToken | null;
       frozenPriceAmount: VariationListingManualPriceAmount;
       frozenPriceCurrency: 'USD';
       frozenTargetGroupId: string;
@@ -225,6 +222,12 @@ function parsePendingPair(value: Record<string, unknown>): VariationListingWatch
         : fail('new-variation pending pair target_variation_id must be null.')
       : requireUuid(value.target_variation_id, 'pending pair target_variation_id');
   const priceAmount = requirePrice(value.price_amount, 'pending pair price_amount');
+  const conditionToken =
+    mode === 'duplicate_copy'
+      ? requireConditionToken(requireNonEmptyExact(value.condition_token, 'pending pair condition_token'))
+      : value.condition_token === null
+        ? null
+        : fail('new-variation pending pair condition_token must be null.');
 
   if (value.price_currency !== 'USD') {
     return fail('pending pair price_currency must be USD.');
@@ -250,6 +253,7 @@ function parsePendingPair(value: Record<string, unknown>): VariationListingWatch
   return {
     expectedDesiredRevision,
     frontSourceRef,
+    conditionToken,
     mode,
     pairId,
     priceAmount,
@@ -268,7 +272,11 @@ function assertSessionConfiguration(session: VariationListingIntakeSession): voi
   }
 
   if (session.mode === 'idle') {
-    if (session.targetGroupId !== null || session.targetVariationId !== null) {
+    if (
+      session.targetGroupId !== null ||
+      session.targetVariationId !== null ||
+      session.copyConditionToken !== null
+    ) {
       fail('idle session must not have a target.');
     }
     return;
@@ -276,6 +284,7 @@ function assertSessionConfiguration(session: VariationListingIntakeSession): voi
 
   if (session.mode === 'new_variation') {
     requireUuid(session.targetGroupId, 'targetGroupId');
+    if (session.copyConditionToken !== null) fail('new-variation session must not have copy condition.');
     if (session.targetVariationId !== null) {
       fail('new-variation session must not have targetVariationId.');
     }
@@ -285,6 +294,7 @@ function assertSessionConfiguration(session: VariationListingIntakeSession): voi
   if (session.mode === 'duplicate_copy') {
     requireUuid(session.targetGroupId, 'targetGroupId');
     requireUuid(session.targetVariationId, 'targetVariationId');
+    requireConditionToken(requireNonEmptyExact(session.copyConditionToken, 'copyConditionToken'));
     return;
   }
 
@@ -309,6 +319,9 @@ function assertPendingMatchesSession(
     session.stickyPriceCurrency !== pendingPair.priceCurrency
   ) {
     fail('pending pair price disagrees with current durable session price.');
+  }
+  if ((session.copyConditionToken ?? null) !== pendingPair.conditionToken) {
+    fail('pending pair condition disagrees with current durable session condition.');
   }
 }
 
@@ -375,6 +388,7 @@ export async function routeVariationListingWatcherEvent(
       captureSourceKey,
       frontSourceRef: sourceRef,
       frozenMode: session.mode,
+      frozenConditionToken: session.copyConditionToken,
       frozenPriceAmount: requirePrice(session.stickyPriceAmount, 'stickyPriceAmount'),
       frozenPriceCurrency: 'USD',
       frozenTargetGroupId: targetGroupId,
@@ -474,7 +488,13 @@ export async function storeVariationListingCompletionCandidate(
     return fail('storage handoff completion kind does not match the frozen pending pair mode.');
   }
 
-  const conditionToken = requireConditionToken(handoff.conditionToken);
+  const handoffConditionToken = requireConditionToken(handoff.conditionToken);
+  const conditionToken = route.completionKind === 'duplicate_copy'
+    ? requireConditionToken(requireNonEmptyExact(route.pendingPair.conditionToken, 'pending copy conditionToken'))
+    : handoffConditionToken;
+  if (route.completionKind === 'duplicate_copy' && handoffConditionToken !== conditionToken) {
+    return fail('duplicate-copy completion condition disagrees with frozen pending condition.');
+  }
   const newVariationHandoff = handoff.completionKind === 'new_variation'
     ? {
         selectorValue: requireNonEmptyExact(handoff.selectorValue, 'selectorValue'),

@@ -19,8 +19,28 @@ describe('simplified variation RPC gateway',()=>{ it('maps frozen operation plan
 
 
 describe('YP3.3 RPC parity',()=>{
+  it('maps duplicate intake configuration and frozen copy condition', async () => {
+    const session = {
+      capture_source_key: 'camera', mode: 'duplicate_copy',
+      target_group_id: '11111111-1111-4111-8111-111111111111',
+      target_variation_id: '22222222-2222-4222-8222-222222222222',
+      copy_condition_token: 'EXCELLENT', sticky_price_amount: 1.49,
+      sticky_price_currency: 'USD', pending_pair: null,
+      created_at: 'now', updated_at: 'now',
+    };
+    const c = clientFor('configure_variation_listing_intake', { session_row: session }, args => {
+      expect(args).toMatchObject({ p_copy_condition_token: 'EXCELLENT' });
+    });
+    await expect(createSupabaseVariationListingTransactionGateway(c).configureIntake({
+      captureSourceKey: 'camera', mode: 'duplicate_copy',
+      targetGroupId: session.target_group_id,
+      targetVariationId: session.target_variation_id,
+      copyConditionToken: 'EXCELLENT', stickyPriceAmount: 1.49,
+    })).resolves.toMatchObject({ copy_condition_token: 'EXCELLENT' });
+  });
+
   it('accepts equivalent start timestamps with different offset spelling',async()=>{
-    const session={capture_source_key:'camera',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,sticky_price_amount:1.49,sticky_price_currency:'USD',pending_pair:{pair_id:'44444444-4444-4444-8444-444444444444',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,price_amount:1.49,price_currency:'USD',front_source_ref:'front',started_at:'2026-09-01T05:00:00+00:00',expected_desired_revision:0},created_at:'now',updated_at:'now'};
+    const session={capture_source_key:'camera',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,copy_condition_token:null,sticky_price_amount:1.49,sticky_price_currency:'USD',pending_pair:{pair_id:'44444444-4444-4444-8444-444444444444',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,price_amount:1.49,price_currency:'USD',condition_token:null,front_source_ref:'front',started_at:'2026-09-01T05:00:00+00:00',expected_desired_revision:0},created_at:'now',updated_at:'now'};
     const c=clientFor('start_variation_listing_intake_pair',{session_row:session});
     await expect(createSupabaseVariationListingTransactionGateway(c).startIntakePair({captureSourceKey:'camera',pairId:'44444444-4444-4444-8444-444444444444',frontSourceRef:'front',startedAt:'2026-09-01T01:00:00-04:00'})).resolves.toMatchObject({capture_source_key:'camera'});
   });

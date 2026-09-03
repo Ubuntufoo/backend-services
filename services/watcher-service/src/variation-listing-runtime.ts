@@ -143,7 +143,9 @@ export function createVariationListingRuntimeProcessor(
       }
 
       const completionRoute: Extract<VariationListingWatcherEventRoute, { kind: 'completion_candidate' }> = route;
-      const conditionToken = await getGroupConditionToken(route.pendingPair.targetGroupId);
+      const conditionToken = route.completionKind === 'new_variation'
+        ? await getGroupConditionToken(route.pendingPair.targetGroupId)
+        : route.pendingPair.conditionToken ?? fail('duplicate-copy pending pair is missing frozen condition.');
       const copyId = deriveCaptureOwnedUuid(route.pendingPair.pairId, 'copy');
       const variationId = route.completionKind === 'duplicate_copy'
         ? route.pendingPair.targetVariationId ?? fail('duplicate-copy route is missing targetVariationId.')

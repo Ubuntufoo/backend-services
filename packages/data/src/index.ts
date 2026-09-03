@@ -86,6 +86,12 @@ export {
   type ReserveAiModelUsageWindowResult,
 } from './repositories/ai-model-usage.js';
 export {
+  VARIATION_LISTING_COPY_CONDITION_TOKENS,
+  isVariationListingCopyConditionCompatible,
+  isVariationListingCopyConditionToken,
+  type VariationListingCopyConditionToken,
+} from './variation-listing-condition.js';
+export {
   buildR2ImageObjectKey,
   buildPublicImageUrl,
   createR2ImageStorageClient,

@@ -21,28 +21,77 @@ const manualPriceAmountSchema = z.union([
   z.literal(2.49),
 ]);
 
-const variationListingIntakeModeSchema = z.enum(['idle', 'new_variation']);
+const variationListingIntakeModeSchema = z.enum(['idle', 'new_variation', 'duplicate_copy']);
 
 export const configureVariationListingIntakeRequestSchema = z
   .object({
     mode: variationListingIntakeModeSchema,
     targetGroupId: z.string().uuid().nullable(),
+    targetVariationId: z.string().uuid().nullable().default(null),
+    copyConditionToken: z.enum(['NEAR_MINT_OR_BETTER', 'EXCELLENT', 'VERY_GOOD', 'POOR']).nullable().default(null),
     stickyPriceAmount: manualPriceAmountSchema,
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.mode === 'idle' && value.targetGroupId !== null) {
+    if (value.mode === 'idle') {
+      if (value.targetGroupId !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'targetGroupId must be null while intake is idle',
+          path: ['targetGroupId'],
+        });
+      }
+      if (value.targetVariationId !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'targetVariationId must be null while intake is idle',
+          path: ['targetVariationId'],
+        });
+      }
+      if (value.copyConditionToken !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'copyConditionToken must be null while intake is idle',
+          path: ['copyConditionToken'],
+        });
+      }
+      return;
+    }
+
+    if (value.targetGroupId === null) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'targetGroupId must be null while intake is idle',
+        message: `targetGroupId is required for ${value.mode} intake`,
         path: ['targetGroupId'],
       });
     }
-    if (value.mode === 'new_variation' && value.targetGroupId === null) {
+
+    if (value.mode === 'new_variation' && value.targetVariationId !== null) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'targetGroupId is required for new_variation intake',
-        path: ['targetGroupId'],
+        message: 'targetVariationId must be null for new_variation intake',
+        path: ['targetVariationId'],
+      });
+    }
+    if (value.mode === 'new_variation' && value.copyConditionToken !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'copyConditionToken must be null for new_variation intake',
+        path: ['copyConditionToken'],
+      });
+    }
+    if (value.mode === 'duplicate_copy' && value.targetVariationId === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'targetVariationId is required for duplicate_copy intake',
+        path: ['targetVariationId'],
+      });
+    }
+    if (value.mode === 'duplicate_copy' && value.copyConditionToken === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'copyConditionToken is required for duplicate_copy intake',
+        path: ['copyConditionToken'],
       });
     }
   });

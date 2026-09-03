@@ -9,6 +9,7 @@ import type {
   VariationListingVariationRow,
 } from './database.js';
 import type { VariationListingManualPriceAmount } from './variation-listing-pricing.js';
+import type { VariationListingCopyConditionToken } from './variation-listing-condition.js';
 
 export const VARIATION_LISTING_CAPTURE_SOURCE_KEY_ENV_VAR = 'WATCHER_CAPTURE_SOURCE_KEY' as const;
 
@@ -153,6 +154,7 @@ export interface CreateVariationListingGroupInput {
 
 export interface ConfigureVariationListingIntakeInput {
   captureSourceKey: string;
+  copyConditionToken: VariationListingCopyConditionToken | null;
   mode: 'idle' | 'new_variation' | 'duplicate_copy';
   stickyPriceAmount: VariationListingManualPriceAmount;
   targetGroupId: string | null;

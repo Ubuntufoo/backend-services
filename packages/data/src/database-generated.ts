@@ -823,6 +823,7 @@ export type Database = {
         Row: {
           capture_source_key: string;
           created_at: string;
+          copy_condition_token: string | null;
           mode: string;
           pending_pair: Json | null;
           sticky_price_amount: number;
@@ -834,6 +835,7 @@ export type Database = {
         Insert: {
           capture_source_key: string;
           created_at?: string;
+          copy_condition_token?: string | null;
           mode?: string;
           pending_pair?: Json | null;
           sticky_price_amount?: number;
@@ -845,6 +847,7 @@ export type Database = {
         Update: {
           capture_source_key?: string;
           created_at?: string;
+          copy_condition_token?: string | null;
           mode?: string;
           pending_pair?: Json | null;
           sticky_price_amount?: number;
@@ -1071,7 +1074,7 @@ export type Database = {
         Returns: { group_row: Json }[];
       };
       configure_variation_listing_intake: {
-        Args: { p_capture_source_key: string; p_mode: string; p_sticky_price_amount: number; p_target_group_id: string | null; p_target_variation_id: string | null };
+        Args: { p_capture_source_key: string; p_copy_condition_token: string | null; p_mode: string; p_sticky_price_amount: number; p_target_group_id: string | null; p_target_variation_id: string | null };
         Returns: { session_row: Json }[];
       };
       start_variation_listing_intake_pair: {
