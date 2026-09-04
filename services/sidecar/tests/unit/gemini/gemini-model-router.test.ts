@@ -2,6 +2,7 @@ import type { ResolvedAiModelRoute } from '@ebay-inventory/data';
 import { describe, expect, it, vi } from 'vitest';
 import {
   classifyGeminiFallbackKind,
+  executeGeminiRouteCascade,
   GeminiDraftServiceError,
   GeminiDraftTitleOverflowError,
   GeminiDraftValidationError,
@@ -66,39 +67,68 @@ describe('generateListingDraftWithFallback', () => {
     expect(result.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'succeeded']);
   });
 
-  it('falls through the canonical four-model route order', async () => {
+  it('falls through the configured six-model stable route order', async () => {
     const executeRoute = vi
       .fn()
       .mockRejectedValueOnce(new GeminiDraftServiceError('429 rate limit exceeded'))
       .mockRejectedValueOnce(new GeminiDraftServiceError('RESOURCE_EXHAUSTED: quota reached'))
       .mockRejectedValueOnce(new GeminiDraftServiceError('503 temporarily unavailable'))
-      .mockResolvedValueOnce({ title: 'draft-4' });
+      .mockRejectedValueOnce(new GeminiDraftServiceError('503 temporarily unavailable'))
+      .mockRejectedValueOnce(new GeminiDraftServiceError('503 temporarily unavailable'))
+      .mockResolvedValueOnce({ title: 'draft-6' });
     const routes = [
       createRoute(),
       createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 }),
-      createRoute({ modelName: 'gemini-3.5-flash', routeOrder: 3 }),
-      createRoute({ modelName: 'gemini-3-flash-preview', routeOrder: 4 }),
+      createRoute({ modelName: 'gemini-3.8-flash', routeOrder: 3 }),
+      createRoute({ modelName: 'gemini-3.7-flash', routeOrder: 4 }),
+      createRoute({ modelName: 'gemini-3.6-flash', routeOrder: 5 }),
+      createRoute({ modelName: 'gemini-3.5-flash', routeOrder: 6 }),
     ];
 
     const result = await generateListingDraftWithFallback({
       executeRoute,
       incrementDailyUsage: vi.fn(async () => undefined),
-      now: () => new Date('2026-06-01T12:00:00.000Z'),
+      now: () => new Date('2026-09-04T12:00:00.000Z'),
       routes,
     });
 
-    expect(executeRoute).toHaveBeenCalledTimes(4);
-    expect(executeRoute).toHaveBeenNthCalledWith(1, routes[0]);
-    expect(executeRoute).toHaveBeenNthCalledWith(2, routes[1]);
-    expect(executeRoute).toHaveBeenNthCalledWith(3, routes[2]);
-    expect(executeRoute).toHaveBeenNthCalledWith(4, routes[3]);
-    expect(result.selectedRoute.modelName).toBe('gemini-3-flash-preview');
+    expect(executeRoute).toHaveBeenCalledTimes(6);
+    routes.forEach((route, index) => expect(executeRoute).toHaveBeenNthCalledWith(index + 1, route));
+    expect(result.selectedRoute.modelName).toBe('gemini-3.5-flash');
     expect(result.attempts.map((attempt) => attempt.status)).toEqual([
-      'failed',
-      'failed',
-      'failed',
-      'succeeded',
+      'failed', 'failed', 'failed', 'failed', 'failed', 'succeeded',
     ]);
+  });
+
+  it('shared route cascade resolves free-tier structured routes and owns usage accounting', async () => {
+    const routes = [
+      createRoute(),
+      createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 }),
+    ];
+    const resolveForTask = vi.fn(async () => routes);
+    const incrementGeminiCallsUsed = vi.fn(async () => undefined);
+    const executeRoute = vi
+      .fn()
+      .mockRejectedValueOnce(new GeminiDraftServiceError('503 unavailable'))
+      .mockResolvedValueOnce({ title: 'fallback' });
+
+    const result = await executeGeminiRouteCascade({
+      dataAccess: { aiModelRoutes: { resolveForTask }, dailyUsage: { incrementGeminiCallsUsed } },
+      executeRoute,
+      now: () => new Date('2026-09-04T12:00:00.000Z'),
+      requireImages: true,
+    });
+
+    expect(resolveForTask).toHaveBeenCalledWith({
+      freeTierOnly: true,
+      provider: 'google',
+      requireImages: true,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+    expect(incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
+    expect(result.selectedRoute.modelName).toBe('gemini-3.1-flash-lite');
   });
 
   it('falls back on quota failures', async () => {
@@ -219,6 +249,30 @@ describe('generateListingDraftWithFallback', () => {
     expect(onAttemptStarted).toHaveBeenCalledTimes(1);
   });
 
+  it('does not treat a successful-attempt audit failure as a provider failure', async () => {
+    const executeRoute = vi.fn(async () => ({ title: 'draft-1' }));
+    const auditError = new Error('audit persistence failed');
+    const onAttemptSucceeded = vi.fn(async () => {
+      throw auditError;
+    });
+
+    await expect(
+      generateListingDraftWithFallback({
+        executeRoute,
+        incrementDailyUsage: vi.fn(async () => undefined),
+        now: () => new Date('2026-06-01T12:00:00.000Z'),
+        onAttemptSucceeded,
+        routes: [
+          createRoute(),
+          createRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 }),
+        ],
+      })
+    ).rejects.toBe(auditError);
+
+    expect(executeRoute).toHaveBeenCalledTimes(1);
+    expect(onAttemptSucceeded).toHaveBeenCalledTimes(1);
+  });
+
   it('marks exhausted fallback failures recoverably', async () => {
     const executeRoute = vi
       .fn()
@@ -256,6 +310,33 @@ describe('classifyGeminiFallbackKind', () => {
       classifyGeminiFallbackKind(new GeminiDraftServiceError('Gemini returned invalid JSON for the listing draft.'))
     ).toBe('none');
   });
+
+  it('detects a provider 503 nested beneath a Gemini service error', () => {
+    const providerError = Object.assign(new Error('high demand'), { status: 503 });
+    const wrapped = new GeminiDraftServiceError('variation identity generation failed', {
+      cause: providerError,
+    });
+    expect(classifyGeminiFallbackKind(wrapped)).toBe('unavailable');
+  });
+
+  it('does not fallback when deterministic validation is nested beneath a service error', () => {
+    const validation = new GeminiDraftValidationError([
+      { code: 'custom', message: 'schema quota field is invalid', path: ['title'] } as never,
+    ]);
+    const wrapped = new GeminiDraftServiceError('Gemini response processing failed.', {
+      cause: validation,
+    });
+
+    expect(classifyGeminiFallbackKind(wrapped)).toBe('none');
+  });
+
+  it.each([400, 401, 403])(
+    'does not fallback on known non-429 client error %s even when text mentions quota',
+    (status) => {
+      const providerError = Object.assign(new Error('quota policy rejected request'), { status });
+      expect(classifyGeminiFallbackKind(providerError)).toBe('none');
+    }
+  );
 
   it('does not fallback on deterministic protected title overflow', () => {
     expect(

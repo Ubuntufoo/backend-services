@@ -15,6 +15,7 @@ import {
   type VariationListingSerialEvidence,
   type VariationListingYearEvidence,
   validateGenerateVariationListingIdentityInput,
+  variationListingSeasonEvidenceSchema,
   variationListingIdentityModelResponseSchema,
 } from './variation-listing-identity-contracts.js';
 import { buildVariationListingIdentityPrompt } from './variation-listing-identity-prompt.js';
@@ -124,16 +125,23 @@ function validateYearEvidence(
 }
 
 function validateSeasonEvidence(
-  evidence: VariationListingIdentityModelResponse['seasonEvidence']
+  evidence: VariationListingIdentityModelResponse['seasonEvidence'],
+  warnings: string[]
 ): NonNullable<VariationListingIdentityModelResponse['seasonEvidence']> | null {
   if (!evidence) return null;
   const season = normalizeSportsSeasonRange(evidence.season);
   if (!season) {
-    throw new GeminiDraftServiceError('Variation identity seasonEvidence is not an adjacent sports season.');
+    warnings.push(
+      'Gemini seasonEvidence was ignored because it was not an adjacent sports season.'
+    );
+    return null;
   }
   const claims = [...evidence.visibleText.matchAll(/\b(?:19|20)\d{2}\s*[-/]\s*(?:\d{2}|\d{4})\b/gu)];
   if (claims.length !== 1 || normalizeSportsSeasonRange(claims[0]![0]) !== season) {
-    throw new GeminiDraftServiceError('Variation identity seasonEvidence is inconsistent with visibleText.');
+    warnings.push(
+      'Gemini seasonEvidence was ignored because visibleText did not contain exactly one matching adjacent sports season.'
+    );
+    return null;
   }
   return { ...evidence, season, visibleText: normalizeText(evidence.visibleText) };
 }
@@ -321,15 +329,36 @@ export function parseVariationListingIdentityResponse(
       cause: error,
     });
   }
-  const parsedResult = variationListingIdentityModelResponseSchema.safeParse(json);
+
+  // Season evidence is optional and must not abort identity capture when Gemini
+  // returns a malformed season-only object. Keep strict validation for every
+  // other response key while dropping only this optional field.
+  let responseForValidation = json;
+  let malformedSeasonEvidence = false;
+  if (json !== null && typeof json === 'object' && !Array.isArray(json) && 'seasonEvidence' in json) {
+    const seasonResult = variationListingSeasonEvidenceSchema.nullable().optional().safeParse(
+      (json as Record<string, unknown>).seasonEvidence
+    );
+    if (!seasonResult.success) {
+      responseForValidation = { ...(json as Record<string, unknown>) };
+      delete (responseForValidation as Record<string, unknown>).seasonEvidence;
+      malformedSeasonEvidence = true;
+    }
+  }
+  const parsedResult = variationListingIdentityModelResponseSchema.safeParse(responseForValidation);
   if (!parsedResult.success) throw new GeminiDraftValidationError(parsedResult.error.issues);
   const parsed = parsedResult.data;
-  const warnings = dedupeStrings(parsed.warnings);
+  const warnings = dedupeStrings([
+    ...parsed.warnings,
+    ...(malformedSeasonEvidence
+      ? ['Gemini seasonEvidence was ignored because the optional field was malformed.']
+      : []),
+  ]);
   const reviewNotes = dedupeStrings(parsed.reviewNotes);
   const { facts, identity } = normalizeFacts(parsed.facts);
   const explicitYear = validatedInput.userHints?.explicitYear;
   const yearEvidence = validateYearEvidence(parsed.yearEvidence, explicitYear, warnings);
-  const seasonEvidence = validateSeasonEvidence(parsed.seasonEvidence);
+  const seasonEvidence = validateSeasonEvidence(parsed.seasonEvidence, warnings);
   const serialEvidence = validateSerialEvidence(parsed.serialEvidence);
   if (explicitYear) identity.year = explicitYear;
   else if (yearEvidence) identity.year = yearEvidence.year;

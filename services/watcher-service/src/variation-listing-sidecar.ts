@@ -22,6 +22,15 @@ export interface VariationListingSidecarClientDependencies {
   fetch?: typeof fetch;
 }
 
+export class VariationListingSidecarRetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VariationListingSidecarRetryableError';
+  }
+}
+
+const RETRYABLE_GEMINI_FALLBACK_KINDS = new Set(['rate_limit', 'quota_exceeded', 'unavailable']);
+
 function fail(message: string): never {
   throw new Error(`Variation listing Sidecar client failed: ${message}`);
 }
@@ -98,6 +107,17 @@ export async function requestVariationListingIdentityHandoff(
       : typeof payload?.error === 'string'
         ? payload.error
         : `HTTP ${response.status}`;
+    if (
+      response.status === 503 &&
+      payload?.error === 'gemini_routes_temporarily_unavailable' &&
+      payload?.retryable === true &&
+      typeof payload.fallbackKind === 'string' &&
+      RETRYABLE_GEMINI_FALLBACK_KINDS.has(payload.fallbackKind)
+    ) {
+      throw new VariationListingSidecarRetryableError(
+        `Variation listing Sidecar identity request is retryable: ${message}`
+      );
+    }
     return fail(`identity request failed: ${message}`);
   }
   const selectorValue = payload?.selectorValue;

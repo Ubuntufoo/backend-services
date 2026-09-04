@@ -1,5 +1,12 @@
 import chokidar, { type FSWatcher, type WatchOptions } from 'chokidar';
 import { basename, isAbsolute, normalize, resolve } from 'node:path';
+import {
+  DEFAULT_AI_GENERATION_MAX_ATTEMPTS,
+  DEFAULT_RECOVERABLE_RETRY_DELAY_FIRST_MS,
+  DEFAULT_RECOVERABLE_RETRY_DELAY_NEXT_MS,
+  getRecoverableRetryDelayMs,
+  resolvePositiveIntegerSetting,
+} from '@ebay-inventory/types';
 
 import { createWatcherServiceConfig, type WatcherServiceConfig, type WatcherServiceConfigInput } from './config/index.js';
 import { createEmptyWatcherGroupingState, type WatcherGroupingState } from './image-grouping.js';
@@ -13,6 +20,7 @@ import {
   createVariationListingRuntimeProcessor,
   type VariationListingRuntimeProcessor,
 } from './variation-listing-runtime.js';
+import { VariationListingSidecarRetryableError } from './variation-listing-sidecar.js';
 
 export interface WatcherRuntimeState {
   pendingQueue: string[];
@@ -176,12 +184,73 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
 
   let activeDrainPromise: Promise<void> | null = null;
   let closePromise: Promise<void> | null = null;
+  const variationRetryAttempts = new Map<string, number>();
+  let variationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let blockedVariationPath: string | null = null;
+  const consumedVariationPaths = new Set<string>();
+  const legacyPathHints = new Set<string>();
 
   const watcher = watch(config.incomingDirectory, WATCHER_RUNTIME_WATCH_OPTIONS);
 
+  function scheduleVariationRetry(sourcePath: string): boolean {
+    if (state.isClosed) return false;
+    const attemptsUsed = (variationRetryAttempts.get(sourcePath) ?? 0) + 1;
+    variationRetryAttempts.set(sourcePath, attemptsUsed);
+    // Preserve process-level retry settings while allowing explicit watcher
+    // embedder/test overrides to win on a per-key basis.
+    const retryEnv = {
+      ...process.env,
+      ...(input.configInput?.env ?? {}),
+    } as NodeJS.ProcessEnv;
+    const maxAttempts = resolvePositiveIntegerSetting(
+      retryEnv.SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI,
+      DEFAULT_AI_GENERATION_MAX_ATTEMPTS
+    );
+    if (attemptsUsed >= maxAttempts) {
+      logger.error('variation_retry_exhausted', { sourcePath, attemptsUsed, maxAttempts });
+      return false;
+    }
+    const firstDelayMs = resolvePositiveIntegerSetting(
+      retryEnv.SIDECAR_JOB_RETRY_DELAY_FIRST_MS,
+      DEFAULT_RECOVERABLE_RETRY_DELAY_FIRST_MS
+    );
+    const nextDelayMs = resolvePositiveIntegerSetting(
+      retryEnv.SIDECAR_JOB_RETRY_DELAY_NEXT_MS,
+      DEFAULT_RECOVERABLE_RETRY_DELAY_NEXT_MS
+    );
+    const delayMs = getRecoverableRetryDelayMs(attemptsUsed, firstDelayMs, nextDelayMs);
+    logger.info('variation_retry_scheduled', { sourcePath, attemptsUsed, maxAttempts, delayMs });
+    // There is one authoritative retry deadline. New add events append to the
+    // retained queue but never replace or bypass an existing timer.
+    if (variationRetryTimer) return true;
+    variationRetryTimer = setTimeout(() => {
+      variationRetryTimer = null;
+      void drainQueue();
+    }, delayMs);
+    return true;
+  }
+
+  function removeConsumedVariationInputs(): void {
+    if (consumedVariationPaths.size === 0 || state.pendingQueue.length === 0) return;
+
+    const retained = state.pendingQueue.filter((sourcePath) => !consumedVariationPaths.has(sourcePath));
+    if (retained.length === state.pendingQueue.length) return;
+    state.pendingQueue.length = 0;
+    state.pendingQueue.push(...retained);
+  }
+
   async function drainQueue(): Promise<void> {
-    if (state.isClosed || state.isProcessing || state.pendingQueue.length === 0) {
+    removeConsumedVariationInputs();
+    if (state.isClosed || state.isProcessing || variationRetryTimer || state.pendingQueue.length === 0) {
       return;
+    }
+    if (blockedVariationPath) {
+      // A terminal variation failure is retained for operator recovery. The
+      // retained path is always unshifted ahead of newly arrived inputs; only
+      // explicit removal by an operator clears the terminal gate.
+      if (state.pendingQueue.includes(blockedVariationPath)) return;
+      variationRetryAttempts.delete(blockedVariationPath);
+      blockedVariationPath = null;
     }
 
     state.isProcessing = true;
@@ -193,6 +262,9 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
           state.pendingQueue.length = 0;
 
           let variationRetryInputs: string[] = [];
+          let variationRetrySource: string | null = null;
+          let variationRetryable = false;
+          let legacyInputsForBatch: string[] = [];
           try {
             const legacyInputs: string[] = [];
             let variationProcessedCount = 0;
@@ -201,20 +273,36 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                 legacyInputs.push(sourcePath);
                 continue;
               }
+              if (consumedVariationPaths.has(sourcePath)) {
+                continue;
+              }
+              if (legacyPathHints.has(sourcePath)) {
+                legacyInputs.push(sourcePath);
+                continue;
+              }
               try {
                 const outcome = await variationRuntime.process(sourcePath);
                 if (outcome.kind === 'legacy') {
                   legacyInputs.push(sourcePath);
+                  // Preserve the first classification across retries. A new
+                  // durable variation session must not re-route this already
+                  // classified legacy input.
+                  legacyPathHints.add(sourcePath);
                   continue;
                 }
                 variationProcessedCount += 1;
+                consumedVariationPaths.add(sourcePath);
+                variationRetryAttempts.delete(sourcePath);
                 logger.info(`variation_${outcome.kind}`, outcome);
               } catch (error) {
                 variationRetryInputs = [...legacyInputs, ...snapshot.slice(sourceIndex)];
+                variationRetrySource = sourcePath;
+                variationRetryable = error instanceof VariationListingSidecarRetryableError;
                 throw error;
               }
             }
 
+            legacyInputsForBatch = legacyInputs;
             const result = legacyInputs.length > 0
               ? await processBatch(
                   {
@@ -252,14 +340,26 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               pendingQueueSize: state.pendingQueue.length,
               processedListingCount: result.processedListings.length,
             });
+            for (const sourcePath of legacyInputsForBatch) {
+              if (!state.pendingQueue.includes(sourcePath)) {
+                legacyPathHints.delete(sourcePath);
+              }
+            }
           } catch (error) {
             if (error instanceof WatcherBatchProcessingError) {
+              const retryInputs = new Set(error.retryInputs);
+              for (const sourcePath of legacyInputsForBatch) {
+                if (!retryInputs.has(sourcePath) && !state.pendingQueue.includes(sourcePath)) {
+                  legacyPathHints.delete(sourcePath);
+                }
+              }
               state.groupingState = cloneWatcherGroupingState(error.groupingState);
               state.pendingQueue.unshift(...cloneWatcherInputs(error.retryInputs));
               shouldResumeDraining = false;
             }
             if (!(error instanceof WatcherBatchProcessingError)) {
               state.pendingQueue.unshift(...variationRetryInputs);
+              removeConsumedVariationInputs();
               shouldResumeDraining = false;
             }
 
@@ -277,6 +377,15 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               stack: error instanceof Error ? error.stack : undefined,
             });
 
+            if (variationRetryable && variationRetrySource) {
+              if (!scheduleVariationRetry(variationRetrySource)) {
+                blockedVariationPath = variationRetrySource;
+              }
+            } else if (variationRetrySource) {
+              variationRetryAttempts.delete(variationRetrySource);
+              blockedVariationPath = variationRetrySource;
+            }
+
             if (error instanceof WatcherBatchProcessingError || variationRetryInputs.length > 0) {
               break;
             }
@@ -285,6 +394,12 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
       } finally {
         state.isProcessing = false;
         activeDrainPromise = null;
+
+        if (!state.isClosed && !variationRetryTimer && !blockedVariationPath && state.pendingQueue.length === 0) {
+          // Keep duplicate suppression bounded to the active drain/retry
+          // sequence; a later filesystem add may represent a replacement file.
+          consumedVariationPaths.clear();
+        }
 
         if (!state.isClosed && shouldResumeDraining && state.pendingQueue.length > 0) {
           void drainQueue();
@@ -301,6 +416,12 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
     }
 
     const normalizedPath = normalizeWatcherRuntimePath(pathValue);
+    if (variationRuntime && consumedVariationPaths.has(normalizedPath)) {
+      logger.info('variation_input_ignored_consumed', {
+        path: normalizedPath,
+      });
+      return;
+    }
     state.pendingQueue.push(normalizedPath);
     logger.info('file_detected', {
       path: normalizedPath,
@@ -337,6 +458,10 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
 
       closePromise = (async () => {
         state.isClosed = true;
+        if (variationRetryTimer) {
+          clearTimeout(variationRetryTimer);
+          variationRetryTimer = null;
+        }
         await watcher.close();
 
         if (activeDrainPromise) {

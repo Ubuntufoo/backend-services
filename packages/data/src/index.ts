@@ -261,6 +261,7 @@ export {
   type MarkVariationListingPublishReadyInput,
   type ReserveVariationListingActionRevisionInput,
   type UpdateVariationListingManualPriceInput,
+  type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingCopyAvailabilityInput,
   type UpdateVariationListingRepresentativeCopyInput,
   type VariationListingAggregateSnapshot,

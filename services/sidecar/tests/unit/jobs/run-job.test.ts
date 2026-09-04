@@ -53,6 +53,21 @@ vi.mock('@/pricing/provider-resolver.js', async () => {
   };
 });
 
+// Keep the pricing tests hermetic: the production research pipeline performs
+// an optional active-market shadow after baseline pricing. Prevent that shadow
+// from initializing OAuth/eBay when no explicit traversal seam is supplied.
+vi.mock('@/api/index.js', async () => {
+  const actual = await vi.importActual<typeof import('@/api/index.js')>('@/api/index.js');
+  return {
+    ...actual,
+    EbaySellerApi: class OfflineEbaySellerApi extends actual.EbaySellerApi {
+      override async initialize(): Promise<void> {
+        throw new Error('active-market shadow disabled in unit tests');
+      }
+    },
+  };
+});
+
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   PublishListingError,
@@ -63,7 +78,12 @@ import {
 import { PublishImageUrlReadinessValidationError } from '@/ebay/image-url-readiness.js';
 import type { GeneratedListingDraft } from '@/gemini/contracts.js';
 import { runSidecarJob, type RunSidecarJobOptions } from '@/jobs/index.js';
-import { GeminiDraftTitleOverflowError } from '@/gemini/index.js';
+import {
+  GeminiDraftServiceError,
+  GeminiDraftTitleOverflowError,
+  GeminiDraftValidationError,
+  parseGeneratedDraft,
+} from '@/gemini/index.js';
 import {
   ApifyPricingProviderError,
   FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
@@ -1110,11 +1130,13 @@ describe('runSidecarJob', () => {
       aiModelRoutes: [],
     });
     const generateListingDraftMock = vi.fn();
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>();
 
     const result = await runSidecarJob('job-generate-ai', {
       dataAccess,
       generateListingDraft: generateListingDraftMock,
       now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
     });
 
     expect(result.job.status).toBe('queued');
@@ -1144,6 +1166,7 @@ describe('runSidecarJob', () => {
     });
     expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).not.toHaveBeenCalled();
     expect(generateListingDraftMock).not.toHaveBeenCalled();
+    expect(prepareListingDraftMock).not.toHaveBeenCalled();
     expect(dataAccess.jobs.updateGeminiAttemptAudit).not.toHaveBeenCalled();
     expect(dataAccess.aiModelAttempts.create).not.toHaveBeenCalled();
     expect(dataAccess.listings.updateWorkflowState).not.toHaveBeenCalled();
@@ -3023,6 +3046,136 @@ describe('runSidecarJob', () => {
     expect(dataAccess.listingPriceResearch.create).not.toHaveBeenCalled();
   });
 
+  it('does not requeue validation failures wrapped by Gemini service errors', async () => {
+    const dataAccess = createDataAccess();
+    const validation = new GeminiDraftValidationError([
+      { code: 'custom', message: 'response schema is invalid', path: ['title'] } as never,
+    ]);
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>(async () => ({
+      diagnostics: {
+        latency: { prepareDraftMs: 0 },
+        payload: { imageCount: 1 },
+      },
+      input: { imageUrls: ['https://cdn.example.com/card.jpg'], listingId: 'LIST-001' },
+      execute: async () => {
+        throw new GeminiDraftServiceError('Gemini response processing failed.', {
+          cause: validation,
+        });
+      },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(result.listing?.status).toBe('assets_ready');
+    expect(result.listing?.sub_status).toBe('ready_to_generate');
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['invalid JSON', 'network quota'],
+    ['non-object JSON', '[]'],
+  ])('does not requeue deterministic parser %s failures from the real parser', async (_label, rawText) => {
+    const dataAccess = createDataAccess({
+      aiModelRoutes: [
+        resolvedAiModelRoute,
+        createResolvedAiModelRoute({ modelName: 'gemini-3.1-flash-lite', routeOrder: 2 }),
+      ],
+    });
+    const execute = vi.fn(async () => ({
+      diagnostics: { payload: { imageCount: 1 } },
+      draft: parseGeneratedDraft(rawText, { source: 'parser-test' }),
+    }));
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>(async () => ({
+      diagnostics: { latency: { prepareDraftMs: 0 }, payload: { imageCount: 1 } },
+      input: { imageUrls: ['https://cdn.example.com/card.jpg'], listingId: 'LIST-001' },
+      execute,
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(dataAccess.dailyUsage.incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
+  });
+
+  it('does not requeue the parser title-overflow message when wrapped as a generic service error', async () => {
+    const dataAccess = createDataAccess();
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>(async () => ({
+      diagnostics: { latency: { prepareDraftMs: 0 }, payload: { imageCount: 1 } },
+      input: { imageUrls: ['https://cdn.example.com/card.jpg'], listingId: 'LIST-001' },
+      execute: async () => {
+        throw new GeminiDraftServiceError(
+          'Generated listing title exceeds 80 characters after backend normalization.'
+        );
+      },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(result.job.last_error_code).toBe('generate_ai_failed');
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
+  });
+
+  it('does not requeue a nested Gemini API-key failure', async () => {
+    const dataAccess = createDataAccess();
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>(async () => ({
+      diagnostics: { latency: { prepareDraftMs: 0 }, payload: { imageCount: 1 } },
+      input: { imageUrls: ['https://cdn.example.com/card.jpg'], listingId: 'LIST-001' },
+      execute: async () => {
+        throw new GeminiDraftServiceError('Gemini execution failed.', {
+          cause: new GeminiDraftServiceError('GEMINI_API_KEY is required to generate Gemini listing drafts.'),
+        });
+      },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
+  });
+
+  it.each([400, 401, 403])('does not requeue a nested non-429 Gemini client failure (%s)', async (status) => {
+    const dataAccess = createDataAccess();
+    const providerError = Object.assign(new Error('request forbidden'), { status });
+    const prepareListingDraftMock = vi.fn<PrepareListingDraftMock>(async () => ({
+      diagnostics: { latency: { prepareDraftMs: 0 }, payload: { imageCount: 1 } },
+      input: { imageUrls: ['https://cdn.example.com/card.jpg'], listingId: 'LIST-001' },
+      execute: async () => {
+        throw new GeminiDraftServiceError('Gemini execution failed.', { cause: providerError });
+      },
+    }));
+
+    const result = await runSidecarJob('job-generate-ai', {
+      dataAccess,
+      now: () => new Date('2026-05-20T13:00:00.000Z'),
+      prepareListingDraft: prepareListingDraftMock,
+    });
+
+    expect(result.job.status).toBe('failed');
+    expect(dataAccess.jobs.requeue).not.toHaveBeenCalled();
+  });
+
   it('preserves the Gemini failure when Gemini audit persistence fails', async () => {
     const dataAccess = createDataAccess({
       geminiAttemptAuditError: new Error('audit write failed'),
@@ -4465,7 +4618,7 @@ describe('runSidecarJob', () => {
         last_error_code: listing.last_error_code,
         last_error_context: listing.last_error_context,
         last_error_message: listing.last_error_message,
-        price: 13.03,
+        price: 12.95,
         status: 'needs_review',
         sub_status: 'review_pending',
       });
@@ -4486,7 +4639,7 @@ describe('runSidecarJob', () => {
           status: 'succeeded',
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
-        suggested_price: 13.03,
+        suggested_price: 12.95,
       });
       expect(markSucceededInput?.confidence).toBe('medium');
       expect(markSucceededInput?.llm_reasoning_json).toMatchObject({
@@ -4499,7 +4652,7 @@ describe('runSidecarJob', () => {
         expect.arrayContaining([expect.any(String)])
       );
       expect(dataAccess.listings.update).toHaveBeenCalledWith('LIST-001', {
-        price: 13.03,
+        price: 12.95,
       });
       expect(pricingAnalyst.analyze).toHaveBeenCalledTimes(1);
       expect(jobLoggerInfo).toHaveBeenCalledWith(
@@ -4513,7 +4666,7 @@ describe('runSidecarJob', () => {
         'Succeeded research_price job.',
         expect.objectContaining({
           event: 'research_price_succeeded',
-          finalSuggestedPrice: 13.03,
+          finalSuggestedPrice: 12.95,
           llmStatus: 'succeeded',
           pricingModelName: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
         })
@@ -4892,7 +5045,7 @@ describe('runSidecarJob', () => {
           },
         },
         pricing_model_name: FIXTURE_LLM_PRICING_ANALYST_MODEL_NAME,
-        suggested_price: 13.03,
+        suggested_price: 12.95,
       });
       expect(markSucceededInput?.confidence).toBe('high');
     });

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
+import { GeminiDraftServiceError } from '@/gemini/contracts.js';
+import type { ResolvedAiModelRoute } from '@ebay-inventory/data';
 
 const variationId = '11111111-1111-4111-8111-111111111111';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -84,6 +86,56 @@ describe('variation listing intake identity handoff', () => {
       selectorValue: '2003 Topps Tracy McGrady #1',
       variationMetadata: { Set: 'Topps' },
     });
+  });
+
+  it('prepares identity once and falls back across configured models on provider unavailability', async () => {
+    const paths = await createIncomingFiles();
+    const routes: ResolvedAiModelRoute[] = [
+      {
+        displayName: 'Gemini 3.5 Flash Lite', fallbackOnQuotaExceeded: true, fallbackOnRateLimit: true,
+        fallbackOnUnavailable: true, freeTierStatus: 'confirmed', isFreeTierEligible: true,
+        modelName: 'gemini-3.5-flash-lite', provider: 'google', requestsPerDay: 500,
+        requestsPerMinute: null, routeOrder: 1, supportsImages: true, supportsJsonOutput: true,
+        supportsStructuredOutput: true, supportsText: true, taskType: 'listing_draft_generation',
+      },
+      {
+        displayName: 'Gemini 3.1 Flash Lite', fallbackOnQuotaExceeded: true, fallbackOnRateLimit: true,
+        fallbackOnUnavailable: true, freeTierStatus: 'confirmed', isFreeTierEligible: true,
+        modelName: 'gemini-3.1-flash-lite', provider: 'google', requestsPerDay: 500,
+        requestsPerMinute: null, routeOrder: 2, supportsImages: true, supportsJsonOutput: true,
+        supportsStructuredOutput: true, supportsText: true, taskType: 'listing_draft_generation',
+      },
+    ];
+    const draft = await createIdentityMock()({
+      variationId,
+      imageUrls: ['front', 'back'],
+      sourceRefs: { front: paths.front, back: paths.back },
+    });
+    const execute = vi
+      .fn()
+      .mockRejectedValueOnce(new GeminiDraftServiceError('503 temporarily unavailable'))
+      .mockResolvedValueOnce(draft);
+    const prepareIdentity = vi.fn(async (input) => ({ input, execute }));
+    const incrementGeminiCallsUsed = vi.fn(async () => undefined as never);
+
+    const result = await generateVariationListingIntakeIdentityHandoff(
+      { variationId, frontSourceRef: paths.front, backSourceRef: paths.back },
+      {
+        cwd: paths.root,
+        env: { WATCHER_INCOMING_DIR: paths.incomingDirectory },
+        prepareIdentity,
+        routeDataAccess: {
+          aiModelRoutes: { resolveForTask: vi.fn(async () => routes) },
+          dailyUsage: { incrementGeminiCallsUsed },
+        },
+      }
+    );
+
+    expect(prepareIdentity).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenNthCalledWith(1, { model: 'gemini-3.5-flash-lite' });
+    expect(execute).toHaveBeenNthCalledWith(2, { model: 'gemini-3.1-flash-lite' });
+    expect(incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
+    expect(result.selectorValue).toBe('2003 Topps Tracy McGrady #1');
   });
 
   it('mirrors watcher base-directory fallback when incoming directory is unset', async () => {

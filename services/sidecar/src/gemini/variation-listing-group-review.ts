@@ -1,6 +1,8 @@
 import type { VariationListingAggregateSnapshot } from '@ebay-inventory/data';
 import { getGeminiDraftClient, type GeminiDraftClient } from './client.js';
 import { loadGeminiDraftConfig } from './config.js';
+import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import { executeGeminiRouteCascade } from './gemini-route-cascade.js';
 import { GeminiDraftServiceError, GeminiDraftValidationError } from './contracts.js';
 import {
   type GeneratedVariationListingGroupReviewDraft,
@@ -225,11 +227,14 @@ export function buildVariationListingGroupReviewInputFromAggregate(
   });
 }
 
-export async function generateVariationListingGroupReview(
+export interface PreparedVariationListingGroupReview {
+  execute(options: GenerateVariationListingGroupReviewOptions): Promise<GeneratedVariationListingGroupReviewDraft>;
+}
+
+export function prepareGenerateVariationListingGroupReview(
   input: GenerateVariationListingGroupReviewInput,
-  options: GenerateVariationListingGroupReviewOptions,
   dependencies: VariationListingGroupReviewGeneratorDependencies = {}
-): Promise<GeneratedVariationListingGroupReviewDraft> {
+): PreparedVariationListingGroupReview {
   const validated = validateGenerateVariationListingGroupReviewInput(input);
   const derivedCommonEbayAspects = deriveVariationListingCommonEbayAspects(validated);
   const readiness = evaluateVariationListingGroupReadiness(validated);
@@ -239,23 +244,52 @@ export async function generateVariationListingGroupReview(
   }
   const client = (dependencies.getClient ?? getGeminiDraftClient)(config.apiKey);
   const prompt = buildVariationListingGroupReviewPrompt(validated, derivedCommonEbayAspects);
-  let raw;
-  try {
-    raw = await client.generateDraftRaw({ model: options.model, imageParts: [], prompt });
-  } catch (error) {
-    throw new GeminiDraftServiceError(
-      `Gemini variation group content generation failed for group "${validated.groupId}".`,
-      { cause: error instanceof Error ? error : undefined }
-    );
-  }
-  const content = parseVariationListingGroupContentResponse(raw.text, raw.rawResponse);
   return {
-    groupId: validated.groupId,
-    title: content.title,
-    description: content.description,
-    derivedCommonEbayAspects,
-    readiness,
-    warnings: [...content.warnings],
-    rawModelResponse: content.rawModelResponse,
+    execute: async (options) => {
+      let raw;
+      try {
+        raw = await client.generateDraftRaw({ model: options.model, imageParts: [], prompt });
+      } catch (error) {
+        throw new GeminiDraftServiceError(
+          `Gemini variation group content generation failed for group "${validated.groupId}".`,
+          { cause: error instanceof Error ? error : undefined }
+        );
+      }
+      const content = parseVariationListingGroupContentResponse(raw.text, raw.rawResponse);
+      return {
+        groupId: validated.groupId,
+        title: content.title,
+        description: content.description,
+        derivedCommonEbayAspects,
+        readiness,
+        warnings: [...content.warnings],
+        rawModelResponse: content.rawModelResponse,
+      };
+    },
   };
+}
+
+export async function generateVariationListingGroupReviewWithFallback(
+  input: GenerateVariationListingGroupReviewInput,
+  dependencies: VariationListingGroupReviewGeneratorDependencies & {
+    routeDataAccess?: Pick<SidecarDataAccess, 'aiModelRoutes' | 'dailyUsage'>;
+  } = {}
+): Promise<GeneratedVariationListingGroupReviewDraft> {
+  const prepared = prepareGenerateVariationListingGroupReview(input, dependencies);
+  const result = await executeGeminiRouteCascade({
+    dataAccess: dependencies.routeDataAccess ?? getSidecarDataAccess(),
+    requireImages: false,
+    now: () => new Date(),
+    executeRoute: async (route) => await prepared.execute({ model: route.modelName }),
+  });
+  return result.draft;
+}
+
+export async function generateVariationListingGroupReview(
+  input: GenerateVariationListingGroupReviewInput,
+  options: GenerateVariationListingGroupReviewOptions,
+  dependencies: VariationListingGroupReviewGeneratorDependencies = {}
+): Promise<GeneratedVariationListingGroupReviewDraft> {
+  const prepared = prepareGenerateVariationListingGroupReview(input, dependencies);
+  return await prepared.execute(options);
 }

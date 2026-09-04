@@ -4,9 +4,10 @@ import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { Json } from '@ebay-inventory/data';
 
-import { DEFAULT_GEMINI_DRAFT_MODEL } from './config.js';
+import { getSidecarDataAccess, type SidecarDataAccess } from '@/data/sidecar-data.js';
+import { executeGeminiRouteCascade } from './gemini-route-cascade.js';
 import {
-  generateVariationListingIdentity,
+  prepareGenerateVariationListingIdentity,
   toVariationListingNewVariationIdentityHandoff,
 } from './variation-listing-identity.js';
 import type {
@@ -31,6 +32,8 @@ export interface VariationListingIntakeIdentityDependencies {
     input: GenerateVariationListingIdentityInput,
     options: { model: string }
   ) => Promise<GeneratedVariationListingIdentityDraft>;
+  prepareIdentity?: typeof prepareGenerateVariationListingIdentity;
+  routeDataAccess?: Pick<SidecarDataAccess, 'aiModelRoutes' | 'dailyUsage'>;
 }
 
 function fail(message: string): never {
@@ -198,20 +201,28 @@ export async function generateVariationListingIntakeIdentityHandoff(
   ): Promise<string> => toImageDataUrl(await read(sourcePath, label), mimeType, label);
   const frontImageUrl = await readAndEncode(canonicalFrontSourceRef, frontMimeType, 'front');
   const backImageUrl = await readAndEncode(canonicalBackSourceRef, backMimeType, 'back');
-  const generateIdentity =
-    dependencies.generateIdentity ??
-    (async (identityInput, options) =>
-      await generateVariationListingIdentity(identityInput, options));
-  const draft = await generateIdentity(
-    {
-      variationId: input.variationId,
-      imageUrls: [frontImageUrl, backImageUrl],
-      sourceRefs: {
-        front: frontSourceRef,
-        back: backSourceRef,
-      },
+  const identityInput: GenerateVariationListingIdentityInput = {
+    variationId: input.variationId,
+    imageUrls: [frontImageUrl, backImageUrl],
+    sourceRefs: {
+      front: frontSourceRef,
+      back: backSourceRef,
     },
-    { model: DEFAULT_GEMINI_DRAFT_MODEL }
-  );
+  };
+  const draft = dependencies.generateIdentity
+    ? await dependencies.generateIdentity(identityInput, { model: 'injected-test-model' })
+    : await (async () => {
+        const prepared = await (dependencies.prepareIdentity ?? prepareGenerateVariationListingIdentity)(
+          identityInput
+        );
+        return (
+          await executeGeminiRouteCascade({
+            dataAccess: dependencies.routeDataAccess ?? getSidecarDataAccess(),
+            requireImages: true,
+            now: () => new Date(),
+            executeRoute: async (route) => await prepared.execute({ model: route.modelName }),
+          })
+        ).draft;
+      })();
   return toVariationListingNewVariationIdentityHandoff(draft);
 }

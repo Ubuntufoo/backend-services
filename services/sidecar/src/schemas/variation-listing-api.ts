@@ -152,6 +152,16 @@ export const updateVariationListingPriceRequestSchema = z
   })
   .strict();
 
+export const updateVariationListingSelectorValueRequestSchema = z
+  .object({
+    expectedDesiredRevision: expectedDesiredRevisionSchema,
+    selectorValue: z
+      .string()
+      .min(1, 'selectorValue is required')
+      .refine((value) => value === value.trim(), 'selectorValue must be outer-trimmed'),
+  })
+  .strict();
+
 export const updateVariationListingRepresentativeCopyRequestSchema = z
   .object({
     expectedDesiredRevision: expectedDesiredRevisionSchema,

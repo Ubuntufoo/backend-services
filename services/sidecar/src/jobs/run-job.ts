@@ -1,5 +1,4 @@
 import {
-  AiModelRouteNotFoundError,
   getPricingProviderMode,
   isPricingEnabled,
   type AiModelAttemptMetadata,
@@ -14,7 +13,8 @@ import {
 import {
   aspectValueSchema,
   generateListingDraft,
-  generateListingDraftWithFallback,
+  executeGeminiRouteCascade,
+  getGeminiDeterministicFailure,
   GeminiDraftServiceError,
   GeminiDraftValidationError,
   GeminiFallbackExecutionError,
@@ -78,7 +78,6 @@ const CONDITION_SUGGESTION_ASPECT_KEY = 'ConditionSuggestion';
 const SKU_CATEGORY_CODE_ASPECT_KEY = 'skuCategoryCode';
 const AI_PROVIDER_GOOGLE = 'google';
 const AI_ROUTING_SOURCE_DIRECT_GEMINI = 'direct_gemini';
-const LISTING_DRAFT_ROUTE_TASK_TYPE = 'listing_draft_generation';
 const GENERATED_DESCRIPTION_NOTICE =
   "Condition & Photography: Card was photographed outside its sleeve to minimize glare and show its actual condition clearly. It will be shipped securely in a new sleeve, protected against movement, bending, and moisture. Please review all high-res photos closely to assess centering, corners, and surface details.\n\nShipping: Eligible low-value items under $20 ship via eBay Standard Envelope for $0.99. One or two eligible items cost $0.99 total; three or more eligible items receive free shipping automatically. FedEx Ground Economy is also available as a $6.49 alternate. Items priced at $20 or more, or items not eligible for eBay Standard Envelope, ship free via FedEx Ground Economy.\n\nCombined Shipping: eBay automatically applies combined shipping in your cart; no message is needed before payment.\n\nFeedback: If you have feedback about the shipping process, please message me. I'm always open to practical, cost-effective shipping improvements.";
 const PREVIOUS_GENERATED_DESCRIPTION_NOTICE =
@@ -398,28 +397,6 @@ function summarizeGeminiAttemptFailureMessage(message: string): string {
   return `${normalized.slice(0, 237)}...`;
 }
 
-function buildListingDraftRouteResolutionInput(): {
-  freeTierOnly: true;
-  provider: typeof AI_PROVIDER_GOOGLE;
-  requireImages: true;
-  requireJsonOutput: true;
-  requireStructuredOutput: true;
-  taskType: typeof LISTING_DRAFT_ROUTE_TASK_TYPE;
-} {
-  return {
-    freeTierOnly: true,
-    provider: AI_PROVIDER_GOOGLE,
-    requireImages: true,
-    requireJsonOutput: true,
-    requireStructuredOutput: true,
-    taskType: LISTING_DRAFT_ROUTE_TASK_TYPE,
-  };
-}
-
-function createListingDraftRouteNotFoundError(): AiModelRouteNotFoundError {
-  return new AiModelRouteNotFoundError(buildListingDraftRouteResolutionInput());
-}
-
 function enrichGeminiJobError(
   error: SidecarJobError,
   routerError: GeminiFallbackExecutionError<ResolvedAiModelRoute>
@@ -438,6 +415,27 @@ function enrichGeminiJobError(
       final_failure_message: error.message,
     },
     { cause: error }
+  );
+}
+
+function classifyDeterministicGeminiJobError(
+  error: unknown,
+  failure: ReturnType<typeof getGeminiDeterministicFailure>
+): SidecarJobError {
+  const message = error instanceof Error ? error.message : String(error);
+  const context = {
+    ...(error instanceof Error ? { name: error.name } : {}),
+    ...(failure?.kind === 'api_key' ? { reason: 'api_key' } : {}),
+    ...(failure?.kind === 'client_error' && failure.status !== undefined
+      ? { status: failure.status }
+      : {}),
+  };
+  return new SidecarJobError(
+    JOB_ERROR_CODES.GENERATE_AI_FAILED,
+    'user_fixable',
+    message,
+    context,
+    { cause: error instanceof Error ? error : undefined }
   );
 }
 
@@ -834,40 +832,43 @@ async function runGenerateAiJob(
   const totalStartedAt = nowMs();
 
   try {
-    const resolvedRoutes = await options.dataAccess.aiModelRoutes.resolveForTask(
-      buildListingDraftRouteResolutionInput()
-    );
-
-    if (resolvedRoutes.length === 0) {
-      throw createListingDraftRouteNotFoundError();
-    }
-
     const userHints = buildUserHints(listing);
-    const prepareDraftStartedAt = nowMs();
-    const preparedDraft = await options.prepareListingDraft({
-      imageUrls,
-      listingId,
-      userHints,
-    });
-    const prepareDraftMs =
-      preparedDraft.diagnostics.latency.prepareDraftMs || elapsedMs(prepareDraftStartedAt);
-    const payloadDiagnostics = preparedDraft.diagnostics.payload;
-
-    jobLogger.info('Completed generate_ai draft preparation.', {
-      event: 'generate_ai_prepare_completed',
-      generateAiLatency: {
-        prepareDraftMs,
-      },
-      generateAiPayload: payloadDiagnostics,
-      jobId: job.id,
-      listingId,
-    });
+    let preparedDraft: PreparedGenerateListingDraft | undefined;
+    let prepareDraftMs = 0;
+    let payloadDiagnostics: GenerateAiPayloadDiagnostics = {
+      imageCount: imageUrls.length,
+    };
 
     const routerResult =
-      await generateListingDraftWithFallback<PreparedGenerateListingDraftExecutionResult>({
-        executeRoute: async (route) => await preparedDraft.execute({ model: route.modelName }),
-        incrementDailyUsage: async () => {
-          await options.dataAccess.dailyUsage.incrementGeminiCallsUsed();
+      await executeGeminiRouteCascade<PreparedGenerateListingDraftExecutionResult>({
+        dataAccess: options.dataAccess,
+        requireImages: true,
+        beforeAttempts: async () => {
+          const prepareDraftStartedAt = nowMs();
+          preparedDraft = await options.prepareListingDraft({
+            imageUrls,
+            listingId,
+            userHints,
+          });
+          prepareDraftMs =
+            preparedDraft.diagnostics.latency.prepareDraftMs || elapsedMs(prepareDraftStartedAt);
+          payloadDiagnostics = preparedDraft.diagnostics.payload;
+
+          jobLogger.info('Completed generate_ai draft preparation.', {
+            event: 'generate_ai_prepare_completed',
+            generateAiLatency: {
+              prepareDraftMs,
+            },
+            generateAiPayload: payloadDiagnostics,
+            jobId: job.id,
+            listingId,
+          });
+        },
+        executeRoute: async (route) => {
+          if (!preparedDraft) {
+            throw new Error('Gemini draft preparation did not complete before provider execution.');
+          }
+          return await preparedDraft.execute({ model: route.modelName });
         },
         now: options.now,
         onAttemptFailed: async (attempt) => {
@@ -1051,7 +1052,6 @@ async function runGenerateAiJob(
             willFallback: false,
           });
         },
-        routes: resolvedRoutes,
       });
 
     const listingUpdateStartedAt = nowMs();
@@ -1092,13 +1092,28 @@ async function runGenerateAiJob(
       listing: reviewListing,
     };
   } catch (error) {
+    const deterministicFailure =
+      error instanceof GeminiFallbackExecutionError
+        ? getGeminiDeterministicFailure(error.finalError)
+        : undefined;
+    const classificationError =
+      error instanceof GeminiFallbackExecutionError
+        ? (deterministicFailure?.error ?? error.finalError)
+        : error;
+    let baseJobError =
+      classifyJobError(job.job_type, classificationError);
+
+    if (deterministicFailure && baseJobError.category === 'recoverable') {
+      baseJobError = classifyDeterministicGeminiJobError(
+        error instanceof GeminiFallbackExecutionError ? error.finalError : error,
+        deterministicFailure
+      );
+    }
+
     let jobError =
       error instanceof GeminiFallbackExecutionError
-        ? enrichGeminiJobError(
-            classifyJobError(job.job_type, error.finalError),
-            error as GeminiFallbackExecutionError<ResolvedAiModelRoute>
-          )
-        : classifyJobError(job.job_type, error);
+        ? enrichGeminiJobError(baseJobError, error as GeminiFallbackExecutionError<ResolvedAiModelRoute>)
+        : baseJobError;
 
     try {
       await options.dataAccess.listings.update(

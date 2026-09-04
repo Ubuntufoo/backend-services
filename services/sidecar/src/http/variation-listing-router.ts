@@ -26,7 +26,10 @@ import { getSidecarDataAccess } from '@/data/sidecar-data.js';
 import {
   buildVariationListingGroupReviewInputFromAggregate,
   evaluateVariationListingGroupReadiness,
+  generateVariationListingGroupReview,
+  generateVariationListingGroupReviewWithFallback,
 } from '@/gemini/variation-listing-group-review.js';
+import { GeminiFallbackExecutionError } from '@/gemini/gemini-model-router.js';
 import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
 import {
   createVariationListingGroupRequestSchema,
@@ -34,6 +37,7 @@ import {
   generateVariationListingIntakeIdentityRequestSchema,
   updateVariationListingCopyAvailabilityRequestSchema,
   updateVariationListingPriceRequestSchema,
+  updateVariationListingSelectorValueRequestSchema,
   updateVariationListingRepresentativeCopyRequestSchema,
   updateVariationListingReviewDraftRequestSchema,
   variationListingCopyIdParamsSchema,
@@ -56,6 +60,7 @@ export type VariationListingApiDataAccess = Pick<
   | 'createGroup'
   | 'applyGroupReviewDraft'
   | 'updateVariationPrice'
+  | 'updateVariationSelectorValue'
   | 'updateCopyAvailability'
   | 'updateRepresentativeCopy'
 >;
@@ -65,6 +70,7 @@ export interface VariationListingApiRouterOptions {
   actionDataAccess?: VariationListingActionDataAccess;
   createId?: () => string;
   generateIntakeIdentity?: typeof generateVariationListingIntakeIdentityHandoff;
+  generateGroupReview?: typeof generateVariationListingGroupReview;
   actions?: VariationListingApiActions;
 }
 
@@ -150,6 +156,19 @@ function sendError(res: Response, error: unknown): void {
   }
   if (error instanceof VariationListingTransactionConflictError) {
     res.status(409).json({ error: 'variation_listing_state_stale', message: error.message });
+    return;
+  }
+  if (
+    error instanceof GeminiFallbackExecutionError &&
+    error.fallbackExhausted &&
+    error.finalFallbackKind !== 'none'
+  ) {
+    res.status(503).json({
+      error: 'gemini_routes_temporarily_unavailable',
+      message: 'All configured Gemini fallback models are temporarily unavailable.',
+      retryable: true,
+      fallbackKind: error.finalFallbackKind,
+    });
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -322,17 +341,58 @@ function summarizeJournal(
       latestByKey.set(checkpoint.operationKey, checkpoint);
     }
   }
+  // Match executor latestUnresolvedOperation: latest checkpoint per operation,
+  // then first unresolved operation in insertion order.
+  const unresolved = [...latestByKey.values()]
+    .find((checkpoint) => ['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(checkpoint.state));
+  const recovery = unresolved
+    ? unresolved.state === 'retry_authorized'
+      ? {
+          operationKey: unresolved.operationKey,
+          revisionId: revision.revisionId,
+          requiresReconciliation: false,
+          remoteState: unresolved.observedRemoteState === 'unknown' ? 'unknown' : 'known_unchanged',
+          recommendedActions: ['retry_action'],
+          retryStatus: 'safe_to_retry',
+        }
+      : unresolved.state === 'retry_exhausted'
+        ? {
+            operationKey: unresolved.operationKey,
+            revisionId: revision.revisionId,
+            requiresReconciliation: false,
+            remoteState: unresolved.observedRemoteState === 'present' ? 'known_changed' : 'known_unchanged',
+            recommendedActions: ['inspect_remote_state', 'resolve_manually'],
+            retryStatus: 'retry_exhausted',
+          }
+        : {
+            operationKey: unresolved.operationKey,
+            revisionId: revision.revisionId,
+            requiresReconciliation: true,
+            remoteState: 'unknown',
+            recommendedActions: ['reconcile_remote_state', 'do_not_retry_blindly'],
+            retryStatus: 'reconciliation_required',
+          }
+    : {
+        revisionId: revision.revisionId,
+        requiresReconciliation: false,
+        remoteState: 'known_unchanged',
+        recommendedActions: [],
+        retryStatus: 'not_applicable',
+      };
   return {
     latestRevision: {
       revisionId: revision.revisionId,
       capturedDesiredRevision: revision.capturedDesiredRevision,
       operationCount: revision.operationCount,
       capturedAt: revision.source.captured_at,
-      hasUnknownOutcome: checkpoints.some(
+      hasUnknownOutcome: [...latestByKey.values()].some(
         (checkpoint) =>
-          checkpoint.state === 'unknown' || checkpoint.observedRemoteState === 'unknown'
+          checkpoint.state === 'started' ||
+          checkpoint.state === 'unknown' ||
+          checkpoint.observedRemoteState === 'unknown'
       ),
       retryExhausted: checkpoints.some((checkpoint) => checkpoint.state === 'retry_exhausted'),
+      recovery,
       operations: revision.operationPlan.map((operation) => {
         const latest = latestByKey.get(operation.operation_key);
         return {
@@ -570,6 +630,29 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     });
   });
 
+  router.post('/:groupId/review-draft/generate', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    return await runRoute(res, async () => {
+      const dataAccess = getDataAccess();
+      const aggregate = await requireAggregate(res, dataAccess, params.groupId);
+      if (!aggregate) return;
+      const reviewInput = buildVariationListingGroupReviewInputFromAggregate(aggregate);
+      const draft = options.generateGroupReview
+        ? await options.generateGroupReview(reviewInput, { model: 'injected-test-model' })
+        : await generateVariationListingGroupReviewWithFallback(reviewInput);
+      res.json({
+        groupId: params.groupId,
+        expectedDesiredRevision: aggregate.group.desired_revision,
+        title: draft.title,
+        description: draft.description,
+        derivedCommonEbayAspects: draft.derivedCommonEbayAspects,
+        readiness: draft.readiness,
+        warnings: draft.warnings,
+      });
+    });
+  });
+
   router.patch('/:groupId/review-draft', async (req: Request, res: Response) => {
     const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
     const body = parseOrSend(res, updateVariationListingReviewDraftRequestSchema, req.body);
@@ -582,6 +665,24 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         title: body.title,
         description: body.description,
         derivedCommonEbayAspects: body.derivedCommonEbayAspects as Json,
+      });
+      const aggregate = await requireAggregate(res, dataAccess, params.groupId);
+      if (!aggregate) return;
+      res.json(await serializeAggregate(dataAccess, aggregate));
+    });
+  });
+
+  router.patch('/:groupId/variations/:variationId/selector-value', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingVariationIdParamsSchema, req.params);
+    const body = parseOrSend(res, updateVariationListingSelectorValueRequestSchema, req.body);
+    if (!params || !body) return;
+    return await runRoute(res, async () => {
+      const dataAccess = getDataAccess();
+      await dataAccess.updateVariationSelectorValue({
+        groupId: params.groupId,
+        variationId: params.variationId,
+        expectedDesiredRevision: body.expectedDesiredRevision,
+        selectorValue: body.selectorValue,
       });
       const aggregate = await requireAggregate(res, dataAccess, params.groupId);
       if (!aggregate) return;

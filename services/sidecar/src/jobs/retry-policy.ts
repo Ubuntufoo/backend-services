@@ -1,12 +1,17 @@
 import type { JobRow } from '@ebay-inventory/data';
+import {
+  DEFAULT_AI_GENERATION_MAX_ATTEMPTS,
+  DEFAULT_RECOVERABLE_RETRY_DELAY_FIRST_MS,
+  DEFAULT_RECOVERABLE_RETRY_DELAY_NEXT_MS,
+  getRecoverableRetryDelayMs,
+  resolvePositiveIntegerSetting,
+} from '@ebay-inventory/types';
 
-const DEFAULT_GENERATE_AI_MAX_ATTEMPTS = 3;
+const DEFAULT_GENERATE_AI_MAX_ATTEMPTS = DEFAULT_AI_GENERATION_MAX_ATTEMPTS;
 const DEFAULT_PUBLISH_MAX_ATTEMPTS = 3;
 const DEFAULT_PROCESS_IMAGES_MAX_ATTEMPTS = 2;
 const DEFAULT_RESEARCH_PRICE_MAX_ATTEMPTS = 1;
 const DEFAULT_STALE_LEASE_MS = 15 * 60 * 1000;
-const DEFAULT_RETRY_DELAY_FIRST_MS = 60 * 1000;
-const DEFAULT_RETRY_DELAY_NEXT_MS = 5 * 60 * 1000;
 
 const DEFAULT_MAX_ATTEMPTS_BY_JOB_TYPE: Record<JobRow['job_type'], number> = {
   generate_ai: DEFAULT_GENERATE_AI_MAX_ATTEMPTS,
@@ -27,14 +32,7 @@ function readPositiveIntegerEnv(
   key: string,
   fallback: number
 ): number {
-  const rawValue = env[key]?.trim();
-
-  if (!rawValue) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(rawValue, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  return resolvePositiveIntegerSetting(env[key], fallback);
 }
 
 export function getDefaultMaxAttempts(
@@ -70,14 +68,14 @@ export function getNextRetryAt(
   const firstDelayMs = readPositiveIntegerEnv(
     env,
     'SIDECAR_JOB_RETRY_DELAY_FIRST_MS',
-    DEFAULT_RETRY_DELAY_FIRST_MS
+    DEFAULT_RECOVERABLE_RETRY_DELAY_FIRST_MS
   );
   const nextDelayMs = readPositiveIntegerEnv(
     env,
     'SIDECAR_JOB_RETRY_DELAY_NEXT_MS',
-    DEFAULT_RETRY_DELAY_NEXT_MS
+    DEFAULT_RECOVERABLE_RETRY_DELAY_NEXT_MS
   );
-  const delayMs = attemptsUsed <= 1 ? firstDelayMs : nextDelayMs;
+  const delayMs = getRecoverableRetryDelayMs(attemptsUsed, firstDelayMs, nextDelayMs);
 
   return new Date(now.getTime() + delayMs).toISOString();
 }

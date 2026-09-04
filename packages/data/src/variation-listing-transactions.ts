@@ -122,6 +122,13 @@ export interface UpdateVariationListingManualPriceInput {
   variationId: string;
 }
 
+export interface UpdateVariationListingSelectorValueInput {
+  expectedDesiredRevision: number;
+  groupId: string;
+  selectorValue: string;
+  variationId: string;
+}
+
 export interface UpdateVariationListingCopyAvailabilityInput {
   availabilityState: 'available' | 'unavailable';
   copyId: string;
@@ -251,6 +258,9 @@ export interface VariationListingTransactionGateway {
   ): Promise<VariationListingGroupRow>;
   updateVariationPrice(
     input: UpdateVariationListingManualPriceInput
+  ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+  updateVariationSelectorValue(
+    input: UpdateVariationListingSelectorValueInput
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
   updateCopyAvailability(
     input: UpdateVariationListingCopyAvailabilityInput

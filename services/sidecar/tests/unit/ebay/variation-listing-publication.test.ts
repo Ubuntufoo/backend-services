@@ -75,11 +75,23 @@ function testHarness(withMedia = false) {
   let lastConfirmedRevision: number | null = null;
   let capturedRevision: VariationListingRevisionRow | null = null;
   let failItem = false;
+  let blockMediaReads = false;
+  let mediaReadExpirationMismatch = false;
   const remote = {
     async getInventoryItem(sku: string) { return items.has(sku) ? { state: 'present' as const, value: items.get(sku)! } : { state: 'proven_absent' as const }; },
     async getOffers(sku: string, _marketplace: string) { return { state: 'present' as const, value: offers.get(sku) ?? [] }; },
     async getInventoryItemGroup(_groupKey: string) { return group ? { state: 'present' as const, value: group } : { state: 'proven_absent' as const }; },
-    async getMedia(location: string) { return media.has(location) ? { state: 'present' as const, value: media.get(location)! } : { state: 'proven_absent' as const }; },
+    async getMedia(location: string) {
+      if (blockMediaReads) return { state: 'unknown' as const, reason: 'transient Media read failure' };
+      if (!media.has(location)) return { state: 'proven_absent' as const };
+      const value = media.get(location)!;
+      return {
+        state: 'present' as const,
+        value: mediaReadExpirationMismatch
+          ? { ...value, expirationDate: '2026-10-02T00:00:00Z' }
+          : value,
+      };
+    },
   };
   const mutationsApi = {
     async createMedia(sourceUrl: string) {
@@ -152,7 +164,11 @@ function testHarness(withMedia = false) {
   };
   return {
     group: () => group, items, journalRows, media, mutations: () => mutations, confirmations: () => confirmations,
-    bundle, plan, remote, setFailItem: (value: boolean) => { failItem = value; }, mutationsApi, transaction,
+    bundle, plan, remote,
+    setFailItem: (value: boolean) => { failItem = value; },
+    setBlockMediaReads: (value: boolean) => { blockMediaReads = value; },
+    setMediaReadExpirationMismatch: (value: boolean) => { mediaReadExpirationMismatch = value; },
+    mutationsApi, transaction,
     execute: () => executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows], loadRevision: async () => capturedRevision }, mutations: mutationsApi, remote, transaction, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() }),
   };
 }
@@ -165,6 +181,57 @@ describe('executeVariationListingPublication', () => {
     expect(h.confirmations()).toBe(1);
     expect(h.journalRows.every((row) => row.state === 'started' || Object.keys(row.evidence).length > 0)).toBe(true);
     expect(h.journalRows.filter((row) => row.operation_key === 'group-publish').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+  });
+
+  it('persists Media identity before read-back and resumes transient reconciliation without duplicate creation', async () => {
+    const h = testHarness(true);
+    h.setBlockMediaReads(true);
+
+    await expect(h.execute()).rejects.toThrow('Media read is unknown');
+    expect(h.mutations()).toBe(1);
+    const mediaHistory = h.journalRows.filter((row) => row.operation_key === 'media:copy-A:front');
+    expect(mediaHistory.map((row) => row.state)).toEqual(['started', 'unknown']);
+    expect(mediaHistory[1]?.evidence).toMatchObject({
+      imageId: 'image-copy-A-front',
+      imageUrl: image('AF'),
+      location: 'https://api.ebay.test/media/copy-A-front',
+      expirationDate: '2026-10-01T00:00:00Z',
+    });
+
+    h.setBlockMediaReads(false);
+    await expect(h.execute()).resolves.toEqual({ revisionId: 'revision-1', confirmedRevision: 1, listingId: 'listing-1' });
+    expect(h.mutations()).toBe(10);
+    expect(h.journalRows.filter((row) => row.operation_key === 'media:copy-A:front').map((row) => row.state)).toEqual([
+      'started',
+      'unknown',
+      'confirmed_complete',
+    ]);
+  });
+
+  it('keeps a created Media identity recoverable across exact read-back mismatch without replaying creation', async () => {
+    const h = testHarness(true);
+    h.setMediaReadExpirationMismatch(true);
+
+    await expect(h.execute()).rejects.toThrow('expirationDate');
+    expect(h.mutations()).toBe(1);
+    const calls = h.mutations();
+    await expect(h.execute()).rejects.toThrow('expirationDate');
+    expect(h.mutations()).toBe(calls);
+
+    h.setMediaReadExpirationMismatch(false);
+    await expect(h.execute()).resolves.toMatchObject({ revisionId: 'revision-1', listingId: 'listing-1' });
+    expect(h.mutations()).toBe(10);
+  });
+
+  it('refuses replay for legacy unresolved Media checkpoints that lost the returned identity', async () => {
+    const h = testHarness(true);
+    h.journalRows.push(
+      { attempt_number: 1, checkpoint_id: 'legacy-started', checkpoint_number: 1, created_at: '2026-09-01T00:00:00Z', evidence: {}, observed_remote_state: null, operation_key: 'media:copy-A:front', revision_id: 'revision-1', state: 'started' } as VariationListingPublishingCheckpointRow,
+      { attempt_number: 1, checkpoint_id: 'legacy-unknown', checkpoint_number: 2, created_at: '2026-09-01T00:00:01Z', evidence: { reason: 'Created Media resource did not reconcile exactly.' }, observed_remote_state: 'unknown', operation_key: 'media:copy-A:front', revision_id: 'revision-1', state: 'unknown' } as VariationListingPublishingCheckpointRow,
+    );
+
+    await expect(h.execute()).rejects.toThrow('unresolved checkpoint without a durably captured Media identity');
+    expect(h.mutations()).toBe(0);
   });
 
   it('resumes an already exact publication without remote mutations', async () => {

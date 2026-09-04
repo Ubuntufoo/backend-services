@@ -165,6 +165,10 @@ function checkpoint(): VariationListingPublishingCheckpoint {
   } as unknown as VariationListingPublishingCheckpoint;
 }
 
+function checkpointWithState(state: string, observedRemoteState: string | null = 'unknown'): VariationListingPublishingCheckpoint {
+  return {...checkpoint(), state, observedRemoteState};
+}
+
 function intakeSession(
   overrides: Partial<VariationListingIntakeSession> = {}
 ): VariationListingIntakeSession {
@@ -194,6 +198,7 @@ function dataAccess(overrides: Partial<VariationListingApiDataAccess> = {}): Var
     createGroup: vi.fn(async () => current.group),
     applyGroupReviewDraft: vi.fn(async () => current.group),
     updateVariationPrice: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
+    updateVariationSelectorValue: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     updateCopyAvailability: vi.fn(async () => ({ group: current.group, copy: current.copies[0]! })),
     updateRepresentativeCopy: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     getIntakeSession: vi.fn(async () => intakeSession()),
@@ -357,6 +362,76 @@ describe('YP6.1 variation listing API router', () => {
     expect(JSON.stringify(response.body)).not.toContain('browsePricing');
   });
 
+  it('serializes authoritative recovery metadata from the latest unresolved checkpoint', async () => {
+    const access = dataAccess({listCheckpointsByRevisionId: vi.fn(async () => [checkpointWithState('retry_authorized')])});
+    const response = await request(app(access)).get(`/api/variation-listings/${groupId}`);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      operationKey: 'child-offer:1',
+      revisionId: latestRevision().revisionId,
+      retryStatus: 'safe_to_retry',
+      requiresReconciliation: false,
+    });
+
+    const unknown = await request(app(dataAccess({listCheckpointsByRevisionId: vi.fn(async () => [checkpointWithState('started')])}))).get(`/api/variation-listings/${groupId}`);
+    expect(unknown.body.journal.latestRevision.recovery).toMatchObject({retryStatus: 'reconciliation_required', remoteState: 'unknown', requiresReconciliation: true});
+
+    const firstUnresolved = checkpointWithState('unknown');
+    const laterOperation = { ...checkpointWithState('retry_authorized', 'known_unchanged'), operationKey: 'reconcile' };
+    const parity = await request(app(dataAccess({listCheckpointsByRevisionId: vi.fn(async () => [firstUnresolved, laterOperation])}))).get(`/api/variation-listings/${groupId}`);
+    expect(parity.body.journal.latestRevision.recovery).toMatchObject({operationKey: 'child-offer:1', retryStatus: 'reconciliation_required'});
+  });
+
+  it('clears historical unknown outcome after a valid terminal checkpoint', async () => {
+    const rows = [
+      {
+        ...checkpoint(),
+        checkpointId: 'started-checkpoint',
+        checkpointNumber: 1,
+        evidence: {},
+        observedRemoteState: null,
+        state: 'started',
+      },
+      {
+        ...checkpoint(),
+        checkpointId: 'unknown-checkpoint',
+        checkpointNumber: 2,
+        evidence: { reason: 'transient read failure' },
+        observedRemoteState: 'unknown',
+        state: 'unknown',
+      },
+      {
+        ...checkpoint(),
+        attemptNumber: 2,
+        checkpointId: 'confirmed-checkpoint',
+        checkpointNumber: 1,
+        evidence: { imageId: 'image-copy-A-front', exact: true },
+        observedRemoteState: 'present',
+        state: 'confirmed_complete',
+      },
+    ] as VariationListingPublishingCheckpoint[];
+    const response = await request(
+      app(dataAccess({ listCheckpointsByRevisionId: vi.fn(async () => rows) }))
+    ).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision).toMatchObject({
+      hasUnknownOutcome: false,
+      recovery: {
+        requiresReconciliation: false,
+        retryStatus: 'not_applicable',
+      },
+      operations: expect.arrayContaining([
+        expect.objectContaining({
+          operationKey: 'child-offer:1',
+          state: 'confirmed_complete',
+          attemptNumber: 2,
+          checkpointNumber: 1,
+          observedRemoteState: 'present',
+        }),
+      ]),
+    });
+  });
+
   it('blocks initial readiness when required common Sport is not truthful', async () => {
     const current = aggregate();
     current.group.derived_common_ebay_aspects = {};
@@ -499,6 +574,137 @@ describe('YP6.1 variation listing API router', () => {
       title: 'Updated title',
       description: 'Updated description',
       derivedCommonEbayAspects: { Manufacturer: 'Topps' },
+    });
+  });
+
+  it('generates a non-persistent group review draft with the current desired revision', async () => {
+    const access = dataAccess();
+    const generateGroupReview = vi.fn(async (input: { groupId: string }, _options: { model: string }) => ({
+      groupId: input.groupId,
+      title: 'Generated title',
+      description: 'Generated description',
+      derivedCommonEbayAspects: { Sport: ['Basketball'] },
+      readiness: {
+        ready: false,
+        blockers: ['needs review'],
+        conditionCompatible: true,
+        incompatibleCopies: [],
+      },
+      warnings: ['check title'],
+      rawModelResponse: { ignored: true },
+    }));
+
+    const instance = express();
+    instance.use(express.json());
+    instance.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess: access, generateGroupReview }));
+    const response = await request(instance)
+      .post(`/api/variation-listings/${groupId}/review-draft/generate`)
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      groupId,
+      expectedDesiredRevision: 4,
+      title: 'Generated title',
+      description: 'Generated description',
+      derivedCommonEbayAspects: { Sport: ['Basketball'] },
+      readiness: {
+        ready: false,
+        blockers: ['needs review'],
+        conditionCompatible: true,
+        incompatibleCopies: [],
+      },
+      warnings: ['check title'],
+    });
+    expect(generateGroupReview).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId, variations: expect.any(Array) }),
+      expect.objectContaining({ model: expect.any(String) }),
+    );
+    expect(access.applyGroupReviewDraft).not.toHaveBeenCalled();
+  });
+
+  it('returns authoritative refreshed aggregate after saving a group review draft', async () => {
+    const refreshed = aggregate();
+    refreshed.group = {
+      ...refreshed.group,
+      desired_revision: 5,
+      lifecycle_state: 'review',
+      title: 'Saved title',
+      description: 'Saved description',
+    };
+    const access = dataAccess({
+      loadAggregate: vi.fn(async () => refreshed),
+      applyGroupReviewDraft: vi.fn(async () => refreshed.group),
+    });
+
+    const response = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/review-draft`)
+      .send({
+        expectedDesiredRevision: 4,
+        title: 'Saved title',
+        description: 'Saved description',
+        derivedCommonEbayAspects: { Sport: ['Basketball'] },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      desiredRevision: 5,
+      lifecycleState: 'review',
+      title: 'Saved title',
+      description: 'Saved description',
+    });
+  });
+
+  it('enforces exact outer-trimmed selector input before persistence', async () => {
+    const refreshed = aggregate();
+    refreshed.group = { ...refreshed.group, desired_revision: 5 };
+    refreshed.variations = refreshed.variations.map((variation) =>
+      variation.variation_id === variationA
+        ? { ...variation, selector_value: 'Card A updated' }
+        : variation
+    );
+    const access = dataAccess({ loadAggregate: vi.fn(async () => refreshed) });
+    const invalid = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/selector-value`)
+      .send({ expectedDesiredRevision: 4, selectorValue: ' Card A updated ' });
+
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toBe('invalid_request');
+    expect(access.updateVariationSelectorValue).not.toHaveBeenCalled();
+
+    const valid = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/selector-value`)
+      .send({ expectedDesiredRevision: 4, selectorValue: 'Card A updated' });
+
+    expect(valid.status).toBe(200);
+    expect(access.updateVariationSelectorValue).toHaveBeenCalledWith({
+      groupId,
+      variationId: variationA,
+      expectedDesiredRevision: 4,
+      selectorValue: 'Card A updated',
+    });
+    expect(valid.body).toMatchObject({
+      desiredRevision: 5,
+      variations: expect.arrayContaining([
+        expect.objectContaining({ variationId: variationA, selectorValue: 'Card A updated' }),
+      ]),
+    });
+  });
+
+  it('maps selector CAS conflicts to a stable stale-state response', async () => {
+    const access = dataAccess({
+      updateVariationSelectorValue: vi.fn(async () => {
+        throw new VariationListingTransactionConflictError('VR001', 'stale desired revision');
+      }),
+    });
+    const response = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/selector-value`)
+      .send({ expectedDesiredRevision: 3, selectorValue: 'Card A updated' });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: 'variation_listing_state_stale',
+      message: 'stale desired revision',
     });
   });
 });

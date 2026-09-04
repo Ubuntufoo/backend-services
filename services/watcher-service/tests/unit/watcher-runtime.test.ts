@@ -6,6 +6,7 @@ import {
   consumeImageGrouping,
   createEmptyWatcherGroupingState,
   startWatcherRuntime,
+  VariationListingSidecarRetryableError,
   WatcherBatchProcessingError,
 } from '../../src/index.js';
 
@@ -304,6 +305,555 @@ describe('watcher runtime', () => {
       '/watcher/incoming/unprocessed.jpg',
       '/watcher/incoming/trigger.jpg',
     ]);
+    await runtime.close();
+  });
+
+  it('automatically requeues retryable variation identity failures with the shared 1m/5m policy', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const logger = createLogger();
+      const processor = {
+        process: vi
+          .fn()
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('all Gemini routes unavailable'))
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('all Gemini routes unavailable'))
+          .mockResolvedValueOnce({
+            kind: 'completed' as const,
+            completionKind: 'new_variation' as const,
+            copyId: 'copy',
+            groupId: 'group',
+            status: 'completed' as const,
+            variationId: 'variation',
+          }),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: {
+          env: {
+            SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI: '3',
+            SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '60000',
+            SIDECAR_JOB_RETRY_DELAY_NEXT_MS: '300000',
+          },
+        },
+        logger,
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(1);
+      expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back.jpg']);
+      expect(logger.info).toHaveBeenCalledWith(
+        'variation_retry_scheduled',
+        expect.objectContaining({ delayMs: 60000, attemptsUsed: 1 })
+      );
+
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(processor.process).toHaveBeenCalledTimes(2);
+      expect(logger.info).toHaveBeenCalledWith(
+        'variation_retry_scheduled',
+        expect.objectContaining({ delayMs: 300000, attemptsUsed: 2 })
+      );
+
+      await vi.advanceTimersByTimeAsync(300000);
+      expect(processor.process).toHaveBeenCalledTimes(3);
+      expect(runtime.state.pendingQueue).toEqual([]);
+      await runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('merges process retry settings with explicit watcher overrides', async () => {
+    vi.useFakeTimers();
+    const originalNextDelay = process.env.SIDECAR_JOB_RETRY_DELAY_NEXT_MS;
+    process.env.SIDECAR_JOB_RETRY_DELAY_NEXT_MS = '20';
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const logger = createLogger();
+      const processor = {
+        process: vi
+          .fn()
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockResolvedValueOnce({
+            kind: 'completed' as const,
+            completionKind: 'new_variation' as const,
+            copyId: 'copy',
+            groupId: 'group',
+            status: 'completed' as const,
+            variationId: 'variation',
+          }),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: {
+          env: {
+            SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '10',
+          },
+        },
+        logger,
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(logger.info).toHaveBeenCalledWith(
+        'variation_retry_scheduled',
+        expect.objectContaining({ attemptsUsed: 2, delayMs: 20 })
+      );
+
+      await runtime.close();
+    } finally {
+      if (originalNextDelay === undefined) delete process.env.SIDECAR_JOB_RETRY_DELAY_NEXT_MS;
+      else process.env.SIDECAR_JOB_RETRY_DELAY_NEXT_MS = originalNextDelay;
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a new add bypass an active variation retry backoff', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const processor = {
+        process: vi
+          .fn()
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('all Gemini routes unavailable'))
+          .mockResolvedValueOnce({
+            kind: 'completed' as const,
+            completionKind: 'new_variation' as const,
+            copyId: 'copy',
+            groupId: 'group',
+            status: 'completed' as const,
+            variationId: 'variation',
+          })
+          .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group-2', pairId: 'pair-2' }),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: {
+          env: {
+            SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI: '3',
+            SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '60000',
+            SIDECAR_JOB_RETRY_DELAY_NEXT_MS: '300000',
+          },
+        },
+        logger: createLogger(),
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(1);
+      expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back.jpg']);
+
+      fakeWatcher.emitAdd('/watcher/incoming/new-front.jpg');
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(1);
+      expect(runtime.state.pendingQueue).toEqual([
+        '/watcher/incoming/back.jpg',
+        '/watcher/incoming/new-front.jpg',
+      ]);
+
+      await vi.advanceTimersByTimeAsync(59999);
+      expect(processor.process).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processor.process).toHaveBeenCalledTimes(3);
+      expect(processor.process).toHaveBeenNthCalledWith(2, '/watcher/incoming/back.jpg');
+      expect(processor.process).toHaveBeenNthCalledWith(3, '/watcher/incoming/new-front.jpg');
+      expect(runtime.state.pendingQueue).toEqual([]);
+      await runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replay a consumed variation path added while its drain is active', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const first = createDeferred<{ kind: 'started'; groupId: string; pairId: string }>();
+    const processor = {
+      process: vi.fn(async () => await first.promise),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch: vi.fn(),
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/front.jpg');
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+
+    fakeWatcher.emitAdd('/watcher/incoming/front.jpg');
+    expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/front.jpg']);
+    first.resolve({ kind: 'started', groupId: 'group', pairId: 'pair' });
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    expect(runtime.state.pendingQueue).toEqual([]);
+    await runtime.close();
+  });
+
+  it('retains non-retryable variation failures without automatically retrying on later adds', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const processor = {
+      process: vi.fn().mockRejectedValue(new Error('invalid variation state')),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch: vi.fn(),
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back.jpg']);
+
+    fakeWatcher.emitAdd('/watcher/incoming/new-front.jpg');
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    expect(runtime.state.pendingQueue).toEqual([
+      '/watcher/incoming/back.jpg',
+      '/watcher/incoming/new-front.jpg',
+    ]);
+    await runtime.close();
+  });
+
+  it('stops a retryable variation after exactly three total waterfalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const processor = {
+        process: vi.fn().mockRejectedValue(new VariationListingSidecarRetryableError('unavailable')),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: {
+          env: {
+            SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI: '3',
+            SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '10',
+            SIDECAR_JOB_RETRY_DELAY_NEXT_MS: '20',
+          },
+        },
+        logger: createLogger(),
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(processor.process).toHaveBeenCalledTimes(3);
+      expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back.jpg']);
+
+      fakeWatcher.emitAdd('/watcher/incoming/new-front.jpg');
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(3);
+      expect(runtime.state.pendingQueue).toEqual([
+        '/watcher/incoming/back.jpg',
+        '/watcher/incoming/new-front.jpg',
+      ]);
+      await runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replay consumed fronts when a later pair fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const processor = {
+        process: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group-1', pairId: 'pair-1' })
+          .mockResolvedValueOnce({
+            kind: 'completed' as const,
+            completionKind: 'new_variation' as const,
+            copyId: 'copy-1',
+            groupId: 'group-1',
+            status: 'completed' as const,
+            variationId: 'variation-1',
+          })
+          .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group-2', pairId: 'pair-2' })
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockResolvedValueOnce({
+            kind: 'completed' as const,
+            completionKind: 'new_variation' as const,
+            copyId: 'copy-2',
+            groupId: 'group-2',
+            status: 'completed' as const,
+            variationId: 'variation-2',
+          }),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: {
+          env: {
+            SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI: '3',
+            SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '1',
+            SIDECAR_JOB_RETRY_DELAY_NEXT_MS: '2',
+          },
+        },
+        logger: createLogger(),
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      runtime.state.pendingQueue.push(
+        '/watcher/incoming/front-1.jpg',
+        '/watcher/incoming/back-1.jpg',
+        '/watcher/incoming/front-2.jpg',
+        '/watcher/incoming/back-2.jpg'
+      );
+      fakeWatcher.emitAdd('/watcher/incoming/front-1.jpg');
+      await vi.runAllTicks();
+      await flushMicrotasks();
+      await flushMicrotasks();
+      await flushMicrotasks();
+      expect(processor.process).toHaveBeenCalledTimes(4);
+      expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back-2.jpg']);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processor.process).toHaveBeenCalledTimes(5);
+      expect(processor.process).toHaveBeenNthCalledWith(5, '/watcher/incoming/back-2.jpg');
+      expect(runtime.state.pendingQueue).toEqual([]);
+      await runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a pending variation retry timer on close', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const processor = {
+        process: vi
+          .fn()
+          .mockRejectedValue(new VariationListingSidecarRetryableError('unavailable')),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: { env: { SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '10' } },
+        logger: createLogger(),
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(1);
+      await runtime.close();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(processor.process).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not create a retry timer when an in-flight variation fails during close', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const deferred = createDeferred<never>();
+      const processor = { process: vi.fn(async () => await deferred.promise) };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: { env: { SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '10' } },
+        logger: createLogger(),
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await flushMicrotasks();
+      const closePromise = runtime.close();
+      deferred.reject(new VariationListingSidecarRetryableError('unavailable'));
+      await closePromise;
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(processor.process).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves a previously legacy-classified prefix across variation retries', async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeWatcher = new FakeWatcher();
+      const processor = {
+        process: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: 'legacy' as const })
+          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group', pairId: 'pair' }),
+      };
+      const processIncomingImageBatch = vi.fn(async (input) => ({
+        groupingState: createEmptyWatcherGroupingState(),
+        processedListings: [],
+        incoming: input.incoming,
+      }));
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: {
+          env: {
+            SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI: '3',
+            SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '1',
+            SIDECAR_JOB_RETRY_DELAY_NEXT_MS: '2',
+          },
+        },
+        logger: createLogger(),
+        processIncomingImageBatch,
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      runtime.state.pendingQueue.push('/watcher/incoming/legacy.jpg', '/watcher/incoming/back.jpg');
+      fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processor.process).toHaveBeenCalledTimes(3);
+      expect(processor.process).toHaveBeenNthCalledWith(3, '/watcher/incoming/back.jpg');
+      expect(processIncomingImageBatch).toHaveBeenLastCalledWith(
+        expect.objectContaining({ incoming: ['/watcher/incoming/legacy.jpg'] }),
+        undefined
+      );
+      await runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps an in-flight duplicate legacy add on the legacy path after the first batch accepts it', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const firstBatch = createDeferred<{ groupingState: { pending: never[] }; processedListings: never[] }>();
+    const processor = {
+      process: vi.fn(async () => ({ kind: 'legacy' as const })),
+    };
+    const processIncomingImageBatch = vi
+      .fn()
+      .mockImplementationOnce(async () => await firstBatch.promise)
+      .mockResolvedValueOnce({
+        groupingState: createEmptyWatcherGroupingState(),
+        processedListings: [],
+      });
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger: createLogger(),
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/legacy.jpg');
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    expect(processIncomingImageBatch).toHaveBeenCalledTimes(1);
+
+    fakeWatcher.emitAdd('/watcher/incoming/legacy.jpg');
+    firstBatch.resolve({ groupingState: createEmptyWatcherGroupingState(), processedListings: [] });
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    expect(processIncomingImageBatch).toHaveBeenCalledTimes(2);
     await runtime.close();
   });
 

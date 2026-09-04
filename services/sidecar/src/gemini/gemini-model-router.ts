@@ -1,7 +1,6 @@
 import { ApiError } from '@google/genai';
 import type { ResolvedAiModelRoute } from '@ebay-inventory/data';
 import {
-  GeminiDraftServiceError,
   GeminiDraftTitleOverflowError,
   GeminiDraftValidationError,
 } from './contracts.js';
@@ -75,22 +74,32 @@ function getDurationMs(startedAt: string, completedAt: string): number {
   return Math.max(0, Date.parse(completedAt) - Date.parse(startedAt));
 }
 
-function getErrorStatus(error: unknown): number | undefined {
+function getOwnErrorStatus(error: unknown): number | undefined {
   if (error instanceof ApiError && typeof error.status === 'number') {
     return error.status;
   }
 
   if (typeof error === 'object' && error !== null && 'status' in error) {
     const value = (error as { status?: unknown }).status;
-
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (typeof value === 'string') {
       const parsed = Number.parseInt(value, 10);
-      return Number.isFinite(parsed) ? parsed : undefined;
+      if (Number.isFinite(parsed)) return parsed;
     }
+  }
+
+  return undefined;
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current);
+    const status = getOwnErrorStatus(current);
+    if (status !== undefined) return status;
+    current = getErrorCause(current);
   }
 
   return undefined;
@@ -103,6 +112,65 @@ function getErrorCause(error: unknown): unknown {
 
   if (typeof error === 'object' && error !== null && 'cause' in error) {
     return (error as { cause?: unknown }).cause;
+  }
+
+  return undefined;
+}
+
+export interface GeminiDeterministicFailureInfo {
+  error: unknown;
+  kind: 'api_key' | 'client_error' | 'schema' | 'title_overflow' | 'validation';
+  status?: number;
+}
+
+const DETERMINISTIC_GEMINI_MESSAGE_KINDS = new Map<string, GeminiDeterministicFailureInfo['kind']>([
+  ['Generated listing title exceeds 80 characters after backend normalization.', 'title_overflow'],
+  ['Gemini returned an empty listing draft response.', 'schema'],
+  ['Gemini returned invalid JSON for the listing draft.', 'schema'],
+  ['Gemini returned JSON for the listing draft, but it was not an object.', 'schema'],
+  ['Gemini returned an empty variation identity response.', 'schema'],
+  ['Gemini returned invalid JSON for variation identity.', 'schema'],
+  ['Gemini returned an empty variation group content response.', 'schema'],
+  ['Gemini returned invalid JSON for variation group content.', 'schema'],
+]);
+
+export function getGeminiDeterministicFailure(
+  error: unknown
+): GeminiDeterministicFailureInfo | undefined {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof GeminiDraftTitleOverflowError) {
+      return { error: current, kind: 'title_overflow' };
+    }
+    if (current instanceof GeminiDraftValidationError) {
+      return { error: current, kind: 'validation' };
+    }
+    const currentMessage =
+      current instanceof Error
+        ? current.message
+        : typeof current === 'object' &&
+            current !== null &&
+            'message' in current &&
+            typeof (current as { message?: unknown }).message === 'string'
+          ? (current as { message: string }).message
+          : undefined;
+    const knownMessageKind = currentMessage
+      ? DETERMINISTIC_GEMINI_MESSAGE_KINDS.get(currentMessage)
+      : undefined;
+    if (knownMessageKind) {
+      return { error: current, kind: knownMessageKind };
+    }
+    if (currentMessage?.toLowerCase().includes('gemini_api_key is required')) {
+      return { error: current, kind: 'api_key' };
+    }
+    const status = getOwnErrorStatus(current);
+    if (typeof status === 'number' && status >= 400 && status < 500 && status !== 429) {
+      return { error: current, kind: 'client_error', status };
+    }
+    current = getErrorCause(current);
   }
 
   return undefined;
@@ -156,21 +224,19 @@ function routeAllowsFallback(route: ResolvedAiModelRoute, kind: GeminiFallbackKi
   }
 }
 
-function isGeminiApiKeyError(error: GeminiDraftServiceError): boolean {
-  return error.message.includes('GEMINI_API_KEY is required');
-}
-
 export function classifyGeminiFallbackKind(error: unknown): GeminiFallbackKind {
-  if (error instanceof GeminiDraftValidationError || error instanceof GeminiDraftTitleOverflowError) {
-    return 'none';
-  }
-
-  if (error instanceof GeminiDraftServiceError && isGeminiApiKeyError(error)) {
+  if (getGeminiDeterministicFailure(error)) {
     return 'none';
   }
 
   const status = getErrorStatus(error);
   const text = getErrorTexts(error).join(' ');
+
+  // Known client/request failures are deterministic. Keep 429 eligible for
+  // the configured rate-limit/quota handling, but never fallback on other 4xx.
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 429) {
+    return 'none';
+  }
 
   if (text.includes('quota') || text.includes('resource exhausted')) {
     return 'quota_exceeded';
@@ -232,30 +298,9 @@ export async function generateListingDraftWithFallback<
       startedAt,
     });
 
+    let draft: Draft;
     try {
-      const draft = await options.executeRoute(route);
-      const completedAt = asIsoTimestamp(options.now);
-      const succeededAttempt: GeminiFallbackAttempt<Route> = {
-        attemptOrder,
-        completedAt,
-        durationMs: getDurationMs(startedAt, completedAt),
-        fallbackKind: 'none',
-        route,
-        startedAt,
-        status: 'succeeded',
-      };
-      attempts.push(succeededAttempt);
-      await options.onAttemptSucceeded?.({
-        ...succeededAttempt,
-        draft,
-      });
-
-      return {
-        attempts,
-        draft,
-        selectedAttempt: succeededAttempt,
-        selectedRoute: route,
-      };
+      draft = await options.executeRoute(route);
     } catch (error) {
       const completedAt = asIsoTimestamp(options.now);
       const fallbackKind = classifyFallbackKind(error);
@@ -287,6 +332,31 @@ export async function generateListingDraftWithFallback<
         finalError: error,
       });
     }
+
+    // Audit callbacks are post-attempt bookkeeping. A callback failure must
+    // not be interpreted as a provider failure or trigger another model call.
+    const completedAt = asIsoTimestamp(options.now);
+    const succeededAttempt: GeminiFallbackAttempt<Route> = {
+      attemptOrder,
+      completedAt,
+      durationMs: getDurationMs(startedAt, completedAt),
+      fallbackKind: 'none',
+      route,
+      startedAt,
+      status: 'succeeded',
+    };
+    attempts.push(succeededAttempt);
+    await options.onAttemptSucceeded?.({
+      ...succeededAttempt,
+      draft,
+    });
+
+    return {
+      attempts,
+      draft,
+      selectedAttempt: succeededAttempt,
+      selectedRoute: route,
+    };
   }
 
   throw new Error('Gemini fallback router requires at least one route.');

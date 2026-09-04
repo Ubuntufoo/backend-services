@@ -47,6 +47,7 @@ export function buildVariationListingIdentityPrompt(
     'Without explicitYear, return yearEvidence only when visible card text explicitly states the production/release year in a copyright, manufacture, production, or explicit release-year line. Copy the exact supporting visibleText and imageIndex.',
     'Statistics, biography dates, career dates, card numbers, set knowledge, and design recognition are not year evidence.',
     'seasonEvidence is independent from Year. Return it only for one exact visibly printed adjacent sports season range such as 2024-25, 2024/25, or 2024-2025. Copy the exact supporting text and image index.',
+    'A standalone year or year-plus-product string such as "2003 Topps" is not season evidence. Return seasonEvidence: null unless an adjacent season range is visibly printed.',
     'serialEvidence is only for one unambiguous visibly printed serial fraction such as 037/199. Return exact visibleText, numerator, denominator, and imageIndex. Do not treat Card #10 of 25 or a card number as serial numbering.',
     'reviewNotes should be short factual observations useful to a human reviewing card identity. warnings should describe missing or uncertain identity evidence.',
     'Return strict JSON only. Do not add markdown fences, prose, or keys outside the expected shape.',

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { VariationListingAggregateSnapshot } from '@ebay-inventory/data';
+import type { ResolvedAiModelRoute, VariationListingAggregateSnapshot } from '@ebay-inventory/data';
 import type { GeminiDraftClient } from '../../../src/gemini/client.js';
 import {
   buildVariationListingGroupReviewInputFromAggregate,
@@ -7,6 +7,10 @@ import {
   deriveVariationListingCommonEbayAspects,
   evaluateVariationListingGroupReadiness,
   generateVariationListingGroupReview,
+  generateVariationListingGroupReviewWithFallback,
+  GeminiDraftServiceError,
+  GeminiDraftValidationError,
+  GeminiFallbackExecutionError,
   parseVariationListingGroupContentResponse,
   type GenerateVariationListingGroupReviewInput,
   generateVariationListingGroupReviewInputSchema,
@@ -67,6 +71,38 @@ const baseInput: GenerateVariationListingGroupReviewInput = {
   ],
   userHints: { groupTheme: '1997-98 Metal Universe Planet Metal basketball cards' },
 };
+
+function createRoute(modelName: string, routeOrder: number): ResolvedAiModelRoute {
+  return {
+    displayName: modelName,
+    fallbackOnQuotaExceeded: true,
+    fallbackOnRateLimit: true,
+    fallbackOnUnavailable: true,
+    freeTierStatus: 'confirmed',
+    isFreeTierEligible: true,
+    modelName,
+    provider: 'google',
+    requestsPerDay: 20,
+    requestsPerMinute: null,
+    routeOrder,
+    supportsImages: true,
+    supportsJsonOutput: true,
+    supportsStructuredOutput: true,
+    supportsText: true,
+    taskType: 'listing_draft_generation',
+  };
+}
+
+function createGroupReviewRawResponse(title: string) {
+  return {
+    text: JSON.stringify({
+      title,
+      description: 'Choose one card using the Card selector. Images correspond to the selected card.',
+      warnings: [],
+    }),
+    rawResponse: { fixture: true },
+  };
+}
 
 describe('variation-listing group review', () => {
   it('derives only truthful common aspects, using intersection for multi values', () => {
@@ -367,5 +403,137 @@ describe('variation-listing group review', () => {
     expect(result.readiness.ready).toBe(true);
     expect(result.derivedCommonEbayAspects.Sport).toEqual(['Basketball']);
     expect(result).not.toHaveProperty('price');
+  });
+
+  it('prepares config, client, and prompt once while falling through a nested 503', async () => {
+    const routes = [createRoute('gemini-first', 1), createRoute('gemini-second', 2)];
+    const generateDraftRaw = vi
+      .fn<GeminiDraftClient['generateDraftRaw']>()
+      .mockRejectedValueOnce(
+        new GeminiDraftServiceError('provider request failed', {
+          cause: Object.assign(new Error('high demand'), { status: 503 }),
+        })
+      )
+      .mockResolvedValueOnce(createGroupReviewRawResponse('Fallback group title'));
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(),
+      generateDraftRaw,
+    };
+    const loadConfig = vi.fn(() => ({ apiKey: 'test-key' }));
+    const getClient = vi.fn(() => client);
+    const resolveForTask = vi.fn(async () => routes);
+    const incrementGeminiCallsUsed = vi.fn(async () => undefined);
+
+    const result = await generateVariationListingGroupReviewWithFallback(baseInput, {
+      getClient,
+      loadConfig,
+      routeDataAccess: {
+        aiModelRoutes: { resolveForTask },
+        dailyUsage: { incrementGeminiCallsUsed },
+      },
+    });
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(getClient).toHaveBeenCalledTimes(1);
+    expect(getClient).toHaveBeenCalledWith('test-key');
+    expect(resolveForTask).toHaveBeenCalledTimes(1);
+    expect(resolveForTask).toHaveBeenCalledWith({
+      freeTierOnly: true,
+      provider: 'google',
+      requireImages: false,
+      requireJsonOutput: true,
+      requireStructuredOutput: true,
+      taskType: 'listing_draft_generation',
+    });
+    expect(incrementGeminiCallsUsed).toHaveBeenCalledTimes(2);
+    expect(client.prepareImageParts).not.toHaveBeenCalled();
+    expect(generateDraftRaw).toHaveBeenCalledTimes(2);
+
+    const firstRequest = generateDraftRaw.mock.calls[0]![0];
+    const secondRequest = generateDraftRaw.mock.calls[1]![0];
+    expect(firstRequest.model).toBe('gemini-first');
+    expect(secondRequest.model).toBe('gemini-second');
+    expect(firstRequest.prompt).toBe(secondRequest.prompt);
+    expect(firstRequest.imageParts).toEqual([]);
+    expect(secondRequest.imageParts).toEqual([]);
+    expect(result.title).toBe('Fallback group title');
+    expect(result.readiness.ready).toBe(true);
+  });
+
+  it('surfaces a typed exhausted error after all configured routes are unavailable', async () => {
+    const routes = [
+      createRoute('gemini-first', 1),
+      createRoute('gemini-second', 2),
+      createRoute('gemini-third', 3),
+    ];
+    const generateDraftRaw = vi
+      .fn<GeminiDraftClient['generateDraftRaw']>()
+      .mockRejectedValue(Object.assign(new Error('temporarily unavailable'), { status: 503 }));
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(),
+      generateDraftRaw,
+    };
+    const incrementGeminiCallsUsed = vi.fn(async () => undefined);
+    const promise = generateVariationListingGroupReviewWithFallback(baseInput, {
+      getClient: () => client,
+      loadConfig: () => ({ apiKey: 'test-key' }),
+      routeDataAccess: {
+        aiModelRoutes: { resolveForTask: vi.fn(async () => routes) },
+        dailyUsage: { incrementGeminiCallsUsed },
+      },
+    });
+
+    let caught: unknown;
+    try {
+      await promise;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(GeminiFallbackExecutionError);
+    const fallbackError = caught as GeminiFallbackExecutionError;
+    expect(fallbackError.attemptedModels).toEqual(['gemini-first', 'gemini-second', 'gemini-third']);
+    expect(fallbackError.fallbackExhausted).toBe(true);
+    expect(fallbackError.finalFallbackKind).toBe('unavailable');
+    expect(fallbackError.finalError).toBeInstanceOf(Error);
+    expect(generateDraftRaw).toHaveBeenCalledTimes(3);
+    expect(incrementGeminiCallsUsed).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not fall back or mark a deterministic schema failure retryable', async () => {
+    const routes = [createRoute('gemini-first', 1), createRoute('gemini-second', 2)];
+    const generateDraftRaw = vi.fn<GeminiDraftClient['generateDraftRaw']>(async () => ({
+      text: JSON.stringify({ title: 'Missing description' }),
+      rawResponse: { fixture: true },
+    }));
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(),
+      generateDraftRaw,
+    };
+    const incrementGeminiCallsUsed = vi.fn(async () => undefined);
+    const promise = generateVariationListingGroupReviewWithFallback(baseInput, {
+      getClient: () => client,
+      loadConfig: () => ({ apiKey: 'test-key' }),
+      routeDataAccess: {
+        aiModelRoutes: { resolveForTask: vi.fn(async () => routes) },
+        dailyUsage: { incrementGeminiCallsUsed },
+      },
+    });
+
+    let caught: unknown;
+    try {
+      await promise;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(GeminiFallbackExecutionError);
+    const fallbackError = caught as GeminiFallbackExecutionError;
+    expect(fallbackError.attemptedModels).toEqual(['gemini-first']);
+    expect(fallbackError.fallbackExhausted).toBe(false);
+    expect(fallbackError.finalFallbackKind).toBe('none');
+    expect(fallbackError.finalError).toBeInstanceOf(GeminiDraftValidationError);
+    expect(generateDraftRaw).toHaveBeenCalledTimes(1);
+    expect(incrementGeminiCallsUsed).toHaveBeenCalledTimes(1);
   });
 });

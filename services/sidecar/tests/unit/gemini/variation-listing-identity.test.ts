@@ -271,6 +271,45 @@ describe('variation-listing Gemini identity', () => {
     expect(result.identity.year).toBe('1997');
   });
 
+  it('drops unsupported optional season evidence instead of aborting identity generation', () => {
+    const response = {
+      ...modelResponse,
+      seasonEvidence: {
+        season: '2003-04',
+        visibleText: '2003 Topps',
+        imageIndex: 1,
+      },
+    };
+
+    const result = parseVariationListingIdentityResponse(JSON.stringify(response), undefined, input);
+
+    expect(result.identity.season).toBeUndefined();
+    expect(result.evidence).not.toHaveProperty('seasonEvidence');
+    expect(result.warnings).toContain(
+      'Gemini seasonEvidence was ignored because visibleText did not contain exactly one matching adjacent sports season.'
+    );
+    expect(result.selectorValue).not.toContain('2003-04');
+  });
+
+  it('drops malformed optional season evidence while preserving the rest of the identity response', () => {
+    const response = {
+      ...modelResponse,
+      seasonEvidence: {
+        season: '1997-98',
+        visibleText: '1997-98 SKYBOX METAL UNIVERSE',
+        imageIndex: 2,
+      },
+    };
+
+    const result = parseVariationListingIdentityResponse(JSON.stringify(response), undefined, input);
+
+    expect(result.identity.season).toBeUndefined();
+    expect(result.warnings).toContain(
+      'Gemini seasonEvidence was ignored because the optional field was malformed.'
+    );
+    expect(result.identity.set).toBe('Metal Universe');
+  });
+
   it('rejects malformed or unsupported model keys instead of widening the contract', () => {
     const response = {
       ...modelResponse,
@@ -352,6 +391,41 @@ describe('variation-listing Gemini identity', () => {
       variationMetadata: result.variationMetadata,
     });
   });
+
+  it('continues identity handoff when optional season evidence is semantically invalid', async () => {
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(async () => ({
+        imageParts: [{ text: 'front' }, { text: 'back' }],
+        inlineImageBytesApprox: 0,
+      })),
+      generateDraftRaw: vi.fn(async () => ({
+        text: JSON.stringify({
+          ...modelResponse,
+          seasonEvidence: {
+            season: '2003-04',
+            visibleText: '2003 Topps',
+            imageIndex: 1,
+          },
+        }),
+        rawResponse: { fixture: true },
+      })),
+    };
+
+    const result = await generateVariationListingIdentity(
+      input,
+      { model: 'gemini-test' },
+      {
+        getClient: () => client,
+        loadConfig: () => ({ apiKey: 'test-key' }),
+      }
+    );
+
+    expect(result.identity.season).toBeUndefined();
+    expect(result.warnings).toContain(
+      'Gemini seasonEvidence was ignored because visibleText did not contain exactly one matching adjacent sports season.'
+    );
+    expect(toVariationListingNewVariationIdentityHandoff(result).selectorValue).not.toContain('2003-04');
+  });
 });
 
 describe('variation-listing Gemini identity prompt', () => {
@@ -361,6 +435,7 @@ describe('variation-listing Gemini identity prompt', () => {
     expect(prompt).toContain('Never return Autographed');
     expect(prompt).toContain('Backend code constructs the selector deterministically');
     expect(prompt).toContain('Never guess a year');
+    expect(prompt).toContain('"2003 Topps" is not season evidence');
     expect(prompt).toContain('Image index 0 is the FRONT. Image index 1 is the BACK.');
     expect(prompt).toContain('"manufacturer": {"value":"string","imageIndex":0 | 1');
     expect(prompt).toContain('"yearEvidence": {"year":"YYYY"');

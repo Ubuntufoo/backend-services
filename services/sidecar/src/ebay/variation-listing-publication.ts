@@ -66,9 +66,10 @@ export interface VariationListingFrozenPublicationSnapshot {
   representativeImages: VariationListingRepresentativeImage[] | null;
 }
 
-/** Role-addressed immutable Media source intent. The seller EPS URL is remote
- * output and is therefore journaled only after eBay returns and exact read-back
- * confirms it; it is never fabricated or frozen before Media creation. */
+/** Role-addressed immutable Media source intent. The seller EPS identity is
+ * remote output and is persisted after eBay returns, before read-back, so an
+ * uncertain reconciliation can resume without replaying Media creation. It is
+ * never fabricated or frozen before Media creation. */
 export interface VariationListingMediaResource {
   copyId: string;
   role: 'front' | 'back';
@@ -480,9 +481,40 @@ function mediaEvidence(media: VariationListingRemoteMedia): Json {
   };
 }
 
+function mediaFromEvidence(value: Json, operationKey: string): VariationListingRemoteMedia {
+  const evidence = checkpointEvidence(value);
+  return {
+    expirationDate: requiredEvidenceString(evidence, 'expirationDate', `Media operation ${operationKey}`),
+    imageId: requiredEvidenceString(evidence, 'imageId', `Media operation ${operationKey}`),
+    imageUrl: requiredEvidenceString(evidence, 'imageUrl', `Media operation ${operationKey}`),
+    location: requiredEvidenceString(evidence, 'location', `Media operation ${operationKey}`),
+  };
+}
+
+function mediaReconciliationIssue(
+  read: VariationListingRemoteRead<VariationListingRemoteMedia>,
+  expected: VariationListingRemoteMedia
+): string | null {
+  if (read.state === 'unknown') return 'Media read is unknown.';
+  if (read.state === 'proven_absent') return 'Media read is proven absent at its returned Location.';
+  const mismatches: string[] = [];
+  if (read.value.imageId !== expected.imageId) mismatches.push('imageId');
+  if (read.value.location !== expected.location) mismatches.push('location');
+  if (read.value.imageUrl !== expected.imageUrl) mismatches.push('imageUrl');
+  if (read.value.expirationDate !== expected.expirationDate) mismatches.push('expirationDate');
+  if (!variationListingEpsImageUrlSchema.safeParse(read.value.imageUrl).success) mismatches.push('EPS imageUrl trust/shape');
+  return mismatches.length === 0 ? null : `Media exact read-back differs in: ${mismatches.join(', ')}.`;
+}
+
 function requiredEvidenceString(value: Json, key: string, label: string): string {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) || typeof value[key] !== 'string') {
-    throw new Error(`Variation listing ${label} evidence is missing ${key}.`);
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    typeof value[key] !== 'string' ||
+    !(value[key] as string).trim()
+  ) {
+    throw new Error(`Variation listing ${label} evidence is missing a non-empty ${key}.`);
   }
   return value[key] as string;
 }
@@ -822,27 +854,48 @@ export async function executeVariationListingPublication(
     const current = latest(history.get(operationKey)!);
     if (current) {
       if (isTerminal(current)) {
-        const location = requiredEvidenceString(current.evidence, 'location', `Media operation ${operationKey}`);
-        const imageId = requiredEvidenceString(current.evidence, 'imageId', `Media operation ${operationKey}`);
-        const imageUrl = requiredEvidenceString(current.evidence, 'imageUrl', `Media operation ${operationKey}`);
-        const expirationDate = requiredEvidenceString(current.evidence, 'expirationDate', `Media operation ${operationKey}`);
-        const read = await input.remote.getMedia(location);
-        if (
-          read.state !== 'present' ||
-          read.value.imageId !== imageId ||
-          read.value.location !== location ||
-          read.value.imageUrl !== imageUrl ||
-          read.value.expirationDate !== expirationDate ||
-          variationListingEpsImageUrlSchema.safeParse(imageUrl).success === false
-        ) {
-          throw new Error(`Variation listing Media operation ${operationKey} terminal identity no longer reconciles exactly.`);
+        const durable = mediaFromEvidence(current.evidence, operationKey);
+        const read = await input.remote.getMedia(durable.location);
+        const issue = mediaReconciliationIssue(read, durable);
+        if (issue) {
+          throw new Error(`Variation listing Media operation ${operationKey} terminal identity no longer reconciles exactly. ${issue}`);
         }
-        resolvedMediaImages.set(`${media.copyId}:${media.role}`, imageUrl);
+        if (read.state !== 'present') throw new Error('Variation listing Media reconciliation invariant failed.');
+        resolvedMediaImages.set(`${media.copyId}:${media.role}`, read.value.imageUrl);
+        continue;
+      }
+      if (current.state === 'unknown') {
+        let durable: VariationListingRemoteMedia;
+        try {
+          durable = mediaFromEvidence(current.evidence, operationKey);
+        } catch {
+          throw new Error(`Variation listing Media operation ${operationKey} has an unresolved checkpoint without a durably captured Media identity; replay is forbidden.`);
+        }
+        const read = await input.remote.getMedia(durable.location);
+        const issue = mediaReconciliationIssue(read, durable);
+        if (issue) {
+          throw new Error(`Variation listing Media operation ${operationKey} remains unresolved. ${issue} Creation will not be replayed.`);
+        }
+        if (read.state !== 'present') throw new Error('Variation listing Media reconciliation invariant failed.');
+        await appendCheckpoint(input, history, operationKey, {
+          attemptNumber: current.attempt_number + 1,
+          checkpointNumber: 1,
+          evidence: mediaEvidence(read.value),
+          observedRemoteState: 'present',
+          state: 'confirmed_complete',
+        });
+        resolvedMediaImages.set(`${media.copyId}:${media.role}`, read.value.imageUrl);
         continue;
       }
       throw new Error(`Variation listing Media operation ${operationKey} has started without a durably captured Media identity; replay is forbidden.`);
     }
-    await appendCheckpoint(input, history, operationKey, { attemptNumber: 1, checkpointNumber: 1, evidence: {}, state: 'started' });
+
+    await appendCheckpoint(input, history, operationKey, {
+      attemptNumber: 1,
+      checkpointNumber: 1,
+      evidence: {},
+      state: 'started',
+    });
     let created: VariationListingRemoteMedia;
     try {
       created = await input.mutations.createMedia(media.sourceUrl);
@@ -856,27 +909,27 @@ export async function executeVariationListingPublication(
       });
       throw error;
     }
-    const read = await input.remote.getMedia(created.location);
-    if (
-      read.state !== 'present' ||
-      read.value.imageId !== created.imageId ||
-      read.value.location !== created.location ||
-      read.value.imageUrl !== created.imageUrl ||
-      variationListingEpsImageUrlSchema.safeParse(read.value.imageUrl).success === false ||
-      read.value.expirationDate !== created.expirationDate
-    ) {
-      await appendCheckpoint(input, history, operationKey, {
-        attemptNumber: 1,
-        checkpointNumber: 2,
-        evidence: { reason: 'Created Media resource did not reconcile exactly.' },
-        observedRemoteState: 'unknown',
-        state: 'unknown',
-      });
-      throw new Error(`Variation listing Media operation ${operationKey} did not reconcile to its frozen EPS identity.`);
-    }
+
+    // Media creation has no source-keyed lookup/idempotency key. Persist the only
+    // recoverable remote identity before any read-back so a transient/mismatched
+    // GET can be retried safely without ever replaying createMedia().
     await appendCheckpoint(input, history, operationKey, {
       attemptNumber: 1,
       checkpointNumber: 2,
+      evidence: mediaEvidence(created),
+      observedRemoteState: 'unknown',
+      state: 'unknown',
+    });
+
+    const read = await input.remote.getMedia(created.location);
+    const issue = mediaReconciliationIssue(read, created);
+    if (issue) {
+      throw new Error(`Variation listing Media operation ${operationKey} remains unresolved. ${issue} Creation will not be replayed.`);
+    }
+    if (read.state !== 'present') throw new Error('Variation listing Media reconciliation invariant failed.');
+    await appendCheckpoint(input, history, operationKey, {
+      attemptNumber: 2,
+      checkpointNumber: 1,
       evidence: mediaEvidence(read.value),
       observedRemoteState: 'present',
       state: 'confirmed_complete',
