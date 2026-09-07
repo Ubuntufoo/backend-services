@@ -6,7 +6,10 @@ import type {
 } from '@ebay-inventory/data';
 import { describe, expect, it } from 'vitest';
 
-import { buildVariationListingInventoryPayloadBundle } from '@/ebay/variation-listing-payloads.js';
+import {
+  buildVariationListingHistoricalInventoryPayloadBundle,
+  buildVariationListingInventoryPayloadBundle,
+} from '@/ebay/variation-listing-payloads.js';
 
 const front1 = 'https://i.ebayimg.com/images/g/AAA/s-l1600.jpg';
 const back1 = 'https://i.ebayimg.com/images/g/BBB/s-l1600.jpg';
@@ -200,6 +203,32 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
     expect(result.children[1]?.selectorValue).toHaveLength(65);
     expect(result.children[1]?.inventoryItem.product?.imageUrls[0]).toBe(`${front2}?set_id=880000500F`);
     expect(result.group.aspects['x'.repeat(60)]).toEqual(['y'.repeat(80)]);
+  });
+
+  it('accepts a 65-character Card selector and rejects 66 characters', () => {
+    const accepted = fixture();
+    accepted.aggregate.variations[0]!.selector_value = 'x'.repeat(65);
+    expect(() => buildVariationListingInventoryPayloadBundle(accepted)).not.toThrow();
+
+    const rejected = fixture();
+    rejected.aggregate.variations[0]!.selector_value = 'x'.repeat(66);
+    expect(() => buildVariationListingInventoryPayloadBundle(rejected)).toThrow(/at most 65 characters/);
+    expect(buildVariationListingHistoricalInventoryPayloadBundle(rejected).children[1]?.selectorValue).toHaveLength(66);
+  });
+
+  it('accepts the proven Sandbox EPS host while rejecting lookalike hosts', () => {
+    const sandboxFront = 'https://i.sandbox.ebayimg.com/00/s/MTIxN1g5NjA=/z/MREAAeSwBhRqezb1/$_1.JPG?set_id=8800005007';
+    const sandboxBack = 'https://i.sandbox.ebayimg.com/00/s/MTIyNlg5NTE=/z/MGEAAeSwHu9qezb2/$_1.JPG?set_id=8800005007';
+    const result = build({ representativeImages: [
+      { copyId: 'c1', frontEpsUrl: sandboxFront, backEpsUrl: sandboxBack },
+      { copyId: 'c2', frontEpsUrl: front2, backEpsUrl: back2 },
+    ] });
+    expect(result.children[0]?.inventoryItem.product?.imageUrls).toEqual([sandboxFront, sandboxBack]);
+
+    expect(() => build({ representativeImages: [
+      { copyId: 'c1', frontEpsUrl: 'https://i.sandbox.ebayimg.com.evil.example/image.jpg', backEpsUrl: back1 },
+      { copyId: 'c2', frontEpsUrl: front2, backEpsUrl: back2 },
+    ] })).toThrow();
   });
 
   it.each([

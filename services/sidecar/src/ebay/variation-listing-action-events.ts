@@ -7,7 +7,8 @@ export type VariationListingActionName =
   | 'quantity'
   | 'withdraw'
   | 'abandon'
-  | 'cleanup';
+  | 'cleanup'
+  | 'return_to_review';
 
 export type VariationListingActionEvent = {
   action: VariationListingActionName;

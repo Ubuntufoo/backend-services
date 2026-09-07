@@ -91,6 +91,7 @@ import {
   type MarkAiModelAttemptSucceededInput,
   type ApplyVariationListingGroupReviewDraftInput,
   type MarkVariationListingPublishReadyInput,
+  type ReturnVariationListingToReviewInput,
   type CaptureVariationListingRevisionInput,
   type CaptureVariationListingRevisionResult,
   type AppendVariationListingJournalCheckpointInput,
@@ -200,6 +201,7 @@ export interface SidecarDataAccess {
     applyGroupReviewDraft(input: ApplyVariationListingGroupReviewDraftInput): Promise<VariationListingGroupRow>;
     markPublishReady(input: MarkVariationListingPublishReadyInput): Promise<VariationListingGroupRow>;
     reserveActionRevision(input: import('@ebay-inventory/data').ReserveVariationListingActionRevisionInput): Promise<VariationListingGroupRow>;
+    returnToReview(input: ReturnVariationListingToReviewInput): Promise<VariationListingGroupRow>;
     captureRevision(input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult>;
     appendJournalCheckpoint(input: AppendVariationListingJournalCheckpointInput): Promise<AppendVariationListingJournalCheckpointResult>;
     confirmRevision(input: ConfirmVariationListingRevisionInput): Promise<VariationListingGroupRow>;
@@ -301,6 +303,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       applyGroupReviewDraft: async (input) => await variationListingTransactions.applyGroupReviewDraft(input),
       markPublishReady: async (input) => await variationListingTransactions.markPublishReady(input),
       reserveActionRevision: async (input) => await variationListingTransactions.reserveActionRevision(input),
+      returnToReview: async (input) => await variationListingTransactions.returnToReview(input),
       captureRevision: async (input) => await variationListingTransactions.captureRevision(input),
       appendJournalCheckpoint: async (input) => await variationListingTransactions.appendJournalCheckpoint(input),
       confirmRevision: async (input) => await variationListingTransactions.confirmRevision(input),

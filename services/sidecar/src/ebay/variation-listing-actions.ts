@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   VariationListingTransactionConflictError,
@@ -14,6 +14,7 @@ import { EbaySellerApi } from '@/api/index.js';
 import { getEbayConfig } from '@/config/environment.js';
 import {
   buildVariationListingInventoryPayloadBundle,
+  buildVariationListingHistoricalInventoryPayloadBundle,
   type VariationListingInventoryPayloadBundle,
 } from '@/ebay/variation-listing-payloads.js';
 import {
@@ -107,6 +108,7 @@ export interface VariationListingActionDataAccess {
   confirmRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['confirmRevision'];
   advanceCleanupLifecycle: import('@ebay-inventory/data').VariationListingTransactionGateway['advanceCleanupLifecycle'];
   abandonUntouchedGroup: import('@ebay-inventory/data').VariationListingTransactionGateway['abandonUntouchedGroup'];
+  returnToReview: import('@ebay-inventory/data').VariationListingTransactionGateway['returnToReview'];
 }
 
 export interface VariationListingActionServiceOptions {
@@ -289,7 +291,16 @@ function normalizeItem(raw: unknown, sku: string) {
   if (rawSku !== undefined && (typeof rawSku !== 'string' || rawSku.trim() !== sku)) {
     throw new Error(`eBay inventory item identity mismatch for ${sku}.`);
   }
-  const semantic = projectInventoryItemSemanticSnapshot({ ...row, sku: typeof rawSku === 'string' && rawSku.trim() ? rawSku : sku });
+  const semanticSource = {
+    ...row,
+    // eBay may omit conditionDescriptors from GET responses when the persisted
+    // descriptor list is empty. Normalize that transport omission to [] only
+    // at the remote-read boundary; the later semantic comparison still fails
+    // closed if the frozen publication intent expected any real descriptors.
+    conditionDescriptors: row.conditionDescriptors ?? [],
+    sku: typeof rawSku === 'string' && rawSku.trim() ? rawSku : sku,
+  };
+  const semantic = projectInventoryItemSemanticSnapshot(semanticSource);
   const aliases = ['groupIds', 'inventoryItemGroupKeys']
     .filter((key) => key in row)
     .map((key) => Array.isArray(row[key]) ? (row[key] as unknown[]).map(String).map((value) => value.trim()) : []);
@@ -421,6 +432,7 @@ function hydrateInitial(row: VariationListingRevisionRow): VariationListingFroze
   const snapshot = row.snapshot as unknown as VariationListingFrozenPublicationRevision['snapshot'];
   return {
     snapshot,
+    historicalPayload: true,
     captureInput: {
       capturedDesiredRevision: row.captured_desired_revision,
       groupId: row.group_id,
@@ -437,7 +449,7 @@ function hydrateActive(row: VariationListingRevisionRow): VariationListingFrozen
   const snapshot = row.snapshot as unknown as VariationListingFrozenActiveRevision['snapshot'];
   return {
     snapshot,
-    confirmedBundle: buildVariationListingInventoryPayloadBundle({
+    confirmedBundle: buildVariationListingHistoricalInventoryPayloadBundle({
       aggregate: snapshot.confirmed.aggregate,
       representativeImages: snapshot.confirmed.representativeImages,
     }),
@@ -533,13 +545,22 @@ function mediaResourcesForAggregate(
   });
 }
 
-function latestUnresolvedOperation(checkpoints: readonly VariationListingPublishingCheckpointRow[]) {
+function latestUnresolvedOperation(
+  checkpoints: readonly VariationListingPublishingCheckpointRow[],
+  operationOrder?: readonly { operationKey: string; sequenceNo: number }[],
+) {
   const latest = new Map<string, VariationListingPublishingCheckpointRow>();
   for (const row of checkpoints) {
     const prior = latest.get(row.operation_key);
     if (!prior || row.attempt_number > prior.attempt_number || (row.attempt_number === prior.attempt_number && row.checkpoint_number > prior.checkpoint_number)) latest.set(row.operation_key, row);
   }
-  return [...latest.values()].find((row) => ['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(row.state));
+  const unresolved = [...latest.values()].filter((row) => ['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(row.state));
+  if (!operationOrder) return unresolved[0];
+  const sequenceByKey = new Map(operationOrder.map((operation) => [operation.operationKey, operation.sequenceNo]));
+  return unresolved.sort((left, right) =>
+    (sequenceByKey.get(left.operation_key) ?? Number.MAX_SAFE_INTEGER) -
+    (sequenceByKey.get(right.operation_key) ?? Number.MAX_SAFE_INTEGER)
+  )[0];
 }
 
 function unresolvedError(
@@ -614,10 +635,114 @@ export function createVariationListingActionService(options: VariationListingAct
     [...revisions].sort((left, right) => right.captured_desired_revision - left.captured_desired_revision);
   const unresolvedRevision = async (revisions: VariationListingRevisionRow[]) => {
     for (const revision of newestFirst(revisions)) {
-      const unresolved = latestUnresolvedOperation(await checkpoints(revision.revision_id));
+      const unresolved = latestUnresolvedOperation(await checkpoints(revision.revision_id), operationPlan(revision));
       if (unresolved) return { operation: unresolved, revision };
     }
     return null;
+  };
+  const assertTerminalUnpublishedCleanup = async (
+    action: VariationListingActionName,
+    groupId: string,
+    revision: VariationListingRevisionRow,
+    expectedIdentity: { groupKey: string; marketplaceId: string; skuCategoryCode: string; skuBucketToken: string },
+  ): Promise<void> => {
+    if (revisionKind(revision) !== 'cleanup') {
+      throw validationError(action, groupId, 'unpublished_cleanup_missing', 'A durable unpublished cleanup revision is required before this action can continue.', ['cleanup_failed_initial_publication']);
+    }
+    const snapshot = record(revision.snapshot);
+    if (snapshot.terminalLifecycle !== 'abandoned') {
+      throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'Only an unpublished cleanup revision may be reused for this action.', ['cleanup_failed_initial_publication']);
+    }
+    const plan = operationPlan(revision);
+    const invalid = (message: string): never => {
+      throw validationError(action, groupId, 'unpublished_cleanup_invalid', message, ['cleanup_failed_initial_publication']);
+    };
+    const final = plan.at(-1);
+    const ownedRemote = record(snapshot.ownedRemote);
+    const observed = record(snapshot.observed);
+    const orderedSkus = Array.isArray(snapshot.orderedSkus) && snapshot.orderedSkus.every((sku) => typeof sku === 'string' && sku.trim() === sku && sku !== '')
+      ? snapshot.orderedSkus as string[]
+      : null;
+    const rawOfferIdsBySku = ownedRemote.offerIdsBySku;
+    const offerIdsBySku = record(ownedRemote.offerIdsBySku);
+    if (snapshot.planVersion !== 1 || snapshot.groupKey !== expectedIdentity.groupKey || snapshot.marketplaceId !== expectedIdentity.marketplaceId ||
+      !orderedSkus || new Set(orderedSkus).size !== orderedSkus.length || orderedSkus.some((sku) => {
+        const prefix = `${expectedIdentity.skuCategoryCode}-${expectedIdentity.skuBucketToken}-`;
+        const suffix = sku.slice(prefix.length);
+        return !sku.startsWith(prefix) || !/^\d{6}$/.test(suffix) || suffix === '000000';
+      }) || snapshot.terminalLifecycle !== 'abandoned' || ownedRemote.publicationHistoryExists !== false || ownedRemote.listingId !== null ||
+      !snapshot.ownedRemote || Array.isArray(snapshot.ownedRemote) || rawOfferIdsBySku === null || typeof rawOfferIdsBySku !== 'object' || Array.isArray(rawOfferIdsBySku) || Object.keys(offerIdsBySku).some((sku) => !orderedSkus.includes(sku) || typeof offerIdsBySku[sku] !== 'string' || String(offerIdsBySku[sku]).trim() === '') ||
+      !snapshot.observed || Array.isArray(snapshot.observed) || observed.activeListingId !== null ||
+      typeof observed.groupPresent !== 'boolean' || !Array.isArray(observed.itemPresentSkus) || !Array.isArray(observed.offerPresentSkus) ||
+      !['absent', 'inactive-or-unpublished'].includes(String(observed.state))) {
+      invalid('The durable cleanup revision snapshot is incompatible with unpublished cleanup reuse.');
+    }
+    if (!final || final.operationKind !== 'final_absence_verification' || revision.operation_count !== plan.length || plan.length < 1 ||
+      plan.some((operation) => operation.operationKind === 'withdrawal')) {
+      invalid('The durable cleanup revision has invalid lifecycle operations.');
+    }
+    const groupKey = expectedIdentity.groupKey;
+    const validatedOrderedSkus = orderedSkus ?? [];
+    if (new Set(plan.map((operation) => operation.operationKey)).size !== plan.length ||
+      plan.some((operation, index) => operation.sequenceNo !== index + 1)) {
+      invalid('The durable cleanup revision operation identities are invalid.');
+    }
+    let seenGroup = false;
+    let seenItem = false;
+    for (const operation of plan) {
+      const intent = record(operation.intent);
+      const digest = createHash('sha256').update(canonicalJson(operation.intent)).digest('hex');
+      if (digest !== operation.intentDigest) {
+        invalid('The durable cleanup revision intent digest does not match its operation intent.');
+      }
+      const intentGroupKey = typeof intent.groupKey === 'string' ? intent.groupKey : null;
+      const intentSku = typeof intent.sku === 'string' ? intent.sku : null;
+      const intentOfferId = typeof intent.offerId === 'string' ? intent.offerId : null;
+      const intentKeys = Object.keys(intent);
+      const identityMatches =
+        operation.operationKind === 'cleanup_offer'
+          ? intentKeys.length === 2 && intentKeys.includes('offerId') && intentKeys.includes('sku') &&
+            operation.operationKey === `cleanup-offer:${intentSku}` && operation.targetRef === intentOfferId &&
+            Boolean(intentSku) && validatedOrderedSkus.includes(intentSku!) && offerIdsBySku[intentSku!] === intentOfferId && !seenGroup && !seenItem
+          : operation.operationKind === 'cleanup_group'
+            ? intentKeys.length === 1 && intentKeys[0] === 'groupKey' && operation.operationKey === 'cleanup-group' && operation.targetRef === groupKey && intentGroupKey === groupKey && !seenItem
+            : operation.operationKind === 'cleanup_child_inventory_item'
+              ? intentKeys.length === 1 && intentKeys[0] === 'sku' && operation.operationKey === `cleanup-item:${intentSku}` && operation.targetRef === intentSku && Boolean(intentSku) && validatedOrderedSkus.includes(intentSku!)
+              : operation.operationKind === 'final_absence_verification'
+                ? intentKeys.length === 5 && ['groupKey', 'marketplaceId', 'offerIdsBySku', 'orderedSkus', 'terminalLifecycle'].every((key) => intentKeys.includes(key)) &&
+                  operation.operationKey === 'final-absence' && operation.targetRef === groupKey && intentGroupKey === groupKey &&
+                  intent.marketplaceId === expectedIdentity.marketplaceId && canonicalJson(intent.offerIdsBySku) === canonicalJson(offerIdsBySku) &&
+                  canonicalJson(intent.orderedSkus) === canonicalJson(validatedOrderedSkus) && intent.terminalLifecycle === 'abandoned'
+                : false;
+      if (!identityMatches) {
+        invalid('The durable cleanup revision operation intent does not match its target identity.');
+      }
+      if (operation.operationKind === 'cleanup_group') seenGroup = true;
+      if (operation.operationKind === 'cleanup_child_inventory_item') seenItem = true;
+    }
+    const history = await checkpoints(revision.revision_id);
+    for (const operation of plan) {
+      const operationHistory = history.filter((checkpoint) => checkpoint.operation_key === operation.operationKey);
+      const latest = [...operationHistory]
+        .sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number)
+        .at(-1);
+      if (!latest || !['confirmed_complete', 'confirmed_no_op'].includes(latest.state)) {
+        throw unresolvedError(action, groupId, revision, latest ?? {
+          checkpoint_id: '', revision_id: revision.revision_id, operation_key: operation.operationKey,
+          attempt_number: 1, checkpoint_number: 1, state: 'started', observed_remote_state: null, evidence: {}, created_at: revision.captured_at,
+        });
+      }
+      if ((latest.observed_remote_state !== 'present' && latest.observed_remote_state !== 'proven_absent') ||
+        latest.evidence === null || typeof latest.evidence !== 'object' || Array.isArray(latest.evidence) || Object.keys(latest.evidence).length === 0) {
+        throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'The durable cleanup revision lacks exact terminal evidence for every operation.', ['cleanup_failed_initial_publication']);
+      }
+      if (latest.state === 'confirmed_no_op' && operationHistory.some((checkpoint) => checkpoint.state === 'unknown' || checkpoint.observed_remote_state === 'unknown')) {
+        throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'A cleanup operation reconciled to no effect after an unknown outcome and cannot be reused safely.', ['cleanup_failed_initial_publication']);
+      }
+      if (operation.operationKind === 'final_absence_verification' && latest.observed_remote_state !== 'proven_absent') {
+        throw validationError(action, groupId, 'unpublished_cleanup_absence_unproven', 'This action requires durable proof that the unpublished remote state is absent.', ['cleanup_failed_initial_publication']);
+      }
+    }
   };
   const assertNoOlderUnresolved = async (
     action: VariationListingActionName,
@@ -627,7 +752,7 @@ export function createVariationListingActionService(options: VariationListingAct
   ): Promise<void> => {
     for (const revision of newestFirst(revisions)) {
       if (revision.captured_desired_revision >= desiredRevision) continue;
-      const unresolved = latestUnresolvedOperation(await checkpoints(revision.revision_id));
+      const unresolved = latestUnresolvedOperation(await checkpoints(revision.revision_id), operationPlan(revision));
       if (unresolved) throw unresolvedError(action, groupId, revision, unresolved);
     }
   };
@@ -652,7 +777,7 @@ export function createVariationListingActionService(options: VariationListingAct
     const revisions = await rows(groupId).catch(() => [] as VariationListingRevisionRow[]);
     const revision = [...revisions].sort((left, right) => right.captured_desired_revision - left.captured_desired_revision)[0];
     const history = revision ? await checkpoints(revision.revision_id).catch(() => [] as VariationListingPublishingCheckpointRow[]) : [];
-    const unresolved = latestUnresolvedOperation(history);
+    const unresolved = latestUnresolvedOperation(history, revision ? operationPlan(revision) : undefined);
     const unknown = unresolved?.state === 'unknown' || unresolved?.observed_remote_state === 'unknown' || unresolved?.state === 'started';
     const exhausted = unresolved?.state === 'retry_exhausted';
     const issues = eBayIssues(error);
@@ -704,15 +829,25 @@ export function createVariationListingActionService(options: VariationListingAct
     }
   }
 
-  const executeInitial = async (aggregate: VariationListingAggregateSnapshot, existing?: VariationListingRevisionRow) => {
+  const executeInitial = async (
+    aggregate: VariationListingAggregateSnapshot,
+    existing?: VariationListingRevisionRow,
+    inheritedRepresentativeImages?: ReturnType<typeof reconstructVariationListingConfirmedRepresentativeImages>
+  ) => {
     const deps = await resolveDependencies();
     const frozen = existing
       ? hydrateInitial(existing)
-      : buildVariationListingFrozenPublicationRevision({
-          aggregate,
-          mediaResources: mediaResourcesForAggregate(aggregate, publicBaseUrl()),
-          revisionId: ids(),
-        });
+      : inheritedRepresentativeImages
+        ? buildVariationListingFrozenPublicationRevision({
+            aggregate,
+            representativeImages: inheritedRepresentativeImages,
+            revisionId: ids(),
+          })
+        : buildVariationListingFrozenPublicationRevision({
+            aggregate,
+            mediaResources: mediaResourcesForAggregate(aggregate, publicBaseUrl()),
+            revisionId: ids(),
+          });
     return await executeVariationListingPublication({
       frozen,
       journal: journalFor(existing),
@@ -734,8 +869,32 @@ export function createVariationListingActionService(options: VariationListingAct
     const revisions = await rows(groupId);
     const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'initial');
     if (!existing) await assertNoOlderUnresolved('publish', groupId, revisions, expectedDesiredRevision);
-    progress(existing ? 'reconcile_existing_revision' : 'execute_publication');
-    return await executeInitial(aggregate, existing);
+    let inheritedRepresentativeImages: ReturnType<typeof reconstructVariationListingConfirmedRepresentativeImages> | undefined;
+    if (!existing) {
+      const cleanupRevision = newestFirst(revisions).find((revision) =>
+        revision.captured_desired_revision < expectedDesiredRevision && revisionKind(revision) === 'cleanup'
+      );
+      const priorInitial = cleanupRevision
+        ? newestFirst(revisions).find((revision) => revision.captured_desired_revision < cleanupRevision.captured_desired_revision && revisionKind(revision) === 'initial')
+        : undefined;
+      if (cleanupRevision) {
+        if (!priorInitial) {
+          throw validationError('publish', groupId, 'publish_cleanup_lineage_missing', 'A prior unpublished cleanup has no matching initial publication revision for safe Media reuse.', ['inspect_group_history']);
+        }
+        await assertTerminalUnpublishedCleanup('publish', groupId, cleanupRevision, {
+          groupKey: aggregate.group.group_key,
+          marketplaceId: aggregate.group.marketplace_id,
+          skuCategoryCode: aggregate.group.sku_category_code,
+          skuBucketToken: aggregate.group.sku_bucket_token,
+        });
+        inheritedRepresentativeImages = reconstructVariationListingConfirmedRepresentativeImages({
+          revision: priorInitial,
+          checkpoints: await checkpoints(priorInitial.revision_id),
+        });
+      }
+    }
+    progress(existing ? 'reconcile_existing_revision' : inheritedRepresentativeImages ? 'execute_publication_reusing_media' : 'execute_publication');
+    return await executeInitial(aggregate, existing, inheritedRepresentativeImages);
   });
 
   const publishChanges = (groupId: string, expectedDesiredRevision: number) => run('publish_changes', groupId, async (progress) => {
@@ -781,7 +940,7 @@ export function createVariationListingActionService(options: VariationListingAct
     const revision = pending?.revision ?? newestFirst(revisions)[0];
     if (!revision) throw validationError('retry', groupId, 'retry_revision_missing', 'There is no frozen action revision to reconcile or retry.', ['refresh_group']);
     const history = await checkpoints(revision.revision_id);
-    const unresolved = latestUnresolvedOperation(history);
+    const unresolved = latestUnresolvedOperation(history, operationPlan(revision));
     if (!unresolved) throw validationError('retry', groupId, 'retry_not_required', 'The latest action revision has no unresolved operation.', ['refresh_group']);
     if (unresolved.state === 'retry_exhausted') throw new VariationListingActionError(409, {
       action: 'retry',
@@ -840,7 +999,7 @@ export function createVariationListingActionService(options: VariationListingAct
     const bundles: VariationListingInventoryPayloadBundle[] = [];
     for (const revision of revisions) {
       const images = reconstructVariationListingConfirmedRepresentativeImages({ revision, checkpoints: await checkpoints(revision.revision_id) });
-      bundles.push(buildVariationListingInventoryPayloadBundle({ aggregate: snapshotAggregate(revision), representativeImages: images }));
+      bundles.push(buildVariationListingHistoricalInventoryPayloadBundle({ aggregate: snapshotAggregate(revision), representativeImages: images }));
     }
     const last = revisions.at(-1)!;
     const lastImages = reconstructVariationListingConfirmedRepresentativeImages({ revision: last, checkpoints: await checkpoints(last.revision_id) });
@@ -862,7 +1021,7 @@ export function createVariationListingActionService(options: VariationListingAct
       const occupied = revisions.some((revision) => revision.captured_desired_revision === expectedDesiredRevision + 1);
       if (source && !occupied) {
         const sourceHistory = await checkpoints(source.revision_id);
-        const sourceUnresolved = latestUnresolvedOperation(sourceHistory);
+        const sourceUnresolved = latestUnresolvedOperation(sourceHistory, operationPlan(source));
         if (sourceUnresolved) throw unresolvedError('withdraw', groupId, source, sourceUnresolved);
         const sourceAggregate = snapshotAggregate(source);
         if (!semanticallyEqualAggregate(aggregate, sourceAggregate, true)) {
@@ -939,7 +1098,7 @@ export function createVariationListingActionService(options: VariationListingAct
       if (source && !occupied) {
         recoverySource = source;
         const sourceHistory = await checkpoints(source.revision_id);
-        const sourceUnresolved = latestUnresolvedOperation(sourceHistory);
+        const sourceUnresolved = latestUnresolvedOperation(sourceHistory, operationPlan(source));
         if (sourceUnresolved) throw unresolvedError(action, groupId, source, sourceUnresolved);
         if (!semanticallyEqualAggregate(aggregate, snapshotAggregate(source))) {
           throw validationError(action, groupId, 'variation_listing_state_stale', 'Cleanup reservation recovery is blocked because the group changed after the original reservation.', ['refresh_group', 'review_pending_changes']);
@@ -982,11 +1141,11 @@ export function createVariationListingActionService(options: VariationListingAct
       );
       if (!source) throw validationError(action, groupId, 'abandon_requires_frozen_revision', 'This non-empty unpublished group has no frozen publication revision to prove exact ownership.', ['leave_group_in_review', 'publish_or_create_recovery_revision']);
       const sourceHistory = await checkpoints(source.revision_id);
-      const sourceUnresolved = latestUnresolvedOperation(sourceHistory);
+      const sourceUnresolved = latestUnresolvedOperation(sourceHistory, operationPlan(source));
       if (sourceUnresolved) throw unresolvedError(action, groupId, source, sourceUnresolved);
       deps = await resolveDependencies();
       const images = reconstructVariationListingConfirmedRepresentativeImages({ revision: source, checkpoints: sourceHistory });
-      const bundle = buildVariationListingInventoryPayloadBundle({ aggregate: snapshotAggregate(source), representativeImages: images });
+      const bundle = buildVariationListingHistoricalInventoryPayloadBundle({ aggregate: snapshotAggregate(source), representativeImages: images });
       const plan = await prepareVariationListingCleanupPlan({ ownedBundles: [bundle], ownedRemote: { listingId: null, offerIdsBySku: durableOfferIds(source, sourceHistory), publicationHistoryExists: false }, protection: { state: 'clear' }, remote: deps.remote });
       let capturedDesiredRevision: number;
       if (recoveringReservation) {
@@ -1011,11 +1170,62 @@ export function createVariationListingActionService(options: VariationListingAct
     return await executeVariationListingCleanup({ frozen, journal: journalFor(journalRevision), mutations: resolvedDeps.mutations, remote: resolvedDeps.remote, transaction });
   };
 
+  const returnToReview = (groupId: string, expectedDesiredRevision: number) =>
+    run('return_to_review', groupId, async (progress) => {
+      const aggregate = await requireAggregate(groupId, 'return_to_review', expectedDesiredRevision);
+      if (aggregate.group.last_confirmed_revision !== null) {
+        throw validationError('return_to_review', groupId, 'return_to_review_published_forbidden', 'Published variation listings cannot return to unpublished review.', ['withdraw_group']);
+      }
+      if (!['publish-ready', 'abandoned'].includes(aggregate.group.lifecycle_state)) {
+        throw validationError('return_to_review', groupId, 'return_to_review_lifecycle_blocked', 'Return to Review requires an unpublished publish-ready or already-cleaned group.', ['refresh_group']);
+      }
+      let cleaned = aggregate;
+      let cleanupRevisionId: string;
+      if (aggregate.group.lifecycle_state === 'abandoned') {
+        const cleanupRevision = newestFirst(await rows(groupId)).find((revision) =>
+          revision.captured_desired_revision === aggregate.group.desired_revision && revisionKind(revision) === 'cleanup'
+        );
+        if (!cleanupRevision) {
+          throw validationError('return_to_review', groupId, 'return_to_review_cleanup_missing', 'A durable unpublished cleanup revision is required before returning to review.', ['cleanup_failed_initial_publication']);
+        }
+        await assertTerminalUnpublishedCleanup('return_to_review', groupId, cleanupRevision, {
+          groupKey: aggregate.group.group_key,
+          marketplaceId: aggregate.group.marketplace_id,
+          skuCategoryCode: aggregate.group.sku_category_code,
+          skuBucketToken: aggregate.group.sku_bucket_token,
+        });
+        cleanupRevisionId = cleanupRevision.revision_id;
+      } else {
+        const revisionsBefore = await rows(groupId);
+        const unresolved = await unresolvedRevision(revisionsBefore);
+        if (unresolved) throw unresolvedError('return_to_review', groupId, unresolved.revision, unresolved.operation);
+
+        progress('cleanup_failed_initial_publication');
+        const cleanupResult = await performUnpublishedAbandon('cleanup', groupId, expectedDesiredRevision, progress);
+        cleaned = await requireAggregate(groupId, 'return_to_review');
+        if (cleaned.group.lifecycle_state !== 'abandoned' || cleaned.group.last_confirmed_revision !== null) {
+          throw new Error('Variation listing failed-initial cleanup did not reach exact unpublished abandonment.');
+        }
+        const revisionId = record(cleanupResult).revisionId;
+        if (typeof revisionId !== 'string' || revisionId.trim() === '') {
+          throw new Error('Variation listing failed-initial cleanup returned no durable revision identity.');
+        }
+        cleanupRevisionId = revisionId;
+      }
+      progress('return_to_review');
+      const reopened = await options.data.returnToReview({
+        cleanupRevisionId,
+        expectedDesiredRevision: cleaned.group.desired_revision,
+        groupId,
+      });
+      return { desiredRevision: reopened.desired_revision, lifecycleState: reopened.lifecycle_state, cleanupRevisionId };
+    });
+
   const abandon = (groupId: string, expectedDesiredRevision: number) =>
     run('abandon', groupId, async (progress) => await performUnpublishedAbandon('abandon', groupId, expectedDesiredRevision, progress));
 
   const cleanup = (groupId: string, expectedDesiredRevision: number) =>
     run('cleanup', groupId, async (progress) => await performUnpublishedAbandon('cleanup', groupId, expectedDesiredRevision, progress));
 
-  return { abandon, cleanup, publish, publishChanges, quantity, retry, withdraw };
+  return { abandon, cleanup, publish, publishChanges, quantity, retry, returnToReview, withdraw };
 }

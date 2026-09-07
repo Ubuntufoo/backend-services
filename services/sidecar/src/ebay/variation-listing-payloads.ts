@@ -10,6 +10,7 @@ const SELECTOR_NAME = 'Card' as const;
 const LISTING_FORMAT = 'FIXED_PRICE' as const;
 const CURRENCY = 'USD' as const;
 const MAX_INVENTORY_KEY_LENGTH = 50;
+const MAX_SELECTOR_VALUE_LENGTH = 65;
 
 const CONDITION_RANK: Record<string, number> = {
   POOR: 0,
@@ -28,6 +29,11 @@ const inventoryKeySchema = trimmedText(MAX_INVENTORY_KEY_LENGTH);
 const numericIdSchema = z.string().regex(/^\d+$/);
 const aspectNameSchema = trimmedText();
 const aspectValueSchema = trimmedText();
+const selectorValueSchema = z
+  .string()
+  .min(1)
+  .max(MAX_SELECTOR_VALUE_LENGTH, `Card selector value must be at most ${MAX_SELECTOR_VALUE_LENGTH} characters.`)
+  .refine((value) => value === value.trim(), 'Value must be outer-trimmed.');
 const conditionDescriptorSchema = z
   .object({
     additionalInfo: trimmedText(30).optional(),
@@ -44,6 +50,8 @@ const commonAspectsInputSchema = z
   .refine((value) => !Object.prototype.hasOwnProperty.call(value, SELECTOR_NAME), 'Common group aspects must not contain the Card selector.')
   .refine((value) => Object.prototype.hasOwnProperty.call(value, 'Sport'), 'Category 261328 requires a truthful common Sport aspect.');
 
+const TRUSTED_EBAY_EPS_HOSTS = new Set(['i.ebayimg.com', 'i.sandbox.ebayimg.com']);
+
 export const variationListingEpsImageUrlSchema = z
   .string()
   .url()
@@ -51,13 +59,13 @@ export const variationListingEpsImageUrlSchema = z
     const url = new URL(value);
     return (
       url.protocol === 'https:' &&
-      url.hostname === 'i.ebayimg.com' &&
+      TRUSTED_EBAY_EPS_HOSTS.has(url.hostname) &&
       !url.username &&
       !url.password &&
       !url.hash &&
       url.pathname.length > 1
     );
-  }, 'Representative image must be a trusted HTTPS i.ebayimg.com EPS URL.');
+  }, 'Representative image must be a trusted HTTPS eBay EPS URL.');
 
 export const variationListingChildInventoryItemPayloadSchema = z
   .object({
@@ -112,38 +120,39 @@ export const variationListingOfferPayloadSchema = z
   })
   .strict();
 
-export const variationListingInventoryItemGroupPayloadSchema = z
-  .object({
-    aspects: z.record(aspectNameSchema, z.array(aspectValueSchema).min(1)),
-    description: trimmedText(4000),
-    inventoryItemGroupKey: inventoryKeySchema,
-    title: trimmedText(80),
-    variantSKUs: z.array(inventoryKeySchema).min(2),
-    variesBy: z
-      .object({
-        aspectsImageVariesBy: z.tuple([z.literal(SELECTOR_NAME)]),
-        specifications: z.tuple([
-          z.object({ name: z.literal(SELECTOR_NAME), values: z.array(aspectValueSchema).min(2) }).strict(),
-        ]),
-      })
-      .strict(),
-  })
-  .strict()
-  .superRefine((group, context) => {
-    const selectorValues = group.variesBy.specifications[0].values;
-    if (group.variantSKUs.length !== selectorValues.length) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'variantSKUs and ordered Card selector values must have the same length.',
-      });
-    }
-    if (new Set(group.variantSKUs).size !== group.variantSKUs.length) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['variantSKUs'], message: 'Variant SKUs must be unique.' });
-    }
-    if (new Set(selectorValues).size !== selectorValues.length) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['variesBy', 'specifications', 0, 'values'], message: 'Card selector values must be unique.' });
-    }
-  });
+const inventoryItemGroupPayloadSchema = (selectorSchema: z.ZodType<string>) =>
+  z
+    .object({
+      aspects: z.record(aspectNameSchema, z.array(aspectValueSchema).min(1)),
+      description: trimmedText(4000),
+      inventoryItemGroupKey: inventoryKeySchema,
+      title: trimmedText(80),
+      variantSKUs: z.array(inventoryKeySchema).min(2),
+      variesBy: z
+        .object({
+          aspectsImageVariesBy: z.tuple([z.literal(SELECTOR_NAME)]),
+          specifications: z.tuple([
+            z.object({ name: z.literal(SELECTOR_NAME), values: z.array(selectorSchema).min(2) }).strict(),
+          ]),
+        })
+        .strict(),
+    })
+    .strict()
+    .superRefine((group, context) => {
+      const selectorValues = group.variesBy.specifications[0].values;
+      if (group.variantSKUs.length !== selectorValues.length) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: 'variantSKUs and ordered Card selector values must have the same length.' });
+      }
+      if (new Set(group.variantSKUs).size !== group.variantSKUs.length) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['variantSKUs'], message: 'Variant SKUs must be unique.' });
+      }
+      if (new Set(selectorValues).size !== selectorValues.length) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['variesBy', 'specifications', 0, 'values'], message: 'Card selector values must be unique.' });
+      }
+    });
+
+export const variationListingInventoryItemGroupPayloadSchema = inventoryItemGroupPayloadSchema(selectorValueSchema);
+const historicalVariationListingInventoryItemGroupPayloadSchema = inventoryItemGroupPayloadSchema(aspectValueSchema);
 
 export const variationListingPublishGroupRequestSchema = z
   .object({
@@ -226,6 +235,9 @@ function validateAggregateIdentity(aggregate: VariationListingAggregateSnapshot)
     if (variation.price_currency !== CURRENCY || !isVariationListingManualPriceAmount(variation.price_amount)) {
       throw new Error('Variation prices must be persisted USD manual tiers.');
     }
+    if (!variation.selector_value || variation.selector_value !== variation.selector_value.trim()) {
+      throw new Error('Variation selector values must be present and outer-trimmed.');
+    }
   });
   if (new Set(ordered.map((variation) => variation.variation_id)).size !== ordered.length) {
     throw new Error('Variation ids must be unique.');
@@ -252,10 +264,10 @@ function validateAggregateIdentity(aggregate: VariationListingAggregateSnapshot)
   if (incompatible.length > 0) throw new Error('Available physical copies must satisfy the shared group condition tier.');
 }
 
-export function buildVariationListingInventoryPayloadBundle(input: {
+function buildVariationListingInventoryPayloadBundleInternal(input: {
   aggregate: VariationListingAggregateSnapshot;
   representativeImages: readonly VariationListingRepresentativeImage[];
-}): VariationListingInventoryPayloadBundle {
+}, historicalOverlongSelector: boolean): VariationListingInventoryPayloadBundle {
   const aggregate = input.aggregate;
   validateAggregateIdentity(aggregate);
   const group = aggregate.group;
@@ -329,7 +341,9 @@ export function buildVariationListingInventoryPayloadBundle(input: {
     };
   });
 
-  const groupPayload = variationListingInventoryItemGroupPayloadSchema.parse({
+  const groupPayload = (historicalOverlongSelector
+    ? historicalVariationListingInventoryItemGroupPayloadSchema
+    : variationListingInventoryItemGroupPayloadSchema).parse({
     aspects: commonAspects,
     description: group.description,
     inventoryItemGroupKey: group.group_key,
@@ -352,4 +366,21 @@ export function buildVariationListingInventoryPayloadBundle(input: {
     groupKey: group.group_key,
     publishRequest,
   };
+}
+
+export function buildVariationListingInventoryPayloadBundle(input: {
+  aggregate: VariationListingAggregateSnapshot;
+  representativeImages: readonly VariationListingRepresentativeImage[];
+}): VariationListingInventoryPayloadBundle {
+  return buildVariationListingInventoryPayloadBundleInternal(input, false);
+}
+
+/** Historical-only reconstruction used to prove ownership of a frozen failed
+ * publication created before the 65-character Card-selector guard existed.
+ * New publication paths must use buildVariationListingInventoryPayloadBundle. */
+export function buildVariationListingHistoricalInventoryPayloadBundle(input: {
+  aggregate: VariationListingAggregateSnapshot;
+  representativeImages: readonly VariationListingRepresentativeImage[];
+}): VariationListingInventoryPayloadBundle {
+  return buildVariationListingInventoryPayloadBundleInternal(input, true);
 }

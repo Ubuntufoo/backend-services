@@ -49,9 +49,7 @@ describe('variation-listing Gemini identity', () => {
       input
     );
 
-    expect(result.selectorValue).toBe(
-      '1997-98 Metal Universe Planet Metal Marcus Camby #6 Toronto Raptors'
-    );
+    expect(result.selectorValue).toBe('1997-98 Metal Universe Planet Metal Marcus Camby #6');
     expect(result.identity).toMatchObject({
       cardNumber: '6',
       playerAthlete: 'Marcus Camby',
@@ -81,6 +79,21 @@ describe('variation-listing Gemini identity', () => {
     });
     expect(result.variationMetadata).not.toHaveProperty('priceSuggestion');
     expect(result.variationMetadata).not.toHaveProperty('Autographed');
+  });
+
+  it('shortens a truthful generated Card selector to eBay\'s 65-character limit', () => {
+    const response = {
+      ...modelResponse,
+      facts: {
+        ...modelResponse.facts,
+        set: {value: 'Extremely Long Premium Basketball Collection Name', imageIndex: 1, visibleEvidence: 'set visible'},
+        team: {value: 'Philadelphia Seventy Sixers Basketball Club', imageIndex: 0, visibleEvidence: 'team visible'},
+      },
+    };
+    const result = parseVariationListingIdentityResponse(JSON.stringify(response), undefined, input);
+    expect(result.selectorValue.length).toBeLessThanOrEqual(65);
+    expect(result.selectorValue).toContain('Marcus Camby');
+    expect(result.selectorValue).toContain('#6');
   });
 
   it('uses explicit operator year without accepting model yearEvidence', () => {

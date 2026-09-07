@@ -1,7 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
-import type { VariationListingAggregateSnapshot } from '@ebay-inventory/data';
+import type { VariationListingAggregateSnapshot, VariationListingPublishingCheckpoint, VariationListingRevision } from '@ebay-inventory/data';
 
 import {
   createVariationListingApiRouter,
@@ -52,6 +52,7 @@ function actions(): VariationListingApiActions {
     withdraw: vi.fn(async () => ({ lifecycleState: 'withdrawn' })),
     abandon: vi.fn(async () => ({ lifecycleState: 'abandoned' })),
     cleanup: vi.fn(async () => ({ lifecycleState: 'terminal-absent' })),
+    returnToReview: vi.fn(async () => ({ lifecycleState: 'review' })),
   };
 }
 
@@ -78,6 +79,12 @@ describe('YP6.2 action routes', () => {
       .send({ expectedDesiredRevision: 4, variationId, copyId, availabilityState: 'unavailable' });
     expect(quantity.status).toBe(200);
     expect(actionService.quantity).toHaveBeenCalledWith(groupId, { expectedDesiredRevision: 4, variationId, copyId, availabilityState: 'unavailable' });
+
+    const returnToReview = await request(app(dataAccess, actionService))
+      .post(`/api/variation-listings/${groupId}/actions/return-to-review`)
+      .send({ expectedDesiredRevision: 4 });
+    expect(returnToReview.status).toBe(200);
+    expect(actionService.returnToReview).toHaveBeenCalledWith(groupId, 4);
   });
 
   it('serializes the UI-ready action status and omits raw stack traces', async () => {
@@ -148,5 +155,31 @@ describe('YP6.2 action routes', () => {
     });
     expect(response.body.warning.recommendedActions).toEqual(expect.arrayContaining(['refresh_group', 'do_not_retry_action']));
     expect(JSON.stringify(response.body)).not.toContain('supersecret');
+  });
+
+  it('reports the first unresolved operation in frozen executor order', async () => {
+    const dataAccess = access();
+    const revision = {
+      capturedDesiredRevision: 4,
+      groupId,
+      operationCount: 2,
+      operationPlan: [
+        { sequence_no: 1, operation_key: 'first-op', operation_kind: 'child_inventory_item_write', target_ref: 'sku-1', intent_version: 1, intent_digest: 'a'.repeat(64), intent: {} },
+        { sequence_no: 2, operation_key: 'later-op', operation_kind: 'child_inventory_item_write', target_ref: 'sku-2', intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+      ],
+      revisionId: 'revision-1',
+      snapshotDigest: 'c'.repeat(64),
+      source: { captured_at: '2026-09-02T00:00:00Z' },
+    } as unknown as VariationListingRevision;
+    const checkpoints = [
+      { operationKey: 'later-op', state: 'unknown', observedRemoteState: 'unknown', attemptNumber: 1, checkpointNumber: 1 },
+      { operationKey: 'first-op', state: 'unknown', observedRemoteState: 'unknown', attemptNumber: 1, checkpointNumber: 1 },
+    ] as unknown as VariationListingPublishingCheckpoint[];
+    vi.mocked(dataAccess.listRevisionsByGroupId).mockResolvedValue([revision]);
+    vi.mocked(dataAccess.listCheckpointsByRevisionId).mockResolvedValue(checkpoints);
+
+    const response = await request(app(dataAccess, actions())).get(`/api/variation-listings/${groupId}`);
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({ operationKey: 'first-op', retryStatus: 'reconciliation_required' });
   });
 });

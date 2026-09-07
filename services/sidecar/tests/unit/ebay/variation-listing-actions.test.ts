@@ -1,9 +1,13 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
 
 import { createVariationListingActionService, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
 import { subscribeVariationListingActionEvents } from '@/ebay/variation-listing-action-events.js';
-import { buildVariationListingInventoryPayloadBundle } from '@/ebay/variation-listing-payloads.js';
+import {
+  buildVariationListingHistoricalInventoryPayloadBundle,
+  buildVariationListingInventoryPayloadBundle,
+} from '@/ebay/variation-listing-payloads.js';
 import { VariationListingTransactionConflictError } from '@ebay-inventory/data';
 
 const groupId = '11111111-1111-4111-8111-111111111111';
@@ -13,6 +17,8 @@ const revisionId = '44444444-4444-4444-8444-444444444444';
 const variationBId = '66666666-6666-4666-8666-666666666666';
 const copyBId = '77777777-7777-4777-8777-777777777777';
 const withdrawalRevisionId = '88888888-8888-4888-8888-888888888888';
+
+const intentDigest = (intent: unknown) => createHash('sha256').update(JSON.stringify(intent)).digest('hex');
 
 function aggregate(overrides: Partial<VariationListingAggregateSnapshot['group']> = {}): VariationListingAggregateSnapshot {
   return {
@@ -129,22 +135,28 @@ function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?
       confirmRevision: vi.fn(),
       advanceCleanupLifecycle: vi.fn(),
       abandonUntouchedGroup: vi.fn(),
+      returnToReview: vi.fn(),
     },
     updateCopyAvailability,
   };
 }
 
-function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: boolean; failWithdrawalOnce?: boolean; unpublished?: boolean } = {}) {
+function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: boolean; failWithdrawalOnce?: boolean; unpublished?: boolean; historicalOverlong?: boolean } = {}) {
   const current = aggregate({ lifecycle_state: options.unpublished ? 'publish-ready' : 'active', desired_revision: options.unpublished ? 3 : options.pending ? 4 : 3, last_confirmed_revision: options.unpublished ? null : 3, next_inventory_serial: 3 });
   const secondVariation = { ...current.variations[0]!, variation_id: variationBId, selector_value: 'Card B', sku: 'BSKBL-McGrady-000002', representative_copy_id: copyBId, inventory_serial: 2, position: 1 };
   const secondCopy = { ...current.copies[0]!, copy_id: copyBId, variation_id: variationBId, front_r2_key: 'variation/front-b.jpg', back_r2_key: 'variation/back-b.jpg' };
   current.variations = [current.variations[0]!, secondVariation];
   current.copies = [current.copies[0]!, secondCopy];
+  if (options.historicalOverlong) {
+    current.variations[0]!.selector_value = 'x'.repeat(66);
+  }
   const representativeImages = [
     { copyId, frontEpsUrl: 'https://i.ebayimg.com/images/g/front-a/s-l1600.jpg', backEpsUrl: 'https://i.ebayimg.com/images/g/back-a/s-l1600.jpg' },
     { copyId: copyBId, frontEpsUrl: 'https://i.ebayimg.com/images/g/front-b/s-l1600.jpg', backEpsUrl: 'https://i.ebayimg.com/images/g/back-b/s-l1600.jpg' },
   ];
-  const bundle = buildVariationListingInventoryPayloadBundle({ aggregate: current, representativeImages });
+  const bundle = (options.historicalOverlong
+    ? buildVariationListingHistoricalInventoryPayloadBundle
+    : buildVariationListingInventoryPayloadBundle)({ aggregate: current, representativeImages });
   const confirmedRevision: VariationListingRevisionRow = {
     revision_id: revisionId, group_id: groupId, captured_desired_revision: 3, snapshot_version: 1, snapshot_digest: 'a'.repeat(64),
     snapshot: { aggregate: current, representativeImages }, operation_plan: [{ sequence_no: 1, operation_key: 'group-publish', operation_kind: 'group_publish', target_ref: current.group.group_key, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} }], operation_count: 1, captured_at: '2026-09-02T00:00:00Z',
@@ -268,6 +280,14 @@ describe('YP6.2 variation listing actions', () => {
     expect(harness.remoteFactory).toHaveBeenCalledTimes(1);
   });
 
+  it('reconstructs published ownership from a historical overlong revision during withdrawal', async () => {
+    const harness = activeWithdrawalHarness({ historicalOverlong: true });
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.withdraw(groupId, 3)).resolves.toMatchObject({ lifecycleState: 'withdrawn', revisionId: withdrawalRevisionId });
+    expect(harness.remoteFactory).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers an orphaned withdrawal reservation without reserving a second revision', async () => {
     const harness = activeWithdrawalHarness();
     const source = (await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source;
@@ -302,6 +322,156 @@ describe('YP6.2 variation listing actions', () => {
     expect(harness.access.value.reserveActionRevision).toHaveBeenCalledTimes(1);
     expect(harness.access.value.captureRevision).toHaveBeenCalledTimes(2);
     expect(harness.deletes).toEqual([]);
+  });
+
+  it('resumes return to review from abandoned after cleanup succeeded but reopen acknowledgement failed', async () => {
+    const current = aggregate({ desired_revision: 4, lifecycle_state: 'abandoned' });
+    const cleanupId = '99999999-9999-4999-8999-999999999999';
+    const cleanupRevision: VariationListingRevisionRow = {
+      revision_id: cleanupId,
+      group_id: groupId,
+      captured_desired_revision: 4,
+      snapshot_version: 1,
+      snapshot_digest: 'c'.repeat(64),
+      snapshot: {
+        planVersion: 1,
+        groupKey: current.group.group_key,
+        marketplaceId: current.group.marketplace_id,
+        ownedPayloadBundles: [],
+        orderedSkus: [],
+        ownedRemote: { listingId: null, offerIdsBySku: {}, publicationHistoryExists: false },
+        observed: { activeListingId: null, groupPresent: false, itemPresentSkus: [], offerPresentSkus: [], state: 'absent' },
+        terminalLifecycle: 'abandoned',
+      },
+      operation_plan: [
+        { sequence_no: 1, operation_key: 'cleanup-group', operation_kind: 'cleanup_group', target_ref: current.group.group_key, intent_version: 1, intent_digest: intentDigest({ groupKey: current.group.group_key }), intent: { groupKey: current.group.group_key } },
+        { sequence_no: 2, operation_key: 'final-absence', operation_kind: 'final_absence_verification', target_ref: current.group.group_key, intent_version: 1, intent_digest: intentDigest({ groupKey: current.group.group_key, marketplaceId: current.group.marketplace_id, offerIdsBySku: {}, orderedSkus: [], terminalLifecycle: 'abandoned' }), intent: { groupKey: current.group.group_key, marketplaceId: current.group.marketplace_id, offerIdsBySku: {}, orderedSkus: [], terminalLifecycle: 'abandoned' } },
+      ],
+      operation_count: 2,
+      captured_at: '2026-09-02T00:00:00Z',
+    };
+    const cleanupCheckpoints: VariationListingPublishingCheckpointRow[] = [
+      {
+        ...checkpoint('confirmed_complete', 'proven_absent'),
+        revision_id: cleanupId,
+        operation_key: 'cleanup-group',
+        checkpoint_number: 2,
+        evidence: { groupKey: current.group.group_key },
+      },
+      {
+        ...checkpoint('confirmed_complete', 'proven_absent'),
+        revision_id: cleanupId,
+        operation_key: 'final-absence',
+        checkpoint_number: 1,
+        evidence: { state: 'proven_absent' },
+      },
+    ];
+    const access = data({ aggregate: current, revisions: [cleanupRevision], checkpoints: cleanupCheckpoints });
+    access.value.returnToReview.mockResolvedValue({ ...current.group, desired_revision: 5, lifecycle_state: 'review' });
+    const remoteFactory = vi.fn();
+    const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
+
+    await expect(service.returnToReview(groupId, 4)).resolves.toMatchObject({ lifecycleState: 'review', desiredRevision: 5, cleanupRevisionId: cleanupId });
+    expect(access.value.returnToReview).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 4, cleanupRevisionId: cleanupId });
+    expect(remoteFactory).not.toHaveBeenCalled();
+  });
+
+  it('rejects abandoned cleanup reuse when intent digest or target identity is invalid', async () => {
+    const current = aggregate({ desired_revision: 4, lifecycle_state: 'abandoned' });
+    const cleanupId = '99999999-9999-4999-8999-999999999998';
+    const cleanupRevision: VariationListingRevisionRow = {
+      revision_id: cleanupId,
+      group_id: groupId,
+      captured_desired_revision: 4,
+      snapshot_version: 1,
+      snapshot_digest: 'c'.repeat(64),
+      snapshot: {
+        planVersion: 1,
+        groupKey: current.group.group_key,
+        marketplaceId: current.group.marketplace_id,
+        ownedPayloadBundles: [],
+        orderedSkus: [],
+        ownedRemote: { listingId: null, offerIdsBySku: {}, publicationHistoryExists: false },
+        observed: { activeListingId: null, groupPresent: false, itemPresentSkus: [], offerPresentSkus: [], state: 'absent' },
+        terminalLifecycle: 'abandoned',
+      },
+      operation_plan: [{
+        sequence_no: 1,
+        operation_key: 'final-absence',
+        operation_kind: 'final_absence_verification',
+        target_ref: 'wrong-group-key',
+        intent_version: 1,
+        intent_digest: intentDigest({ groupKey: current.group.group_key, marketplaceId: current.group.marketplace_id, offerIdsBySku: {}, orderedSkus: [], terminalLifecycle: 'abandoned' }),
+        intent: { groupKey: current.group.group_key, marketplaceId: current.group.marketplace_id, offerIdsBySku: {}, orderedSkus: [], terminalLifecycle: 'abandoned' },
+      }],
+      operation_count: 1,
+      captured_at: '2026-09-02T00:00:00Z',
+    };
+    const cleanupCheckpoint: VariationListingPublishingCheckpointRow = {
+      ...checkpoint('confirmed_complete', 'proven_absent'),
+      revision_id: cleanupId,
+      operation_key: 'final-absence',
+      evidence: { state: 'proven_absent' },
+    };
+    const access = data({ aggregate: current, revisions: [cleanupRevision], checkpoints: [cleanupCheckpoint] });
+    const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test' });
+
+    await expect(service.returnToReview(groupId, 4)).rejects.toMatchObject({ status: { code: 'unpublished_cleanup_invalid' } });
+    cleanupRevision.operation_plan[0]!.target_ref = current.group.group_key;
+    cleanupRevision.operation_plan[0]!.intent_digest = '0'.repeat(64);
+    await expect(service.returnToReview(groupId, 4)).rejects.toMatchObject({ status: { code: 'unpublished_cleanup_invalid' } });
+    (cleanupRevision.snapshot as Record<string, unknown>).orderedSkus = ['wrong-sku'];
+    await expect(service.returnToReview(groupId, 4)).rejects.toMatchObject({ status: { code: 'unpublished_cleanup_invalid' } });
+    cleanupRevision.operation_plan.unshift({ sequence_no: 1, operation_key: 'withdraw-group', operation_kind: 'withdrawal', target_ref: current.group.group_key, intent_version: 1, intent_digest: intentDigest({ groupKey: current.group.group_key }), intent: { groupKey: current.group.group_key } });
+    cleanupRevision.operation_plan[1]!.sequence_no = 2;
+    cleanupRevision.operation_count = 2;
+    await expect(service.returnToReview(groupId, 4)).rejects.toMatchObject({ status: { code: 'unpublished_cleanup_invalid' } });
+  });
+
+  it('blocks republish when prior cleanup lacks final proven-absence evidence', async () => {
+    const current = aggregate({ desired_revision: 4, lifecycle_state: 'publish-ready' });
+    current.variations = [
+      current.variations[0]!,
+      { ...current.variations[0]!, variation_id: variationBId, position: 1, inventory_serial: 2, sku: 'BSKBL-McGrady-000002', selector_value: 'Card B', representative_copy_id: copyBId },
+    ];
+    current.copies = [
+      current.copies[0]!,
+      { ...current.copies[0]!, copy_id: copyBId, variation_id: variationBId },
+    ];
+    const priorInitial = { ...revision(), captured_desired_revision: 2, snapshot: { aggregate: { ...current, group: { ...current.group, desired_revision: 2 } } } };
+    const cleanupId = '99999999-9999-4999-8999-999999999999';
+    const cleanupRevision: VariationListingRevisionRow = {
+      ...revision(),
+      revision_id: cleanupId,
+      captured_desired_revision: 3,
+      snapshot: {
+        planVersion: 1,
+        groupKey: current.group.group_key,
+        marketplaceId: current.group.marketplace_id,
+        ownedPayloadBundles: [],
+        orderedSkus: [],
+        ownedRemote: { listingId: null, offerIdsBySku: {}, publicationHistoryExists: false },
+        observed: { activeListingId: null, groupPresent: false, itemPresentSkus: [], offerPresentSkus: [], state: 'absent' },
+        terminalLifecycle: 'abandoned',
+      },
+      operation_plan: [
+        { sequence_no: 1, operation_key: 'final-absence', operation_kind: 'final_absence_verification', target_ref: current.group.group_key, intent_version: 1, intent_digest: intentDigest({ groupKey: current.group.group_key, marketplaceId: current.group.marketplace_id, offerIdsBySku: {}, orderedSkus: [], terminalLifecycle: 'abandoned' }), intent: { groupKey: current.group.group_key, marketplaceId: current.group.marketplace_id, offerIdsBySku: {}, orderedSkus: [], terminalLifecycle: 'abandoned' } },
+      ],
+      operation_count: 1,
+    };
+    const cleanupCheckpoint: VariationListingPublishingCheckpointRow = {
+      ...checkpoint('confirmed_complete', 'present'),
+      revision_id: cleanupId,
+      operation_key: 'final-absence',
+      checkpoint_number: 1,
+      evidence: { state: 'not-absent' },
+    };
+    const access = data({ aggregate: current, revisions: [priorInitial, cleanupRevision], checkpoints: [cleanupCheckpoint] });
+    const remoteFactory = vi.fn();
+    const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
+
+    await expect(service.publish(groupId, 4)).rejects.toMatchObject({ status: { code: 'unpublished_cleanup_absence_unproven' } });
+    expect(remoteFactory).not.toHaveBeenCalled();
   });
 
   it('fails cleanly on pending active local changes before remote factory or revision reservation', async () => {

@@ -260,6 +260,7 @@ export {
   type ApplyVariationListingGroupReviewDraftInput,
   type MarkVariationListingPublishReadyInput,
   type ReserveVariationListingActionRevisionInput,
+  type ReturnVariationListingToReviewInput,
   type UpdateVariationListingManualPriceInput,
   type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingCopyAvailabilityInput,

@@ -23,7 +23,7 @@ const baseInput: GenerateVariationListingGroupReviewInput = {
   variations: [
     {
       variationId: '22222222-2222-4222-8222-222222222222',
-      selectorValue: '1997-98 Metal Universe Planet Metal Marcus Camby #6 Toronto Raptors',
+      selectorValue: '1997-98 Metal Universe Marcus Camby #6',
       variationMetadata: {
         Sport: ['Basketball', 'Sports Trading Card'],
         League: 'NBA',
@@ -40,7 +40,7 @@ const baseInput: GenerateVariationListingGroupReviewInput = {
     },
     {
       variationId: '33333333-3333-4333-8333-333333333333',
-      selectorValue: '1997-98 Metal Universe Planet Metal Kevin Garnett #2 Minnesota Timberwolves',
+      selectorValue: '1997-98 Metal Universe Kevin Garnett #2',
       variationMetadata: {
         Sport: ['Basketball'],
         League: 'NBA',
@@ -331,6 +331,19 @@ describe('variation-listing group review', () => {
       baseInput
     );
     expect(aggregate).toEqual(before);
+  });
+
+  it('blocks publish readiness when a Card selector exceeds eBay\'s 65-character limit', () => {
+    const input: GenerateVariationListingGroupReviewInput = {
+      ...baseInput,
+      variations: [
+        {...baseInput.variations[0]!, selectorValue: 'x'.repeat(66)},
+        baseInput.variations[1]!,
+      ],
+    };
+    const readiness = evaluateVariationListingGroupReadiness(input);
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockers.some((blocker) => blocker.includes('65-character limit'))).toBe(true);
   });
 
   it('requires at least two variations for publish readiness', () => {

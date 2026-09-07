@@ -12,6 +12,7 @@ import type {
 } from '@ebay-inventory/data';
 
 import {
+  buildVariationListingHistoricalInventoryPayloadBundle,
   buildVariationListingInventoryPayloadBundle,
   variationListingEpsImageUrlSchema,
   type VariationListingInventoryPayloadBundle,
@@ -79,6 +80,10 @@ export interface VariationListingMediaResource {
 export interface VariationListingFrozenPublicationRevision {
   captureInput: CaptureVariationListingRevisionInput;
   snapshot: VariationListingFrozenPublicationSnapshot;
+  /** True when hydrating an already-persisted revision. Historical frozen
+   * payloads may contain selectors longer than eBay's current 65-char limit;
+   * this marker never applies to a newly-built publication revision. */
+  historicalPayload?: boolean;
 }
 
 export interface VariationListingUnpublishedReconciliation {
@@ -262,6 +267,7 @@ export function buildVariationListingFrozenPublicationRevision(input: {
   const snapshotJson = asJson(snapshot);
   return {
     snapshot,
+    historicalPayload: false,
     captureInput: {
       capturedDesiredRevision: aggregate.group.desired_revision,
       groupId: aggregate.group.group_id,
@@ -276,12 +282,13 @@ export function buildVariationListingFrozenPublicationRevision(input: {
 
 function buildBundleFromImages(
   frozen: VariationListingFrozenPublicationRevision,
-  representativeImages: readonly VariationListingRepresentativeImage[]
+  representativeImages: readonly VariationListingRepresentativeImage[],
+  historicalPayloadAlreadyUsed = false
 ): VariationListingInventoryPayloadBundle {
-  return buildVariationListingInventoryPayloadBundle({
-    aggregate: frozen.snapshot.aggregate,
-    representativeImages,
-  });
+  const input = { aggregate: frozen.snapshot.aggregate, representativeImages };
+  return frozen.historicalPayload || historicalPayloadAlreadyUsed
+    ? buildVariationListingHistoricalInventoryPayloadBundle(input)
+    : buildVariationListingInventoryPayloadBundle(input);
 }
 
 function groupPayloadWithoutMembership(payload: Json): Json {
@@ -947,7 +954,10 @@ export async function executeVariationListingPublication(
       }
       return { copyId, frontEpsUrl, backEpsUrl };
     });
-  const bundle = buildBundleFromImages(input.frozen, representativeImages);
+  const historicalPayloadAlreadyUsed = input.frozen.captureInput.operationPlan.some(
+    (operation) => operation.operationKind !== 'media_ingest' && (history.get(operation.operationKey)?.length ?? 0) > 0
+  );
+  const bundle = buildBundleFromImages(input.frozen, representativeImages, historicalPayloadAlreadyUsed);
 
   for (const child of bundle.children) {
     await executeMutationOperation(

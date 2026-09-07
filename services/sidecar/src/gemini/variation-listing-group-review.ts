@@ -138,6 +138,11 @@ export function evaluateVariationListingGroupReadiness(
   if (validated.variations.length < 2) {
     blockers.push('Variation listing publish readiness requires at least two variations.');
   }
+  for (const variation of validated.variations) {
+    if (variation.selectorValue.length > 65) {
+      blockers.push(`Card selector for variation ${variation.variationId} exceeds eBay's 65-character limit.`);
+    }
+  }
   const required = REQUIRED_COMMON_ASPECT_KEYS_BY_CATEGORY[validated.categoryId];
   if (!required) {
     blockers.push(`Variation listing group readiness has no reviewed common-aspect contract for category ${validated.categoryId}.`);

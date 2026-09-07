@@ -9,7 +9,10 @@ import type {
 } from '@ebay-inventory/data';
 import { describe, expect, it } from 'vitest';
 
-import { buildVariationListingInventoryPayloadBundle } from '@/ebay/variation-listing-payloads.js';
+import {
+  buildVariationListingHistoricalInventoryPayloadBundle,
+  buildVariationListingInventoryPayloadBundle,
+} from '@/ebay/variation-listing-payloads.js';
 import {
   buildVariationListingFrozenPublicationRevision,
   executeVariationListingPublication,
@@ -55,13 +58,22 @@ function frozen(withMedia = false) {
   });
 }
 
-function testHarness(withMedia = false) {
+function testHarness(withMedia = false, historicalOverlong = false) {
   const plan = frozen(withMedia);
+  if (historicalOverlong) {
+    const longSelector = 'x'.repeat(66);
+    plan.historicalPayload = true;
+    plan.snapshot.aggregate.variations[0]!.selector_value = longSelector;
+    (plan.captureInput.snapshot as { aggregate: VariationListingAggregateSnapshot }).aggregate.variations[0]!.selector_value = longSelector;
+  }
   const expectedImages = [
     { copyId: 'copy-A', frontEpsUrl: image('AF'), backEpsUrl: image('AB') },
     { copyId: 'copy-B', frontEpsUrl: image('BF'), backEpsUrl: image('BB') },
   ];
-  const bundle = buildVariationListingInventoryPayloadBundle({
+  const bundleBuilder = historicalOverlong
+    ? buildVariationListingHistoricalInventoryPayloadBundle
+    : buildVariationListingInventoryPayloadBundle;
+  const bundle = bundleBuilder({
     aggregate: plan.snapshot.aggregate,
     representativeImages: expectedImages,
   });
@@ -162,6 +174,51 @@ function testHarness(withMedia = false) {
       return { ...plan.snapshot.aggregate.group, last_confirmed_revision: 1 } as VariationListingGroupRow;
     },
   };
+  if (historicalOverlong) {
+    for (const resource of plan.snapshot.mediaResources) {
+      const expected = expectedImages.find((candidate) => candidate.copyId === resource.copyId)!;
+      const value = {
+        expirationDate: '2026-10-01T00:00:00Z',
+        imageId: `image-${resource.copyId}-${resource.role}`,
+        imageUrl: resource.role === 'front' ? expected.frontEpsUrl : expected.backEpsUrl,
+        location: `https://api.ebay.test/media/${resource.copyId}-${resource.role}`,
+      };
+      media.set(value.location, value);
+      journalRows.push({
+        attempt_number: 1,
+        checkpoint_id: `historical-started-${resource.copyId}-${resource.role}`,
+        checkpoint_number: 1,
+        created_at: '2026-09-01T00:00:00Z',
+        evidence: {},
+        observed_remote_state: null,
+        operation_key: `media:${resource.copyId}:${resource.role}`,
+        revision_id: plan.captureInput.revisionId,
+        state: 'started',
+      });
+      journalRows.push({
+        attempt_number: 1,
+        checkpoint_id: `historical-unknown-${resource.copyId}-${resource.role}`,
+        checkpoint_number: 2,
+        created_at: '2026-09-01T00:00:00Z',
+        evidence: value,
+        observed_remote_state: 'unknown',
+        operation_key: `media:${resource.copyId}:${resource.role}`,
+        revision_id: plan.captureInput.revisionId,
+        state: 'unknown',
+      });
+      journalRows.push({
+        attempt_number: 2,
+        checkpoint_id: `historical-complete-${resource.copyId}-${resource.role}`,
+        checkpoint_number: 1,
+        created_at: '2026-09-01T00:00:00Z',
+        evidence: value,
+        observed_remote_state: 'present',
+        operation_key: `media:${resource.copyId}:${resource.role}`,
+        revision_id: plan.captureInput.revisionId,
+        state: 'confirmed_complete',
+      });
+    }
+  }
   return {
     group: () => group, items, journalRows, media, mutations: () => mutations, confirmations: () => confirmations,
     bundle, plan, remote,
@@ -174,6 +231,13 @@ function testHarness(withMedia = false) {
 }
 
 describe('executeVariationListingPublication', () => {
+  it('resumes a historical overlong frozen revision after terminal Media with no child checkpoint', async () => {
+    const h = testHarness(true, true);
+    await expect(h.execute()).resolves.toEqual({ revisionId: 'revision-1', confirmedRevision: 1, listingId: 'listing-1' });
+    expect(h.mutations()).toBe(6);
+    expect(h.journalRows.filter((row) => row.operation_key.startsWith('media:')).every((row) => row.state !== 'started' || row.attempt_number === 1)).toBe(true);
+  });
+
   it('creates Media, ordered child resources, group, publishes, and confirms only after exact reconciliation', async () => {
     const h = testHarness(true);
     await expect(h.execute()).resolves.toEqual({ revisionId: 'revision-1', confirmedRevision: 1, listingId: 'listing-1' });

@@ -255,7 +255,36 @@ function buildSelectorValue(identity: VariationListingNormalizedIdentity): strin
       'Variation identity does not contain a card-distinguishing component for a safe selector.'
     );
   }
-  return parts.join(' ').trim();
+  const candidates = [
+    parts,
+    dedupeStrings([
+      ...(temporal ? [temporal] : []),
+      ...(setIdentity ? [setIdentity] : []),
+      ...characteristics,
+      ...selectorFeatures,
+      ...(identity.playerAthlete ? [identity.playerAthlete] : []),
+      ...(identity.cardNumber ? [`#${identity.cardNumber}`] : []),
+      ...(serialNumber ? [serialNumber] : []),
+    ]),
+    dedupeStrings([
+      ...(temporal ? [temporal] : []),
+      ...(identity.playerAthlete ? [identity.playerAthlete] : []),
+      ...(identity.cardNumber ? [`#${identity.cardNumber}`] : []),
+      ...(serialNumber ? [serialNumber] : []),
+    ]),
+    dedupeStrings([
+      ...(identity.playerAthlete ? [identity.playerAthlete] : []),
+      ...(identity.cardNumber ? [`#${identity.cardNumber}`] : []),
+      ...(serialNumber ? [serialNumber] : []),
+    ]),
+  ];
+  const selector = candidates
+    .map((candidate) => candidate.join(' ').trim())
+    .find((candidate) => candidate.length > 0 && candidate.length <= 65);
+  if (!selector) {
+    throw new GeminiDraftServiceError('Variation identity cannot construct a truthful Card selector within eBay\'s 65-character limit.');
+  }
+  return selector;
 }
 
 function buildVariationMetadata(

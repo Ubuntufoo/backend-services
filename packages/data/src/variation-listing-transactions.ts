@@ -115,6 +115,12 @@ export interface ReserveVariationListingActionRevisionInput {
   groupId: string;
 }
 
+export interface ReturnVariationListingToReviewInput {
+  cleanupRevisionId: string;
+  expectedDesiredRevision: number;
+  groupId: string;
+}
+
 export interface UpdateVariationListingManualPriceInput {
   expectedDesiredRevision: number;
   groupId: string;
@@ -255,6 +261,9 @@ export interface VariationListingTransactionGateway {
   ): Promise<VariationListingGroupRow>;
   reserveActionRevision(
     input: ReserveVariationListingActionRevisionInput
+  ): Promise<VariationListingGroupRow>;
+  returnToReview(
+    input: ReturnVariationListingToReviewInput
   ): Promise<VariationListingGroupRow>;
   updateVariationPrice(
     input: UpdateVariationListingManualPriceInput

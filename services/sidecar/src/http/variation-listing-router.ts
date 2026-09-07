@@ -84,6 +84,7 @@ export interface VariationListingApiActions {
   withdraw(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   abandon(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   cleanup(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+  returnToReview(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
 }
 
 function parseOrSend<T>(res: Response, schema: ZodType<T>, value: unknown): T | undefined {
@@ -342,10 +343,15 @@ function summarizeJournal(
       latestByKey.set(checkpoint.operationKey, checkpoint);
     }
   }
-  // Match executor latestUnresolvedOperation: latest checkpoint per operation,
-  // then first unresolved operation in insertion order.
+  // Match executor ordering: latest checkpoint per operation, then the first
+  // unresolved operation in the frozen executor plan (not checkpoint order).
+  const sequenceByKey = new Map(revision.operationPlan.map((operation) => [operation.operation_key, operation.sequence_no]));
   const unresolved = [...latestByKey.values()]
-    .find((checkpoint) => ['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(checkpoint.state));
+    .filter((checkpoint) => ['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(checkpoint.state))
+    .sort((left, right) =>
+      (sequenceByKey.get(left.operationKey) ?? Number.MAX_SAFE_INTEGER) -
+      (sequenceByKey.get(right.operationKey) ?? Number.MAX_SAFE_INTEGER)
+    )[0];
   const recovery = unresolved
     ? unresolved.state === 'retry_authorized'
       ? {
@@ -583,6 +589,14 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     const body = parseActionOrSend(res, 'retry', params.groupId, variationListingRetryActionRequestSchema, req.body ?? {});
     if (!body) return;
     return await runRoute(res, async () => await actionResponse(res, 'retry', params.groupId, await getActions().retry(params.groupId)));
+  });
+
+  router.post('/:groupId/actions/return-to-review', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    const body = parseActionOrSend(res, 'return_to_review', params.groupId, variationListingRevisionActionRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => await actionResponse(res, 'return_to_review', params.groupId, await getActions().returnToReview(params.groupId, body.expectedDesiredRevision)));
   });
 
   router.post('/:groupId/actions/quantity', async (req: Request, res: Response) => {

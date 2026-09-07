@@ -158,6 +158,7 @@ export const updateVariationListingSelectorValueRequestSchema = z
     selectorValue: z
       .string()
       .min(1, 'selectorValue is required')
+      .max(65, 'selectorValue must be at most 65 characters')
       .refine((value) => value === value.trim(), 'selectorValue must be outer-trimmed'),
   })
   .strict();
