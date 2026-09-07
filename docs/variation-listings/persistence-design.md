@@ -1,5 +1,8 @@
 # Variation-listing initial persistence design
 
+> Post-publication clarification: this schema preserves local capture provenance and outbound revision history; it is not an order-management or sold-inventory ledger. Standard Single/Lot persistence remains separate and unchanged. For active Variation Listings, eBay is authoritative for current sellable quantity, while local copy identity is used to detect newly captured replenishment units relative to the last confirmed revision snapshot. Existing `availability_state` storage may remain for local eligibility/workflow compatibility but must not be interpreted as authoritative post-sale stock.
+
+
 ## Decision and boundary
 
 YP2.1 defines the exact additive local persistence contract. It does not author or apply SQL,
@@ -25,7 +28,7 @@ Single/Lot capture modes, and Single/Lot SKU parsing/allocation remain untouched
 
 The initial tables deliberately do not contain revision snapshots, payload digests, remote IDs,
 operation attempts/checkpoints, eBay Media identities, order lines, or sold-history evidence. Those
-rows belong to the separately reviewed YP2.5 operation ledger (and the deferred YP8.1/YP8.2 sold/order work).
+rows belong to the separately reviewed YP2.5 operation ledger. YP8.1 later proved order-line identity in Sandbox, but the final product decision is not to add a variation-specific local sold/order ledger.
 No publishing is allowed before that ledger exists.
 
 ## YP2.5 crash-safe publishing journal

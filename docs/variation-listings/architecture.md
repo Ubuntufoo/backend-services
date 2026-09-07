@@ -1,5 +1,12 @@
 # Variation listing backend architecture
 
+## Product boundary
+
+Standard Single/Lot listing creation and Variation Listings are peer workflows. Standard listings remain a first-class daily path and retain their existing intake, Gemini generation, pricing, review, publishing, reconciliation, cleanup, UI, routes, and SKU grammar. Variation Listings is an alternate grouped-inventory/replenishment mode only; it must not become a parent abstraction or change Standard behavior.
+
+For Variation Listings, this application owns capture, listing-content generation, staged outbound Inventory API mutations, and replenishment intent. After publication, eBay is authoritative for current sellable quantity and all order-management concerns. eBay Seller Hub remains the direct source of truth for purchases, sold history, fulfillment, cancellations, returns, and refunds.
+
+
 ## Scope and evidence levels
 
 The variation listing is a dedicated fixed-price multiple-variation workflow, not a third legacy

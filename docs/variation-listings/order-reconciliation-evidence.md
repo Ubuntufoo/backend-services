@@ -1,8 +1,13 @@
 # Variation order reconciliation evidence (YP8.1)
 
+## Final product decision
+
+The Sandbox purchase evidence is retained to prove that eBay orders identify the purchased child variation correctly by exact SKU and line item. The production application will not duplicate eBay order management locally. Seller Hub is the source of truth for orders, sold history, fulfillment, cancellations, returns, and refunds. No YP8 order-line/sold-state persistence is planned; the evidence instead informs the eBay-authoritative replenishment design in which active quantity starts from exact live eBay quantity and local snapshots contribute only newly captured replenishment copies.
+
+
 ## Evidence status
 
-This run has generated-contract evidence and synthetic fixtures only. A bounded read with the configured Sandbox credentials for creation dates 2026-08-01 through 2026-08-12 returned `{"orders":[]}`; no qualifying purchased variation order payload was available, so real-payload proof remains pending. No eBay, Supabase, or local persistence mutation was performed.
+YP8.1 now has real Sandbox evidence. Sandbox order `02-00001-38769` from listing `110590549597` returned line item `10000012392410`, exact child SKU `BSKBL-IversonTestBucket4-000002`, and quantity `1`. The stable diagnostic identity remains exact `orderId` + exact `lineItemId` + exact SKU + positive int32 quantity. This evidence validates child-variation purchase identity; it does not create a requirement for local production order persistence.
 
 ## Fulfillment contract
 
