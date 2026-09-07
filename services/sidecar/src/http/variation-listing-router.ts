@@ -57,6 +57,7 @@ export type VariationListingApiDataAccess = Pick<
   | 'listCheckpointsByRevisionId'
   | 'getIntakeSession'
   | 'configureIntake'
+  | 'discardIntakePair'
   | 'createGroup'
   | 'applyGroupReviewDraft'
   | 'updateVariationPrice'
@@ -500,6 +501,13 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     });
   });
 
+  router.post('/intake-session/discard', async (_req: Request, res: Response) =>
+    await runRoute(res, async () => {
+      const session = await getDataAccess().discardIntakePair();
+      res.json({ session: serializeIntakeSession(session) });
+    })
+  );
+
   router.post('/intake-identity', async (req: Request, res: Response) => {
     const body = parseOrSend(res, generateVariationListingIntakeIdentityRequestSchema, req.body);
     if (!body) return;
@@ -521,7 +529,15 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     const unsubscribe = subscribeVariationListingActionEvents(params.groupId, (event) => {
       res.write(`event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`);
     });
-    req.on('close', unsubscribe);
+    const heartbeat = setInterval(() => {
+      res.write(': keepalive\n\n');
+    }, 30_000);
+    heartbeat.unref?.();
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    req.on('close', cleanup);
   });
 
   const actionResponse = async (

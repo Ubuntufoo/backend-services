@@ -211,6 +211,7 @@ export interface SidecarDataAccess {
     updateRepresentativeCopy(input: UpdateVariationListingRepresentativeCopyInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
     getIntakeSession(): Promise<VariationListingIntakeSession | null>;
     configureIntake(input: Omit<ConfigureVariationListingIntakeInput, 'captureSourceKey'>): Promise<VariationListingIntakeSession>;
+    discardIntakePair(): Promise<VariationListingIntakeSession>;
   };
   orders: {
     hasByListingId(listingId: string): Promise<boolean>;
@@ -320,6 +321,12 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
             ...input,
             captureSourceKey: getVariationListingCaptureSourceKey(),
           })
+        ),
+      discardIntakePair: async () =>
+        mapVariationListingIntakeSessionRow(
+          await variationListingTransactions.discardIntakePair(
+            getVariationListingCaptureSourceKey()
+          )
         ),
     },
     orders: {
