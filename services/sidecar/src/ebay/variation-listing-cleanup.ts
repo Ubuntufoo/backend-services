@@ -50,6 +50,26 @@ function groupPayloadWithoutMembership(payload: Json): Json {
   return rest;
 }
 
+function inventoryPayloadWithoutQuantity(payload: Json): Json {
+  const clone = structuredClone(payload);
+  if (clone === null || typeof clone !== 'object' || Array.isArray(clone)) return clone;
+  const availability = (clone as Record<string, Json>).availability;
+  if (availability === null || typeof availability !== 'object' || Array.isArray(availability)) return clone;
+  const ship = (availability as Record<string, Json>).shipToLocationAvailability;
+  if (ship !== null && typeof ship === 'object' && !Array.isArray(ship)) {
+    delete (ship as Record<string, Json>).quantity;
+  }
+  return clone;
+}
+
+function offerPayloadWithoutQuantity(payload: Json): Json {
+  const clone = structuredClone(payload);
+  if (clone !== null && typeof clone === 'object' && !Array.isArray(clone)) {
+    delete (clone as Record<string, Json>).availableQuantity;
+  }
+  return clone;
+}
+
 function sameMembership(left: readonly string[], right: readonly string[]): boolean {
   if (new Set(left).size !== left.length || new Set(right).size !== right.length || left.length !== right.length) return false;
   const set = new Set(left);
@@ -190,13 +210,14 @@ function exactOwnedItem(
   item: VariationListingRemoteInventoryItem,
   sku: string,
   groupKey: string,
-  candidates: VariationListingInventoryPayloadBundle['children']
+  candidates: VariationListingInventoryPayloadBundle['children'],
+  ignoreQuantity = false
 ): void {
   if (item.sku !== sku) throw new Error(`Variation listing cleanup item ${sku} identity mismatch.`);
   if (item.groupKeys !== null && (item.groupKeys.length !== 1 || item.groupKeys[0] !== groupKey)) {
     throw new Error(`Variation listing cleanup item ${sku} has foreign group association.`);
   }
-  if (!candidates.some((child) => canonicalJson(item.payload) === canonicalJson(asJson(child.inventoryItem)))) {
+  if (!candidates.some((child) => canonicalJson(ignoreQuantity ? inventoryPayloadWithoutQuantity(item.payload) : item.payload) === canonicalJson(ignoreQuantity ? inventoryPayloadWithoutQuantity(asJson(child.inventoryItem)) : asJson(child.inventoryItem)))) {
     throw new Error(`Variation listing cleanup item ${sku} does not match an exact owned payload state.`);
   }
 }
@@ -207,7 +228,8 @@ function exactOwnedOffer(
   marketplaceId: string,
   expectedOfferId: string | undefined,
   ownedListingId: string | null,
-  candidates: VariationListingInventoryPayloadBundle['children']
+  candidates: VariationListingInventoryPayloadBundle['children'],
+  ignoreQuantity = false
 ): void {
   if (offer.sku !== sku || offer.marketplaceId !== marketplaceId) {
     throw new Error(`Variation listing cleanup offer ${sku} ownership mismatch.`);
@@ -215,7 +237,7 @@ function exactOwnedOffer(
   if (!expectedOfferId || offer.offerId !== expectedOfferId) {
     throw new Error(`Variation listing cleanup offer ${sku} does not match its durable owned offer ID.`);
   }
-  if (!candidates.some((child) => canonicalJson(offer.payload) === canonicalJson(asJson(child.offer)))) {
+  if (!candidates.some((child) => canonicalJson(ignoreQuantity ? offerPayloadWithoutQuantity(offer.payload) : offer.payload) === canonicalJson(ignoreQuantity ? offerPayloadWithoutQuantity(asJson(child.offer)) : asJson(child.offer)))) {
     throw new Error(`Variation listing cleanup offer ${sku} does not match an exact owned payload state.`);
   }
   if (offer.lifecycleClass === 'ambiguous') {
@@ -243,15 +265,29 @@ export async function prepareVariationListingCleanupPlan(
   validateOwnedRemoteIdentity(input.ownedRemote, orderedSkus);
   const newest = input.ownedBundles.at(-1)!;
   const orderedSkuSet = new Set(orderedSkus);
+  // A published group may legitimately have a lower eBay quantity after a
+  // sale. Withdrawal owns that lifecycle transition and therefore validates
+  // identity/non-quantity fields while ignoring quantity; unpublished
+  // destructive cleanup remains strict in its executor reads.
+  const quantityTolerant = input.ownedRemote.publicationHistoryExists;
 
   const groupRead = await input.remote.getInventoryItemGroup(groupKey);
   if (groupRead.state === 'unknown') throw new Error(`Variation listing cleanup group read is unknown: ${groupRead.reason}`);
+  const groupMatches = (candidate: VariationListingInventoryPayloadBundle) =>
+    groupRead.state === 'present' &&
+    sameMembership(groupRead.value.variantSKUs, candidate.group.variantSKUs) &&
+    canonicalJson(groupPayloadWithoutMembership(groupRead.value.payload)) === canonicalJson(groupPayloadWithoutMembership(asJson(candidate.group)));
+  // When staged additions exist, the current remote group identifies the last
+  // confirmed bundle (the newest bundle may include unpublished SKUs). For a
+  // single unchanged group, reverse search selects the newest historical
+  // payload so rollback to an older price/content state is rejected.
+  const matchingGroupBundle = groupRead.state === 'present'
+    ? [...input.ownedBundles].reverse().find(groupMatches)
+    : undefined;
+  const matchBundles = quantityTolerant ? [matchingGroupBundle ?? newest] : input.ownedBundles;
   let matchedGroupSkus: string[] = [];
   if (groupRead.state === 'present') {
-    const matchingBundle = input.ownedBundles.find((bundle) =>
-      sameMembership(groupRead.value.variantSKUs, bundle.group.variantSKUs) &&
-      canonicalJson(groupPayloadWithoutMembership(groupRead.value.payload)) === canonicalJson(groupPayloadWithoutMembership(asJson(bundle.group)))
-    );
+    const matchingBundle = matchingGroupBundle;
     if (!matchingBundle) throw new Error('Variation listing cleanup group does not match any exact owned complete-group state.');
     if (groupRead.value.variantSKUs.some((sku) => !orderedSkuSet.has(sku))) {
       throw new Error('Variation listing cleanup group contains a foreign SKU.');
@@ -265,13 +301,15 @@ export async function prepareVariationListingCleanupPlan(
   const offersBySku = new Map<string, VariationListingRemoteOffer>();
 
   for (const sku of orderedSkus) {
-    const candidates = candidateChildren(input.ownedBundles, sku);
+    const candidates = quantityTolerant && matchingGroupBundle && !matchingGroupBundle.children.some((child) => child.sku === sku)
+      ? candidateChildren([newest], sku)
+      : candidateChildren(matchBundles, sku);
     if (candidates.length === 0) throw new Error(`Variation listing cleanup has no owned payload candidate for ${sku}.`);
 
     const itemRead = await input.remote.getInventoryItem(sku);
     if (itemRead.state === 'unknown') throw new Error(`Variation listing cleanup item ${sku} read is unknown: ${itemRead.reason}`);
     if (itemRead.state === 'present') {
-      exactOwnedItem(itemRead.value, sku, groupKey, candidates);
+      exactOwnedItem(itemRead.value, sku, groupKey, candidates, quantityTolerant);
       itemPresentSkus.push(sku);
       itemsBySku.set(sku, itemRead.value);
     }
@@ -289,7 +327,8 @@ export async function prepareVariationListingCleanupPlan(
         marketplaceId,
         input.ownedRemote.offerIdsBySku[sku],
         input.ownedRemote.listingId,
-        candidates
+        candidates,
+        quantityTolerant
       );
       offersBySku.set(sku, offer);
       offerPresentSkus.push(sku);
@@ -707,17 +746,23 @@ interface CleanupOwnedRead {
 
 async function readCleanupOwnedState(
   snapshot: VariationListingCleanupSnapshot,
-  remote: VariationListingPublicationReadGateway
+  remote: VariationListingPublicationReadGateway,
+  quantityTolerant = false
 ): Promise<CleanupOwnedRead> {
   const bundles = cleanupBundles(snapshot);
   const groupRead = await remote.getInventoryItemGroup(snapshot.groupKey);
   if (groupRead.state === 'unknown') throw new Error(`Variation listing cleanup group read is unknown: ${groupRead.reason}`);
+  const groupMatches = (candidate: VariationListingInventoryPayloadBundle) =>
+    groupRead.state === 'present' &&
+    sameMembership(groupRead.value.variantSKUs, candidate.group.variantSKUs) &&
+    canonicalJson(groupPayloadWithoutMembership(groupRead.value.payload)) === canonicalJson(groupPayloadWithoutMembership(asJson(candidate.group)));
+  const matchingGroupBundle = groupRead.state === 'present'
+    ? [...bundles].reverse().find(groupMatches)
+    : undefined;
+  const matchBundles = quantityTolerant ? [matchingGroupBundle ?? bundles.at(-1)!] : bundles;
   let group: VariationListingRemoteGroup | null = null;
   if (groupRead.state === 'present') {
-    const matching = bundles.find((bundle) =>
-      sameMembership(groupRead.value.variantSKUs, bundle.group.variantSKUs) &&
-      canonicalJson(groupPayloadWithoutMembership(groupRead.value.payload)) === canonicalJson(groupPayloadWithoutMembership(asJson(bundle.group)))
-    );
+    const matching = matchingGroupBundle;
     if (!matching || groupRead.value.variantSKUs.some((sku) => !snapshot.orderedSkus.includes(sku))) {
       throw new Error('Variation listing cleanup group is not an exact owned complete payload.');
     }
@@ -726,11 +771,13 @@ async function readCleanupOwnedState(
   const items = new Map<string, VariationListingRemoteInventoryItem>();
   const offers = new Map<string, VariationListingRemoteOffer>();
   for (const sku of snapshot.orderedSkus) {
-    const candidates = candidateChildren(bundles, sku);
+    const candidates = quantityTolerant && matchingGroupBundle && !matchingGroupBundle.children.some((child) => child.sku === sku)
+      ? candidateChildren([bundles.at(-1)!], sku)
+      : candidateChildren(matchBundles, sku);
     const itemRead = await remote.getInventoryItem(sku);
     if (itemRead.state === 'unknown') throw new Error(`Variation listing cleanup item ${sku} read is unknown: ${itemRead.reason}`);
     if (itemRead.state === 'present') {
-      exactOwnedItem(itemRead.value, sku, snapshot.groupKey, candidates);
+      exactOwnedItem(itemRead.value, sku, snapshot.groupKey, candidates, quantityTolerant);
       items.set(sku, itemRead.value);
     }
     const offerRead = await remote.getOffers(sku, snapshot.marketplaceId);
@@ -740,7 +787,7 @@ async function readCleanupOwnedState(
     }
     const offer = offerRead.state === 'present' ? offerRead.value[0] : undefined;
     if (offer) {
-      exactOwnedOffer(offer, sku, snapshot.marketplaceId, snapshot.ownedRemote.offerIdsBySku[sku], snapshot.ownedRemote.listingId, candidates);
+      exactOwnedOffer(offer, sku, snapshot.marketplaceId, snapshot.ownedRemote.offerIdsBySku[sku], snapshot.ownedRemote.listingId, candidates, quantityTolerant);
       offers.set(sku, offer);
     }
   }
@@ -871,7 +918,8 @@ export interface VariationListingWithdrawalExecutionResult {
 }
 
 /** Execute only the frozen withdrawal operation and durably stop at withdrawn.
- * The same immutable cleanup revision remains resumable by executeVariationListingCleanup.
+ * Ever-published groups intentionally terminate here; destructive cleanup is
+ * reserved for never-published failed staging.
  */
 export async function executeVariationListingWithdrawal(
   input: VariationListingCleanupExecutionInput
@@ -907,12 +955,12 @@ export async function executeVariationListingWithdrawal(
   const history = cleanupHistory(input.frozen, await input.journal.listCheckpoints(input.frozen.captureInput.revisionId));
   await runCleanupMutation(input, history, withdrawal.operationKey,
     async () => {
-      const state = await readCleanupOwnedState(snapshot, input.remote);
+      const state = await readCleanupOwnedState(snapshot, input.remote, true);
       if (!state.group || [...state.offers.values()].some((offer) => offer.status === 'PUBLISHED' && offer.lifecycleClass === 'active')) return null;
       return { evidence: asJson({ groupKey: snapshot.groupKey, state: 'withdrawn' }), observed: 'present' };
     },
     async () => {
-      const state = await readCleanupOwnedState(snapshot, input.remote);
+      const state = await readCleanupOwnedState(snapshot, input.remote, true);
       const active = [...state.offers.values()].filter((offer) => offer.status === 'PUBLISHED' && offer.lifecycleClass === 'active');
       return state.group && active.length > 0
         ? { evidence: asJson({ groupKey: snapshot.groupKey, listingId: snapshot.ownedRemote.listingId, state: 'active' }), observed: 'present' }
@@ -940,6 +988,9 @@ export async function executeVariationListingCleanup(
   const snapshot = input.frozen.captureInput.snapshot as unknown as VariationListingCleanupSnapshot;
   if (snapshot.planVersion !== CLEANUP_PLAN_VERSION || input.frozen.captureInput.snapshotDigest !== digestJson(asJson(snapshot))) {
     throw new Error('Variation listing cleanup frozen snapshot integrity check failed.');
+  }
+  if (snapshot.ownedRemote.publicationHistoryExists) {
+    throw new Error('Variation listing destructive cleanup is forbidden for ever-published groups; use withdrawal and retain the remote inventory history.');
   }
   const frozenBundleIdentity = validateOwnedBundles(cleanupBundles(snapshot));
   if (frozenBundleIdentity.groupKey !== snapshot.groupKey || frozenBundleIdentity.marketplaceId !== snapshot.marketplaceId ||

@@ -20,7 +20,6 @@ import {
 import {
   buildVariationListingFrozenPublicationRevision,
   executeVariationListingPublication,
-  reconcileVariationListingExactPublished,
   type VariationListingFrozenPublicationRevision,
   type VariationListingMediaResource,
   type VariationListingPublicationMutationGateway,
@@ -28,8 +27,10 @@ import {
   type VariationListingRemoteRead,
 } from '@/ebay/variation-listing-publication.js';
 import {
+  applyVariationListingConfirmedRemoteQuantities,
   executeVariationListingActiveRevisionPublication,
   prepareVariationListingFrozenActiveRevision,
+  reconstructConfirmedRemoteIdentity,
   reconstructVariationListingConfirmedRepresentativeImages,
   type VariationListingFrozenActiveRevision,
 } from '@/ebay/variation-listing-active-revision.js';
@@ -102,7 +103,6 @@ export interface VariationListingActionDataAccess {
   listCheckpointsByRevisionId(revisionId: string): Promise<Array<{ source: VariationListingPublishingCheckpointRow }>>;
   markPublishReady(input: { groupId: string; expectedDesiredRevision: number }): Promise<unknown>;
   reserveActionRevision(input: import('@ebay-inventory/data').ReserveVariationListingActionRevisionInput): Promise<import('@ebay-inventory/data').VariationListingGroupRow>;
-  updateCopyAvailability(input: { groupId: string; variationId: string; copyId: string; expectedDesiredRevision: number; availabilityState: 'available' | 'unavailable' }): Promise<unknown>;
   captureRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['captureRevision'];
   appendJournalCheckpoint: import('@ebay-inventory/data').VariationListingTransactionGateway['appendJournalCheckpoint'];
   confirmRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['confirmRevision'];
@@ -447,12 +447,16 @@ function hydrateInitial(row: VariationListingRevisionRow): VariationListingFroze
 
 function hydrateActive(row: VariationListingRevisionRow): VariationListingFrozenActiveRevision {
   const snapshot = row.snapshot as unknown as VariationListingFrozenActiveRevision['snapshot'];
+  const historicalConfirmedBundle = buildVariationListingHistoricalInventoryPayloadBundle({
+    aggregate: snapshot.confirmed.aggregate,
+    representativeImages: snapshot.confirmed.representativeImages,
+  });
   return {
     snapshot,
-    confirmedBundle: buildVariationListingHistoricalInventoryPayloadBundle({
-      aggregate: snapshot.confirmed.aggregate,
-      representativeImages: snapshot.confirmed.representativeImages,
-    }),
+    confirmedBundle: applyVariationListingConfirmedRemoteQuantities(
+      historicalConfirmedBundle,
+      snapshot.confirmed.remote.quantitiesBySku
+    ),
     desiredBundlePreview: null,
     captureInput: {
       capturedDesiredRevision: row.captured_desired_revision,
@@ -602,6 +606,24 @@ function validationError(action: VariationListingActionName, groupId: string, co
     issues: [],
     recommendedActions,
     remoteState: 'known_unchanged',
+    requiresReconciliation: false,
+    retryStatus: 'not_applicable',
+    severity: 'error',
+    stage: 'preflight',
+    summary,
+    userActionRequired: true,
+  });
+}
+
+function activeRevisionReprepareError(action: VariationListingActionName, groupId: string, summary: string) {
+  return new VariationListingActionError(409, {
+    action,
+    affected: { groupId },
+    category: 'state',
+    code: 'active_revision_reprepare_required',
+    issues: [],
+    recommendedActions: ['refresh_group', 'stage_new_change'],
+    remoteState: 'known_changed',
     requiresReconciliation: false,
     retryStatus: 'not_applicable',
     severity: 'error',
@@ -773,6 +795,13 @@ export function createVariationListingActionService(options: VariationListingAct
     if (error instanceof VariationListingActionError) return error;
     if (error instanceof VariationListingTransactionConflictError) {
       return validationError(action, groupId, 'variation_listing_state_stale', error.message, ['refresh_group', 'review_pending_changes']);
+    }
+    if (error instanceof Error && error.message.startsWith('active_revision_reprepare_required:')) {
+      return activeRevisionReprepareError(
+        action,
+        groupId,
+        error.message.slice('active_revision_reprepare_required:'.length).trim()
+      );
     }
     const revisions = await rows(groupId).catch(() => [] as VariationListingRevisionRow[]);
     const revision = [...revisions].sort((left, right) => right.captured_desired_revision - left.captured_desired_revision)[0];
@@ -969,22 +998,11 @@ export function createVariationListingActionService(options: VariationListingAct
     if (aggregate.group.last_confirmed_revision !== null) {
       const unresolvedPlanOperation = operationPlan(revision).find((operation) => operation.operationKey === unresolved.operation_key);
       if (unresolvedPlanOperation?.operationKind !== 'withdrawal') {
-        throw validationError('retry', groupId, 'cleanup_sale_protection_pending', 'Published cleanup cannot continue until variation-SKU sale protection is proven in YP8.', ['keep_group_withdrawn', 'wait_for_order_reconciliation']);
+        throw validationError('retry', groupId, 'published_cleanup_forbidden', 'Published groups must remain retained after withdrawal; destructive cleanup is unavailable.', ['keep_group_withdrawn']);
       }
       return await executeVariationListingWithdrawal({ frozen: cleanupFrozen, journal: journalFor(revision), mutations: deps.mutations, remote: deps.remote, transaction });
     }
     return await executeVariationListingCleanup({ frozen: cleanupFrozen, journal: journalFor(revision), mutations: deps.mutations, remote: deps.remote, transaction });
-  });
-
-  const quantity = (groupId: string, input: { variationId: string; copyId: string; expectedDesiredRevision: number; availabilityState: 'available' | 'unavailable' }) => run('quantity', groupId, async (progress) => {
-    const aggregate = await requireAggregate(groupId, 'quantity', input.expectedDesiredRevision);
-    const variation = aggregate.variations.find((candidate) => candidate.variation_id === input.variationId);
-    if (!variation) throw validationError('quantity', groupId, 'variation_not_found', 'The selected variation no longer exists.', ['refresh_group'], { variationId: input.variationId });
-    const copy = aggregate.copies.find((candidate) => candidate.copy_id === input.copyId && candidate.variation_id === input.variationId);
-    if (!copy) throw validationError('quantity', groupId, 'copy_not_found', 'The selected physical copy no longer belongs to this variation.', ['refresh_group'], { variationId: input.variationId, sku: variation.sku });
-    progress('stage_copy_availability', { variationId: input.variationId, sku: variation.sku });
-    await options.data.updateCopyAvailability({ groupId, variationId: input.variationId, copyId: input.copyId, expectedDesiredRevision: input.expectedDesiredRevision, availabilityState: input.availabilityState });
-    return { desiredRevision: input.expectedDesiredRevision + 1, staged: true, variationId: input.variationId, sku: variation.sku };
   });
 
   async function exactOwnedHistory(groupId: string, aggregate: VariationListingAggregateSnapshot, deps: Awaited<ReturnType<typeof resolveDependencies>>) {
@@ -995,17 +1013,37 @@ export function createVariationListingActionService(options: VariationListingAct
         revisionKind(revision) !== 'cleanup'
       )
       .sort((a, b) => a.captured_desired_revision - b.captured_desired_revision);
-    if (revisions.length === 0) throw validationError('withdraw', groupId, 'published_revision_history_missing', 'Published remote ownership cannot be reconstructed from durable revisions.', ['inspect_group_history']);
+    if (revisions.length === 0 || revisions.at(-1)?.captured_desired_revision !== aggregate.group.last_confirmed_revision) {
+      throw validationError('withdraw', groupId, 'published_revision_history_missing', 'Published remote ownership cannot be reconstructed from the latest confirmed revision.', ['inspect_group_history']);
+    }
     const bundles: VariationListingInventoryPayloadBundle[] = [];
     for (const revision of revisions) {
       const images = reconstructVariationListingConfirmedRepresentativeImages({ revision, checkpoints: await checkpoints(revision.revision_id) });
       bundles.push(buildVariationListingHistoricalInventoryPayloadBundle({ aggregate: snapshotAggregate(revision), representativeImages: images }));
     }
     const last = revisions.at(-1)!;
-    const lastImages = reconstructVariationListingConfirmedRepresentativeImages({ revision: last, checkpoints: await checkpoints(last.revision_id) });
-    const lastBundle = bundles.at(-1)!;
-    const published = await reconcileVariationListingExactPublished(deps.remote, { captureInput: { capturedDesiredRevision: last.captured_desired_revision, groupId: last.group_id, operationPlan: [], revisionId: last.revision_id, snapshot: last.snapshot, snapshotDigest: last.snapshot_digest, snapshotVersion: last.snapshot_version }, snapshot: { aggregate: snapshotAggregate(last), mediaResources: [], representativeImages: lastImages } }, lastBundle);
-    return { bundles, ownedRemote: { listingId: published.listingId, offerIdsBySku: Object.fromEntries(published.offers.map((offer) => [offer.sku, offer.offerId])), publicationHistoryExists: true } };
+    const lastCheckpoints = await checkpoints(last.revision_id);
+    let durableIdentity: ReturnType<typeof reconstructConfirmedRemoteIdentity>;
+    try {
+      durableIdentity = reconstructConfirmedRemoteIdentity(last, lastCheckpoints);
+    } catch (error) {
+      throw validationError('withdraw', groupId, 'published_revision_history_missing', error instanceof Error ? error.message : 'Published remote ownership cannot be reconstructed from durable checkpoints.', ['inspect_group_history']);
+    }
+    // Withdrawal ownership reads intentionally ignore quantity-only eBay drift
+    // (sales) while retaining exact non-quantity payload, group, SKU, and
+    // durable offer/listing identity checks. Destructive cleanup uses its
+    // strict default reader and is not weakened by this path.
+    const published = await prepareVariationListingCleanupPlan({
+      ownedBundles: bundles,
+      ownedRemote: {
+        listingId: durableIdentity.listingId,
+        offerIdsBySku: durableIdentity.offerIdsBySku,
+        publicationHistoryExists: true,
+      },
+      protection: { state: 'clear' },
+      remote: deps.remote,
+    });
+    return { bundles, ownedRemote: published.snapshot.ownedRemote };
   }
 
   const withdraw = (groupId: string, expectedDesiredRevision: number) => run('withdraw', groupId, async (progress) => {
@@ -1112,11 +1150,11 @@ export function createVariationListingActionService(options: VariationListingAct
       throw validationError(
         action,
         groupId,
-        action === 'cleanup' ? 'cleanup_sale_protection_pending' : 'abandon_published_group_forbidden',
+        action === 'cleanup' ? 'published_cleanup_forbidden' : 'abandon_published_group_forbidden',
         action === 'cleanup'
-          ? 'Destructive cleanup is blocked until YP8 proves variation-SKU sold/order protection.'
-          : 'Published groups must be withdrawn and protected cleanup must wait for sold/order reconciliation.',
-        action === 'cleanup' ? ['keep_group_withdrawn', 'wait_for_order_reconciliation'] : ['withdraw_group']
+          ? 'Published groups must remain retained after withdrawal; destructive cleanup is unavailable.'
+          : 'Published groups cannot be abandoned; withdraw the group to end buyer-facing availability.',
+        action === 'cleanup' ? ['keep_group_withdrawn'] : ['withdraw_group']
       );
     }
     if (aggregate.group.desired_revision === 0) {
@@ -1227,5 +1265,5 @@ export function createVariationListingActionService(options: VariationListingAct
   const cleanup = (groupId: string, expectedDesiredRevision: number) =>
     run('cleanup', groupId, async (progress) => await performUnpublishedAbandon('cleanup', groupId, expectedDesiredRevision, progress));
 
-  return { abandon, cleanup, publish, publishChanges, quantity, retry, returnToReview, withdraw };
+  return { abandon, cleanup, publish, publishChanges, retry, returnToReview, withdraw };
 }

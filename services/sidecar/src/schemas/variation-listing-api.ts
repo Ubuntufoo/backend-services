@@ -170,24 +170,8 @@ export const updateVariationListingRepresentativeCopyRequestSchema = z
   })
   .strict();
 
-export const updateVariationListingCopyAvailabilityRequestSchema = z
-  .object({
-    expectedDesiredRevision: expectedDesiredRevisionSchema,
-    availabilityState: z.enum(['available', 'unavailable']),
-  })
-  .strict();
-
 export const variationListingRevisionActionRequestSchema = z
   .object({ expectedDesiredRevision: expectedDesiredRevisionSchema })
-  .strict();
-
-export const variationListingQuantityActionRequestSchema = z
-  .object({
-    expectedDesiredRevision: expectedDesiredRevisionSchema,
-    variationId: z.string().uuid(),
-    copyId: z.string().uuid(),
-    availabilityState: z.enum(['available', 'unavailable']),
-  })
   .strict();
 
 export const variationListingRetryActionRequestSchema = z.object({}).strict();

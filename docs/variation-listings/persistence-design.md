@@ -375,8 +375,9 @@ it must occur before deleting the current representative. Selling or making a re
 unavailable never auto-repoints it. A delete transaction that removes a representative must first
 update the variation to another same-variation copy (or delete the variation in the same transaction);
 `NO ACTION` plus deferred checking rejects an orphan at commit. Copy deletion is otherwise service-role
-only and only for an eligible unsold/unprotected local aggregate; deferred YP8.1/YP8.2 order/sold
-evidence adds the proven order/sold guards.
+only and remains a local capture/provenance operation. It must not reconstruct post-publication eBay
+quantity or introduce a variation-specific order/sold ledger; active replenishment compares newly
+eligible copy IDs with the last confirmed revision snapshot.
 
 ## Durable intake sessions — `public.variation_listing_intake_sessions`
 
@@ -581,7 +582,9 @@ the complete group, variations, copies, and relevant session state in one transa
 - All copies marked `available` have a condition compatible with the group's shared eBay condition.
   An incompatible copy may be retained only as `unavailable` or moved to a compatible group; it may
   not weaken the group's condition. Desired quantity is exactly `COUNT(*)` of available copies for the
-  variation. No quantity column or manual quantity authority exists.
+  variation only before initial publication (and for a brand-new active variation). Existing active
+  revisions use exact live eBay Inventory Item/Offer quantities as baseline; no quantity column or
+  manual quantity authority exists.
 - Initial category `261328` compatibility is deterministic. Group and copy each persist one canonical
   token ranked `POOR=0`, `VERY_GOOD=1`, `EXCELLENT=2`, `NEAR_MINT_OR_BETTER=3`; a copy may be
   `available` only when its rank is at least the group's minimum rank. The group service also requires

@@ -88,6 +88,28 @@ describe('YP5.4 variation listing cleanup planning', () => {
     expect(plan.operationPlan.some((entry) => entry.operationKind === 'media_ingest')).toBe(false);
   });
 
+  it('blocks withdrawal when remote rolled back to an older historical payload', async () => {
+    const prior = bundle(['A', 'B']);
+    const newest = bundle(['A', 'B']);
+    const changedOffer = structuredClone(newest.children[0]!.offer) as unknown as Record<string, Json>;
+    changedOffer.pricingSummary = { price: { value: '1.49', currency: 'USD' } };
+    newest.children[0]!.offer = changedOffer as typeof newest.children[0]['offer'];
+    const base = remoteState({
+      bundles: [prior, newest],
+      groupBundleIndex: 1,
+      items: ['SKU-A', 'SKU-B'],
+      offers: { 'SKU-A': offerFor(prior, 'SKU-A'), 'SKU-B': offerFor(prior, 'SKU-B') },
+    });
+    const remote: VariationListingPublicationReadGateway = {
+      ...base,
+      async getInventoryItem(sku) {
+        const child = prior.children.find((entry) => entry.sku === sku)!;
+        return { state: 'present' as const, value: { groupKeys: [prior.groupKey], payload: child.inventoryItem as unknown as Json, sku } };
+      },
+    };
+    await expect(prepareVariationListingCleanupPlan({ ownedBundles: [prior, newest], ownedRemote: ownedRemote(['SKU-A', 'SKU-B']), protection: { state: 'clear' }, remote })).rejects.toThrow('does not match an exact owned payload state');
+  });
+
   it('plans exact unpublished partial staging cleanup without withdrawal and ends abandoned', async () => {
     const current = bundle(['A', 'B']);
     const remote = remoteState({
@@ -186,7 +208,7 @@ describe('YP5.4 variation listing cleanup planning', () => {
     expect(plan.operationPlan.some((entry) => entry.operationKind === 'withdrawal')).toBe(false);
   });
 
-  it('journals already-absent ended cleanup mutations as started then confirmed no-op', async () => {
+  it('rejects direct destructive cleanup for an ever-published ended group before journaling', async () => {
     const current = bundle(['A', 'B']);
     const plan = await prepareVariationListingCleanupPlan({
       ownedBundles: [current],
@@ -237,14 +259,10 @@ describe('YP5.4 variation listing cleanup planning', () => {
         },
       },
       checkpointId: () => `checkpoint-id-${checkpointNo + 1}`,
-    })).resolves.toEqual({ lifecycleState: 'terminal-absent', revisionId: 'cleanup-revision-ended' });
-    expect(calls).toEqual(['lifecycle:cleanup', 'lifecycle:terminal-absent']);
-    for (const operation of frozen.captureInput.operationPlan.filter((entry) => entry.operationKind !== 'final_absence_verification')) {
-      expect(checkpoints.filter((checkpoint) => checkpoint.operation_key === operation.operationKey).map((checkpoint) => ({ attempt: checkpoint.attempt_number, checkpoint: checkpoint.checkpoint_number, state: checkpoint.state }))).toEqual([
-        { attempt: 1, checkpoint: 1, state: 'started' },
-        { attempt: 1, checkpoint: 2, state: 'confirmed_no_op' },
-      ]);
-    }
+    })).rejects.toThrow('destructive cleanup is forbidden for ever-published groups');
+    expect(calls).toEqual([]);
+    expect(checkpoints).toEqual([]);
+    expect(durableRevision).toBeNull();
   });
 
   it('abandons only a truly untouched revision-0 intake group after exact remote group absence', async () => {
@@ -354,7 +372,7 @@ describe('YP5.4 variation listing cleanup planning', () => {
     })).rejects.toThrow('withdrawal durable revision does not match the frozen intent');
   });
 
-  it('journals active withdrawal then exact reverse cleanup and terminal absence without deleting Media', async () => {
+  it('rejects direct destructive cleanup for an active ever-published group before withdrawal or deletion', async () => {
     const current = bundle(['A', 'B']);
     let groupPresent = true;
     const items = new Set(['SKU-A', 'SKU-B']);
@@ -424,12 +442,9 @@ describe('YP5.4 variation listing cleanup planning', () => {
         },
       },
       checkpointId: () => `checkpoint-id-${checkpointNo + 1}`,
-    })).resolves.toEqual({ lifecycleState: 'terminal-absent', revisionId: 'cleanup-revision-1' });
-    expect(calls).toEqual([
-      'withdraw', 'lifecycle:withdrawn', 'lifecycle:cleanup',
-      'offer:offer-SKU-B', 'offer:offer-SKU-A', 'group', 'item:SKU-B', 'item:SKU-A',
-      'lifecycle:terminal-absent',
-    ]);
-    expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'final-absence', state: 'confirmed_complete', observed_remote_state: 'proven_absent' });
+    })).rejects.toThrow('destructive cleanup is forbidden for ever-published groups');
+    expect(calls).toEqual([]);
+    expect(checkpoints).toEqual([]);
+    expect(durableRevision).toBeNull();
   });
 });

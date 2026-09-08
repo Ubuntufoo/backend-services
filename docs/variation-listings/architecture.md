@@ -83,16 +83,14 @@ the pilot runbook and must not create, revise, end, or relist these resources.
 
 ### Publication, quantity, and cleanup
 
-- Publication and buyer listing identity are group-scoped. Price, quantity, order
-  reconciliation, and sold history are variation-SKU-scoped.
+- Publication and buyer listing identity are group-scoped. Price and quantity are projected per
+  variation SKU; eBay Seller Hub remains authoritative for order reconciliation and sold history.
 - Setting one variation's child inventory item and offer quantities to zero removes that selector from buyer
   view while other positive-quantity variations remain purchasable. Group membership remains
   complete; zero quantity is not variation deletion.
-- Withdrawal and dependency-ordered cleanup may proceed directly from that zero-quantity state.
-  Restoration is not a cleanup precondition.
-- Cleanup withdraws the active group when required, deletes exact manifest-owned child offers, deletes
-  the group, deletes variation child inventory items, and then proves exact absence. Ambiguous ownership or
-  lifecycle evidence stops destructive cleanup.
+- Withdrawal may proceed directly from that zero-quantity state; restoration is not a precondition.
+  Dependency-ordered destructive cleanup is limited to unpublished failed staging. Ambiguous ownership
+  or lifecycle evidence stops cleanup.
 - Publication, listing, and offer IDs remain durable historical ownership facts after cleanup.
   Current remote state is represented separately by reconciled lifecycle/absence evidence,
   terminal cleanup state, and final-absence verification. Historical identity must not be erased
@@ -255,9 +253,10 @@ Every aggregate mutation and complete group payload must validate all of these t
 - each variation owns its price, selector identity, representative-copy choice, inventory item, and
   offer history; each physical copy owns its exact front/back image pair, internal condition,
   availability, and capture evidence;
-- desired variation quantity is exactly the count of eligible `available` physical copies. Additional
-  duplicate copies replenish the existing variation/SKU instead of creating duplicate selectors or an
-  independently editable quantity authority;
+- desired quantity for initial publication or a brand-new active variation is exactly the count of
+  eligible `available` physical copies. For an existing active variation, eBay's lower live quantity is
+  the baseline and additional eligible duplicate copies replenish the same variation/SKU; no separately
+  editable quantity authority exists;
 - exactly one copy is the representative image source for each variation. The first copy is selected by
   default, and later representative changes are explicit staged local changes rather than automatic
   consequences of a sale or availability change.
@@ -393,22 +392,19 @@ prior editable state instead of entering recovery.
 
 ### Variation state and protections
 
-Each variation's desired quantity is derived exactly by counting its physical-copy rows with
-`availability_state = 'available'`; no quantity column exists. Before publication, a variation is
-`draft`. In an active group, a positive derived count is available and a zero derived count is
-`unavailable`, not removed or deleted. Order/sold evidence and any `partially-sold`/`sold` protections
-are added by YP2.8/YP8.1/YP8.2 without introducing a competing quantity authority.
+Before publication, each variation's desired quantity is derived exactly by counting its physical-copy
+rows with `availability_state = 'available'`; no quantity column exists. After publication, eBay is
+the current quantity authority: active revisions freeze exact Inventory Item and Offer quantities,
+use the lower sellable baseline, and add only eligible copies absent from the last confirmed snapshot.
+Local availability remains capture/replenishment eligibility, not a mirror of post-sale stock.
 
-- Aggregate `active` does not mean every variation is available. Unavailable variations remain aggregate
-  members and retain immutable identity, selector value, position history, SKU, and copy evidence.
-  Later sold-protected variations likewise remain members with their order/sale evidence.
-- Any credible order-line or sold evidence activates a permanent destructive-erasure guard for the
-  variation. Removing the variation from current selection, deleting its local record, reusing its identity,
-  deleting history, or treating remote absence as permission to erase it is forbidden.
-- Until order matching is proven, conflicting, incomplete, or possibly variation-relevant order evidence
-  is conservative: block destructive variation/group deletion and escalate. It does not authorize an
-  inferred decrement, selector rewrite, or adoption.
-- Unsold variations may be removed only before remote publication work begins. Correcting an immutable
+- Aggregate `active` does not mean every variation has positive remote quantity. Zero-quantity
+  variations remain aggregate members and retain immutable identity, selector value, position history,
+  SKU, and copy evidence.
+- Order/sold systems remain outside this runtime. Remote quantity drift is accepted only as the
+  eBay-authoritative baseline for a frozen active revision; identity, listing, group, offer, and other
+  non-quantity drift remains fail-closed.
+- Variations may be removed only before remote publication work begins. Correcting an immutable
   selector value creates a new variation and retires the old eligible variation; it is never an in-place
   rename. After remote staging begins, membership change requires withdrawal, exact reconciliation,
   and the later explicit revision/republication contract—never omission from a group replacement.
@@ -418,18 +414,17 @@ are added by YP2.8/YP8.1/YP8.2 without introducing a competing quantity authorit
 | Action | Preconditions and result |
 | --- | --- |
 | Create | New immutable group/variation UUIDs; valid ordered collection and admission cap; no remote work. Creates `intake`/`draft`. |
-| Edit shared or variation fields | `draft`/`review`; or an explicitly supported active price/quantity action. Immutable IDs, remote keys, selector identity/value, sale evidence, and publication history never change. Buyer-facing structural edits after staging require withdrawal and later revision rules. |
-| Reorder | `draft`/`review`, all affected variations unsold, and no remote publication operation started. Rewrites contiguous positions and selector order atomically. Remote array order never triggers it. |
+| Edit shared or variation fields | `draft`/`review`; or an explicitly supported active price/structural revision. Immutable IDs, remote keys, selector identity/value, and publication history never change. Buyer-facing structural edits after staging require withdrawal and later revision rules. |
+| Reorder | `draft`/`review` and no remote publication operation started. Rewrites contiguous positions and selector order atomically. Remote array order never triggers it. |
 | Add variation / add copy | `draft`/`review` or an `active` long-lived group with no incompatible recovery blocker. New variations and duplicate copies are first staged locally. A duplicate copy attaches to an existing variation and changes desired quantity; it never creates a duplicate SKU/selector. Remote membership/quantity is changed only by an explicit revision batch built from complete desired group state. |
-| Update price | Variation belongs to exact reconciled aggregate. Before publish, edit in `draft`/`review`; while `active`, require supported full offer intent, exact before-read, sold guard evaluation, and post-read. Unknown outcome blocks replay. |
-| Update quantity / set zero | Local desired quantity is derived from eligible physical-copy state rather than directly edited. Copy availability/sold transitions change the derived quantity. An explicit publication batch updates the intended eBay child item/offer consistently and reconciles both; derived zero enters variation `unavailable` while retaining full group membership. It is not delete, withdraw, sold proof, or abandonment. |
-| Restore quantity | Deliberate operator/user request only; current exact reads prove the variation is unsold, owned, zero, and otherwise eligible, and the aggregate is `active`. Never automatic and never required before withdrawal or cleanup. |
-| Post-sale variation action | Any sold/order evidence freezes membership, identity, selector, position history, local record/history, and bound remote resources. Read-only reconciliation and safe aggregate withdrawal remain allowed; removal, reorder, rename, restore/increase, reprice, republish/revise, and destructive cleanup stay blocked unless later YP8.1/YP8.2 evidence and rules explicitly authorize the exact action. |
-| Publish | `publish-ready`; all variations have positive initial quantity, exact complete payloads, trusted Media results, collision reads prove intended keys absent or exact owned staged state, and no sold/recovery blocker exists. Enters `publishing`; only exact reconciliation enters `active`. |
+| Update price | Variation belongs to exact reconciled aggregate. Before publish, edit in `draft`/`review`; while `active`, require supported full offer intent, exact before-read, and post-read. Unknown outcome blocks replay. |
+| Replenish active quantity | Do not expose a manual quantity action. Read exact live Inventory Item and Offer quantities, freeze both plus their lower sellable baseline, then add only newly captured eligible copies. A brand-new variation uses its eligible captured-copy count. |
+| Post-sale variation action | eBay quantity changes do not create local sold/order state. Read-only reconciliation and safe aggregate withdrawal remain allowed; identity, listing, group, offer, and non-quantity drift blocks the revision. Published groups are ended through Withdraw, not abandonment or destructive cleanup. |
+| Publish | `publish-ready`; all variations have positive initial quantity, exact complete payloads, trusted Media results, collision reads prove intended keys absent or exact owned staged state, and no recovery blocker exists. Enters `publishing`; only exact reconciliation enters `active`. |
 | Retry/reconcile | Read-only reconciliation is allowed from any nonterminal remote-bearing state. Mutation retry requires exact proof that the prior attempt had no effect and remains bounded to that same immutable intent. Exact complete state reconciles forward. Any other state sets/retains `recovery_required = true`. |
 | Withdraw | Required for a current active publication before Inventory deletion. Exact read proves ownership and a withdrawable listing lifecycle; success is exact read-back showing no active publication. A zero-quantity variation does not block it. |
-| Abandon | Local intent termination only before buyer-facing publication, or when exact reads prove no remote resources require withdrawal. Enter `abandoned` only when no owned Inventory resources remain; otherwise clean exact owned unpublished staging first. It is not a synonym for ending a published listing and cannot bypass sale guards. |
-| Cleanup/delete | Aggregate is withdrawn, was never buyer-facing with exact proof no withdrawal is needed, or is eligible for cleanup directly from zero after withdrawal. Exact ownership/current-state reads and no sale/order guard are required before every destructive dependency. Enters `cleanup`; only final reads enter `terminal-absent`. |
+| Abandon | Local intent termination only before buyer-facing publication, or when exact reads prove no remote resources require withdrawal. Enter `abandoned` only when no owned Inventory resources remain; otherwise clean exact owned unpublished staging first. It is not a synonym for ending a published listing. |
+| Cleanup/delete | Unpublished failed staging with exact ownership/current-state reads before every destructive dependency. Ever-published groups terminate through Withdraw and remain retained. Enters `cleanup`; only final reads enter `terminal-absent`. |
 
 No action is authorized merely because a UI/local status says it is allowed. The operation must load
 one valid aggregate, evaluate current variation protections, and reconcile every remote identity needed
@@ -443,12 +438,12 @@ for that action immediately before mutation.
 | Known no-op/provider rejection | Definitive response and reads prove the intended mutation made no change | Record rejection; retry only if the defect is corrected and bounded rules still permit the same operation |
 | Retryable transport failure with proven unchanged state | Transport failed, then complete authoritative reads exactly equal the recorded pre-state | At most one bounded replay of identical intent; otherwise stop |
 | Ambiguous mutation outcome | Timeout, disconnect, malformed/partial response, or reads cannot prove exact pre- or post-state | Set `recovery_required = true`; no blind replay, compensating mutation, or destructive cleanup |
-| Remote semantic mismatch | Owned resources exist but membership, aspects, invariants, quantities, price, lifecycle, or bindings differ from exact pre/post intent | Stop; preserve evidence; operator/recovery path, never opportunistic repair |
+| Remote semantic mismatch | Owned resources exist but membership, aspects, invariants, non-quantity payload, price, lifecycle, or bindings differ from exact pre/post intent | Stop; preserve evidence; operator/recovery path, never opportunistic repair |
 | Foreign ownership/collision | Key, SKU, offer, listing, or group membership cannot be proven exclusively aggregate-owned | Stop; never adopt, overwrite, withdraw, or delete it |
 | Split listing/offer state | Child offers resolve to multiple/conflicting listings, duplicates, or incompatible lifecycle classes | Stop in recovery; no partial publish, withdraw, or cleanup inference |
 | Auth/permission failure | Reads or writes are unauthorized/forbidden, including account/marketplace mismatch | Current state is unknown; refresh/repair authority, then reconcile before any mutation |
 | Media create with unknown identity | Create began but exact returned Media identity/URL was not captured | Never replay that create automatically; preserve source/attempt evidence and escalate or deliberately start a separately identified ingest |
-| Destructive-cleanup ambiguity | Any ownership, lifecycle, dependency absence, sold guard, or delete result is unknown | Stop at the last proven checkpoint; preserve all remaining identities and perform bounded reads only |
+| Destructive-cleanup ambiguity | Any ownership, lifecycle, dependency absence, or delete result is unknown | Stop at the last proven checkpoint; preserve all remaining identities and perform bounded reads only |
 
 Provider messages and HTTP status alone do not prove effect or no effect when a mutation could have
 reached eBay. A known complete outcome is advanced by reconciliation, not replay. A proven no-op may
@@ -473,15 +468,12 @@ like its result.
 | Group publish | Exact group/offers reads prove every child offer belongs to one common listing with compatible active lifecycle. Existing exact published state confirms forward; exact unpublished pre-state alone may allow one bounded replay. |
 | Price/quantity revision | Exact child item and offer before/after reads prove the same owned child and consistent intended values. Partial or conflicting application is unknown/mismatch, not permission to repeat. |
 | Withdrawal | Exact pre-read proves the owned active group/listing; completion requires all intended offers/listing evidence in a compatible non-active state. Unknown or split state blocks retry and cleanup. |
-| Dependency-ordered cleanup | For each dependency, read ownership/current state, delete exact owned offer(s), then group, then unsold/unprotected child item(s); confirm absence after each step. A missing dependency is complete only when the exact read is authoritative. Media is excluded. |
+| Dependency-ordered cleanup | For unpublished failed staging, read ownership/current state, delete exact owned offer(s), then group, then child item(s); confirm absence after each step. A missing dependency is complete only when the exact read is authoritative. Media is excluded. |
 | Final absence | Bounded affirmative reads prove listing, every historical/targeted offer, group key, and every child SKU absent. Only then enter `terminal-absent`; auth, timeout, malformed, partial, or mismatched reads remain unknown. |
 
-Cleanup may start with one or more unsold variations already at zero and must not restore them. If any
-variation has sold/order evidence, cleanup may withdraw the buyer-facing group, but must not delete that
-variation's child item, child offer, identity, or history under the current contract. It may remove only other exact
-resources that later order-safe rules affirm are independent and destructible; it cannot claim
-whole-aggregate terminal deletion while protected history/resources require retention. Exact
-post-sale remote mechanics stay deferred to YP8.1 and production proof.
+Cleanup may start with one or more variations already at zero and must not restore them. A published
+group terminates through Withdraw and remains retained; destructive cleanup/abandonment is unavailable
+for ever-published groups. Exact destructive cleanup remains for unpublished failed staging only.
 
 ## Abandonment, withdrawal, cleanup, and terminal state
 
@@ -491,17 +483,17 @@ post-sale remote mechanics stay deferred to YP8.1 and production proof.
   directly; staged unpublished resources require cleanup and final-absence evidence first.
 - **Withdraw** ends buyer-facing availability while retaining aggregate, variations, remote resources,
   and all history. Every published group must be withdrawn before Inventory deletion.
-- **Cleanup** removes only exact aggregate-owned, unsold/unprotected Inventory dependencies in
-  reverse order. It may follow withdrawal or clean unpublished partial staging. It may start from
-  quantity zero and never targets Media.
+- **Cleanup** removes exact aggregate-owned Inventory dependencies in reverse order only for
+  unpublished failed staging. It may start from quantity zero and never targets Media. Ever-published
+  groups remain retained after Withdraw.
 - **Terminal absence** is a current-evidence conclusion, not erasure. Historical IDs remain
   append-only. Media may still exist or expire independently. Any incomplete final read leaves the
   aggregate in cleanup/recovery, not terminal absence.
 
 Sandbox observation supports the MVP cleanup-from-zero path, but selector disappearance,
-out-of-stock display, revision capacity, and post-sale behavior are not universal production eBay
-guarantees. Later scale, account/category, order, and production gates may narrow allowed actions;
-they must not weaken identity retention, no-blind-replay, ownership, or sold-erasure protections.
+out-of-stock display, revision capacity, and production behavior are not universal eBay guarantees.
+Later scale, account/category, and production gates may narrow allowed actions; they must not weaken
+identity retention, no-blind-replay, ownership, or published-group withdrawal protections.
 
 ## Configurable MVP admission cap
 
@@ -540,11 +532,11 @@ platform maximum.
 | Physical-copy ID | Copy/application | Immutable UUID for one actual card; belongs to exactly one variation and never becomes an eBay SKU |
 | Copy front/back images | Copy | Application/R2 references for every physical copy; retained independently of eBay representation |
 | Copy condition | Copy/application | Exact normalized token `NEAR_MINT_OR_BETTER`, `EXCELLENT`, `VERY_GOOD`, or `POOR`; available rank must meet/exceed the group's minimum token |
-| Copy availability | Copy/application | Source of truth for sellable physical inventory; sold/unavailable evidence is retained |
+| Copy availability | Copy/application | Local capture/replenishment eligibility; retained for provenance and never treated as post-publication eBay stock |
 | Representative copy | Variation/application | Exactly one copy supplies the variation's eBay image pair; first copy defaults, later changes are explicit |
 | Representative front/back EPS images | Variation remote projection | Seller EPS URLs in exact `product.imageUrls: [front, back]` order from the representative copy |
 | Media identity and expiry | Representative-image support resource | Opaque eBay identity; separate from Inventory cleanup and from non-representative copy images |
-| Quantity | Derived variation projection | Exact count of copies with `availability_state = available`; no competing quantity column |
+| Quantity | Derived initial / eBay-authoritative active projection | Initial publication counts eligible copies; active revisions freeze exact live Inventory Item and Offer quantities, use the lower sellable baseline, and add only newly eligible copies |
 | Price | Variation | Offer pricing summary |
 | Offer ID | Variation remote history | Read-back identity retained after deletion |
 | eBay listing ID | Group remote history | Publish identity retained after final absence |
@@ -559,8 +551,10 @@ platform maximum.
   expiry evidence. Do not imply that Inventory deletion deletes Media or that every copy is uploaded
   to eBay Media.
 - Model historical remote identities separately from current lifecycle and absence evidence.
-- Derive quantity from eligible available physical copies. Treat derived zero as an unavailable-variation
-  state and support cleanup from it without an artificial restore transition.
+- Derive quantity from eligible available physical copies only for initial publication and brand-new
+  variations. For existing active variations, eBay quantities are authoritative; local copy rows only
+  identify newly captured replenishment units. Treat zero as a remote quantity state, not a local stock
+  reconstruction or manual quantity action.
 - Enforce the configurable two-or-three-variation admission cap at the application-service boundary.
   It is a safety choice, not a persisted aggregate property or platform maximum.
 - Keep variation listing persistence, jobs, routes, reconciliation, UI, and SKU rules isolated from
@@ -591,10 +585,9 @@ or later runtime schemas from that fallback.
   category/account-specific recorded scale evidence rather than hardcoding that ceiling.
 - Whether the Sandbox results generalize to production accounts, categories, policies, Media
   processing, buyer rendering, and out-of-stock settings.
-- Post-sale and order behavior: partial sales, oversell prevention, cancellations, returns,
-  refunds, sold-history retention, and order-line reconciliation across variants.
-- Safe mutation rules after sales, long-lived revision behavior, operational recovery UX, and
-  support procedures at larger scale.
+- Order-management behavior remains outside this runtime: partial sales, oversell prevention,
+  cancellations, returns, refunds, sold-history retention, and order-line reconciliation across variants.
+- Operational recovery UX, long-lived revision support, and support procedures at larger scale.
 - Exact useful selector names and normalization behavior for other categories/accounts. The
   accepted pilot selector does not establish a universal taxonomy contract.
 - The later operation-ledger representation of revision snapshots and remote operation evidence (YP2.5).

@@ -35,16 +35,13 @@ import {
   createVariationListingGroupRequestSchema,
   configureVariationListingIntakeRequestSchema,
   generateVariationListingIntakeIdentityRequestSchema,
-  updateVariationListingCopyAvailabilityRequestSchema,
   updateVariationListingPriceRequestSchema,
   updateVariationListingSelectorValueRequestSchema,
   updateVariationListingRepresentativeCopyRequestSchema,
   updateVariationListingReviewDraftRequestSchema,
-  variationListingCopyIdParamsSchema,
   variationListingGroupIdParamsSchema,
   variationListingVariationIdParamsSchema,
   variationListingRevisionActionRequestSchema,
-  variationListingQuantityActionRequestSchema,
   variationListingRetryActionRequestSchema,
   type CreateVariationListingGroupRequest,
 } from '@/schemas/variation-listing-api.js';
@@ -62,7 +59,6 @@ export type VariationListingApiDataAccess = Pick<
   | 'applyGroupReviewDraft'
   | 'updateVariationPrice'
   | 'updateVariationSelectorValue'
-  | 'updateCopyAvailability'
   | 'updateRepresentativeCopy'
 >;
 
@@ -80,7 +76,6 @@ export interface VariationListingApiActions {
   publish(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   publishChanges(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   retry(groupId: string): Promise<unknown>;
-  quantity(groupId: string, input: { variationId: string; copyId: string; expectedDesiredRevision: number; availabilityState: 'available' | 'unavailable' }): Promise<unknown>;
   withdraw(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   abandon(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   cleanup(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
@@ -141,7 +136,7 @@ function groupRefreshWarning(action: VariationListingActionName, groupId: string
     code: 'group_refresh_required',
     issues: [],
     recommendedActions: ['refresh_group', 'do_not_retry_action'],
-    remoteState: action === 'quantity' ? 'known_unchanged' as const : 'known_changed' as const,
+    remoteState: 'known_changed' as const,
     requiresReconciliation: false,
     retryStatus: 'not_applicable' as const,
     severity: 'warning' as const,
@@ -275,7 +270,6 @@ function serializeVariation(
     priceAmount: variation.price_amount,
     priceCurrency: variation.price_currency,
     representativeCopyId: variation.representative_copy_id,
-    availableQuantity: variationCopies.filter((copy) => copy.availabilityState === 'available').length,
     copyCount: variationCopies.length,
     variationMetadata: variation.variation_metadata,
     copies: variationCopies,
@@ -451,7 +445,6 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
       nextInventorySerial: aggregate.group.next_inventory_serial,
     },
     variationCount: variations.length,
-    totalAvailableQuantity: variations.reduce((sum, variation) => sum + variation.availableQuantity, 0),
     variations,
     validation: buildValidation(aggregate),
     journal: summarizeJournal(latestRevision, checkpoints),
@@ -599,14 +592,6 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     return await runRoute(res, async () => await actionResponse(res, 'return_to_review', params.groupId, await getActions().returnToReview(params.groupId, body.expectedDesiredRevision)));
   });
 
-  router.post('/:groupId/actions/quantity', async (req: Request, res: Response) => {
-    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
-    if (!params) return;
-    const body = parseActionOrSend(res, 'quantity', params.groupId, variationListingQuantityActionRequestSchema, req.body);
-    if (!body) return;
-    return await runRoute(res, async () => await actionResponse(res, 'quantity', params.groupId, await getActions().quantity(params.groupId, body)));
-  });
-
   for (const [route, action] of [
     ['withdraw', 'withdraw'],
     ['abandon', 'abandon'],
@@ -749,25 +734,6 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         variationId: params.variationId,
         copyId: body.copyId,
         expectedDesiredRevision: body.expectedDesiredRevision,
-      });
-      const aggregate = await requireAggregate(res, dataAccess, params.groupId);
-      if (!aggregate) return;
-      res.json(await serializeAggregate(dataAccess, aggregate));
-    });
-  });
-
-  router.patch('/:groupId/variations/:variationId/copies/:copyId/availability', async (req: Request, res: Response) => {
-    const params = parseOrSend(res, variationListingCopyIdParamsSchema, req.params);
-    const body = parseOrSend(res, updateVariationListingCopyAvailabilityRequestSchema, req.body);
-    if (!params || !body) return;
-    return await runRoute(res, async () => {
-      const dataAccess = getDataAccess();
-      await dataAccess.updateCopyAvailability({
-        groupId: params.groupId,
-        variationId: params.variationId,
-        copyId: params.copyId,
-        expectedDesiredRevision: body.expectedDesiredRevision,
-        availabilityState: body.availabilityState,
       });
       const aggregate = await requireAggregate(res, dataAccess, params.groupId);
       if (!aggregate) return;

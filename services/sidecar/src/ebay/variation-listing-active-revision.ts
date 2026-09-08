@@ -17,7 +17,6 @@ import {
   type VariationListingRepresentativeImage,
 } from '@/ebay/variation-listing-payloads.js';
 import {
-  reconcileVariationListingExactPublished,
   type VariationListingMediaResource,
   type VariationListingPublicationReadGateway,
   type VariationListingRemoteOffer,
@@ -85,9 +84,18 @@ function operation(input: {
   };
 }
 
+export interface VariationListingConfirmedRemoteQuantity {
+  inventoryItemQuantity: number;
+  offerQuantity: number;
+  sellableQuantity: number;
+}
+
 export interface VariationListingConfirmedRemoteIdentity {
   listingId: string;
   offerIdsBySku: Record<string, string>;
+  /** Present on YP8.2+ active revisions. A missing map is legacy intent and
+   * is rejected before active execution rather than resuming local counts. */
+  quantitiesBySku?: Record<string, VariationListingConfirmedRemoteQuantity>;
 }
 
 export interface VariationListingFrozenActiveRevisionSnapshot {
@@ -355,18 +363,317 @@ function resolveDesiredRepresentativeImages(input: {
   return { representativeImages, unresolvedMediaCopyIds };
 }
 
-function buildRemoteIdentity(offers: readonly VariationListingRemoteOffer[], listingId: string): VariationListingConfirmedRemoteIdentity {
-  const offerIdsBySku: Record<string, string> = {};
-  for (const offer of offers) {
-    if (offer.listingId !== listingId || offer.status !== 'PUBLISHED' || offer.lifecycleClass !== 'active') {
-      throw new Error('Variation listing confirmed offer is not active on the expected listing ID.');
-    }
-    if (offerIdsBySku[offer.sku]) {
-      throw new Error(`Variation listing confirmed SKU ${offer.sku} has duplicate remote offers.`);
-    }
-    offerIdsBySku[offer.sku] = offer.offerId;
+const MAX_ACTIVE_QUANTITY = 2_147_483_647;
+
+function requireRemoteQuantity(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > MAX_ACTIVE_QUANTITY) {
+    throw new Error(`Variation listing ${label} must be a nonnegative int32.`);
   }
-  return { listingId, offerIdsBySku };
+  return value;
+}
+
+function inventoryItemQuantity(payload: Json, sku: string): number {
+  const root = object(payload, `remote inventory item ${sku}`);
+  const availability = object(root.availability, `remote inventory item ${sku} availability`);
+  const ship = object(availability.shipToLocationAvailability, `remote inventory item ${sku} shipToLocationAvailability`);
+  return requireRemoteQuantity(ship.quantity, `remote inventory item ${sku} quantity`);
+}
+
+function offerQuantity(payload: Json, sku: string): number {
+  return requireRemoteQuantity(object(payload, `remote offer ${sku}`).availableQuantity, `remote offer ${sku} availableQuantity`);
+}
+
+function inventoryPayloadWithoutQuantity(payload: Json, sku: string): Json {
+  const clone = structuredClone(payload);
+  const root = object(clone, `inventory item ${sku}`);
+  const availability = object(root.availability, `inventory item ${sku} availability`);
+  const ship = object(availability.shipToLocationAvailability, `inventory item ${sku} shipToLocationAvailability`);
+  delete ship.quantity;
+  return clone;
+}
+
+function offerPayloadWithoutQuantity(payload: Json, sku: string): Json {
+  const clone = structuredClone(payload);
+  delete object(clone, `offer ${sku}`).availableQuantity;
+  return clone;
+}
+
+function parseConfirmedRemoteQuantity(value: unknown, sku: string): VariationListingConfirmedRemoteQuantity {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Variation listing frozen remote quantity for ${sku} must be an object.`);
+  }
+  const row = value as Record<string, unknown>;
+  const inventoryItemQuantityValue = requireRemoteQuantity(row.inventoryItemQuantity, `frozen inventory item ${sku} quantity`);
+  const offerQuantityValue = requireRemoteQuantity(row.offerQuantity, `frozen offer ${sku} quantity`);
+  const sellableQuantity = requireRemoteQuantity(row.sellableQuantity, `frozen sellable ${sku} quantity`);
+  if (sellableQuantity !== Math.min(inventoryItemQuantityValue, offerQuantityValue)) {
+    throw new Error(`Variation listing frozen sellable quantity for ${sku} is inconsistent with eBay quantity authority.`);
+  }
+  return { inventoryItemQuantity: inventoryItemQuantityValue, offerQuantity: offerQuantityValue, sellableQuantity };
+}
+
+export function applyVariationListingConfirmedRemoteQuantities(
+  bundle: VariationListingInventoryPayloadBundle,
+  quantitiesBySku?: Record<string, VariationListingConfirmedRemoteQuantity>
+): VariationListingInventoryPayloadBundle {
+  const clone = structuredClone(bundle);
+  if (!quantitiesBySku) return clone;
+  for (const child of clone.children) {
+    const quantity = parseConfirmedRemoteQuantity(quantitiesBySku[child.sku], child.sku);
+    child.inventoryItem.availability.shipToLocationAvailability.quantity = quantity.inventoryItemQuantity;
+    child.offer.availableQuantity = quantity.offerQuantity;
+    child.quantity = quantity.sellableQuantity;
+  }
+  return clone;
+}
+
+function applyUniformActiveQuantities(
+  bundle: VariationListingInventoryPayloadBundle,
+  quantitiesBySku: Readonly<Record<string, number>>
+): VariationListingInventoryPayloadBundle {
+  const clone = structuredClone(bundle);
+  for (const child of clone.children) {
+    const quantity = requireRemoteQuantity(quantitiesBySku[child.sku], `desired ${child.sku} quantity`);
+    child.inventoryItem.availability.shipToLocationAvailability.quantity = quantity;
+    child.offer.availableQuantity = quantity;
+    child.quantity = quantity;
+  }
+  return clone;
+}
+
+function desiredActiveQuantities(
+  current: VariationListingAggregateSnapshot,
+  previous: VariationListingAggregateSnapshot,
+  remoteQuantities: Readonly<Record<string, VariationListingConfirmedRemoteQuantity>>
+): Record<string, number> {
+  const previousVariationIds = new Set(previous.variations.map((variation) => variation.variation_id));
+  const previousCopyIds = new Set(previous.copies.map((copy) => copy.copy_id));
+  const quantities: Record<string, number> = {};
+  for (const variation of current.variations) {
+    const copies = current.copies.filter((copy) => copy.variation_id === variation.variation_id);
+    if (!previousVariationIds.has(variation.variation_id)) {
+      quantities[variation.sku] = copies.filter((copy) => copy.availability_state === 'available').length;
+      continue;
+    }
+    const baseline = parseConfirmedRemoteQuantity(remoteQuantities[variation.sku], variation.sku).sellableQuantity;
+    const addedCopies = copies.filter(
+      (copy) => !previousCopyIds.has(copy.copy_id) && copy.availability_state === 'available'
+    ).length;
+    const desired = baseline + addedCopies;
+    if (!Number.isSafeInteger(desired) || desired > MAX_ACTIVE_QUANTITY) {
+      throw new Error(`Variation listing desired quantity for ${variation.sku} exceeds the supported int32 range.`);
+    }
+    quantities[variation.sku] = desired;
+  }
+  return quantities;
+}
+
+async function reconcilePublishedQuantityBaseline(
+  remote: VariationListingPublicationReadGateway,
+  expected: VariationListingInventoryPayloadBundle,
+  expectedRemoteIdentity?: Pick<VariationListingConfirmedRemoteIdentity, 'listingId' | 'offerIdsBySku'>
+): Promise<{
+  listingId: string;
+  offers: VariationListingRemoteOffer[];
+  quantitiesBySku: Record<string, VariationListingConfirmedRemoteQuantity>;
+}> {
+  if (activeGroup(await remote.getInventoryItemGroup(expected.groupKey), expected.group) === null) {
+    throw new Error('Variation listing confirmed group no longer matches the last confirmed structural revision.');
+  }
+
+  const offers: VariationListingRemoteOffer[] = [];
+  const quantitiesBySku: Record<string, VariationListingConfirmedRemoteQuantity> = {};
+  const listingIds = new Set<string>();
+  const offerIds = new Set<string>();
+  for (const child of expected.children) {
+    const itemRead = await remote.getInventoryItem(child.sku);
+    if (itemRead.state === 'unknown') throw new Error(`Variation listing item ${child.sku} read is unknown: ${itemRead.reason}`);
+    if (itemRead.state === 'proven_absent') throw new Error(`Variation listing confirmed item ${child.sku} is proven absent.`);
+    if (itemRead.value.sku !== child.sku || itemRead.value.groupKeys?.length !== 1 || itemRead.value.groupKeys[0] !== expected.groupKey) {
+      throw new Error(`Variation listing confirmed item ${child.sku} identity/group association changed.`);
+    }
+    if (canonicalJson(inventoryPayloadWithoutQuantity(itemRead.value.payload, child.sku)) !== canonicalJson(inventoryPayloadWithoutQuantity(asJson(child.inventoryItem), child.sku))) {
+      throw new Error(`Variation listing confirmed item ${child.sku} changed outside quantity.`);
+    }
+
+    const offerRead = await remote.getOffers(child.sku, child.offer.marketplaceId);
+    if (offerRead.state === 'unknown') throw new Error(`Variation listing offer ${child.sku} read is unknown: ${offerRead.reason}`);
+    if (offerRead.state === 'proven_absent' || offerRead.value.length !== 1) {
+      throw new Error(`Variation listing confirmed SKU ${child.sku} must have exactly one remote offer.`);
+    }
+    const offer = offerRead.value[0]!;
+    if (
+      offer.sku !== child.sku ||
+      offer.marketplaceId !== child.offer.marketplaceId ||
+      offer.status !== 'PUBLISHED' ||
+      offer.lifecycleClass !== 'active' ||
+      !offer.listingId
+    ) {
+      throw new Error(`Variation listing confirmed offer ${child.sku} is not one active owned offer.`);
+    }
+    if (
+      expectedRemoteIdentity &&
+      (offer.offerId !== expectedRemoteIdentity.offerIdsBySku[child.sku] || offer.listingId !== expectedRemoteIdentity.listingId)
+    ) {
+      throw new Error(`Variation listing confirmed offer ${child.sku} does not match the durable previous revision identity.`);
+    }
+    if (canonicalJson(offerPayloadWithoutQuantity(offer.payload, child.sku)) !== canonicalJson(offerPayloadWithoutQuantity(asJson(child.offer), child.sku))) {
+      throw new Error(`Variation listing confirmed offer ${child.sku} changed outside quantity.`);
+    }
+    if (offerIds.has(offer.offerId)) throw new Error('Variation listing remote offer IDs must be unique.');
+    offerIds.add(offer.offerId);
+    listingIds.add(offer.listingId);
+    offers.push(offer);
+
+    const inventoryQuantity = inventoryItemQuantity(itemRead.value.payload, child.sku);
+    const currentOfferQuantity = offerQuantity(offer.payload, child.sku);
+    quantitiesBySku[child.sku] = {
+      inventoryItemQuantity: inventoryQuantity,
+      offerQuantity: currentOfferQuantity,
+      // eBay documents the effective listing quantity as the lower value when
+      // both Inventory Item and Offer quantities are populated.
+      sellableQuantity: Math.min(inventoryQuantity, currentOfferQuantity),
+    };
+  }
+  if (listingIds.size !== 1) throw new Error('Variation listing confirmed offers do not resolve to one listing ID.');
+  return { listingId: [...listingIds][0]!, offers, quantitiesBySku };
+}
+
+function requiredEvidenceObject(row: VariationListingPublishingCheckpointRow, operationKey: string): Record<string, Json> {
+  if (row.state !== 'confirmed_complete' && row.state !== 'confirmed_no_op') {
+    throw new Error(`Variation listing previous revision operation ${operationKey} has no terminal identity evidence.`);
+  }
+  if (row.observed_remote_state !== 'present') {
+    throw new Error(`Variation listing previous revision operation ${operationKey} terminal evidence is not confirmed present.`);
+  }
+  return object(row.evidence, `previous revision operation ${operationKey} evidence`);
+}
+
+function durableCheckpoint(
+  checkpointsByOperation: Map<string, VariationListingPublishingCheckpointRow[]>,
+  operationKey: string
+): VariationListingPublishingCheckpointRow {
+  const rows = checkpointsByOperation.get(operationKey);
+  if (!rows || rows.length === 0) {
+    throw new Error(`Variation listing previous revision is missing terminal checkpoint ${operationKey}.`);
+  }
+  const ordered = [...rows].sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number);
+  const row = ordered.at(-1)!;
+  requiredEvidenceObject(row, operationKey);
+  return row;
+}
+
+function optionalEvidenceString(value: Json | undefined, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  return activeString(value, label);
+}
+
+/** Reconstruct the last-confirmed remote identities from its immutable
+ * operation/checkpoint evidence. Current eBay reads are only accepted when
+ * they match these durable IDs; they are never an identity-adoption source. */
+export function reconstructConfirmedRemoteIdentity(
+  revision: VariationListingRevisionRow,
+  checkpoints: readonly VariationListingPublishingCheckpointRow[]
+): Pick<VariationListingConfirmedRemoteIdentity, 'listingId' | 'offerIdsBySku'> {
+  const aggregate = revisionSnapshotAggregate(revision);
+  const operations = Array.isArray(revision.operation_plan)
+    ? revision.operation_plan as unknown as { operation_key: string; operation_kind: string; target_ref?: string }[]
+    : [];
+  const normalizedOperations = operations.map((operation) => ({
+    key: operation.operation_key,
+    kind: operation.operation_kind,
+    targetRef: operation.target_ref,
+  }));
+  const byKey = new Map<string, { key: string; kind: string }>();
+  for (const operation of normalizedOperations) {
+    if (!operation.key || byKey.has(operation.key)) throw new Error('Variation listing previous revision operation keys must be unique.');
+    byKey.set(operation.key, operation);
+  }
+  if (revision.operation_count !== normalizedOperations.length) {
+    throw new Error('Variation listing previous revision operation count does not match its durable plan.');
+  }
+  const checkpointsByOperation = new Map<string, VariationListingPublishingCheckpointRow[]>();
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.revision_id !== revision.revision_id || !byKey.has(checkpoint.operation_key)) {
+      throw new Error('Variation listing previous revision checkpoint does not belong to its durable operation plan.');
+    }
+    checkpointsByOperation.set(checkpoint.operation_key, [...(checkpointsByOperation.get(checkpoint.operation_key) ?? []), checkpoint]);
+  }
+
+  const expectedVariationIds = new Set(aggregate.variations.map((variation) => variation.variation_id));
+  const expectedSkus = new Set(aggregate.variations.map((variation) => variation.sku));
+  const childOfferOperations = normalizedOperations.filter((operation) => operation.kind === 'child_offer_write');
+  if (childOfferOperations.length !== expectedVariationIds.size) {
+    throw new Error('Variation listing previous revision child-offer operation coverage is incomplete.');
+  }
+  const offerIdsBySku: Record<string, string> = {};
+  const listingIds = new Set<string>();
+  const terminalOfferIds = new Map<string, string>();
+  for (const operation of childOfferOperations) {
+    const variationId = operation.key.startsWith('child-offer:') ? operation.key.slice('child-offer:'.length) : '';
+    if (!expectedVariationIds.has(variationId)) throw new Error(`Variation listing previous revision has an unknown child-offer operation ${operation.key}.`);
+    const evidence = requiredEvidenceObject(durableCheckpoint(checkpointsByOperation, operation.key), operation.key);
+    const offerId = activeString(evidence.offerId, `previous revision ${operation.key} offerId`);
+    const sku = activeString(evidence.sku, `previous revision ${operation.key} sku`);
+    const variation = aggregate.variations.find((candidate) => candidate.variation_id === variationId)!;
+    if (sku !== variation.sku || operation.targetRef !== variation.sku || !expectedSkus.has(sku)) throw new Error(`Variation listing previous revision ${operation.key} SKU coverage is invalid.`);
+    if (offerIdsBySku[sku] || [...terminalOfferIds.values()].includes(offerId)) throw new Error('Variation listing previous revision offer IDs must be unique.');
+    offerIdsBySku[sku] = offerId;
+    terminalOfferIds.set(variationId, offerId);
+    const listingId = optionalEvidenceString(evidence.listingId, `previous revision ${operation.key} listingId`);
+    if (listingId) listingIds.add(listingId);
+  }
+
+  for (const operation of normalizedOperations.filter((entry) => entry.key.startsWith('publish-offer:'))) {
+    const variationId = operation.key.slice('publish-offer:'.length);
+    if (!expectedVariationIds.has(variationId)) throw new Error(`Variation listing previous revision has an unknown publish-offer operation ${operation.key}.`);
+    const evidence = requiredEvidenceObject(durableCheckpoint(checkpointsByOperation, operation.key), operation.key);
+    const offerId = activeString(evidence.offerId, `previous revision ${operation.key} offerId`);
+    const sku = activeString(evidence.sku, `previous revision ${operation.key} sku`);
+    const variation = aggregate.variations.find((candidate) => candidate.variation_id === variationId)!;
+    if (sku !== variation.sku || terminalOfferIds.get(variationId) !== offerId) throw new Error(`Variation listing previous revision ${operation.key} identity does not match its child-offer evidence.`);
+    const listingId = optionalEvidenceString(evidence.listingId, `previous revision ${operation.key} listingId`);
+    if (!listingId) throw new Error(`Variation listing previous revision ${operation.key} is missing listingId evidence.`);
+    listingIds.add(listingId);
+  }
+
+  const listingIdentityOperations = normalizedOperations.filter((operation) => operation.key === 'group-publish' || operation.key === 'revision-reconcile');
+  for (const operation of listingIdentityOperations) {
+    const evidence = requiredEvidenceObject(durableCheckpoint(checkpointsByOperation, operation.key), operation.key);
+    const listingId = activeString(evidence.listingId, `previous revision ${operation.key} listingId`);
+    listingIds.add(listingId);
+  }
+  if (Object.keys(offerIdsBySku).length !== expectedSkus.size || listingIds.size !== 1) {
+    throw new Error('Variation listing previous revision remote identity evidence does not cover exact SKUs and one listing.');
+  }
+  return { listingId: [...listingIds][0]!, offerIdsBySku };
+}
+
+async function verifyFrozenRemoteBaseline(
+  input: VariationListingActiveRevisionExecutionInput,
+  reprepareOnQuantityDrift: boolean,
+): Promise<void> {
+  const frozenQuantities = input.frozen.snapshot.confirmed.remote.quantitiesBySku;
+  if (!frozenQuantities) return;
+  let observed: Awaited<ReturnType<typeof reconcilePublishedQuantityBaseline>>;
+  try {
+    observed = await reconcilePublishedQuantityBaseline(
+      input.remote,
+      input.frozen.confirmedBundle,
+      input.frozen.snapshot.confirmed.remote
+    );
+  } catch (error) {
+    if (reprepareOnQuantityDrift) {
+      throw new Error(`active_revision_reprepare_required: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    throw error;
+  }
+  if (canonicalJson(asJson(observed.quantitiesBySku)) !== canonicalJson(asJson(frozenQuantities))) {
+    if (reprepareOnQuantityDrift) {
+      throw new Error('active_revision_reprepare_required: Variation listing active revision remote quantity changed after freeze; stage a new change and prepare again before mutation.');
+    }
+    throw new Error('Variation listing active revision remote quantity changed after freeze; capture is forbidden until the revision is reprepared.');
+  }
 }
 
 export async function prepareVariationListingFrozenActiveRevision(
@@ -411,27 +718,26 @@ export async function prepareVariationListingFrozenActiveRevision(
     revision: input.previousRevision,
     checkpoints: input.previousCheckpoints,
   });
-  const confirmedBundle = buildVariationListingInventoryPayloadBundle({
+  const localConfirmedBundle = buildVariationListingInventoryPayloadBundle({
     aggregate: previousAggregate,
     representativeImages: previousImages,
   });
-  const confirmedRemote = await reconcileVariationListingExactPublished(input.remote, {
-    captureInput: {
-      capturedDesiredRevision: input.previousRevision.captured_desired_revision,
-      groupId: input.previousRevision.group_id,
-      operationPlan: [],
-      revisionId: input.previousRevision.revision_id,
-      snapshot: input.previousRevision.snapshot,
-      snapshotDigest: input.previousRevision.snapshot_digest,
-      snapshotVersion: input.previousRevision.snapshot_version,
-    },
-    snapshot: {
-      aggregate: previousAggregate,
-      mediaResources: [],
-      representativeImages: previousImages,
-    },
-  }, confirmedBundle);
-  const remoteIdentity = buildRemoteIdentity(confirmedRemote.offers, confirmedRemote.listingId);
+  const durableRemoteIdentity = reconstructConfirmedRemoteIdentity(input.previousRevision, input.previousCheckpoints);
+  const confirmedRemote = await reconcilePublishedQuantityBaseline(input.remote, localConfirmedBundle, durableRemoteIdentity);
+  const remoteIdentity = {
+    listingId: durableRemoteIdentity.listingId,
+    offerIdsBySku: durableRemoteIdentity.offerIdsBySku,
+    quantitiesBySku: confirmedRemote.quantitiesBySku,
+  } satisfies VariationListingConfirmedRemoteIdentity;
+  const confirmedBundle = applyVariationListingConfirmedRemoteQuantities(
+    localConfirmedBundle,
+    remoteIdentity.quantitiesBySku
+  );
+  const desiredQuantitiesBySku = desiredActiveQuantities(
+    current,
+    previousAggregate,
+    confirmedRemote.quantitiesBySku
+  );
 
   const mediaResources = structuredClone([...(input.mediaResources ?? [])]);
   const desiredImages = resolveDesiredRepresentativeImages({
@@ -461,10 +767,13 @@ export async function prepareVariationListingFrozenActiveRevision(
     });
   }
   const desiredBundlePreview = desiredImages.unresolvedMediaCopyIds.length === 0
-    ? buildVariationListingInventoryPayloadBundle({
-        aggregate: current,
-        representativeImages: desiredImages.representativeImages,
-      })
+    ? applyUniformActiveQuantities(
+        buildVariationListingInventoryPayloadBundle({
+          aggregate: current,
+          representativeImages: desiredImages.representativeImages,
+        }),
+        desiredQuantitiesBySku
+      )
     : null;
 
   const snapshot: VariationListingFrozenActiveRevisionSnapshot = {
@@ -615,6 +924,23 @@ function activeErrorEvidence(error: unknown): Json {
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
+function hasQuantityMutationCheckpoint(
+  frozen: VariationListingFrozenActiveRevision,
+  checkpoints: readonly VariationListingPublishingCheckpointRow[]
+): boolean {
+  const quantityOperationKeys = new Set(
+    frozen.captureInput.operationPlan
+      .filter((operation) => operation.operationKind === 'child_inventory_item_write' || operation.operationKind === 'child_offer_write')
+      .map((operation) => operation.operationKey)
+  );
+  const byOperation = new Map<string, VariationListingPublishingCheckpointRow[]>();
+  for (const checkpoint of checkpoints) {
+    if (!quantityOperationKeys.has(checkpoint.operation_key)) continue;
+    byOperation.set(checkpoint.operation_key, [...(byOperation.get(checkpoint.operation_key) ?? []), checkpoint]);
+  }
+  return [...byOperation.values()].some((rows) => activeLatest(rows)?.state !== 'confirmed_no_op');
+}
+
 async function activeAppend(
   input: VariationListingActiveRevisionExecutionInput,
   history: ActiveHistory,
@@ -734,6 +1060,27 @@ function activeString(value: Json | undefined, label: string): string {
   return value;
 }
 
+function hasPriorRemoteProgress(
+  frozen: VariationListingFrozenActiveRevision,
+  history: ActiveHistory,
+  operationKey: string
+): boolean {
+  const mutationKeys = new Set(
+    frozen.captureInput.operationPlan
+      .filter((operation) => ['child_inventory_item_write', 'child_offer_write', 'complete_group_replace', 'group_publish'].includes(operation.operationKind))
+      .map((operation) => operation.operationKey)
+  );
+  for (const [key, rows] of history) {
+    if (key === operationKey || !mutationKeys.has(key)) continue;
+    // confirmed_no_op is a read-only proof and does not mean a prior remote
+    // mutation happened. Any completed mutation, started/unknown outcome, or
+    // bounded-retry state does require a durable unresolved marker if the next
+    // operation's precondition drifts.
+    if (rows.some((row) => !['started', 'confirmed_no_op'].includes(row.state))) return true;
+  }
+  return false;
+}
+
 async function executeActiveOperation(
   input: VariationListingActiveRevisionExecutionInput,
   history: ActiveHistory,
@@ -832,8 +1179,23 @@ async function executeActiveOperation(
     await activeAppend(input, history, operationKey, 'confirmed_no_op', 1, 2, afterEvidence, 'present');
     return;
   }
-  const preEvidence = await pre();
-  if (preEvidence === null) throw new Error(`Variation listing operation ${operationKey} pre-state is not exact.`);
+    let preEvidence: Json | null;
+    try {
+      preEvidence = await pre();
+    } catch (error) {
+      if (hasPriorRemoteProgress(input.frozen, history, operationKey)) {
+        await activeAppend(input, history, operationKey, 'started', 1, 1, {});
+        await activeAppend(input, history, operationKey, 'unknown', 1, 2, activeErrorEvidence(error), 'unknown');
+      }
+      throw error;
+    }
+    if (preEvidence === null) {
+      if (hasPriorRemoteProgress(input.frozen, history, operationKey)) {
+        await activeAppend(input, history, operationKey, 'started', 1, 1, {});
+        await activeAppend(input, history, operationKey, 'unknown', 1, 2, { reason: 'Exact pre-state changed after earlier remote operations.' }, 'unknown');
+      }
+      throw new Error(`Variation listing operation ${operationKey} pre-state is not exact.`);
+    }
   await activeAppend(input, history, operationKey, 'started', 1, 1, {});
   try {
     await mutate();
@@ -872,7 +1234,31 @@ function activeOffer(
   if (offer.offerId !== identity.offerId || offer.sku !== expected.sku || offer.marketplaceId !== expected.marketplaceId || offer.status !== status || offer.listingId !== identity.listingId || (lifecycleRequired && offer.lifecycleClass !== 'active')) {
     throw new Error(`Variation listing offer ${expected.sku} does not match the frozen offer identity.`);
   }
+  offerQuantity(offer.payload, expected.sku);
   if (canonicalJson(offer.payload) !== canonicalJson(asJson(expected))) return null;
+  return asJson({ offerId: offer.offerId, listingId: offer.listingId, payload: offer.payload, sku: offer.sku });
+}
+
+/** Reconcile an already-terminal offer without treating a later eBay sale as
+ * a structural mismatch. Identity, marketplace, listing, lifecycle, and all
+ * non-quantity payload fields remain exact; only availableQuantity may drift
+ * after the write has been durably confirmed. */
+function activeOfferIgnoringQuantity(
+  read: Awaited<ReturnType<VariationListingPublicationReadGateway['getOffers']>>,
+  expected: VariationListingInventoryPayloadBundle['children'][number]['offer'],
+  identity: { offerId: string; listingId: string },
+  status: 'PUBLISHED' | 'UNPUBLISHED',
+  lifecycleRequired: boolean
+): Json | null {
+  if (read.state === 'unknown') throw new Error(`Variation listing offer ${expected.sku} read is unknown: ${read.reason}`);
+  if (read.state === 'proven_absent' || read.value.length === 0) return null;
+  if (read.value.length !== 1) throw new Error(`Variation listing offer ${expected.sku} must have exactly one offer.`);
+  const offer = read.value[0];
+  if (offer.offerId !== identity.offerId || offer.sku !== expected.sku || offer.marketplaceId !== expected.marketplaceId || offer.status !== status || offer.listingId !== identity.listingId || (lifecycleRequired && offer.lifecycleClass !== 'active')) {
+    throw new Error(`Variation listing offer ${expected.sku} does not match the frozen offer identity.`);
+  }
+  offerQuantity(offer.payload, expected.sku);
+  if (canonicalJson(offerPayloadWithoutQuantity(offer.payload, expected.sku)) !== canonicalJson(offerPayloadWithoutQuantity(asJson(expected), expected.sku))) return null;
   return asJson({ offerId: offer.offerId, listingId: offer.listingId, payload: offer.payload, sku: offer.sku });
 }
 
@@ -887,7 +1273,27 @@ function activeItem(
   if (read.value.sku !== expected.sku) throw new Error(`Variation listing item ${expected.sku} identity mismatch.`);
   if (read.value.groupKeys !== null && (read.value.groupKeys.length !== 1 || read.value.groupKeys[0] !== groupKey)) throw new Error(`Variation listing item ${expected.sku} has foreign group association.`);
   if (requireGroup && (read.value.groupKeys?.length !== 1 || read.value.groupKeys[0] !== groupKey)) throw new Error(`Variation listing item ${expected.sku} is not associated with the expected group.`);
+  inventoryItemQuantity(read.value.payload, expected.sku);
   if (canonicalJson(read.value.payload) !== canonicalJson(asJson(expected.inventoryItem))) return null;
+  return asJson({ groupKeys: read.value.groupKeys, payload: read.value.payload, sku: read.value.sku });
+}
+
+/** Reconcile an already-terminal Inventory Item while tolerating only a
+ * quantity-only eBay change. Group association, SKU, and every non-quantity
+ * payload field remain exact. */
+function activeItemIgnoringQuantity(
+  read: Awaited<ReturnType<VariationListingPublicationReadGateway['getInventoryItem']>>,
+  expected: VariationListingInventoryPayloadBundle['children'][number],
+  groupKey: string,
+  requireGroup: boolean
+): Json | null {
+  if (read.state === 'unknown') throw new Error(`Variation listing item ${expected.sku} read is unknown: ${read.reason}`);
+  if (read.state === 'proven_absent') return null;
+  if (read.value.sku !== expected.sku) throw new Error(`Variation listing item ${expected.sku} identity mismatch.`);
+  if (read.value.groupKeys !== null && (read.value.groupKeys.length !== 1 || read.value.groupKeys[0] !== groupKey)) throw new Error(`Variation listing item ${expected.sku} has foreign group association.`);
+  if (requireGroup && (read.value.groupKeys?.length !== 1 || read.value.groupKeys[0] !== groupKey)) throw new Error(`Variation listing item ${expected.sku} is not associated with the expected group.`);
+  inventoryItemQuantity(read.value.payload, expected.sku);
+  if (canonicalJson(inventoryPayloadWithoutQuantity(read.value.payload, expected.sku)) !== canonicalJson(inventoryPayloadWithoutQuantity(asJson(expected.inventoryItem), expected.sku))) return null;
   return asJson({ groupKeys: read.value.groupKeys, payload: read.value.payload, sku: read.value.sku });
 }
 
@@ -961,6 +1367,27 @@ export async function executeVariationListingActiveRevision(
     throw new Error('Variation listing active revision requires a durable revision lookup.');
   }
   const existingRevision = await input.journal.loadRevision(captureInput.revisionId);
+  // A clean captured revision has no operation checkpoints yet, so its frozen
+  // remote quantities are still the complete authority for the first write.
+  // Re-read that whole baseline immediately before capture/mutation. If the
+  // immutable row already exists, quantity-only drift cannot be superseded via
+  // the current reserve RPC; fail with a stable reprepare instruction instead
+  // of pinning the group to stale quantities or writing a counterpart blindly.
+  const existingCheckpoints = await input.journal.listCheckpoints(captureInput.revisionId);
+  // Version-2 active snapshots must carry the eBay-authoritative quantity
+  // map. A missing map is legacy local-count intent and is never safe to
+  // resume after a sale. A clean captured row can be reprepared; a row with
+  // remote work already recorded must fail reconciliation rather than replay
+  // stale quantities.
+  if (!input.frozen.snapshot.confirmed.remote.quantitiesBySku) {
+    if (!existingRevision || !hasQuantityMutationCheckpoint(input.frozen, existingCheckpoints)) {
+      throw new Error('active_revision_reprepare_required: Variation listing active revision lacks frozen eBay quantities; stage a new change and prepare again before mutation.');
+    }
+    throw new Error('Variation listing active revision lacks frozen eBay quantities; reconciliation is required before resume.');
+  }
+  if (!existingRevision || !hasQuantityMutationCheckpoint(input.frozen, existingCheckpoints)) {
+    await verifyFrozenRemoteBaseline(input, Boolean(existingRevision));
+  }
   const captured = existingRevision
     ? { revision: existingRevision }
     : await input.transaction.captureRevision(captureInput);
@@ -990,7 +1417,7 @@ export async function executeVariationListingActiveRevision(
   if (canonicalJson(captured.revision.operation_plan) !== canonicalJson(durableOperationPlan)) {
     throw new Error('Captured variation listing active revision operation plan does not exactly match the frozen plan.');
   }
-  const history = makeActiveHistory(input.frozen, await input.journal.listCheckpoints(captureInput.revisionId));
+  const history = makeActiveHistory(input.frozen, existingCheckpoints);
   const previousBundle = input.frozen.confirmedBundle;
   const desiredImages = new Map(input.frozen.snapshot.representativeImages.map((image) => [image.copyId, structuredClone(image)]));
   const resolvedMedia = new Map<string, VariationListingRemoteMedia>();
@@ -1046,7 +1473,18 @@ export async function executeVariationListingActiveRevision(
     if (!image) throw new Error(`Variation listing representative copy ${copyId} is missing resolved EPS evidence.`);
     return image;
   });
-  const desiredBundle = buildVariationListingInventoryPayloadBundle({ aggregate: input.frozen.snapshot.aggregate, representativeImages });
+  const desiredBundleBase = buildVariationListingInventoryPayloadBundle({ aggregate: input.frozen.snapshot.aggregate, representativeImages });
+  const remoteQuantities = input.frozen.snapshot.confirmed.remote.quantitiesBySku;
+  const desiredBundle = remoteQuantities
+    ? applyUniformActiveQuantities(
+        desiredBundleBase,
+        desiredActiveQuantities(
+          input.frozen.snapshot.aggregate,
+          input.frozen.snapshot.confirmed.aggregate,
+          remoteQuantities
+        )
+      )
+    : desiredBundleBase;
   const previousByVariation = new Map(input.frozen.snapshot.confirmed.aggregate.variations.map((variation) => [variation.variation_id, variation]));
   const priorOfferIds = input.frozen.snapshot.confirmed.remote.offerIdsBySku;
   const frozenListingId = input.frozen.snapshot.confirmed.remote.listingId;
@@ -1056,9 +1494,15 @@ export async function executeVariationListingActiveRevision(
     const priorVariation = previousByVariation.get(child.variationId);
     const priorChild = previousBundle.children.find((candidate) => candidate.variationId === child.variationId);
     const existed = Boolean(priorVariation);
+    const priorOfferId = priorOfferIds[child.sku];
     const itemOperationKey = `child-item:${child.variationId}`;
-    const itemAfter = async (): Promise<Json | null> => activeItem(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, existed);
     const itemRows = history.get(itemOperationKey)!;
+    const itemAfter = async (): Promise<Json | null> => {
+      const terminal = activeTerminal(activeLatest(itemRows));
+      return terminal
+        ? activeItemIgnoringQuantity(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, existed)
+        : activeItem(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, existed);
+    };
     const originalItemAfter = itemAfter;
     const guardedItemAfter = async (): Promise<Json | null> => {
       const result = await originalItemAfter();
@@ -1074,9 +1518,43 @@ export async function executeVariationListingActiveRevision(
       }
       return activeItem(await input.remote.getInventoryItem(child.sku), priorChild, desiredBundle.groupKey, true);
     };
-    await executeActiveOperation(input, history, itemOperationKey, guardedItemAfter, itemPre, () => input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem)));
+    const itemMutate = async (): Promise<void> => {
+      // Re-read the target itself immediately before writing. The pre-state
+      // read may be stale even when the paired Offer remains unchanged.
+      const ownItemRead = await input.remote.getInventoryItem(child.sku);
+      if (existed) {
+        if (!priorChild || activeItem(ownItemRead, priorChild, desiredBundle.groupKey, true) === null) {
+          throw new Error(`Variation listing Inventory Item ${child.sku} changed before its mutation.`);
+        }
+      } else if (ownItemRead.state !== 'proven_absent') {
+        if (ownItemRead.state === 'unknown') throw new Error(`Variation listing new item ${child.sku} pre-state is unknown: ${ownItemRead.reason}`);
+        throw new Error(`Variation listing new item ${child.sku} appeared before create.`);
+      }
+      if (existed) {
+        if (!priorChild || !priorOfferId) {
+          throw new Error(`Variation listing existing child ${child.sku} has no complete frozen counterpart identity.`);
+        }
+        // Re-read the paired frozen offer immediately before the Inventory
+        // Item write. A sale/quantity change between itemPre and this closure
+        // must block without touching either remote resource.
+        const pairedOffer = activeOffer(
+          await input.remote.getOffers(child.sku, child.offer.marketplaceId),
+          priorChild.offer,
+          { offerId: priorOfferId, listingId: frozenListingId },
+          'PUBLISHED',
+          true
+        );
+        if (pairedOffer === null) {
+          throw new Error(`Variation listing paired offer ${child.sku} changed before the Inventory Item mutation.`);
+        }
+      }
+      // A provider-side change after this final read and before the request is
+      // an unavoidable API TOCTOU; the exact after-state read below records it
+      // as unknown rather than permitting a blind retry.
+      await input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem));
+    };
+    await executeActiveOperation(input, history, itemOperationKey, guardedItemAfter, itemPre, itemMutate);
 
-    const priorOfferId = priorOfferIds[child.sku];
     const offerIdentity = { offerId: priorOfferId ?? '', listingId: frozenListingId };
     let returnedOfferId: string | null = null;
     const offerOperationKey = `child-offer:${child.variationId}`;
@@ -1089,14 +1567,15 @@ export async function executeVariationListingActiveRevision(
         if (read.value.length !== 1) throw new Error(`Variation listing new offer ${child.sku} must have exactly one offer.`);
         const offer = read.value[0];
         if (offer.sku !== child.sku || offer.marketplaceId !== child.offer.marketplaceId) throw new Error(`Variation listing new offer ${child.sku} identity mismatch.`);
-        if (canonicalJson(offer.payload) !== canonicalJson(asJson(child.offer))) {
+        const latestOfferRow = activeLatest(offerRows);
+        const terminalOffer = latestOfferRow?.state === 'confirmed_complete' || latestOfferRow?.state === 'confirmed_no_op';
+        if (canonicalJson(terminalOffer ? offerPayloadWithoutQuantity(offer.payload, child.sku) : offer.payload) !== canonicalJson(terminalOffer ? offerPayloadWithoutQuantity(asJson(child.offer), child.sku) : asJson(child.offer))) {
           throw new Error(`Variation listing new offer ${child.sku} payload mismatch.`);
         }
         // Before this operation has any durable history, any existing offer is
         // a collision rather than an adoptable after-state. executeActiveOperation
         // will then run the exact absence pre-read and fail closed.
         if (offerRows.length === 0) return null;
-        const latestOfferRow = activeLatest(offerRows);
         if (offer.status === 'UNPUBLISHED' && offer.listingId === null) {
           if (returnedOfferId && returnedOfferId !== offer.offerId) {
             throw new Error(`Variation listing new offer ${child.sku} returned ID drifted.`);
@@ -1143,7 +1622,9 @@ export async function executeVariationListingActiveRevision(
         return asJson({ offerId: offer.offerId, listingId: offer.listingId, payload: offer.payload, sku: offer.sku });
       }
       if (!priorOfferId) throw new Error(`Variation listing existing offer ${child.sku} has no frozen offer ID.`);
-      return activeOffer(read, child.offer, offerIdentity, 'PUBLISHED', true);
+      return activeTerminal(activeLatest(offerRows))
+        ? activeOfferIgnoringQuantity(read, child.offer, offerIdentity, 'PUBLISHED', true)
+        : activeOffer(read, child.offer, offerIdentity, 'PUBLISHED', true);
     };
     const offerPre = async (): Promise<Json | null> => {
       const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
@@ -1156,9 +1637,35 @@ export async function executeVariationListingActiveRevision(
       return activeOffer(read, priorChild ? previousBundle.children.find((candidate) => candidate.variationId === child.variationId)!.offer : child.offer, offerIdentity, 'PUBLISHED', true);
     };
     const offerMutate = async (): Promise<void> => {
+      // Re-read the target Offer itself immediately before writing. This
+      // closes the pre() -> mutate() gap independently of the paired Item
+      // guard below.
+      const ownOfferRead = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (existed) {
+        if (!priorChild || activeOffer(ownOfferRead, priorChild.offer, offerIdentity, 'PUBLISHED', true) === null) {
+          throw new Error(`Variation listing Offer ${child.sku} changed before its mutation.`);
+        }
+        // The Item operation may have completed while a concurrent eBay write
+        // changed it again. Re-read the desired Item state immediately before
+        // updating its paired Offer so we never overwrite a newer quantity or
+        // payload with the frozen counterpart.
+        const pairedItem = activeItem(
+          await input.remote.getInventoryItem(child.sku),
+          child,
+          desiredBundle.groupKey,
+          true
+        );
+        if (pairedItem === null) {
+          throw new Error(`Variation listing paired Inventory Item ${child.sku} changed before the Offer mutation.`);
+        }
+        // A provider-side change after this final read and before the request
+        // remains API TOCTOU; post-state mismatch is preserved as unknown.
         await requireActiveMethod(input.mutations, 'updateOffer')(priorOfferId, asJson(child.offer));
       } else {
+        if (ownOfferRead.state === 'unknown') throw new Error(`Variation listing new offer ${child.sku} pre-state is unknown: ${ownOfferRead.reason}`);
+        if (ownOfferRead.state !== 'proven_absent' && !(ownOfferRead.state === 'present' && ownOfferRead.value.length === 0)) {
+          throw new Error(`Variation listing new offer ${child.sku} appeared before create.`);
+        }
         const created = await input.mutations.createOffer(asJson(child.offer));
         if (!created.offerId || typeof created.offerId !== 'string') throw new Error(`Variation listing new offer ${child.sku} create returned no offerId.`);
         returnedOfferId = created.offerId;
@@ -1187,6 +1694,13 @@ export async function executeVariationListingActiveRevision(
     const offerId = newOfferIdsByVariation.get(child.variationId);
     if (!offerId) throw new Error(`Variation listing publish offer ${child.sku} has no durable created offer ID.`);
     const operationKey = `publish-offer:${child.variationId}`;
+    // Once publishOffer has been durably started, eBay may decrement the
+    // available quantity before the post-state read (for example, a buyer
+    // sale racing the publish response). The operation owns that published
+    // state, so tolerate quantity-only drift on PUBLISHED reads while keeping
+    // the pre-publish UNPUBLISHED check exact.
+    const publishReadAllowsQuantity = (status: 'UNPUBLISHED' | 'PUBLISHED'): boolean =>
+      status === 'PUBLISHED' && activeLatest(history.get(operationKey)!) !== null;
     const identifyOffer = async (status: 'UNPUBLISHED' | 'PUBLISHED'): Promise<Json | null> => {
       const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (read.state === 'unknown') throw new Error(`Variation listing publish offer ${child.sku} read is unknown: ${read.reason}`);
@@ -1200,7 +1714,12 @@ export async function executeVariationListingActiveRevision(
       } else if (offer.status !== 'UNPUBLISHED' || offer.listingId !== null) {
         throw new Error(`Variation listing publish offer ${child.sku} identity/state mismatch.`);
       }
-      if (canonicalJson(offer.payload) !== canonicalJson(asJson(child.offer))) {
+      const quantityTolerant = publishReadAllowsQuantity(status);
+      const payloadMatches = quantityTolerant
+        ? canonicalJson(offerPayloadWithoutQuantity(offer.payload, child.sku)) === canonicalJson(offerPayloadWithoutQuantity(asJson(child.offer), child.sku))
+        : canonicalJson(offer.payload) === canonicalJson(asJson(child.offer));
+      if (quantityTolerant) offerQuantity(offer.payload, child.sku);
+      if (!payloadMatches) {
         if (status === 'PUBLISHED') return null;
         throw new Error(`Variation listing publish offer ${child.sku} payload mismatch.`);
       }
@@ -1222,12 +1741,12 @@ export async function executeVariationListingActiveRevision(
   if (activeGroup(finalGroup, desiredBundle.group) === null) throw new Error('Variation listing final group is absent.');
   const listingIds = new Set<string>();
   for (const child of desiredBundle.children) {
-    if (activeItem(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, true) === null) throw new Error(`Variation listing final item ${child.sku} is absent.`);
+    if (activeItemIgnoringQuantity(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, true) === null) throw new Error(`Variation listing final item ${child.sku} is absent or changed outside quantity.`);
     const prior = previousByVariation.has(child.variationId);
     const offerId = prior ? priorOfferIds[child.sku] : newOfferIdsByVariation.get(child.variationId) ?? null;
     if (!offerId) throw new Error(`Variation listing final offer ${child.sku} has no durable offer ID.`);
     const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
-    const evidence = activeOffer(read, child.offer, { offerId, listingId: frozenListingId }, 'PUBLISHED', true);
+    const evidence = activeOfferIgnoringQuantity(read, child.offer, { offerId, listingId: frozenListingId }, 'PUBLISHED', true);
     if (!evidence) throw new Error(`Variation listing final offer ${child.sku} is absent.`);
     listingIds.add(frozenListingId);
   }

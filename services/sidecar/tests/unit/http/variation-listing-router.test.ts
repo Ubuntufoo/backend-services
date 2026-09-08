@@ -199,7 +199,6 @@ function dataAccess(overrides: Partial<VariationListingApiDataAccess> = {}): Var
     applyGroupReviewDraft: vi.fn(async () => current.group),
     updateVariationPrice: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     updateVariationSelectorValue: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
-    updateCopyAvailability: vi.fn(async () => ({ group: current.group, copy: current.copies[0]! })),
     updateRepresentativeCopy: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     getIntakeSession: vi.fn(async () => intakeSession()),
     configureIntake: vi.fn(async () => intakeSession()),
@@ -341,7 +340,6 @@ describe('YP6.1 variation listing API router', () => {
       desiredRevision: 4,
       lastConfirmedRevision: 3,
       variationCount: 2,
-      totalAvailableQuantity: 1,
       validation: { hasPendingChanges: true },
       journal: {
         latestRevision: {
@@ -356,8 +354,10 @@ describe('YP6.1 variation listing API router', () => {
       variationA,
       variationB,
     ]);
-    expect(response.body.variations[0]).toMatchObject({ priceAmount: 0.99, availableQuantity: 1, copyCount: 1 });
-    expect(response.body.variations[1]).toMatchObject({ priceAmount: 1.49, availableQuantity: 0, copyCount: 1 });
+    expect(response.body.variations[0]).toMatchObject({ priceAmount: 0.99, copyCount: 1 });
+    expect(response.body.variations[1]).toMatchObject({ priceAmount: 1.49, copyCount: 1 });
+    expect(response.body.variations[0]).not.toHaveProperty('availableQuantity');
+    expect(response.body.variations[1]).not.toHaveProperty('availableQuantity');
     expect(JSON.stringify(response.body)).not.toContain('soldcomps');
     expect(JSON.stringify(response.body)).not.toContain('browsePricing');
   });
@@ -470,7 +470,6 @@ describe('YP6.1 variation listing API router', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       variationCount: 0,
-      totalAvailableQuantity: 0,
       validation: {
         initialPublicationReady: false,
         blockers: ['Variation listing publish readiness requires at least two variations.'],
@@ -528,22 +527,6 @@ describe('YP6.1 variation listing API router', () => {
       .send({ expectedDesiredRevision: 4, priceAmount: 2.99 });
     expect(invalid.status).toBe(400);
     expect(access.updateVariationPrice).not.toHaveBeenCalled();
-  });
-
-  it('maps stale CAS edits to a stable 409 response', async () => {
-    const access = dataAccess({
-      updateCopyAvailability: vi.fn(async () => {
-        throw new VariationListingTransactionConflictError('VR001', 'stale desired revision');
-      }),
-    });
-    const response = await request(app(access))
-      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/copies/${copyA}/availability`)
-      .send({ expectedDesiredRevision: 3, availabilityState: 'unavailable' });
-    expect(response.status).toBe(409);
-    expect(response.body).toEqual({
-      error: 'variation_listing_state_stale',
-      message: 'stale desired revision',
-    });
   });
 
   it('maps representative-copy and review-draft edits through existing RPC-shaped seams', async () => {

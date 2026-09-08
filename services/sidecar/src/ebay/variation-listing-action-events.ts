@@ -4,7 +4,6 @@ export type VariationListingActionName =
   | 'publish'
   | 'publish_changes'
   | 'retry'
-  | 'quantity'
   | 'withdraw'
   | 'abandon'
   | 'cleanup'

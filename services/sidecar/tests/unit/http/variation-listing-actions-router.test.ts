@@ -38,7 +38,6 @@ function access(): VariationListingApiDataAccess {
     createGroup: vi.fn(async () => current.group),
     applyGroupReviewDraft: vi.fn(async () => current.group),
     updateVariationPrice: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
-    updateCopyAvailability: vi.fn(async () => ({ group: current.group, copy: current.copies[0]! })),
     updateRepresentativeCopy: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
   };
 }
@@ -48,7 +47,6 @@ function actions(): VariationListingApiActions {
     publish: vi.fn(async () => ({ revisionId: 'initial' })),
     publishChanges: vi.fn(async () => ({ revisionId: 'changes' })),
     retry: vi.fn(async () => ({ reconciled: true })),
-    quantity: vi.fn(async () => ({ staged: true })),
     withdraw: vi.fn(async () => ({ lifecycleState: 'withdrawn' })),
     abandon: vi.fn(async () => ({ lifecycleState: 'abandoned' })),
     cleanup: vi.fn(async () => ({ lifecycleState: 'terminal-absent' })),
@@ -64,7 +62,7 @@ function app(dataAccess: VariationListingApiDataAccess, actionService: Variation
 }
 
 describe('YP6.2 action routes', () => {
-  it('delegates Publish Changes and quantity with strict request contracts', async () => {
+  it('delegates Publish Changes and Return to Review with strict request contracts', async () => {
     const dataAccess = access();
     const actionService = actions();
     const publish = await request(app(dataAccess, actionService))
@@ -73,12 +71,6 @@ describe('YP6.2 action routes', () => {
     expect(publish.status).toBe(200);
     expect(actionService.publishChanges).toHaveBeenCalledWith(groupId, 4);
     expect(publish.body).toMatchObject({ action: { revisionId: 'changes' }, group: { groupId } });
-
-    const quantity = await request(app(dataAccess, actionService))
-      .post(`/api/variation-listings/${groupId}/actions/quantity`)
-      .send({ expectedDesiredRevision: 4, variationId, copyId, availabilityState: 'unavailable' });
-    expect(quantity.status).toBe(200);
-    expect(actionService.quantity).toHaveBeenCalledWith(groupId, { expectedDesiredRevision: 4, variationId, copyId, availabilityState: 'unavailable' });
 
     const returnToReview = await request(app(dataAccess, actionService))
       .post(`/api/variation-listings/${groupId}/actions/return-to-review`)
@@ -101,30 +93,13 @@ describe('YP6.2 action routes', () => {
     expect(JSON.stringify(response.body)).not.toContain('stack');
   });
 
-  it('returns the structured UI-ready status for malformed action bodies before calling the action service', async () => {
+  it('removes the obsolete quantity action route', async () => {
     const actionService = actions();
     const response = await request(app(access(), actionService))
       .post(`/api/variation-listings/${groupId}/actions/quantity`)
-      .send({ expectedDesiredRevision: 4, variationId, copyId, availabilityState: 'invalid' });
-    expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({
-      error: 'invalid_request',
-      status: {
-        action: 'quantity',
-        affected: { groupId },
-        category: 'validation',
-        code: 'invalid_request',
-        remoteState: 'known_unchanged',
-        requiresReconciliation: false,
-        retryStatus: 'not_applicable',
-        stage: 'request_validation',
-        userActionRequired: true,
-      },
-    });
-    expect(response.body.status.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: 'availabilityState' }),
-    ]));
-    expect(actionService.quantity).not.toHaveBeenCalled();
+      .send({ expectedDesiredRevision: 4 });
+    expect(response.status).toBe(404);
+    expect(actionService.publishChanges).not.toHaveBeenCalled();
   });
 
   it('preserves successful action outcome when post-action group refresh fails', async () => {

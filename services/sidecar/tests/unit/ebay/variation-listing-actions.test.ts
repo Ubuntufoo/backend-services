@@ -121,7 +121,6 @@ function checkpoint(state: VariationListingPublishingCheckpointRow['state'], obs
 }
 
 function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?: VariationListingRevisionRow[]; checkpoints?: VariationListingPublishingCheckpointRow[] } = {}) {
-  const updateCopyAvailability = vi.fn().mockResolvedValue({});
   return {
     value: {
       loadAggregate: vi.fn().mockResolvedValue(input.aggregate ?? aggregate()),
@@ -129,7 +128,6 @@ function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?
       listCheckpointsByRevisionId: vi.fn().mockResolvedValue((input.checkpoints ?? []).map((source) => ({ source }))),
       markPublishReady: vi.fn().mockResolvedValue({}),
       reserveActionRevision: vi.fn().mockResolvedValue({ ...aggregate().group, desired_revision: 4 }),
-      updateCopyAvailability,
       captureRevision: vi.fn(),
       appendJournalCheckpoint: vi.fn(),
       confirmRevision: vi.fn(),
@@ -137,11 +135,10 @@ function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?
       abandonUntouchedGroup: vi.fn(),
       returnToReview: vi.fn(),
     },
-    updateCopyAvailability,
   };
 }
 
-function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: boolean; failWithdrawalOnce?: boolean; unpublished?: boolean; historicalOverlong?: boolean } = {}) {
+function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: boolean; failWithdrawalOnce?: boolean; unpublished?: boolean; historicalOverlong?: boolean; saleDrift?: boolean } = {}) {
   const current = aggregate({ lifecycle_state: options.unpublished ? 'publish-ready' : 'active', desired_revision: options.unpublished ? 3 : options.pending ? 4 : 3, last_confirmed_revision: options.unpublished ? null : 3, next_inventory_serial: 3 });
   const secondVariation = { ...current.variations[0]!, variation_id: variationBId, selector_value: 'Card B', sku: 'BSKBL-McGrady-000002', representative_copy_id: copyBId, inventory_serial: 2, position: 1 };
   const secondCopy = { ...current.copies[0]!, copy_id: copyBId, variation_id: variationBId, front_r2_key: 'variation/front-b.jpg', back_r2_key: 'variation/back-b.jpg' };
@@ -159,14 +156,30 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
     : buildVariationListingInventoryPayloadBundle)({ aggregate: current, representativeImages });
   const confirmedRevision: VariationListingRevisionRow = {
     revision_id: revisionId, group_id: groupId, captured_desired_revision: 3, snapshot_version: 1, snapshot_digest: 'a'.repeat(64),
-    snapshot: { aggregate: current, representativeImages }, operation_plan: [{ sequence_no: 1, operation_key: 'group-publish', operation_kind: 'group_publish', target_ref: current.group.group_key, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} }], operation_count: 1, captured_at: '2026-09-02T00:00:00Z',
+    snapshot: { aggregate: current, representativeImages }, operation_plan: [
+      ...current.variations.flatMap((variation, index) => [
+        { sequence_no: index * 2 + 1, operation_key: `child-item:${variation.variation_id}`, operation_kind: 'child_inventory_item_write', target_ref: variation.sku, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+        { sequence_no: index * 2 + 2, operation_key: `child-offer:${variation.variation_id}`, operation_kind: 'child_offer_write', target_ref: variation.sku, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+      ]),
+      { sequence_no: current.variations.length * 2 + 1, operation_key: 'complete-group', operation_kind: 'complete_group_replace', target_ref: current.group.group_key, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+      { sequence_no: current.variations.length * 2 + 2, operation_key: 'group-publish', operation_kind: 'group_publish', target_ref: current.group.group_key, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+      { sequence_no: current.variations.length * 2 + 3, operation_key: 'revision-reconcile', operation_kind: 'revision_reconcile', target_ref: current.group.group_key, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+    ], operation_count: current.variations.length * 2 + 3, captured_at: '2026-09-02T00:00:00Z',
   };
   const offerBySku = new Map(bundle.children.map((child) => [child.sku, { offerId: `offer-${child.sku}`, lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId: child.offer.marketplaceId, payload: child.offer, sku: child.sku, status: 'PUBLISHED' as const }]));
   let groupPresent = !options.unpublished;
   let failWithdrawal = options.failWithdrawalOnce ?? false;
   let aggregateState = current;
   let captured: VariationListingRevisionRow | null = null;
-  const journal: VariationListingPublishingCheckpointRow[] = options.unresolved ? [{ checkpoint_id: 'old', revision_id: revisionId, operation_key: 'group-publish', attempt_number: 1, checkpoint_number: 1, state: 'unknown', observed_remote_state: 'unknown', evidence: { reason: 'ambiguous' }, created_at: '2026-09-02T00:00:00Z' }] : [];
+  const terminal = (operationKey: string, evidence: Record<string, unknown>): VariationListingPublishingCheckpointRow[] => [
+    { checkpoint_id: `${operationKey}-started`, revision_id: revisionId, operation_key: operationKey, attempt_number: 1, checkpoint_number: 1, state: 'started', observed_remote_state: null, evidence: {}, created_at: '2026-09-02T00:00:00Z' },
+    { checkpoint_id: `${operationKey}-complete`, revision_id: revisionId, operation_key: operationKey, attempt_number: 1, checkpoint_number: 2, state: 'confirmed_complete', observed_remote_state: 'present', evidence: evidence as VariationListingPublishingCheckpointRow['evidence'], created_at: '2026-09-02T00:00:00Z' },
+  ];
+  const durableJournal = current.variations.flatMap((variation) => terminal(`child-offer:${variation.variation_id}`, { offerId: `offer-${variation.sku}`, sku: variation.sku }))
+    .concat(terminal('group-publish', { listingId: 'listing-1' }), terminal('revision-reconcile', { listingId: 'listing-1' }));
+  const journal: VariationListingPublishingCheckpointRow[] = options.unresolved
+    ? durableJournal.filter((row) => row.operation_key !== 'group-publish').concat([{ checkpoint_id: 'old', revision_id: revisionId, operation_key: 'group-publish', attempt_number: 1, checkpoint_number: 1, state: 'unknown', observed_remote_state: 'unknown', evidence: { reason: 'ambiguous' }, created_at: '2026-09-02T00:00:00Z' }])
+    : durableJournal;
   const access = data({ aggregate: aggregateState, revisions: [confirmedRevision], checkpoints: journal });
   access.value.loadAggregate.mockImplementation(async () => ({ ...aggregateState, group: { ...aggregateState.group } }));
   access.value.listRevisionsByGroupId.mockImplementation(async () => [{ source: captured ?? confirmedRevision }]);
@@ -191,8 +204,8 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
   });
   const remote = {
     getInventoryItemGroup: vi.fn(async () => groupPresent ? { state: 'present' as const, value: { payload: bundle.group, variantSKUs: [...bundle.group.variantSKUs].reverse() } } : { state: 'proven_absent' as const }),
-    getInventoryItem: vi.fn(async (sku: string) => { const child = bundle.children.find((entry) => entry.sku === sku)!; return groupPresent ? { state: 'present' as const, value: { sku, groupKeys: [bundle.groupKey], payload: child.inventoryItem } } : { state: 'proven_absent' as const }; }),
-    getOffers: vi.fn(async (sku: string) => { const offer = groupPresent ? offerBySku.get(sku) : undefined; return { state: 'present' as const, value: offer ? [offer] : [] }; }),
+    getInventoryItem: vi.fn(async (sku: string) => { const child = bundle.children.find((entry) => entry.sku === sku)!; const payload = structuredClone(child.inventoryItem); if (options.saleDrift) payload.availability.shipToLocationAvailability.quantity = 0; return groupPresent ? { state: 'present' as const, value: { sku, groupKeys: [bundle.groupKey], payload } } : { state: 'proven_absent' as const }; }),
+    getOffers: vi.fn(async (sku: string) => { const offer = groupPresent ? offerBySku.get(sku) : undefined; if (offer && options.saleDrift) { const drifted = { ...offer, payload: structuredClone(offer.payload) }; drifted.payload.availableQuantity = 0; return { state: 'present' as const, value: [drifted] }; } return { state: 'present' as const, value: offer ? [offer] : [] }; }),
     getMedia: vi.fn(async () => ({ state: 'proven_absent' as const })),
   };
   const deletes: string[] = [];
@@ -207,15 +220,9 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
 const failingRemote = (error: unknown) => async () => { throw error; };
 
 describe('YP6.2 variation listing actions', () => {
-  it('stages quantity only through physical-copy availability and emits action events', async () => {
-    const access = data();
-    const events: string[] = [];
-    const unsubscribe = subscribeVariationListingActionEvents(groupId, (event) => events.push(event.kind));
-    const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test' });
-    await expect(service.quantity(groupId, { variationId, copyId, expectedDesiredRevision: 3, availabilityState: 'unavailable' })).resolves.toMatchObject({ staged: true, sku: 'BSKBL-McGrady-000001' });
-    unsubscribe();
-    expect(access.updateCopyAvailability).toHaveBeenCalledWith({ groupId, variationId, copyId, expectedDesiredRevision: 3, availabilityState: 'unavailable' });
-    expect(events).toEqual(['action_started', 'action_progress', 'action_succeeded']);
+  it('does not expose a manual quantity action', () => {
+    const service = createVariationListingActionService({ data: data().value, publicImageBaseUrl: 'https://images.example.test' });
+    expect('quantity' in service).toBe(false);
   });
 
   it('returns a stable lifecycle error before remote publication', async () => {
@@ -261,11 +268,11 @@ describe('YP6.2 variation listing actions', () => {
     await expect(service.retry(groupId)).rejects.toMatchObject({ status: { code: 'retry_exhausted', category: 'terminal', retryStatus: 'retry_exhausted' } });
   });
 
-  it('blocks destructive published cleanup until YP8 sale protection exists', async () => {
+  it('blocks destructive cleanup for ever-published groups; use Withdraw', async () => {
     const access = data({ aggregate: aggregate({ lifecycle_state: 'withdrawn', last_confirmed_revision: 2 }) });
     const remoteFactory = vi.fn();
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
-    await expect(service.cleanup(groupId, 3)).rejects.toMatchObject({ status: { code: 'cleanup_sale_protection_pending', remoteState: 'known_unchanged' } });
+    await expect(service.cleanup(groupId, 3)).rejects.toMatchObject({ status: { code: 'published_cleanup_forbidden', remoteState: 'known_unchanged' } });
     expect(remoteFactory).not.toHaveBeenCalled();
   });
 
@@ -286,6 +293,24 @@ describe('YP6.2 variation listing actions', () => {
 
     await expect(service.withdraw(groupId, 3)).resolves.toMatchObject({ lifecycleState: 'withdrawn', revisionId: withdrawalRevisionId });
     expect(harness.remoteFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it('withdraws an active group after eBay quantity drift without destructive cleanup', async () => {
+    const harness = activeWithdrawalHarness({ saleDrift: true });
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+    await expect(service.withdraw(groupId, 3)).resolves.toMatchObject({ lifecycleState: 'withdrawn', revisionId: withdrawalRevisionId });
+    expect(harness.deletes).toEqual([]);
+    expect(harness.access.value.advanceCleanupLifecycle).toHaveBeenCalledWith(expect.objectContaining({ targetLifecycle: 'withdrawn' }));
+  });
+
+  it('blocks withdrawal when the latest confirmed watermark has no durable revision row', async () => {
+    const harness = activeWithdrawalHarness();
+    harness.aggregate().group.desired_revision = 4;
+    harness.aggregate().group.last_confirmed_revision = 4;
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+    await expect(service.withdraw(groupId, 4)).rejects.toMatchObject({ status: { code: 'published_revision_history_missing' } });
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.advanceCleanupLifecycle).not.toHaveBeenCalled();
   });
 
   it('recovers an orphaned withdrawal reservation without reserving a second revision', async () => {
