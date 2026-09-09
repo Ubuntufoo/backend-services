@@ -195,7 +195,7 @@ export async function moveGroupedImagesToProcessedListing(
     throw error;
   }
 
-  await fileSystem.mkdir(processedDirectory);
+  await fileSystem.mkdir(processedDirectory, { recursive: true });
 
   const movedRecords: ProcessedImageMovePlanRecord[] = [];
 

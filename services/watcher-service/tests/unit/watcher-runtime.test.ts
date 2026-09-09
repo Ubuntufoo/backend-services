@@ -8,6 +8,7 @@ import {
   startWatcherRuntime,
   VariationListingSidecarRetryableError,
   WatcherBatchProcessingError,
+  type VariationListingRuntimeOwnership,
 } from '../../src/index.js';
 
 class FakeWatcher {
@@ -159,6 +160,151 @@ describe('watcher runtime', () => {
     expect(processIncomingImageBatch).not.toHaveBeenCalled();
   });
 
+  it('retains Standard ownership when Variation arms before a queued image drains', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const routeReady = createDeferred<VariationListingRuntimeOwnership>();
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [],
+    }));
+    const variationListingRuntimeProcessor = {
+      snapshot: vi.fn(async () => await routeReady.promise),
+      process: vi.fn(async (_path: string, ownership?: VariationListingRuntimeOwnership) => {
+        expect(ownership).toBe('legacy');
+        return { kind: 'legacy' as const };
+      }),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/standard-front.jpg');
+    await flushMicrotasks();
+    routeReady.resolve('legacy');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.process).toHaveBeenCalledWith(
+      '/watcher/incoming/standard-front.jpg',
+      'legacy',
+    );
+    expect(processIncomingImageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ incoming: ['/watcher/incoming/standard-front.jpg'] }),
+      undefined,
+    );
+  });
+
+  it('retains Variation ownership when Standard becomes active before a queued image drains', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const routeReady = createDeferred<VariationListingRuntimeOwnership>();
+    const processIncomingImageBatch = vi.fn();
+    const groupId = '11111111-1111-4111-8111-111111111111';
+    const variationOwnership: VariationListingRuntimeOwnership = {
+      kind: 'variation',
+      mode: 'new_variation',
+      targetGroupId: groupId,
+      targetVariationId: null,
+      conditionToken: null,
+      priceAmount: 1.49,
+      priceCurrency: 'USD',
+    };
+    const pairId = '22222222-2222-4222-8222-222222222222';
+    const variationListingRuntimeProcessor = {
+      snapshot: vi.fn(async () => await routeReady.promise),
+      process: vi.fn(async (_path: string, ownership?: VariationListingRuntimeOwnership) => {
+        expect(ownership).toEqual(variationOwnership);
+        return {
+          kind: 'started' as const,
+          groupId,
+          pairId,
+        };
+      }),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/variation-front.jpg');
+    await flushMicrotasks();
+    routeReady.resolve(variationOwnership);
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.process).toHaveBeenCalledWith(
+      '/watcher/incoming/variation-front.jpg',
+      variationOwnership,
+    );
+    expect(processIncomingImageBatch).not.toHaveBeenCalled();
+  });
+
+  it('replays persisted Standard sources through normal grouping after restart', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const variationListingRuntimeProcessor = {
+      snapshot: vi.fn(),
+      process: vi.fn(),
+    };
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [],
+    }));
+    const persisted = [
+      '/watcher/incoming/standard-front.jpg',
+      '/watcher/incoming/standard-back.jpg',
+    ];
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      initialStandardReplayPaths: persisted,
+      logger,
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.snapshot).not.toHaveBeenCalled();
+    expect(variationListingRuntimeProcessor.process).not.toHaveBeenCalled();
+    expect(processIncomingImageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        incoming: persisted,
+        groupingState: createEmptyWatcherGroupingState(),
+      }),
+      undefined,
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'standard_capture_replay_started',
+      {fileCount: 2},
+    );
+  });
+
   it('keeps legacy-only behavior when no capture source key is configured, even with an injected processor', async () => {
     const fakeWatcher = new FakeWatcher();
     const processIncomingImageBatch = vi.fn(async () => ({
@@ -191,6 +337,147 @@ describe('watcher runtime', () => {
       expect.objectContaining({ incoming: ['/watcher/incoming/front.jpg'] }),
       undefined
     );
+  });
+
+  it('keeps an in-progress Standard pair authoritative after Variation becomes armed', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const variationListingRuntimeProcessor = {
+      process: vi.fn(async () => ({
+        kind: 'started' as const,
+        groupId: '11111111-1111-4111-8111-111111111111',
+        pairId: '22222222-2222-4222-8222-222222222222',
+      })),
+    };
+    const pendingStandard = consumeImageGrouping(
+      'single_2_image',
+      ['/watcher/incoming/standard-front.jpg'],
+      createEmptyWatcherGroupingState()
+    ).state;
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [],
+    }));
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      initialGroupingState: pendingStandard,
+      logger,
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/standard-back.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.process).not.toHaveBeenCalled();
+    expect(processIncomingImageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        incoming: ['/watcher/incoming/standard-back.jpg'],
+        groupingState: pendingStandard,
+      }),
+      undefined
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'legacy_pending_group_owned',
+      expect.objectContaining({
+        sourcePath: '/watcher/incoming/standard-back.jpg',
+        pendingGroupSize: 1,
+      })
+    );
+  });
+
+  it('persists every Standard source before processing a batch', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const persistedStates: Array<{ pending: Array<{ path: string }> }> = [];
+    const persistStandardGroupingState = vi.fn(async (state) => {
+      persistedStates.push({ pending: state.pending.map((entry) => ({ ...entry })) });
+    });
+    const processIncomingImageBatch = vi.fn(async () => ({
+      groupingState: createEmptyWatcherGroupingState(),
+      processedListings: [],
+    }));
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger,
+      initialGroupingState: { pending: [{ path: '/watcher/incoming/one.jpg' }] },
+      processIncomingImageBatch,
+      persistStandardGroupingState,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/two.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(processIncomingImageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        incoming: ['/watcher/incoming/two.jpg'],
+      }),
+      undefined,
+    );
+    expect(persistedStates).toEqual([
+      {
+        pending: [
+          { path: '/watcher/incoming/one.jpg' },
+          { path: '/watcher/incoming/two.jpg' },
+        ],
+      },
+      { pending: [] },
+    ]);
+    expect(logger.error).not.toHaveBeenCalledWith(
+      'standard_capture_batch_blocked',
+      expect.anything(),
+    );
+  });
+
+  it('blocks Standard processing when durable pending state cannot be written', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const persistStandardGroupingState = vi.fn(async () => {
+      throw new Error('marker unavailable');
+    });
+    const processIncomingImageBatch = vi.fn();
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger,
+      processIncomingImageBatch,
+      persistStandardGroupingState,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/one.jpg');
+    await flushMicrotasks();
+
+    expect(processIncomingImageBatch).not.toHaveBeenCalled();
+    expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/one.jpg']);
+    expect(logger.error).toHaveBeenCalledWith(
+      'standard_capture_batch_blocked',
+      expect.objectContaining({ fileCount: 1 }),
+    );
+
+    await runtime.close();
   });
 
   it('falls back to the unchanged legacy batch when the variation processor returns legacy', async () => {

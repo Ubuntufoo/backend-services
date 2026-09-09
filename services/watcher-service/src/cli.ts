@@ -3,6 +3,11 @@ import { loadDotenvFiles } from '@ebay-inventory/env';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createWatcherServiceConfig } from './config/index.js';
+import {
+  persistStandardCaptureGroupingState,
+  readStandardCaptureGroupingState,
+} from './standard-capture-state.js';
 import { startWatcherRuntime } from './watcher-runtime.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -29,7 +34,14 @@ function logCliError(event: string, error: unknown, fields: Record<string, unkno
 async function main(): Promise<void> {
   loadRootEnvironment();
 
-  const runtime = startWatcherRuntime();
+  const config = createWatcherServiceConfig();
+  const restoredStandardState = await readStandardCaptureGroupingState(config.incomingDirectory);
+  const runtime = startWatcherRuntime({
+    config,
+    initialStandardReplayPaths: restoredStandardState.pending.map((entry) => entry.path),
+    persistStandardGroupingState: async (state) =>
+      await persistStandardCaptureGroupingState(config.incomingDirectory, state),
+  });
   let shutdownPromise: Promise<void> | null = null;
 
   const shutdown = async (signal: 'SIGINT' | 'SIGTERM') => {

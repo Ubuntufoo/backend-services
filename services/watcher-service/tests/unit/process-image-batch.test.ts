@@ -639,7 +639,7 @@ describe('processIncomingImageBatch', () => {
     expect(result.processedListings[0].listingId).toBe('Single-000001');
     expect(appSettingsRepository.get).toHaveBeenCalledTimes(1);
     expect(listingIdRepository.getLatestByPrefix).toHaveBeenCalledWith('Single');
-    expect(fileSystem.mkdir).toHaveBeenCalledWith('/processed/Single-000001');
+    expect(fileSystem.mkdir).toHaveBeenCalledWith('/processed/Single-000001', { recursive: true });
     expect(fileSystem.rename).toHaveBeenCalledTimes(2);
     expect(fileSystem.rename).toHaveBeenNthCalledWith(
       1,

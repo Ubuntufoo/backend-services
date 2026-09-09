@@ -96,6 +96,23 @@ describe('processed file move execution', () => {
     await expect(fsPromises.access(second)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('creates a missing processed root before creating the listing folder', async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), 'watcher-processed-move-'));
+    const incomingDirectory = path.join(tempDir, 'incoming');
+    const processedRoot = path.join(tempDir, 'missing', 'processed');
+    await fsPromises.mkdir(incomingDirectory);
+    const sourcePath = writeSourceFile(incomingDirectory, 'one.jpg');
+
+    const result = await moveGroupedImagesToProcessedListing({
+      listingId: 'Single-000123',
+      processedDirectory: processedRoot,
+      images: [{ path: sourcePath }],
+    });
+
+    await expect(fsPromises.readFile(result.images[0].processedPath, 'utf-8')).resolves.toBe('one.jpg');
+    await expect(fsPromises.access(sourcePath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('preserves supported extension types while normalizing case', async () => {
     const { incomingDirectory, processedRoot } = await createTempLayout();
     const jpg = writeSourceFile(incomingDirectory, 'one.JPG');

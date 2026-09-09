@@ -19,6 +19,7 @@ import {
 import {
   createVariationListingRuntimeProcessor,
   type VariationListingRuntimeProcessor,
+  type VariationListingRuntimeOwnership,
 } from './variation-listing-runtime.js';
 import { VariationListingSidecarRetryableError } from './variation-listing-sidecar.js';
 
@@ -50,11 +51,13 @@ export interface StartWatcherRuntimeInput {
   config?: WatcherServiceConfig;
   configInput?: WatcherServiceConfigInput;
   initialGroupingState?: WatcherGroupingState;
+  initialStandardReplayPaths?: readonly string[];
   logger?: WatcherRuntimeLogger;
   watch?: (path: string, options: WatchOptions) => WatcherRuntimeWatcher;
   processIncomingImageBatch?: typeof processIncomingImageBatch;
   processIncomingImageBatchDependencies?: ProcessIncomingImageBatchDependencies;
   variationListingRuntimeProcessor?: VariationListingRuntimeProcessor;
+  persistStandardGroupingState?: (state: WatcherGroupingState) => Promise<void>;
 }
 
 function shouldIgnoreWatcherPath(filePath: string): boolean {
@@ -173,8 +176,12 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
           },
         })
       : null;
+  const initialStandardReplayPaths = (input.initialStandardReplayPaths ?? []).map(
+    normalizeWatcherRuntimePath,
+  );
+  const persistStandardGroupingState = input.persistStandardGroupingState;
   const state: WatcherRuntimeState = {
-    pendingQueue: [],
+    pendingQueue: cloneWatcherInputs(initialStandardReplayPaths),
     groupingState: cloneWatcherGroupingState(
       input.initialGroupingState ?? createEmptyWatcherGroupingState()
     ),
@@ -187,10 +194,28 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
   const variationRetryAttempts = new Map<string, number>();
   let variationRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let blockedVariationPath: string | null = null;
+  let standardGroupingPersistenceHealthy = true;
   const consumedVariationPaths = new Set<string>();
-  const legacyPathHints = new Set<string>();
+  const legacyPathHints = new Set<string>(initialStandardReplayPaths);
+  const variationRouteSnapshots = new Map<string, Promise<VariationListingRuntimeOwnership>>();
 
   const watcher = watch(config.incomingDirectory, WATCHER_RUNTIME_WATCH_OPTIONS);
+
+  async function persistStandardState(groupingState: WatcherGroupingState): Promise<boolean> {
+    if (!persistStandardGroupingState) return true;
+    try {
+      await persistStandardGroupingState(groupingState);
+      standardGroupingPersistenceHealthy = true;
+      return true;
+    } catch (error) {
+      standardGroupingPersistenceHealthy = false;
+      logger.error('standard_capture_state_persist_failed', {
+        error: error instanceof Error ? error.message : String(error),
+        pendingGroupSize: groupingState.pending.length,
+      });
+      return false;
+    }
+  }
 
   function scheduleVariationRetry(sourcePath: string): boolean {
     if (state.isClosed) return false;
@@ -235,6 +260,11 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
 
     const retained = state.pendingQueue.filter((sourcePath) => !consumedVariationPaths.has(sourcePath));
     if (retained.length === state.pendingQueue.length) return;
+    for (const sourcePath of state.pendingQueue) {
+      if (consumedVariationPaths.has(sourcePath)) {
+        variationRouteSnapshots.delete(sourcePath);
+      }
+    }
     state.pendingQueue.length = 0;
     state.pendingQueue.push(...retained);
   }
@@ -250,6 +280,7 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
       // explicit removal by an operator clears the terminal gate.
       if (state.pendingQueue.includes(blockedVariationPath)) return;
       variationRetryAttempts.delete(blockedVariationPath);
+      variationRouteSnapshots.delete(blockedVariationPath);
       blockedVariationPath = null;
     }
 
@@ -268,20 +299,48 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
           try {
             const legacyInputs: string[] = [];
             let variationProcessedCount = 0;
+            const legacyGroupWasPending = state.groupingState.pending.length > 0;
             for (const [sourceIndex, sourcePath] of snapshot.entries()) {
+              // A consumed Variation source is already durably owned and must
+              // never be reconsidered for Standard grouping, even when a
+              // pending Standard group or a failed marker gate is present.
+              if (variationRuntime && consumedVariationPaths.has(sourcePath)) {
+                variationRouteSnapshots.delete(sourcePath);
+                continue;
+              }
+              if (!standardGroupingPersistenceHealthy) {
+                variationRouteSnapshots.delete(sourcePath);
+                legacyInputs.push(sourcePath);
+                legacyPathHints.add(sourcePath);
+                logger.info('legacy_owned_fail_closed', {sourcePath});
+                continue;
+              }
+              if (legacyGroupWasPending) {
+                variationRouteSnapshots.delete(sourcePath);
+                legacyInputs.push(sourcePath);
+                legacyPathHints.add(sourcePath);
+                logger.info('legacy_pending_group_owned', {
+                  sourcePath,
+                  pendingGroupSize: state.groupingState.pending.length,
+                });
+                continue;
+              }
               if (!variationRuntime) {
+                variationRouteSnapshots.delete(sourcePath);
                 legacyInputs.push(sourcePath);
                 continue;
               }
-              if (consumedVariationPaths.has(sourcePath)) {
-                continue;
-              }
               if (legacyPathHints.has(sourcePath)) {
+                variationRouteSnapshots.delete(sourcePath);
                 legacyInputs.push(sourcePath);
                 continue;
               }
               try {
-                const outcome = await variationRuntime.process(sourcePath);
+                const capturedRoute = variationRouteSnapshots.get(sourcePath);
+                const outcome = capturedRoute
+                  ? await variationRuntime.process(sourcePath, await capturedRoute)
+                  : await variationRuntime.process(sourcePath);
+                variationRouteSnapshots.delete(sourcePath);
                 if (outcome.kind === 'legacy') {
                   legacyInputs.push(sourcePath);
                   // Preserve the first classification across retries. A new
@@ -302,6 +361,26 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               }
             }
 
+            if (persistStandardGroupingState && legacyInputs.length > 0) {
+              // Persist every source that may still be needed before the
+              // legacy processor moves any files. A single-front marker is
+              // insufficient when a crash occurs during a multi-image batch.
+              const pendingBeforeBatch = {
+                pending: [
+                  ...state.groupingState.pending,
+                  ...legacyInputs.map((path) => ({path})),
+                ],
+              };
+              if (!(await persistStandardState(pendingBeforeBatch))) {
+                state.pendingQueue.unshift(...legacyInputs);
+                shouldResumeDraining = false;
+                logger.error('standard_capture_batch_blocked', {
+                  fileCount: legacyInputs.length,
+                  pendingGroupSize: state.groupingState.pending.length,
+                });
+                break;
+              }
+            }
             legacyInputsForBatch = legacyInputs;
             const result = legacyInputs.length > 0
               ? await processBatch(
@@ -318,6 +397,9 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                 };
 
             state.groupingState = cloneWatcherGroupingState(result.groupingState);
+            if (persistStandardGroupingState) {
+              await persistStandardState(state.groupingState);
+            }
             for (const processedListing of result.processedListings) {
               logger.info('watcher_group_completed', {
                 captureMode: processedListing.captureMode,
@@ -355,6 +437,9 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               }
               state.groupingState = cloneWatcherGroupingState(error.groupingState);
               state.pendingQueue.unshift(...cloneWatcherInputs(error.retryInputs));
+              if (persistStandardGroupingState) {
+                await persistStandardState(state.groupingState);
+              }
               shouldResumeDraining = false;
             }
             if (!(error instanceof WatcherBatchProcessingError)) {
@@ -422,6 +507,18 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
       });
       return;
     }
+    if (variationRuntime?.snapshot && !variationRouteSnapshots.has(normalizedPath)) {
+      let snapshot: Promise<VariationListingRuntimeOwnership>;
+      try {
+        snapshot = variationRuntime.snapshot(normalizedPath);
+      } catch (error) {
+        snapshot = Promise.reject(error);
+      }
+      // Keep failures observable through the drain path even if the watcher is
+      // closed before this source reaches processing.
+      void snapshot.catch(() => undefined);
+      variationRouteSnapshots.set(normalizedPath, snapshot);
+    }
     state.pendingQueue.push(normalizedPath);
     logger.info('file_detected', {
       path: normalizedPath,
@@ -447,6 +544,13 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
     incomingDirectory: config.incomingDirectory,
     processedDirectory: config.processedDirectory,
   });
+
+  if (initialStandardReplayPaths.length > 0) {
+    logger.info('standard_capture_replay_started', {
+      fileCount: initialStandardReplayPaths.length,
+    });
+    void drainQueue();
+  }
 
   return {
     state,

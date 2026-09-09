@@ -39,6 +39,30 @@ function access(): VariationListingApiDataAccess {
     applyGroupReviewDraft: vi.fn(async () => current.group),
     updateVariationPrice: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     updateRepresentativeCopy: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
+    getIntakeSession: vi.fn(async () => null),
+    configureIntake: vi.fn(async () => ({
+      captureSourceKey: 'station-main',
+      mode: 'idle',
+      targetGroupId: null,
+      targetVariationId: null,
+      copyConditionToken: null,
+      stickyPriceAmount: 1.49,
+      stickyPriceCurrency: 'USD',
+      pendingPair: null,
+      source: {} as never,
+    })),
+    discardIntakePair: vi.fn(async () => ({
+      captureSourceKey: 'station-main',
+      mode: 'idle',
+      targetGroupId: null,
+      targetVariationId: null,
+      copyConditionToken: null,
+      stickyPriceAmount: 1.49,
+      stickyPriceCurrency: 'USD',
+      pendingPair: null,
+      source: {} as never,
+    })),
+    updateVariationSelectorValue: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
   };
 }
 

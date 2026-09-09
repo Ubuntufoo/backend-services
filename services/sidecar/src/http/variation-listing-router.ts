@@ -31,6 +31,7 @@ import {
 } from '@/gemini/variation-listing-group-review.js';
 import { GeminiFallbackExecutionError } from '@/gemini/gemini-model-router.js';
 import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
+import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
 import {
   createVariationListingGroupRequestSchema,
   configureVariationListingIntakeRequestSchema,
@@ -80,6 +81,106 @@ export interface VariationListingApiActions {
   abandon(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   cleanup(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   returnToReview(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+}
+
+const CAPTURE_ELIGIBLE_LIFECYCLES = new Set([
+  'intake',
+  'draft',
+  'review',
+  'publish-ready',
+  'active',
+]);
+
+class VariationListingIntakeConflictError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'VariationListingIntakeConflictError';
+    this.code = code;
+  }
+}
+
+async function assertIntakeTargetEligible(
+  dataAccess: VariationListingApiDataAccess,
+  input: { mode: 'idle' | 'new_variation' | 'duplicate_copy'; targetGroupId: string | null }
+): Promise<void> {
+  if (input.mode === 'idle' || input.targetGroupId === null) return;
+  let standardPending: boolean;
+  try {
+    standardPending = await hasPendingStandardCapture();
+  } catch (error) {
+    throw new VariationListingIntakeConflictError(
+      'standard_capture_state_unavailable',
+      `Standard capture state could not be verified: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (standardPending) {
+    throw new VariationListingIntakeConflictError(
+      'standard_capture_pair_pending',
+      'Standard capture has an unfinished image group. Finish that Standard card/lot before arming Variation capture.'
+    );
+  }
+  const aggregate = await dataAccess.loadAggregate(input.targetGroupId);
+  if (!aggregate) {
+    throw new VariationListingIntakeConflictError(
+      'variation_listing_intake_target_unavailable',
+      `Variation listing capture target ${input.targetGroupId} no longer exists.`
+    );
+  }
+  if (!CAPTURE_ELIGIBLE_LIFECYCLES.has(aggregate.group.lifecycle_state)) {
+    throw new VariationListingIntakeConflictError(
+      'variation_listing_intake_target_unavailable',
+      `Variation listing capture target ${input.targetGroupId} is ${aggregate.group.lifecycle_state} and cannot accept new captures.`
+    );
+  }
+}
+
+function isCaptureSourceUnconfigured(error: unknown): boolean {
+  // Only an absent key is compatible with a Sidecar process that has no
+  // Variation intake configured. A present-but-malformed value must fail
+  // closed; swallowing that error would let lifecycle actions proceed while
+  // the watcher and Sidecar disagree about their capture source.
+  return error instanceof Error && /WATCHER_CAPTURE_SOURCE_KEY is required\b/i.test(error.message);
+}
+
+async function readIntakeSessionOrNull(
+  dataAccess: VariationListingApiDataAccess,
+): Promise<VariationListingIntakeSession | null> {
+  try {
+    return await dataAccess.getIntakeSession();
+  } catch (error) {
+    if (isCaptureSourceUnconfigured(error)) return null;
+    throw error;
+  }
+}
+
+async function getTargetedIntakeSession(
+  dataAccess: VariationListingApiDataAccess,
+  groupId: string
+): Promise<VariationListingIntakeSession | null> {
+  const session = await readIntakeSessionOrNull(dataAccess);
+  return session?.targetGroupId === groupId ? session : null;
+}
+
+async function prepareIntakeForPublicationAction(
+  dataAccess: VariationListingApiDataAccess,
+  groupId: string
+): Promise<void> {
+  const session = await getTargetedIntakeSession(dataAccess, groupId);
+  if (!session) return;
+  if (session.pendingPair !== null) {
+    throw new VariationListingIntakeConflictError(
+      'variation_listing_intake_pending',
+      'A pending Variation Listing front/back pair targets this group. Finish or discard that pair before changing publication state.'
+    );
+  }
+  await dataAccess.configureIntake({
+    mode: 'idle',
+    targetGroupId: null,
+    targetVariationId: null,
+    copyConditionToken: null,
+    stickyPriceAmount: session.stickyPriceAmount,
+  });
 }
 
 function parseOrSend<T>(res: Response, schema: ZodType<T>, value: unknown): T | undefined {
@@ -147,6 +248,10 @@ function groupRefreshWarning(action: VariationListingActionName, groupId: string
 }
 
 function sendError(res: Response, error: unknown): void {
+  if (error instanceof VariationListingIntakeConflictError) {
+    res.status(409).json({ error: error.code, message: error.message });
+    return;
+  }
   if (error instanceof VariationListingActionError) {
     res.status(error.httpStatus).json({ error: error.status.code, status: error.status });
     return;
@@ -480,7 +585,7 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
 
   router.get('/intake-session', async (_req: Request, res: Response) =>
     await runRoute(res, async () => {
-      const session = await getDataAccess().getIntakeSession();
+      const session = await readIntakeSessionOrNull(getDataAccess());
       res.json({ session: session ? serializeIntakeSession(session) : null });
     })
   );
@@ -489,7 +594,9 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     const body = parseOrSend(res, configureVariationListingIntakeRequestSchema, req.body);
     if (!body) return;
     return await runRoute(res, async () => {
-      const session = await getDataAccess().configureIntake({
+      const dataAccess = getDataAccess();
+      await assertIntakeTargetEligible(dataAccess, body);
+      const session = await dataAccess.configureIntake({
         mode: body.mode,
         targetGroupId: body.targetGroupId,
         targetVariationId: body.targetVariationId ?? null,
@@ -565,7 +672,10 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     if (!params) return;
     const body = parseActionOrSend(res, 'publish', params.groupId, variationListingRevisionActionRequestSchema, req.body);
     if (!body) return;
-    return await runRoute(res, async () => await actionResponse(res, 'publish', params.groupId, await getActions().publish(params.groupId, body.expectedDesiredRevision)));
+    return await runRoute(res, async () => {
+      await prepareIntakeForPublicationAction(getDataAccess(), params.groupId);
+      await actionResponse(res, 'publish', params.groupId, await getActions().publish(params.groupId, body.expectedDesiredRevision));
+    });
   });
 
   router.post('/:groupId/actions/publish-changes', async (req: Request, res: Response) => {
@@ -573,7 +683,10 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     if (!params) return;
     const body = parseActionOrSend(res, 'publish_changes', params.groupId, variationListingRevisionActionRequestSchema, req.body);
     if (!body) return;
-    return await runRoute(res, async () => await actionResponse(res, 'publish_changes', params.groupId, await getActions().publishChanges(params.groupId, body.expectedDesiredRevision)));
+    return await runRoute(res, async () => {
+      await prepareIntakeForPublicationAction(getDataAccess(), params.groupId);
+      await actionResponse(res, 'publish_changes', params.groupId, await getActions().publishChanges(params.groupId, body.expectedDesiredRevision));
+    });
   });
 
   router.post('/:groupId/actions/retry', async (req: Request, res: Response) => {
@@ -581,7 +694,10 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     if (!params) return;
     const body = parseActionOrSend(res, 'retry', params.groupId, variationListingRetryActionRequestSchema, req.body ?? {});
     if (!body) return;
-    return await runRoute(res, async () => await actionResponse(res, 'retry', params.groupId, await getActions().retry(params.groupId)));
+    return await runRoute(res, async () => {
+      await prepareIntakeForPublicationAction(getDataAccess(), params.groupId);
+      await actionResponse(res, 'retry', params.groupId, await getActions().retry(params.groupId));
+    });
   });
 
   router.post('/:groupId/actions/return-to-review', async (req: Request, res: Response) => {
@@ -589,7 +705,10 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     if (!params) return;
     const body = parseActionOrSend(res, 'return_to_review', params.groupId, variationListingRevisionActionRequestSchema, req.body);
     if (!body) return;
-    return await runRoute(res, async () => await actionResponse(res, 'return_to_review', params.groupId, await getActions().returnToReview(params.groupId, body.expectedDesiredRevision)));
+    return await runRoute(res, async () => {
+      await prepareIntakeForPublicationAction(getDataAccess(), params.groupId);
+      await actionResponse(res, 'return_to_review', params.groupId, await getActions().returnToReview(params.groupId, body.expectedDesiredRevision));
+    });
   });
 
   for (const [route, action] of [
@@ -602,7 +721,10 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
       if (!params) return;
       const body = parseActionOrSend(res, action, params.groupId, variationListingRevisionActionRequestSchema, req.body);
       if (!body) return;
-      return await runRoute(res, async () => await actionResponse(res, action, params.groupId, await getActions()[action](params.groupId, body.expectedDesiredRevision)));
+      return await runRoute(res, async () => {
+        await prepareIntakeForPublicationAction(getDataAccess(), params.groupId);
+        await actionResponse(res, action, params.groupId, await getActions()[action](params.groupId, body.expectedDesiredRevision));
+      });
     });
   }
 
