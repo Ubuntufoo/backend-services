@@ -505,7 +505,7 @@ export interface VariationListingCleanupMutationGateway {
   deleteInventoryItem(sku: string): Promise<void>;
   deleteInventoryItemGroup(groupKey: string): Promise<void>;
   deleteOffer(offerId: string): Promise<void>;
-  withdrawInventoryItemGroup(groupKey: string): Promise<void>;
+  withdrawInventoryItemGroup(groupKey: string, marketplaceId: string): Promise<void>;
 }
 
 export interface VariationListingCleanupJournalReader {
@@ -966,7 +966,7 @@ export async function executeVariationListingWithdrawal(
         ? { evidence: asJson({ groupKey: snapshot.groupKey, listingId: snapshot.ownedRemote.listingId, state: 'active' }), observed: 'present' }
         : null;
     },
-    () => input.mutations.withdrawInventoryItemGroup(snapshot.groupKey));
+    () => input.mutations.withdrawInventoryItemGroup(snapshot.groupKey, snapshot.marketplaceId));
   await input.transaction.advanceCleanupLifecycle({
     expectedDesiredRevision: input.frozen.captureInput.capturedDesiredRevision,
     expectedPreviousConfirmedRevision: input.frozen.expectedPreviousConfirmedRevision,
@@ -1051,7 +1051,7 @@ export async function executeVariationListingCleanup(
         const active = [...state.offers.values()].filter((offer) => offer.status === 'PUBLISHED' && offer.lifecycleClass === 'active');
         return state.group && active.length > 0 ? { evidence: asJson({ groupKey: snapshot.groupKey, listingId: snapshot.ownedRemote.listingId, state: 'active' }), observed: 'present' } : null;
       },
-      () => input.mutations.withdrawInventoryItemGroup(snapshot.groupKey));
+      () => input.mutations.withdrawInventoryItemGroup(snapshot.groupKey, snapshot.marketplaceId));
     await transition('withdrawn');
   }
 

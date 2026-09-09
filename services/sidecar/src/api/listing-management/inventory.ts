@@ -28,6 +28,9 @@ type InventoryItemGroupUpsertResponse = components['schemas']['BaseResponse'] | 
 export type PublishByInventoryItemGroupRequest = Required<
   components['schemas']['PublishByInventoryItemGroupRequest']
 >;
+export type WithdrawByInventoryItemGroupRequest = Required<
+  components['schemas']['WithdrawByInventoryItemGroupRequest']
+>;
 
 /**
  * Inventory API - Manage listings and inventory
@@ -590,7 +593,7 @@ export class InventoryApi {
    * @throws Error if required parameters are missing or invalid
    */
   async withdrawOfferByInventoryItemGroup(
-    request: Record<string, unknown>,
+    request: WithdrawByInventoryItemGroupRequest,
     config?: InventoryRequestConfig
   ): Promise<unknown> {
     requireObject(request, 'request');

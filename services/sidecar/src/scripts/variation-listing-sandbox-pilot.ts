@@ -635,7 +635,10 @@ export function adaptVariationListingPilotMutationApi(
     bulkUpdatePriceQuantity: (payload, headers) =>
       inventory.bulkUpdatePriceQuantity(payload, config(headers)),
     withdrawInventoryItemGroup: (payload, headers) =>
-      inventory.withdrawOfferByInventoryItemGroup(payload, config(headers)),
+      inventory.withdrawOfferByInventoryItemGroup(
+        payload as Parameters<typeof inventory.withdrawOfferByInventoryItemGroup>[0],
+        config(headers)
+      ),
     deleteOffer: (offerId, headers) => inventory.deleteOffer(offerId, config(headers)),
     deleteInventoryItemGroup: (groupKey, headers) =>
       inventory.deleteInventoryItemGroup(groupKey, config(headers)),

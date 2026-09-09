@@ -209,12 +209,13 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
     getMedia: vi.fn(async () => ({ state: 'proven_absent' as const })),
   };
   const deletes: string[] = [];
+  const withdrawalCalls: Array<{ groupKey: string; marketplaceId: string }> = [];
   const remoteFactory = vi.fn(async () => ({ remote, mutations: {
     createMedia: vi.fn(), createOrReplaceInventoryItem: vi.fn(), createOffer: vi.fn(), createOrReplaceInventoryItemGroup: vi.fn(), publishInventoryItemGroup: vi.fn(), publishOffer: vi.fn(), updateOffer: vi.fn(),
-    withdrawInventoryItemGroup: vi.fn(async () => { if (failWithdrawal) { failWithdrawal = false; throw new Error('withdraw transport lost'); } groupPresent = true; for (const offer of offerBySku.values()) offer.lifecycleClass = 'ended'; }),
+    withdrawInventoryItemGroup: vi.fn(async (groupKey: string, marketplaceId: string) => { withdrawalCalls.push({ groupKey, marketplaceId }); if (failWithdrawal) { failWithdrawal = false; throw new Error('withdraw transport lost'); } groupPresent = true; for (const offer of offerBySku.values()) offer.lifecycleClass = 'ended'; }),
     deleteInventoryItem: vi.fn(async (sku: string) => { deletes.push(`item:${sku}`); }), deleteInventoryItemGroup: vi.fn(async () => { deletes.push('group'); }), deleteOffer: vi.fn(async (id: string) => { deletes.push(`offer:${id}`); }),
   } }));
-  return { access, remoteFactory, remote, journal, deletes, aggregate: () => aggregateState, captured: () => captured };
+  return { access, remoteFactory, remote, journal, deletes, withdrawalCalls, aggregate: () => aggregateState, captured: () => captured };
 }
 
 const failingRemote = (error: unknown) => async () => { throw error; };
@@ -515,6 +516,10 @@ describe('YP6.2 variation listing actions', () => {
     expect(harness.access.value.reserveActionRevision).toHaveBeenCalledTimes(1);
     expect(harness.access.value.captureRevision).toHaveBeenCalledTimes(1);
     expect(harness.deletes).toEqual([]);
+    expect(harness.withdrawalCalls).toEqual([
+      { groupKey: 'VL-G-11111111111141118111111111111111', marketplaceId: 'EBAY_US' },
+      { groupKey: 'VL-G-11111111111141118111111111111111', marketplaceId: 'EBAY_US' },
+    ]);
   });
 
   it('blocks newer publish when an older revision has unresolved remote work', async () => {

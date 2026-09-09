@@ -120,7 +120,7 @@ export interface VariationListingActionServiceOptions {
       deleteOffer(offerId: string): Promise<void>;
       publishOffer(offerId: string): Promise<{ listingId: string }>;
       updateOffer(offerId: string, payload: Json): Promise<void>;
-      withdrawInventoryItemGroup(groupKey: string): Promise<void>;
+      withdrawInventoryItemGroup(groupKey: string, marketplaceId: string): Promise<void>;
     };
     remote: VariationListingPublicationRemoteGateway;
   }>;
@@ -393,7 +393,7 @@ async function createProductionRemote() {
           return { listingId };
         },
         updateOffer: async (offerId, payload) => { await api.inventory.updateOffer(offerId, payload as Record<string, unknown>); },
-        withdrawInventoryItemGroup: async (groupKey) => { await api.inventory.withdrawOfferByInventoryItemGroup({ inventoryItemGroupKey: groupKey }, headers); },
+        withdrawInventoryItemGroup: async (groupKey, marketplaceId) => { await api.inventory.withdrawOfferByInventoryItemGroup({ inventoryItemGroupKey: groupKey, marketplaceId }, headers); },
         deleteOffer: async (offerId) => await api.inventory.deleteOffer(offerId, headers),
         deleteInventoryItemGroup: async (groupKey) => await api.inventory.deleteInventoryItemGroup(groupKey, headers),
         deleteInventoryItem: async (sku) => await api.inventory.deleteInventoryItem(sku, headers),

@@ -1,6 +1,7 @@
 import type {
   InventoryItemGroup,
   PublishByInventoryItemGroupRequest,
+  WithdrawByInventoryItemGroupRequest,
 } from '@/api/listing-management/inventory.js';
 import type { ToolHandlerMap } from './types.js';
 
@@ -182,7 +183,7 @@ export const inventoryHandlers: ToolHandlerMap = {
 
   ebay_withdraw_offer_by_inventory_item_group: async (api, args) => {
     return await api.inventory.withdrawOfferByInventoryItemGroup(
-      args.request as Record<string, unknown>
+      args.request as WithdrawByInventoryItemGroupRequest
     );
   },
 };
