@@ -120,7 +120,7 @@ export const generateVariationListingIntakeIdentityRequestSchema = z
 
 export const createVariationListingGroupRequestSchema = z
   .object({
-    skuCategoryCode: z.enum(['BSKBL', 'BSBL', 'OTHER']),
+    skuCategoryCode: z.enum(['BSKBL', 'BSBL']),
     skuBucketToken: trimmed('skuBucketToken')
       .max(32)
       .regex(/^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$/, 'skuBucketToken has invalid characters')

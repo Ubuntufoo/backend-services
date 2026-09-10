@@ -153,6 +153,18 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
     expect(result.children[1]?.offer.pricingSummary.price.value).toBe('2.49');
   });
 
+  it('uses the persisted group common-aspect projection without re-deriving child metadata', () => {
+    const input = fixture();
+    input.aggregate.group.derived_common_ebay_aspects = {
+      Sport: ['Basketball'],
+      Manufacturer: ['Topps'],
+    };
+
+    const result = buildVariationListingInventoryPayloadBundle(input);
+
+    expect(result.group.aspects).toEqual({ Sport: ['Basketball'], Manufacturer: ['Topps'] });
+  });
+
   it.each([
     ['fewer than two variations', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: [a.variations[0]!] })],
     ['wrong category', (a: VariationListingAggregateSnapshot) => ({ ...a, group: group({ category_id: '999' }) })],

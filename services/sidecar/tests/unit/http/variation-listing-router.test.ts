@@ -268,15 +268,15 @@ describe('YP6.1 variation listing API router', () => {
     expect(response.body).toEqual({ session: null });
   });
 
-  it('fails closed when the canonical source key is not configured on the sidecar', async () => {
+  it('normalizes an unconfigured canonical source exception to a nullable session', async () => {
     const access = dataAccess({
       getIntakeSession: vi.fn(async () => {
         throw new Error('WATCHER_CAPTURE_SOURCE_KEY is required for variation-listing intake.');
       }),
     });
     const response = await request(app(access)).get('/api/variation-listings/intake-session');
-    expect(response.status).toBe(503);
-    expect(response.body.error).toBe('variation_listing_capture_source_unconfigured');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ session: null });
   });
 
   it.each([
@@ -432,7 +432,7 @@ describe('YP6.1 variation listing API router', () => {
     });
   });
 
-  it('blocks initial readiness when required common Sport is not truthful', async () => {
+  it('keeps initial readiness blocked until profile Sport is persisted', async () => {
     const current = aggregate();
     current.group.derived_common_ebay_aspects = {};
     const response = await request(
@@ -506,6 +506,44 @@ describe('YP6.1 variation listing API router', () => {
       conditionId: '4000',
       conditionToken: 'VERY_GOOD',
     });
+  });
+
+  it('maps the Baseball listing profile to the same validated eBay category', async () => {
+    const access = dataAccess();
+    const response = await request(app(access, () => groupId))
+      .post('/api/variation-listings')
+      .send({
+        skuCategoryCode: 'BSBL',
+        skuBucketToken: 'Jeter',
+        merchantLocationKey: 'main',
+        fulfillmentPolicyId: 'fulfillment',
+        paymentPolicyId: 'payment',
+        returnPolicyId: 'returns',
+        conditionId: '4000',
+        conditionToken: 'VERY_GOOD',
+      });
+    expect(response.status).toBe(201);
+    expect(access.createGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ skuCategoryCode: 'BSBL', categoryId: '261328' })
+    );
+  });
+
+  it('rejects the unconfigured OTHER listing profile before persistence', async () => {
+    const access = dataAccess();
+    const response = await request(app(access, () => groupId))
+      .post('/api/variation-listings')
+      .send({
+        skuCategoryCode: 'OTHER',
+        skuBucketToken: 'Misc',
+        merchantLocationKey: 'main',
+        fulfillmentPolicyId: 'fulfillment',
+        paymentPolicyId: 'payment',
+        returnPolicyId: 'returns',
+        conditionId: '4000',
+        conditionToken: 'VERY_GOOD',
+      });
+    expect(response.status).toBe(400);
+    expect(access.createGroup).not.toHaveBeenCalled();
   });
 
   it('maps manual price edits and rejects unsupported tiers before persistence', async () => {

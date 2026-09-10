@@ -14,6 +14,7 @@ import {
   variationListingGroupContentModelResponseSchema,
 } from './variation-listing-group-review-contracts.js';
 import { buildVariationListingGroupReviewPrompt } from './variation-listing-group-review-prompt.js';
+import { getVariationListingTrustedCommonEbayAspects } from '@/ebay/variation-listing-profiles.js';
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu;
 const CONDITION_RANK: Record<string, number> = {
@@ -111,6 +112,27 @@ function deriveMultiCommonValues(
   return values[0]!.filter((value) => remaining.has(normalizedKey(value)));
 }
 
+function findTrustedCommonAspectConflicts(
+  input: GenerateVariationListingGroupReviewInput
+): Map<string, string[]> {
+  const conflicts = new Map<string, string[]>();
+  for (const [key, trustedValue] of Object.entries(input.trustedCommonEbayAspects ?? {})) {
+    const trustedValues = asAspectValues(trustedValue);
+    if (trustedValues.length === 0) continue;
+    const trustedKeys = new Set(trustedValues.map(normalizedKey));
+    const conflictingVariationIds = input.variations
+      .filter((variation) => {
+        const childValues = asAspectValues(variation.variationMetadata[key]);
+        // Any explicit child value outside the trusted profile conflicts. A
+        // missing child value remains eligible for profile supplementation.
+        return childValues.length > 0 && childValues.some((value) => !trustedKeys.has(normalizedKey(value)));
+      })
+      .map((variation) => variation.variationId);
+    if (conflictingVariationIds.length > 0) conflicts.set(key, conflictingVariationIds);
+  }
+  return conflicts;
+}
+
 export function deriveVariationListingCommonEbayAspects(
   input: GenerateVariationListingGroupReviewInput
 ): Record<string, string | string[]> {
@@ -126,6 +148,17 @@ export function deriveVariationListingCommonEbayAspects(
     const values = deriveMultiCommonValues(metadata, key);
     if (values.length > 0) result[key] = values;
   }
+
+  const trustedConflicts = findTrustedCommonAspectConflicts(validated);
+  for (const [key, trustedValue] of Object.entries(validated.trustedCommonEbayAspects ?? {})) {
+    if (trustedConflicts.has(key)) {
+      delete result[key];
+      continue;
+    }
+    const values = asAspectValues(trustedValue);
+    if (values.length === 0) continue;
+    result[key] = Array.isArray(trustedValue) ? values : values[0]!;
+  }
   return result;
 }
 
@@ -135,6 +168,13 @@ export function evaluateVariationListingGroupReadiness(
   const validated = validateGenerateVariationListingGroupReviewInput(input);
   const derivedCommonEbayAspects = deriveVariationListingCommonEbayAspects(validated);
   const blockers: string[] = [];
+  const trustedConflicts = findTrustedCommonAspectConflicts(validated);
+  for (const [key, variationIds] of trustedConflicts) {
+    const trustedValues = asAspectValues(validated.trustedCommonEbayAspects?.[key]);
+    blockers.push(
+      `Trusted listing profile aspect ${key} = ${trustedValues.join(', ')} conflicts with ${variationIds.length} variation(s): ${variationIds.join(', ')}.`
+    );
+  }
   if (validated.variations.length < 2) {
     blockers.push('Variation listing publish readiness requires at least two variations.');
   }
@@ -149,7 +189,10 @@ export function evaluateVariationListingGroupReadiness(
   } else {
     for (const key of required) {
       const value = derivedCommonEbayAspects[key];
-      if (value === undefined || (Array.isArray(value) && value.length === 0)) {
+      if (
+        !trustedConflicts.has(key) &&
+        (value === undefined || (Array.isArray(value) && value.length === 0))
+      ) {
         blockers.push(`Required common eBay aspect ${key} has no truthful value across every variation.`);
       }
     }
@@ -212,10 +255,15 @@ export function buildVariationListingGroupReviewInputFromAggregate(
   aggregate: VariationListingAggregateSnapshot,
   userHints?: GenerateVariationListingGroupReviewInput['userHints']
 ): GenerateVariationListingGroupReviewInput {
+  const trustedCommonEbayAspects = getVariationListingTrustedCommonEbayAspects({
+    skuCategoryCode: aggregate.group.sku_category_code,
+    categoryId: aggregate.group.category_id,
+  });
   return validateGenerateVariationListingGroupReviewInput({
     groupId: aggregate.group.group_id,
     categoryId: aggregate.group.category_id,
     conditionToken: aggregate.group.condition_token as GenerateVariationListingGroupReviewInput['conditionToken'],
+    ...(Object.keys(trustedCommonEbayAspects).length > 0 ? { trustedCommonEbayAspects } : {}),
     variations: aggregate.variations.map((variation) => ({
       variationId: variation.variation_id,
       selectorValue: variation.selector_value,

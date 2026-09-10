@@ -4,6 +4,7 @@ import { RAW_CARD_CONDITION_TOKENS } from '@/listings/trading-card-conditions.js
 const nonEmptyStringSchema = z.string().trim().min(1);
 const rawConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
 const availabilityStateSchema = z.enum(['available', 'unavailable']);
+const commonAspectValueSchema = z.union([nonEmptyStringSchema, z.array(nonEmptyStringSchema).min(1)]);
 
 export const variationListingGroupReviewVariationSchema = z
   .object({
@@ -27,6 +28,7 @@ export const generateVariationListingGroupReviewInputSchema = z
     groupId: nonEmptyStringSchema,
     categoryId: nonEmptyStringSchema,
     conditionToken: rawConditionTokenSchema,
+    trustedCommonEbayAspects: z.record(z.string(), commonAspectValueSchema).optional(),
     variations: z.array(variationListingGroupReviewVariationSchema).min(1),
     copies: z.array(variationListingGroupReviewCopySchema),
     userHints: z

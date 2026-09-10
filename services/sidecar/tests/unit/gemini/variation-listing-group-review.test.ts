@@ -167,6 +167,71 @@ describe('variation-listing group review', () => {
     expect(common.Sport).toEqual(['Basketball']);
   });
 
+  it('uses a trusted listing-profile Sport when child metadata omits Sport', () => {
+    const input: GenerateVariationListingGroupReviewInput = {
+      ...baseInput,
+      trustedCommonEbayAspects: { Sport: ['Basketball'] },
+      variations: baseInput.variations.map((variation) => ({
+        ...variation,
+        variationMetadata: {
+          ...variation.variationMetadata,
+          Sport: undefined,
+        },
+      })),
+    };
+    expect(deriveVariationListingCommonEbayAspects(input).Sport).toEqual(['Basketball']);
+    expect(evaluateVariationListingGroupReadiness(input).blockers).not.toContain(
+      'Required common eBay aspect Sport has no truthful value across every variation.'
+    );
+  });
+
+  it('blocks a child Sport that contradicts the trusted listing profile', () => {
+    const input: GenerateVariationListingGroupReviewInput = {
+      ...baseInput,
+      trustedCommonEbayAspects: { Sport: ['Basketball'] },
+      variations: [
+        {
+          ...baseInput.variations[0]!,
+          variationMetadata: {
+            ...baseInput.variations[0]!.variationMetadata,
+            Sport: ['Basketball'],
+          },
+        },
+        {
+          ...baseInput.variations[1]!,
+          variationMetadata: {
+            ...baseInput.variations[1]!.variationMetadata,
+            Sport: ['Baseball'],
+          },
+        },
+      ],
+    };
+    expect(deriveVariationListingCommonEbayAspects(input)).not.toHaveProperty('Sport');
+    const readiness = evaluateVariationListingGroupReadiness(input);
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockers.some((blocker) =>
+      blocker.includes('Trusted listing profile aspect Sport = Basketball conflicts with 1 variation(s)')
+    )).toBe(true);
+  });
+
+  it('blocks mixed trusted and conflicting child Sport values', () => {
+    const input: GenerateVariationListingGroupReviewInput = {
+      ...baseInput,
+      trustedCommonEbayAspects: { Sport: ['Basketball'] },
+      variations: baseInput.variations.map((variation, index) => ({
+        ...variation,
+        variationMetadata: {
+          ...variation.variationMetadata,
+          Sport: index === 0 ? ['Basketball'] : ['Basketball', 'Baseball'],
+        },
+      })),
+    };
+    const readiness = evaluateVariationListingGroupReadiness(input);
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockers.some((blocker) => blocker.includes('Trusted listing profile aspect Sport'))).toBe(true);
+    expect(deriveVariationListingCommonEbayAspects(input)).not.toHaveProperty('Sport');
+  });
+
   it('reports the complete group ready when required common aspects and copy conditions pass', () => {
     const readiness = evaluateVariationListingGroupReadiness(baseInput);
     expect(readiness).toEqual({
@@ -331,6 +396,32 @@ describe('variation-listing group review', () => {
       baseInput
     );
     expect(aggregate).toEqual(before);
+  });
+
+  it('derives the Baseball trusted aspect from persisted SKU namespace and category', () => {
+    const aggregate = {
+      group: {
+        group_id: baseInput.groupId,
+        sku_category_code: 'BSBL',
+        category_id: '261328',
+        condition_token: baseInput.conditionToken,
+      },
+      variations: baseInput.variations.map((variation) => ({
+        variation_id: variation.variationId,
+        selector_value: variation.selectorValue,
+        variation_metadata: { ...variation.variationMetadata, Sport: undefined },
+      })),
+      copies: baseInput.copies.map((copy) => ({
+        copy_id: copy.copyId,
+        variation_id: copy.variationId,
+        availability_state: copy.availabilityState,
+        condition_token: copy.conditionToken,
+      })),
+    } as unknown as VariationListingAggregateSnapshot;
+
+    const input = buildVariationListingGroupReviewInputFromAggregate(aggregate);
+    expect(input.trustedCommonEbayAspects).toEqual({ Sport: ['Baseball'] });
+    expect(deriveVariationListingCommonEbayAspects(input).Sport).toEqual(['Baseball']);
   });
 
   it('blocks publish readiness when a Card selector exceeds eBay\'s 65-character limit', () => {

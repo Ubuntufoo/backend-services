@@ -31,6 +31,10 @@ import {
 } from '@/gemini/variation-listing-group-review.js';
 import { GeminiFallbackExecutionError } from '@/gemini/gemini-model-router.js';
 import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
+import {
+  getVariationListingTrustedCommonEbayAspects,
+  requireVariationListingCreationProfile,
+} from '@/ebay/variation-listing-profiles.js';
 import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
 import {
   createVariationListingGroupRequestSchema,
@@ -397,6 +401,35 @@ function buildValidation(aggregate: VariationListingAggregateSnapshot) {
           buildVariationListingGroupReviewInputFromAggregate(aggregate)
         );
   blockers.push(...reviewedReadiness.blockers);
+  // Publication payloads intentionally consume the persisted group-level
+  // projection. A trusted profile can complete an unsaved generated review,
+  // but must not make a group publishable until that projection is saved via
+  // the review/CAS boundary.
+  const trustedPersistedAspects = getVariationListingTrustedCommonEbayAspects({
+    skuCategoryCode: aggregate.group.sku_category_code,
+    categoryId: aggregate.group.category_id,
+  });
+  const persistedAspects =
+    aggregate.group.derived_common_ebay_aspects !== null &&
+    typeof aggregate.group.derived_common_ebay_aspects === 'object' &&
+    !Array.isArray(aggregate.group.derived_common_ebay_aspects)
+      ? (aggregate.group.derived_common_ebay_aspects as Record<string, unknown>)
+      : {};
+  for (const [key, trustedValue] of Object.entries(trustedPersistedAspects)) {
+    const value = persistedAspects[key];
+    const hasValue =
+      (typeof value === 'string' && value.trim().length > 0) ||
+      (Array.isArray(value) && value.some((entry) => typeof entry === 'string' && entry.trim().length > 0));
+    if (!hasValue) {
+      blockers.push(`Required common eBay aspect ${key} has no truthful value across every variation.`);
+      continue;
+    }
+    const expected = new Set((Array.isArray(trustedValue) ? trustedValue : [trustedValue]).map((entry) => entry.toLowerCase()));
+    const actual = (Array.isArray(value) ? value : [value]).filter((entry): entry is string => typeof entry === 'string');
+    if (actual.some((entry) => !expected.has(entry.trim().toLowerCase()))) {
+      blockers.push(`Persisted common eBay aspect ${key} conflicts with the trusted listing profile.`);
+    }
+  }
   const prePublication = aggregate.group.last_confirmed_revision === null;
   if (!aggregate.group.title) blockers.push('Group title is required.');
   if (!aggregate.group.description) blockers.push('Group description is required.');
@@ -870,12 +903,13 @@ function buildCreateGroupInput(
   groupId: string,
   body: CreateVariationListingGroupRequest
 ): Parameters<VariationListingApiDataAccess['createGroup']>[0] {
+  const profile = requireVariationListingCreationProfile(body.skuCategoryCode);
   return {
     groupId,
     groupKey: groupKeyFromId(groupId),
     skuCategoryCode: body.skuCategoryCode,
     skuBucketToken: body.skuBucketToken,
-    categoryId: '261328',
+    categoryId: profile.categoryId,
     marketplaceId: 'EBAY_US',
     merchantLocationKey: body.merchantLocationKey,
     fulfillmentPolicyId: body.fulfillmentPolicyId,
