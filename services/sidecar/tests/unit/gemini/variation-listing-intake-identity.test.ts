@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -82,10 +82,75 @@ describe('variation listing intake identity handoff', () => {
       }),
       expect.objectContaining({ model: expect.any(String) })
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       selectorValue: '2003 Topps Tracy McGrady #1',
       variationMetadata: { Set: 'Topps' },
     });
+    expect(result.timings).toEqual({
+      imageReadEncodeMs: expect.any(Number),
+      generationMs: expect.any(Number),
+      totalMs: expect.any(Number),
+    });
+    expect(result.timings.imageReadEncodeMs).toBeGreaterThanOrEqual(0);
+    expect(result.timings.generationMs).toBeGreaterThanOrEqual(0);
+    expect(result.timings.totalMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('starts front and back image reads concurrently and preserves image ordering', async () => {
+    const paths = await createIncomingFiles();
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    const readImage = vi.fn(async (sourcePath: string) => {
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await Promise.resolve();
+      activeReads -= 1;
+      return Buffer.from(sourcePath.endsWith('front.jpg') ? 'front' : 'back');
+    });
+    const generateIdentity = createIdentityMock();
+
+    await generateVariationListingIntakeIdentityHandoff(
+      { variationId, frontSourceRef: paths.front, backSourceRef: paths.back },
+      {
+        cwd: paths.root,
+        env: { WATCHER_INCOMING_DIR: paths.incomingDirectory },
+        readImage,
+        generateIdentity,
+      }
+    );
+
+    expect(readImage.mock.calls.map(([sourcePath]) => basename(sourcePath))).toEqual([
+      'front.jpg',
+      'back.png',
+    ]);
+    expect(maxActiveReads).toBe(2);
+    expect(generateIdentity.mock.calls[0]?.[0].imageUrls).toEqual([
+      expect.stringMatching(/^data:image\/jpeg;base64,/u),
+      expect.stringMatching(/^data:image\/png;base64,/u),
+    ]);
+  });
+
+  it('clamps identity timings when the wall clock moves backwards', async () => {
+    const paths = await createIncomingFiles();
+    const nowSpy = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(900)
+      .mockReturnValueOnce(800)
+      .mockReturnValueOnce(700)
+      .mockReturnValueOnce(600)
+      .mockReturnValueOnce(500);
+
+    const result = await generateVariationListingIntakeIdentityHandoff(
+      { variationId, frontSourceRef: paths.front, backSourceRef: paths.back },
+      {
+        cwd: paths.root,
+        env: { WATCHER_INCOMING_DIR: paths.incomingDirectory },
+        generateIdentity: createIdentityMock(),
+      }
+    );
+
+    expect(result.timings).toEqual({ imageReadEncodeMs: 0, generationMs: 0, totalMs: 0 });
+    expect(nowSpy).toHaveBeenCalled();
   });
 
   it('prepares identity once and falls back across configured models on provider unavailability', async () => {

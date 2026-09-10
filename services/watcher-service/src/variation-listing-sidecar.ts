@@ -15,6 +15,27 @@ export interface VariationListingIdentityHandoffRequest {
 export interface VariationListingIdentityHandoffResponse {
   selectorValue: string;
   variationMetadata: Json;
+  timings?: {
+    imageReadEncodeMs: number;
+    generationMs: number;
+    totalMs: number;
+  };
+}
+
+export type VariationListingIntakeProcessingPhase =
+  | 'waiting_for_back'
+  | 'generating_identity'
+  | 'saving'
+  | 'ready'
+  | 'failed';
+
+export interface VariationListingIntakeStatusRequest {
+  captureSourceKey: string;
+  targetGroupId: string;
+  pairId: string;
+  phase: VariationListingIntakeProcessingPhase;
+  completionKind: 'new_variation' | 'duplicate_copy';
+  message: string | null;
 }
 
 export interface VariationListingSidecarClientDependencies {
@@ -86,6 +107,31 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export async function reportVariationListingIntakeStatus(
+  input: VariationListingIntakeStatusRequest,
+  dependencies: VariationListingSidecarClientDependencies = {}
+): Promise<void> {
+  const env = dependencies.env ?? process.env;
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const apiUrl = resolveSidecarApiUrl(env);
+  const headers = buildHeaders(env);
+  assertBearerTransportSafety(apiUrl, headers);
+  const response = await fetchImpl(`${apiUrl}/api/variation-listings/intake-status`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const payload = asObject(await response.json().catch(() => null));
+    const message = typeof payload?.message === 'string'
+      ? payload.message
+      : typeof payload?.error === 'string'
+        ? payload.error
+        : `HTTP ${response.status}`;
+    return fail(`intake status report failed: ${message}`);
+  }
+}
+
 export async function requestVariationListingIdentityHandoff(
   input: VariationListingIdentityHandoffRequest,
   dependencies: VariationListingSidecarClientDependencies = {}
@@ -122,6 +168,10 @@ export async function requestVariationListingIdentityHandoff(
   }
   const selectorValue = payload?.selectorValue;
   const variationMetadata = payload?.variationMetadata;
+  const timings = asObject(payload?.timings);
+  const imageReadEncodeMs = timings?.imageReadEncodeMs;
+  const generationMs = timings?.generationMs;
+  const totalMs = timings?.totalMs;
   if (typeof selectorValue !== 'string' || selectorValue.trim() === '') {
     return fail('identity response is missing selectorValue.');
   }
@@ -131,5 +181,20 @@ export async function requestVariationListingIdentityHandoff(
   return {
     selectorValue,
     variationMetadata: variationMetadata as Json,
+    ...(timings &&
+    typeof imageReadEncodeMs === 'number' &&
+    typeof generationMs === 'number' &&
+    typeof totalMs === 'number' &&
+    [imageReadEncodeMs, generationMs, totalMs].every(
+      (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
+    )
+      ? {
+          timings: {
+            imageReadEncodeMs,
+            generationMs,
+            totalMs,
+          },
+        }
+      : {}),
   };
 }

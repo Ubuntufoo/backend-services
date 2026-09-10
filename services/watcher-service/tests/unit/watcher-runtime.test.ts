@@ -8,6 +8,7 @@ import {
   startWatcherRuntime,
   VariationListingSidecarRetryableError,
   WatcherBatchProcessingError,
+  type VariationListingRuntimeProcessor,
   type VariationListingRuntimeOwnership,
 } from '../../src/index.js';
 
@@ -84,6 +85,114 @@ function createLogger() {
 describe('watcher runtime', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('renders default terminal events as readable stage lines with failure detail', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      processIncomingImageBatch: vi.fn(async () => ({
+        groupingState: createEmptyWatcherGroupingState(),
+        processedListings: [],
+      })),
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitReady();
+    const failure = new Error('camera unavailable');
+    fakeWatcher.emitError(failure);
+    await runtime.close();
+
+    expect(info.mock.calls.some(([line]) =>
+      typeof line === 'string' && line.includes('[WATCHER] watcher_started')
+    )).toBe(true);
+    const renderedFailure = error.mock.calls.find(([line]) =>
+      typeof line === 'string' && line.includes('watcher_error')
+    )?.[0];
+    expect(renderedFailure).toContain('camera unavailable');
+    expect(renderedFailure).toContain('Error: camera unavailable');
+  });
+
+  it('preserves nested variation timing fields for injected loggers and default output', async () => {
+    const outcome = {
+      kind: 'completed' as const,
+      completionKind: 'new_variation' as const,
+      copyId: '33333333-3333-4333-8333-333333333333',
+      groupId: '11111111-1111-4111-8111-111111111111',
+      status: 'completed' as const,
+      variationId: '22222222-2222-4222-8222-222222222222',
+      timings: {
+        identityMs: 20,
+        identityReadEncodeMs: 4,
+        identityGenerationMs: 12,
+        storageMs: 3,
+        persistenceMs: 5,
+        totalMs: 28,
+      },
+    };
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const processor = { process: vi.fn(async () => outcome) } as unknown as VariationListingRuntimeProcessor;
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger,
+      processIncomingImageBatch: vi.fn(async () => ({
+        groupingState: createEmptyWatcherGroupingState(),
+        processedListings: [],
+      })),
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+    fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(logger.info).toHaveBeenCalledWith('variation_completed', outcome);
+
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const defaultWatcher = new FakeWatcher();
+    const defaultRuntime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      processIncomingImageBatch: vi.fn(async () => ({
+        groupingState: createEmptyWatcherGroupingState(),
+        processedListings: [],
+      })),
+      variationListingRuntimeProcessor: { process: vi.fn(async () => outcome) } as unknown as VariationListingRuntimeProcessor,
+      watch: () => defaultWatcher,
+    });
+    defaultWatcher.emitAdd('/watcher/incoming/back.jpg');
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await defaultRuntime.close();
+
+    const rendered = info.mock.calls.find(([line]) =>
+      typeof line === 'string' && line.includes('Variation batch completed')
+    )?.[0];
+    expect(rendered).toContain('identityReadEncodeMs: 4 ms');
+    expect(rendered).toContain('totalMs: 28 ms');
   });
 
   it('enqueues normalized absolute paths from add events', async () => {

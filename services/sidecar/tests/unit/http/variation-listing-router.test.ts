@@ -13,6 +13,11 @@ import {
   createVariationListingApiRouter,
   type VariationListingApiDataAccess,
 } from '@/http/variation-listing-router.js';
+import {
+  clearVariationListingIntakeProcessingStatus,
+  getVariationListingIntakeProcessingStatus,
+  setVariationListingIntakeProcessingStatus,
+} from '@/http/variation-listing-intake-status.js';
 
 const groupId = '11111111-1111-4111-8111-111111111111';
 const variationA = '22222222-2222-4222-8222-222222222222';
@@ -255,6 +260,7 @@ describe('YP6.1 variation listing API router', () => {
           startedAt: now,
           expectedDesiredRevision: 4,
         },
+        processingStatus: null,
         createdAt: now,
         updatedAt: now,
       },
@@ -266,6 +272,160 @@ describe('YP6.1 variation listing API router', () => {
     const response = await request(app(access)).get('/api/variation-listings/intake-session');
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ session: null });
+  });
+
+  it('sets, reads, and clears process-local intake status', () => {
+    const key = 'status-module-test';
+    const status = setVariationListingIntakeProcessingStatus(
+      {
+        captureSourceKey: key,
+        targetGroupId: groupId,
+        pairId: '66666666-6666-4666-8666-666666666666',
+        phase: 'generating_identity',
+        completionKind: 'new_variation',
+        message: null,
+      },
+      () => new Date(now)
+    );
+    expect(getVariationListingIntakeProcessingStatus(key)).toEqual(status);
+    clearVariationListingIntakeProcessingStatus(key);
+    expect(getVariationListingIntakeProcessingStatus(key)).toBeNull();
+  });
+
+  it('rejects stale intake status for a different pair and preserves the active status', async () => {
+    const pair = '66666666-6666-4666-8666-666666666666';
+    const session = intakeSession({
+      mode: 'new_variation',
+      targetGroupId: groupId,
+      pendingPair: {
+        pair_id: pair,
+        mode: 'new_variation',
+        target_group_id: groupId,
+        target_variation_id: null,
+        price_amount: 1.49,
+        price_currency: 'USD',
+        front_source_ref: '/incoming/front.jpg',
+        started_at: now,
+        expected_desired_revision: 4,
+      },
+    });
+    const access = dataAccess({ getIntakeSession: vi.fn(async () => session) });
+    const instance = app(access);
+    const accepted = await request(instance).post('/api/variation-listings/intake-status').send({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: pair,
+      phase: 'saving',
+      completionKind: 'new_variation',
+      message: null,
+    });
+    expect(accepted.status).toBe(200);
+
+    const stale = await request(instance).post('/api/variation-listings/intake-status').send({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: '77777777-7777-4777-8777-777777777777',
+      phase: 'ready',
+      completionKind: 'new_variation',
+      message: null,
+    });
+    expect(stale.status).toBe(409);
+    expect(getVariationListingIntakeProcessingStatus(captureSourceKey)?.pairId).toBe(pair);
+    clearVariationListingIntakeProcessingStatus(captureSourceKey);
+  });
+
+  it('allows a new pending pair to replace a prior pair terminal status', async () => {
+    const oldPair = '66666666-6666-4666-8666-666666666666';
+    const newPair = '77777777-7777-4777-8777-777777777777';
+    setVariationListingIntakeProcessingStatus({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: oldPair,
+      phase: 'ready',
+      completionKind: 'new_variation',
+      message: null,
+    });
+    const session = intakeSession({
+      mode: 'new_variation',
+      targetGroupId: groupId,
+      pendingPair: {
+        pair_id: newPair,
+        mode: 'new_variation',
+        target_group_id: groupId,
+        target_variation_id: null,
+        price_amount: 1.49,
+        price_currency: 'USD',
+        front_source_ref: '/incoming/new-front.jpg',
+        started_at: now,
+        expected_desired_revision: 4,
+      },
+    });
+    const instance = app(dataAccess({ getIntakeSession: vi.fn(async () => session) }));
+    const response = await request(instance).post('/api/variation-listings/intake-status').send({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: newPair,
+      phase: 'waiting_for_back',
+      completionKind: 'new_variation',
+      message: null,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toMatchObject({
+      captureSourceKey,
+      pairId: newPair,
+      phase: 'waiting_for_back',
+    });
+    clearVariationListingIntakeProcessingStatus(captureSourceKey);
+  });
+
+  it('allows same-pair retry from failed back to identity generation', async () => {
+    const pair = '66666666-6666-4666-8666-666666666666';
+    setVariationListingIntakeProcessingStatus({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: pair,
+      phase: 'failed',
+      completionKind: 'new_variation',
+      message: 'temporary provider failure',
+    });
+    const session = intakeSession({
+      mode: 'new_variation',
+      targetGroupId: groupId,
+      pendingPair: {
+        pair_id: pair,
+        mode: 'new_variation',
+        target_group_id: groupId,
+        target_variation_id: null,
+        price_amount: 1.49,
+        price_currency: 'USD',
+        front_source_ref: '/incoming/front.jpg',
+        started_at: now,
+        expected_desired_revision: 4,
+      },
+    });
+    const instance = app(dataAccess({ getIntakeSession: vi.fn(async () => session) }));
+    const retry = await request(instance).post('/api/variation-listings/intake-status').send({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: pair,
+      phase: 'generating_identity',
+      completionKind: 'new_variation',
+      message: null,
+    });
+    expect(retry.status).toBe(200);
+
+    const stale = await request(instance).post('/api/variation-listings/intake-status').send({
+      captureSourceKey,
+      targetGroupId: groupId,
+      pairId: pair,
+      phase: 'waiting_for_back',
+      completionKind: 'new_variation',
+      message: null,
+    });
+    expect(stale.status).toBe(409);
+    expect(getVariationListingIntakeProcessingStatus(captureSourceKey)?.phase).toBe('generating_identity');
+    clearVariationListingIntakeProcessingStatus(captureSourceKey);
   });
 
   it('normalizes an unconfigured canonical source exception to a nullable session', async () => {

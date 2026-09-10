@@ -18,6 +18,10 @@ import type {
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_READ_CHUNK_BYTES = 64 * 1024;
 
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt);
+}
+
 export interface GenerateVariationListingIntakeIdentityInput {
   variationId: string;
   frontSourceRef: string;
@@ -164,7 +168,8 @@ async function readBoundedImage(sourcePath: string, label: string): Promise<Buff
 export async function generateVariationListingIntakeIdentityHandoff(
   input: GenerateVariationListingIntakeIdentityInput,
   dependencies: VariationListingIntakeIdentityDependencies = {}
-): Promise<{ selectorValue: string; variationMetadata: Json }> {
+): Promise<{ selectorValue: string; variationMetadata: Json; timings: { imageReadEncodeMs: number; generationMs: number; totalMs: number } }> {
+  const totalStartedAt = Date.now();
   const env = dependencies.env ?? process.env;
   const cwd = dependencies.cwd ?? process.cwd();
   const frontSourceRef = requireExactPath(input.frontSourceRef, 'frontSourceRef');
@@ -199,8 +204,12 @@ export async function generateVariationListingIntakeIdentityHandoff(
     mimeType: string,
     label: string
   ): Promise<string> => toImageDataUrl(await read(sourcePath, label), mimeType, label);
-  const frontImageUrl = await readAndEncode(canonicalFrontSourceRef, frontMimeType, 'front');
-  const backImageUrl = await readAndEncode(canonicalBackSourceRef, backMimeType, 'back');
+  const imageReadStartedAt = Date.now();
+  const [frontImageUrl, backImageUrl] = await Promise.all([
+    readAndEncode(canonicalFrontSourceRef, frontMimeType, 'front'),
+    readAndEncode(canonicalBackSourceRef, backMimeType, 'back'),
+  ]);
+  const imageReadEncodeMs = elapsedMs(imageReadStartedAt);
   const identityInput: GenerateVariationListingIdentityInput = {
     variationId: input.variationId,
     imageUrls: [frontImageUrl, backImageUrl],
@@ -209,6 +218,7 @@ export async function generateVariationListingIntakeIdentityHandoff(
       back: backSourceRef,
     },
   };
+  const generationStartedAt = Date.now();
   const draft = dependencies.generateIdentity
     ? await dependencies.generateIdentity(identityInput, { model: 'injected-test-model' })
     : await (async () => {
@@ -224,5 +234,13 @@ export async function generateVariationListingIntakeIdentityHandoff(
           })
         ).draft;
       })();
-  return toVariationListingNewVariationIdentityHandoff(draft);
+  const handoff = toVariationListingNewVariationIdentityHandoff(draft);
+  return {
+    ...handoff,
+    timings: {
+      imageReadEncodeMs,
+      generationMs: elapsedMs(generationStartedAt),
+      totalMs: elapsedMs(totalStartedAt),
+    },
+  };
 }

@@ -37,8 +37,14 @@ import {
 } from '@/ebay/variation-listing-profiles.js';
 import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
 import {
+  clearVariationListingIntakeProcessingStatus,
+  getVariationListingIntakeProcessingStatus,
+  setVariationListingIntakeProcessingStatus,
+} from '@/http/variation-listing-intake-status.js';
+import {
   createVariationListingGroupRequestSchema,
   configureVariationListingIntakeRequestSchema,
+  updateVariationListingIntakeStatusRequestSchema,
   generateVariationListingIntakeIdentityRequestSchema,
   updateVariationListingPriceRequestSchema,
   updateVariationListingSelectorValueRequestSchema,
@@ -336,6 +342,13 @@ function serializeCopy(copy: VariationListingAggregateSnapshot['copies'][number]
 
 function serializeIntakeSession(session: VariationListingIntakeSession) {
   const pendingPair = session.pendingPair;
+  const processingStatus = getVariationListingIntakeProcessingStatus(session.captureSourceKey);
+  const visibleProcessingStatus =
+    processingStatus !== null &&
+    session.targetGroupId !== null &&
+    processingStatus.targetGroupId === session.targetGroupId
+      ? processingStatus
+      : null;
   return {
     captureSourceKey: session.captureSourceKey,
     mode: session.mode,
@@ -358,6 +371,7 @@ function serializeIntakeSession(session: VariationListingIntakeSession) {
           expectedDesiredRevision: pendingPair.expected_desired_revision,
         }
       : null,
+    processingStatus: visibleProcessingStatus,
     createdAt: session.source.created_at,
     updatedAt: session.source.updated_at,
   };
@@ -636,6 +650,7 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         copyConditionToken: body.copyConditionToken ?? null,
         stickyPriceAmount: body.stickyPriceAmount,
       });
+      clearVariationListingIntakeProcessingStatus(session.captureSourceKey);
       res.json({ session: serializeIntakeSession(session) });
     });
   });
@@ -643,9 +658,84 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   router.post('/intake-session/discard', async (_req: Request, res: Response) =>
     await runRoute(res, async () => {
       const session = await getDataAccess().discardIntakePair();
+      clearVariationListingIntakeProcessingStatus(session.captureSourceKey);
       res.json({ session: serializeIntakeSession(session) });
     })
   );
+
+  router.post('/intake-status', async (req: Request, res: Response) => {
+    const body = parseOrSend(res, updateVariationListingIntakeStatusRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => {
+      const session = await readIntakeSessionOrNull(getDataAccess());
+      const currentStatus = getVariationListingIntakeProcessingStatus(body.captureSourceKey);
+      const pendingPair = session?.pendingPair;
+      const pendingPairId = pendingPair && typeof pendingPair === 'object' && !Array.isArray(pendingPair)
+        ? (pendingPair as { pair_id?: unknown }).pair_id
+        : null;
+      const pendingPairMode = pendingPair && typeof pendingPair === 'object' && !Array.isArray(pendingPair)
+        ? (pendingPair as { mode?: unknown }).mode
+        : null;
+      const samePairStatus = currentStatus !== null && currentStatus.pairId === body.pairId;
+      if (
+        !session ||
+        session.captureSourceKey !== body.captureSourceKey ||
+        session.targetGroupId !== body.targetGroupId ||
+        (typeof pendingPairId === 'string'
+          ? pendingPairId !== body.pairId
+          : currentStatus === null || currentStatus.pairId !== body.pairId)
+      ) {
+        throw new VariationListingIntakeConflictError(
+          'variation_listing_intake_status_stale',
+          'Variation intake status no longer matches the active capture session.'
+        );
+      }
+      if (
+        (typeof pendingPairMode === 'string' && pendingPairMode !== body.completionKind) ||
+        (samePairStatus && currentStatus.completionKind !== body.completionKind)
+      ) {
+        throw new VariationListingIntakeConflictError(
+          'variation_listing_intake_status_stale',
+          'Variation intake status completion kind no longer matches the active capture pair.'
+        );
+      }
+      if (samePairStatus) {
+        const phaseRank: Record<typeof body.phase, number> = {
+          waiting_for_back: 0,
+          generating_identity: 1,
+          saving: 2,
+          ready: 3,
+          failed: 4,
+        };
+        const currentRank = phaseRank[currentStatus.phase];
+        const nextRank = phaseRank[body.phase];
+        const stalePhase =
+          currentStatus.phase === 'ready'
+            ? body.phase !== 'ready'
+            : currentStatus.phase === 'failed'
+              ? body.phase !== 'failed' &&
+                body.phase !== 'generating_identity' &&
+                body.phase !== 'saving' &&
+                body.phase !== 'ready'
+              : body.phase !== 'failed' && nextRank < currentRank;
+        if (stalePhase) {
+          throw new VariationListingIntakeConflictError(
+            'variation_listing_intake_status_stale',
+            'Variation intake status is older than the current processing phase.'
+          );
+        }
+      }
+      const status = setVariationListingIntakeProcessingStatus({
+        captureSourceKey: body.captureSourceKey,
+        targetGroupId: body.targetGroupId,
+        pairId: body.pairId,
+        phase: body.phase,
+        completionKind: body.completionKind,
+        message: body.message ?? null,
+      });
+      res.json({ status });
+    });
+  });
 
   router.post('/intake-identity', async (req: Request, res: Response) => {
     const body = parseOrSend(res, generateVariationListingIntakeIdentityRequestSchema, req.body);

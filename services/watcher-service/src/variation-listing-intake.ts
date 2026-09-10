@@ -523,8 +523,10 @@ export async function storeVariationListingCompletionCandidate(
       : requireUuid(createId(), 'generated variationId');
 
   const readImage = dependencies.readImage ?? readFile;
-  const frontBody = await readImage(route.pendingPair.frontSourceRef);
-  const backBody = await readImage(route.backSourceRef);
+  const [frontBody, backBody] = await Promise.all([
+    readImage(route.pendingPair.frontSourceRef),
+    readImage(route.backSourceRef),
+  ]);
   const frontR2Key = buildVariationListingR2ImageObjectKey({
     body: frontBody,
     copyId,
@@ -543,24 +545,26 @@ export async function storeVariationListingCompletionCandidate(
   });
   const uploadStoredImage = dependencies.uploadStoredImage ?? defaultUploadStoredImage;
 
-  const frontUpload = await uploadStoredImage({
-    body: frontBody,
-    contentType: getContentType(route.pendingPair.frontSourceRef),
-    objectKey: frontR2Key,
-    sourcePath: route.pendingPair.frontSourceRef,
-    targetGroupId: route.pendingPair.targetGroupId,
-  });
+  const [frontUpload, backUpload] = await Promise.all([
+    uploadStoredImage({
+      body: frontBody,
+      contentType: getContentType(route.pendingPair.frontSourceRef),
+      objectKey: frontR2Key,
+      sourcePath: route.pendingPair.frontSourceRef,
+      targetGroupId: route.pendingPair.targetGroupId,
+    }),
+    uploadStoredImage({
+      body: backBody,
+      contentType: getContentType(route.backSourceRef),
+      objectKey: backR2Key,
+      sourcePath: route.backSourceRef,
+      targetGroupId: route.pendingPair.targetGroupId,
+    }),
+  ]);
   if (frontUpload.objectKey !== frontR2Key) {
     return fail('front R2 upload returned a different object key than requested.');
   }
 
-  const backUpload = await uploadStoredImage({
-    body: backBody,
-    contentType: getContentType(route.backSourceRef),
-    objectKey: backR2Key,
-    sourcePath: route.backSourceRef,
-    targetGroupId: route.pendingPair.targetGroupId,
-  });
   if (backUpload.objectKey !== backR2Key) {
     return fail('back R2 upload returned a different object key than requested.');
   }

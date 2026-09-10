@@ -446,7 +446,56 @@ describe('variation listing image ownership and storage', () => {
       )
     ).rejects.toThrow('R2 unavailable');
 
-    expect(uploadStoredImage).toHaveBeenCalledTimes(1);
+    // Both uploads are launched together; Promise.all still rejects on the
+    // first failure, but the sibling request has already started.
+    expect(uploadStoredImage).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts front/back reads and uploads concurrently with deterministic ordering', async () => {
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    let activeUploads = 0;
+    let maxActiveUploads = 0;
+    const readImage = vi.fn(async (sourcePath: string) => {
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await Promise.resolve();
+      activeReads -= 1;
+      return Buffer.from(sourcePath.includes('front') ? 'front-bytes' : 'back-bytes');
+    });
+    const uploadStoredImage = vi.fn(async (input: { objectKey: string }) => {
+      activeUploads += 1;
+      maxActiveUploads = Math.max(maxActiveUploads, activeUploads);
+      await Promise.resolve();
+      activeUploads -= 1;
+      return { objectKey: input.objectKey, publicUrl: `https://images.example/${input.objectKey}` };
+    });
+
+    await storeVariationListingCompletionCandidate(
+      completionCandidate('new_variation'),
+      {
+        completionKind: 'new_variation',
+        conditionToken: 'EXCELLENT',
+        selectorValue: 'Card',
+        variationMetadata: {} as Json,
+      },
+      {
+        createId: vi.fn().mockReturnValueOnce(COPY_ID).mockReturnValueOnce(NEW_VARIATION_ID),
+        readImage,
+        uploadStoredImage,
+      }
+    );
+
+    expect(maxActiveReads).toBe(2);
+    expect(maxActiveUploads).toBe(2);
+    expect(readImage.mock.calls.map(([sourcePath]) => sourcePath)).toEqual([
+      '/incoming/front.JPG',
+      '/incoming/back.png',
+    ]);
+    expect(uploadStoredImage.mock.calls.map(([input]) => input.sourcePath)).toEqual([
+      '/incoming/front.JPG',
+      '/incoming/back.png',
+    ]);
   });
 });
 
@@ -481,6 +530,7 @@ describe('variation listing runtime retry ownership', () => {
       .fn()
       .mockRejectedValueOnce(new Error('completion response lost'))
       .mockResolvedValueOnce({ status: 'already_completed' });
+    const reportIntakeStatus = vi.fn(async () => undefined);
     const processor = createVariationListingRuntimeProcessor(
       { captureSourceKey: 'camera-1', env: {} },
       {
@@ -489,6 +539,7 @@ describe('variation listing runtime retry ownership', () => {
         requestIdentityHandoff,
         storeCompletionCandidate,
         persistCompletion,
+        reportIntakeStatus,
       }
     );
 
@@ -506,6 +557,84 @@ describe('variation listing runtime retry ownership', () => {
     expect(routeEvent).toHaveBeenCalledTimes(1);
     expect(storeCompletionCandidate).toHaveBeenCalledTimes(1);
     expect(persistCompletion).toHaveBeenCalledTimes(2);
+    expect(reportIntakeStatus.mock.calls.map(([status]) => status.phase)).toEqual([
+      'generating_identity',
+      'saving',
+      'failed',
+      'saving',
+      'ready',
+    ]);
+  });
+
+  it('treats intake status reporting failures as best-effort telemetry', async () => {
+    const reportIntakeStatus = vi.fn(async () => {
+      throw new Error('Sidecar unavailable');
+    });
+    const processor = createVariationListingRuntimeProcessor(
+      { captureSourceKey: 'camera-1', env: {} },
+      {
+        routeEvent: vi.fn(async () => completionCandidate('duplicate_copy')),
+        getGroupConditionToken: vi.fn(async () => 'EXCELLENT'),
+        storeCompletionCandidate: vi.fn(async () => ({
+          backR2Key: 'back', backSourceRef: '/incoming/back.png', capturePairId: PAIR_ID,
+          captureSourceKey: 'camera-1', captureStartedAt: '2026-09-01T05:00:00.000Z',
+          completionKind: 'duplicate_copy' as const, conditionToken: 'EXCELLENT' as const,
+          copyId: COPY_ID, expectedDesiredRevision: 7, frontR2Key: 'front',
+          frontSourceRef: '/incoming/front.JPG', frozenPriceAmount: 1.49 as const,
+          frozenPriceCurrency: 'USD' as const, targetGroupId: GROUP_ID,
+          variationId: VARIATION_ID,
+        })),
+        persistCompletion: vi.fn(async () => ({ status: 'completed' as const })),
+        reportIntakeStatus,
+      }
+    );
+
+    await expect(processor.process('/incoming/back.png')).resolves.toMatchObject({
+      kind: 'completed',
+      status: 'completed',
+    });
+    expect(reportIntakeStatus).toHaveBeenCalled();
+  });
+
+  it('clamps runtime timing telemetry when the wall clock moves backwards', async () => {
+    const clock = [1_000, 900, 800, 700, 600, 500, 400];
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.shift() ?? 0);
+    const command = {
+      backR2Key: 'back', backSourceRef: '/incoming/back.png', capturePairId: PAIR_ID,
+      captureSourceKey: 'camera-1', captureStartedAt: '2026-09-01T05:00:00.000Z',
+      completionKind: 'new_variation' as const, conditionToken: 'EXCELLENT' as const,
+      copyId: COPY_ID, expectedDesiredRevision: 7, frontR2Key: 'front',
+      frontSourceRef: '/incoming/front.JPG', frozenPriceAmount: 1.49 as const,
+      frozenPriceCurrency: 'USD' as const, selectorValue: 'Card', targetGroupId: GROUP_ID,
+      variationId: NEW_VARIATION_ID, variationMetadata: {} as Json,
+    };
+    const processor = createVariationListingRuntimeProcessor(
+      { captureSourceKey: 'camera-1', env: {} },
+      {
+        routeEvent: vi.fn(async () => completionCandidate('new_variation')),
+        getGroupConditionToken: vi.fn(async () => 'EXCELLENT'),
+        requestIdentityHandoff: vi.fn(async () => ({
+          selectorValue: 'Card', variationMetadata: {} as Json,
+          timings: { imageReadEncodeMs: 2, generationMs: 3, totalMs: 5 },
+        })),
+        storeCompletionCandidate: vi.fn(async () => command),
+        persistCompletion: vi.fn(async () => ({ status: 'completed' as const })),
+        reportIntakeStatus: vi.fn(async () => undefined),
+      }
+    );
+
+    const result = await processor.process('/incoming/back.png');
+    expect(result).toMatchObject({
+      kind: 'completed',
+      timings: {
+        identityMs: 0,
+        identityReadEncodeMs: 2,
+        identityGenerationMs: 3,
+        storageMs: 0,
+        persistenceMs: 0,
+        totalMs: 0,
+      },
+    });
   });
 });
 

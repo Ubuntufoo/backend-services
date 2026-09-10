@@ -22,6 +22,14 @@ const manualPriceAmountSchema = z.union([
 ]);
 
 const variationListingIntakeModeSchema = z.enum(['idle', 'new_variation', 'duplicate_copy']);
+const variationListingIntakeProcessingPhaseSchema = z.enum([
+  'waiting_for_back',
+  'generating_identity',
+  'saving',
+  'ready',
+  'failed',
+]);
+
 
 export const configureVariationListingIntakeRequestSchema = z
   .object({
@@ -100,6 +108,17 @@ const exactSourceRefSchema = z
   .string()
   .min(1)
   .refine((value) => value === value.trim(), 'source reference must be outer-trimmed');
+
+export const updateVariationListingIntakeStatusRequestSchema = z
+  .object({
+    captureSourceKey: trimmed('captureSourceKey'),
+    targetGroupId: z.string().uuid(),
+    pairId: z.string().uuid(),
+    phase: variationListingIntakeProcessingPhaseSchema,
+    completionKind: z.enum(['new_variation', 'duplicate_copy']),
+    message: z.string().trim().min(1).max(500).nullable().default(null),
+  })
+  .strict();
 
 export const generateVariationListingIntakeIdentityRequestSchema = z
   .object({

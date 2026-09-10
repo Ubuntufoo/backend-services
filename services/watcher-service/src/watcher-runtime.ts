@@ -115,22 +115,77 @@ function toSerializableFields(fields?: Record<string, unknown>): Record<string, 
   );
 }
 
+function formatWatcherConsoleEvent(
+  level: 'info' | 'error',
+  event: string,
+  fields: Record<string, unknown> = {}
+): string {
+  const prefix = level === 'error' ? '[WATCHER ERROR]' : '[WATCHER]';
+  const value = (key: string): string | null => {
+    let raw = fields[key];
+    if (raw === undefined || raw === null) {
+      const timings = fields.timings;
+      if (typeof timings === 'object' && timings !== null && !Array.isArray(timings)) {
+        raw = (timings as Record<string, unknown>)[key];
+      }
+    }
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      const record = raw as Record<string, unknown>;
+      if (typeof record.message === 'string') {
+        const stack = typeof record.stack === 'string' ? record.stack : null;
+        return stack ? `${record.message}\n${stack}` : record.message;
+      }
+      try {
+        return JSON.stringify(raw);
+      } catch {
+        return '[unserializable object]';
+      }
+    }
+    return String(raw);
+  };
+  const details = (...keys: string[]): string =>
+    keys
+      .map((key) => {
+        const rendered = value(key);
+        return rendered === null ? null : `  ${key}: ${rendered}${key.endsWith('Ms') ? ' ms' : ''}`;
+      })
+      .filter((entry): entry is string => entry !== null)
+      .join('\n');
+
+  switch (event) {
+    case 'file_detected':
+      return `${prefix} File detected\n${details('path', 'pendingQueueSize')}`;
+    case 'variation_started':
+      return `${prefix} Variation front captured\n${details('groupId', 'pairId')}`;
+    case 'variation_completed':
+      return `${prefix} Variation batch completed\n${details('groupId', 'variationId', 'copyId', 'completionKind', 'status', 'identityReadEncodeMs', 'identityGenerationMs', 'identityMs', 'storageMs', 'persistenceMs', 'totalMs')}`;
+    case 'watcher_group_completed':
+      return `${prefix} Standard batch completed\n${details('listingId', 'captureMode', 'imageCount')}`;
+    case 'batch_processed':
+      return `${prefix} Queue batch processed\n${details('fileCount', 'legacyFileCount', 'variationProcessedCount', 'processedListingCount', 'pendingQueueSize', 'pendingGroupSize')}`;
+    case 'variation_retry_scheduled':
+      return `${prefix} Variation retry scheduled\n${details('sourcePath', 'attemptsUsed', 'maxAttempts', 'delayMs')}`;
+    case 'batch_failed':
+      return `${prefix} Batch failed\n${details('error', 'fileCount', 'retainedRetryInputCount', 'pendingQueueSize', 'pendingGroupSize', 'stack')}`;
+    default: {
+      const rendered = details(...Object.keys(fields));
+      return rendered ? `${prefix} ${event}\n${rendered}` : `${prefix} ${event}`;
+    }
+  }
+}
+
 function createDefaultWatcherRuntimeLogger(): WatcherRuntimeLogger {
   function writeLog(level: 'info' | 'error', event: string, fields?: Record<string, unknown>): void {
-    const payload = {
-      level,
-      service: 'watcher-service',
-      event,
-      ...toSerializableFields(fields),
-    };
-    const serialized = JSON.stringify(payload);
+    const serializableFields = toSerializableFields(fields);
+    const rendered = formatWatcherConsoleEvent(level, event, serializableFields);
 
     if (level === 'error') {
-      console.error(serialized);
+      console.error(rendered);
       return;
     }
 
-    console.info(serialized);
+    console.info(rendered);
   }
 
   return {
