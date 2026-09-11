@@ -2,6 +2,7 @@ import winston from 'winston';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
  * Log directory for eBay MCP Server
@@ -155,6 +156,12 @@ export const toolLogger = createLogger('Tool');
 /** Logger for setup wizard output. */
 export const setupLogger = createLogger('Setup');
 
+const expectedApiNotFoundContext = new AsyncLocalStorage<boolean>();
+
+export async function withExpectedApiNotFound<T>(operation: () => Promise<T>): Promise<T> {
+  return await expectedApiNotFoundContext.run(true, operation);
+}
+
 /**
  * Log HTTP request details
  */
@@ -202,6 +209,7 @@ export function logErrorResponse(
   url: string,
   errorData?: unknown
 ): void {
+  if (status === 404 && expectedApiNotFoundContext.getStore() === true) return;
   apiLogger.error(`Error Response: ${status ?? 'N/A'} ${statusText ?? 'No response'}`, {
     url,
     error: errorData ? truncateData(errorData) : undefined,

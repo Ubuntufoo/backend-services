@@ -12,6 +12,7 @@ import {
 
 import { EbaySellerApi } from '@/api/index.js';
 import { getEbayConfig } from '@/config/environment.js';
+import { withExpectedApiNotFound } from '@/utils/logger.js';
 import {
   buildVariationListingInventoryPayloadBundle,
   buildVariationListingHistoricalInventoryPayloadBundle,
@@ -246,8 +247,14 @@ function eBayIssues(error: unknown): VariationListingUiIssue[] {
   });
 }
 
-function remoteRead<T>(operation: () => Promise<T>): Promise<VariationListingRemoteRead<T>> {
-  return operation()
+function remoteRead<T>(
+  operation: () => Promise<T>,
+  options?: { expectedNotFound?: boolean }
+): Promise<VariationListingRemoteRead<T>> {
+  const execute = options?.expectedNotFound === true
+    ? () => withExpectedApiNotFound(operation)
+    : operation;
+  return execute()
     .then((value) => ({ state: 'present', value }) as const)
     .catch((error) => statusCode(error) === 404
       ? ({ state: 'proven_absent' } as const)
@@ -354,10 +361,19 @@ async function createProductionRemote() {
     await api.initialize();
     const headers = { headers: { 'Content-Language': 'en-US' } };
     const remote: VariationListingPublicationRemoteGateway = {
-      getInventoryItem: async (sku) => await remoteRead(async () => normalizeItem(await api.inventory.getInventoryItem(sku), sku)),
-      getInventoryItemGroup: async (groupKey) => await remoteRead(async () => normalizeGroup(await api.inventory.getInventoryItemGroup(groupKey), groupKey)),
-      getOffers: async (sku, marketplaceId) => {
-        const read = await remoteRead(async () => normalizeOffers(await api.inventory.getOffers(sku, marketplaceId)));
+      getInventoryItem: async (sku, options) => await remoteRead(
+        async () => normalizeItem(await api.inventory.getInventoryItem(sku), sku),
+        options
+      ),
+      getInventoryItemGroup: async (groupKey, options) => await remoteRead(
+        async () => normalizeGroup(await api.inventory.getInventoryItemGroup(groupKey), groupKey),
+        options
+      ),
+      getOffers: async (sku, marketplaceId, options) => {
+        const read = await remoteRead(
+          async () => normalizeOffers(await api.inventory.getOffers(sku, marketplaceId)),
+          options
+        );
         return read.state === 'proven_absent' ? { state: 'present', value: [] } : read;
       },
       getMedia: async (location) => await remoteRead(async () => await api.media.getImage(location)),

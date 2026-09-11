@@ -7,7 +7,7 @@ import type {
   VariationListingVariationRow,
   VariationListingCopyRow,
 } from '@ebay-inventory/data';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildVariationListingHistoricalInventoryPayloadBundle,
@@ -319,12 +319,19 @@ describe('executeVariationListingPublication', () => {
 
   it('halts an unknown item outcome at proven absence instead of blindly replaying it', async () => {
     const h = testHarness();
+    const firstChild = h.bundle.children[0]!;
+    const getInventoryItem = vi.spyOn(h.remote, 'getInventoryItem');
     h.setFailItem(true);
     await expect(h.execute()).rejects.toThrow('transport lost');
+    expect(getInventoryItem).toHaveBeenCalledTimes(1);
+    expect(getInventoryItem).toHaveBeenCalledWith(firstChild.sku, { expectedNotFound: true });
     const calls = h.mutations();
     h.setFailItem(false);
     await expect(h.execute()).rejects.toThrow('new revision is required');
     expect(h.mutations()).toBe(calls);
+    expect(getInventoryItem).toHaveBeenCalledTimes(3);
+    expect(getInventoryItem).toHaveBeenNthCalledWith(2, firstChild.sku, { expectedNotFound: false });
+    expect(getInventoryItem).toHaveBeenNthCalledWith(3, firstChild.sku);
   });
 
   it('rejects foreign, duplicate, and split-listing remote states while group membership remains set-based', async () => {

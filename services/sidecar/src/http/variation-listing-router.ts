@@ -561,12 +561,43 @@ function summarizeJournal(
   };
 }
 
+function confirmedListingId(checkpoints: readonly VariationListingPublishingCheckpoint[]): string | null {
+  const checkpoint = [...checkpoints]
+    .filter((candidate) =>
+      candidate.operationKey === 'revision-reconcile' &&
+      candidate.state === 'confirmed_complete'
+    )
+    .sort((left, right) =>
+      left.attemptNumber - right.attemptNumber || left.checkpointNumber - right.checkpointNumber
+    )
+    .at(-1);
+  const listingId = checkpoint?.evidence?.listingId;
+  return typeof listingId === 'string' && listingId.trim() ? listingId.trim() : null;
+}
+
+function configuredListingUrl(listingId: string | null): string | null {
+  if (listingId === null) return null;
+  const baseUrl = process.env.EBAY_ENVIRONMENT === 'production'
+    ? 'https://www.ebay.com'
+    : 'https://www.sandbox.ebay.com';
+  return `${baseUrl}/itm/${encodeURIComponent(listingId)}`;
+}
+
 async function serializeAggregate(dataAccess: VariationListingApiDataAccess, aggregate: VariationListingAggregateSnapshot) {
   const revisions = await dataAccess.listRevisionsByGroupId(aggregate.group.group_id);
   const latestRevision = revisions[0] ?? null;
   const checkpoints = latestRevision
     ? await dataAccess.listCheckpointsByRevisionId(latestRevision.revisionId)
     : [];
+  const confirmedRevision = aggregate.group.last_confirmed_revision === null
+    ? null
+    : revisions.find((revision) => revision.capturedDesiredRevision === aggregate.group.last_confirmed_revision) ?? null;
+  const confirmedCheckpoints = confirmedRevision === null
+    ? []
+    : confirmedRevision.revisionId === latestRevision?.revisionId
+      ? checkpoints
+      : await dataAccess.listCheckpointsByRevisionId(confirmedRevision.revisionId);
+  const listingId = confirmedListingId(confirmedCheckpoints);
   const variations = [...aggregate.variations]
     .sort((left, right) => left.position - right.position)
     .map((variation) => serializeVariation(variation, aggregate.copies));
@@ -590,6 +621,8 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
     conditionToken: aggregate.group.condition_token,
     conditionDescription: aggregate.group.condition_description,
     conditionDescriptors: aggregate.group.condition_descriptors,
+    listingId,
+    listingUrl: configuredListingUrl(listingId),
     selectorName: aggregate.group.selector_name,
     skuNamespace: {
       categoryCode: aggregate.group.sku_category_code,

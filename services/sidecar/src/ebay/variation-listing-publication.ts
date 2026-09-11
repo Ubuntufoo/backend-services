@@ -55,10 +55,24 @@ export interface VariationListingRemoteMedia {
   location: string;
 }
 
+export interface VariationListingRemoteReadOptions {
+  expectedNotFound?: boolean;
+}
+
 export interface VariationListingPublicationReadGateway {
-  getInventoryItem(sku: string): Promise<VariationListingRemoteRead<VariationListingRemoteInventoryItem>>;
-  getInventoryItemGroup(groupKey: string): Promise<VariationListingRemoteRead<VariationListingRemoteGroup>>;
-  getOffers(sku: string, marketplaceId: string): Promise<VariationListingRemoteRead<VariationListingRemoteOffer[]>>;
+  getInventoryItem(
+    sku: string,
+    options?: VariationListingRemoteReadOptions
+  ): Promise<VariationListingRemoteRead<VariationListingRemoteInventoryItem>>;
+  getInventoryItemGroup(
+    groupKey: string,
+    options?: VariationListingRemoteReadOptions
+  ): Promise<VariationListingRemoteRead<VariationListingRemoteGroup>>;
+  getOffers(
+    sku: string,
+    marketplaceId: string,
+    options?: VariationListingRemoteReadOptions
+  ): Promise<VariationListingRemoteRead<VariationListingRemoteOffer[]>>;
 }
 
 export interface VariationListingFrozenPublicationSnapshot {
@@ -649,17 +663,19 @@ async function finishExistingUnknown(
   input: VariationListingPublicationExecutionInput,
   history: OperationHistory,
   operationKey: string,
-  after: () => Promise<Json | null>,
+  after: (expectedNotFound: boolean) => Promise<Json | null>,
   pre: () => Promise<Json | null>
 ): Promise<void> {
   const current = latest(history.get(operationKey)!);
   if (!current) return;
   if (isTerminal(current)) {
-    const evidence = await after();
+    const evidence = await after(false);
     if (evidence === null) throw new Error(`Variation listing operation ${operationKey} terminal state no longer reconciles exactly.`);
     return;
   }
-  const afterEvidence = await after();
+  // A started or unknown checkpoint is a recovery reconciliation, not the
+  // initial absence probe. Keep that read independently observable.
+  const afterEvidence = await after(false);
   if (afterEvidence !== null) {
     await appendCheckpoint(input, history, operationKey, {
       attemptNumber: current.state === 'started' ? current.attempt_number : current.attempt_number + 1,
@@ -707,9 +723,10 @@ async function executeMutationOperation(
   input: VariationListingPublicationExecutionInput,
   history: OperationHistory,
   operationKey: string,
-  after: () => Promise<Json | null>,
+  after: (expectedNotFound: boolean) => Promise<Json | null>,
   pre: () => Promise<Json | null>,
-  mutate: () => Promise<void>
+  mutate: () => Promise<void>,
+  freshAbsentEvidence?: Json
 ): Promise<void> {
   const operation = planOperation(input.frozen, operationKey);
   const checkpoints = history.get(operationKey)!;
@@ -718,7 +735,7 @@ async function executeMutationOperation(
     await finishExistingUnknown(input, history, operationKey, after, pre);
     return;
   }
-  const before = await after();
+  const before = await after(freshAbsentEvidence !== undefined);
   if (before !== null) {
     await appendCheckpoint(input, history, operationKey, {
       attemptNumber: 1,
@@ -735,7 +752,10 @@ async function executeMutationOperation(
     });
     return;
   }
-  const preEvidence = await pre();
+  // For fresh creates, a null exact-after probe already proves the resource is
+  // absent. Reuse that evidence instead of issuing an identical second GET.
+  // Recovery paths still call pre() independently.
+  const preEvidence = freshAbsentEvidence ?? await pre();
   if (preEvidence === null) {
     throw new Error(`Variation listing operation ${operation.operation_key} pre-state is neither exact intent nor proven absent.`);
   }
@@ -757,7 +777,7 @@ async function executeMutationOperation(
     });
     throw error;
   }
-  const afterEvidence = await after();
+  const afterEvidence = await after(false);
   if (afterEvidence === null) {
     await appendCheckpoint(input, history, operationKey, {
       attemptNumber: 1,
@@ -964,13 +984,18 @@ export async function executeVariationListingPublication(
       input,
       history,
       `child-item:${child.variationId}`,
-      async () => exactItemEvidence(await input.remote.getInventoryItem(child.sku), child, bundle.groupKey),
+      async (expectedNotFound) => exactItemEvidence(
+        await input.remote.getInventoryItem(child.sku, { expectedNotFound }),
+        child,
+        bundle.groupKey
+      ),
       async () => {
         const read = await input.remote.getInventoryItem(child.sku);
         if (read.state === 'unknown') throw new Error(`Variation listing child item ${child.sku} pre-state is unknown: ${read.reason}`);
         return read.state === 'proven_absent' ? { sku: child.sku } : null;
       },
-      () => input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem))
+      () => input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem)),
+      { sku: child.sku }
     );
   }
   for (const child of bundle.children) {
@@ -979,9 +1004,9 @@ export async function executeVariationListingPublication(
       input,
       history,
       `child-offer:${child.variationId}`,
-      async () => {
+      async (expectedNotFound) => {
         const evidence = exactOfferEvidence(
-          await input.remote.getOffers(child.sku, child.offer.marketplaceId),
+          await input.remote.getOffers(child.sku, child.offer.marketplaceId, { expectedNotFound }),
           child,
           isTerminal(latest(history.get('group-publish')!))
             ? 'UNPUBLISHED_OR_PUBLISHED'
@@ -1003,7 +1028,8 @@ export async function executeVariationListingPublication(
       },
       async () => {
         returnedOfferId = (await input.mutations.createOffer(asJson(child.offer))).offerId;
-      }
+      },
+      { sku: child.sku }
     );
   }
 
@@ -1012,8 +1038,8 @@ export async function executeVariationListingPublication(
     input,
     history,
     'complete-group',
-    async () => {
-      const read = await input.remote.getInventoryItemGroup(bundle.groupKey);
+    async (expectedNotFound) => {
+      const read = await input.remote.getInventoryItemGroup(bundle.groupKey, { expectedNotFound });
       if (read.state === 'unknown') throw new Error(`Variation listing group ${bundle.groupKey} read is unknown: ${read.reason}`);
       if (read.state === 'proven_absent') return null;
       requireExactGroupMembership(read.value.variantSKUs, bundle.children.map((child) => child.sku));
@@ -1029,7 +1055,8 @@ export async function executeVariationListingPublication(
       if (read.state === 'unknown') throw new Error(`Variation listing group ${bundle.groupKey} pre-state is unknown: ${read.reason}`);
       return read.state === 'proven_absent' ? { groupKey: bundle.groupKey } : null;
     },
-    () => input.mutations.createOrReplaceInventoryItemGroup(bundle.groupKey, asJson(bundle.group))
+    () => input.mutations.createOrReplaceInventoryItemGroup(bundle.groupKey, asJson(bundle.group)),
+    { groupKey: bundle.groupKey }
   );
 
   await executeMutationOperation(
