@@ -14,6 +14,7 @@ import type {
 import {
   buildVariationListingHistoricalInventoryPayloadBundle,
   buildVariationListingInventoryPayloadBundle,
+  deriveVariationListingRawCardConditionDescriptors,
   variationListingEpsImageUrlSchema,
   type VariationListingInventoryPayloadBundle,
   type VariationListingRepresentativeImage,
@@ -160,6 +161,10 @@ export function buildVariationListingFrozenPublicationRevision(input: {
   revisionId: string;
 }): VariationListingFrozenPublicationRevision {
   const aggregate = structuredClone(input.aggregate);
+  aggregate.group.condition_descriptors = deriveVariationListingRawCardConditionDescriptors(
+    aggregate.group.category_id,
+    aggregate.group.condition_token
+  );
   if (aggregate.group.lifecycle_state !== 'publish-ready') {
     throw new Error('Variation listing initial publication requires lifecycle_state publish-ready.');
   }

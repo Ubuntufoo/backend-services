@@ -11,7 +11,9 @@ import type {
 } from '@ebay-inventory/data';
 
 import {
+  buildVariationListingHistoricalInventoryPayloadBundle,
   buildVariationListingInventoryPayloadBundle,
+  deriveVariationListingRawCardConditionDescriptors,
   variationListingEpsImageUrlSchema,
   type VariationListingInventoryPayloadBundle,
   type VariationListingRepresentativeImage,
@@ -680,6 +682,10 @@ export async function prepareVariationListingFrozenActiveRevision(
   input: PrepareVariationListingActiveRevisionInput
 ): Promise<VariationListingFrozenActiveRevision> {
   const current = structuredClone(input.currentAggregate);
+  current.group.condition_descriptors = deriveVariationListingRawCardConditionDescriptors(
+    current.group.category_id,
+    current.group.condition_token
+  );
   if (current.group.lifecycle_state !== 'active') {
     throw new Error('Variation listing active revision requires lifecycle_state active.');
   }
@@ -718,7 +724,7 @@ export async function prepareVariationListingFrozenActiveRevision(
     revision: input.previousRevision,
     checkpoints: input.previousCheckpoints,
   });
-  const localConfirmedBundle = buildVariationListingInventoryPayloadBundle({
+  const localConfirmedBundle = buildVariationListingHistoricalInventoryPayloadBundle({
     aggregate: previousAggregate,
     representativeImages: previousImages,
   });

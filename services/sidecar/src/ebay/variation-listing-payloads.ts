@@ -3,6 +3,10 @@ import type { Json, VariationListingAggregateSnapshot } from '@ebay-inventory/da
 import { z } from 'zod';
 
 import { mapListingConditionIdToInventoryCondition } from '@/ebay/publish-mappers.js';
+import {
+  getRawCardConditionDescriptorValueId,
+  type RawCardConditionToken,
+} from '@/listings/trading-card-conditions.js';
 
 const CATEGORY_ID = '261328' as const;
 const MARKETPLACE_ID = 'EBAY_US' as const;
@@ -18,7 +22,7 @@ const CONDITION_RANK: Record<string, number> = {
   EXCELLENT: 2,
   NEAR_MINT_OR_BETTER: 3,
 };
-const isConditionToken = (value: string): value is keyof typeof CONDITION_RANK =>
+const isConditionToken = (value: string): value is RawCardConditionToken =>
   Object.prototype.hasOwnProperty.call(CONDITION_RANK, value);
 
 const trimmedText = (max?: number) => {
@@ -210,6 +214,22 @@ function parseConditionDescriptors(value: Json): Array<{ name: string; values: s
   return parsed;
 }
 
+export function deriveVariationListingRawCardConditionDescriptors(
+  categoryId: string,
+  conditionToken: string
+): Array<{ name: string; values: string[] }> {
+  if (!isConditionToken(conditionToken)) {
+    throw new Error(`Unsupported variation listing group condition ${conditionToken}.`);
+  }
+  const valueId = getRawCardConditionDescriptorValueId(categoryId, conditionToken);
+  if (!valueId) {
+    throw new Error(
+      `Variation listing category ${categoryId} has no raw-card condition descriptor mapping for ${conditionToken}.`
+    );
+  }
+  return [{ name: '40001', values: [valueId] }];
+}
+
 function normalizeCommonAspects(value: Json): Record<string, string[]> {
   const parsed = commonAspectsInputSchema.parse(jsonObject(value, 'derived_common_ebay_aspects'));
   return Object.fromEntries(
@@ -226,6 +246,7 @@ function validateAggregateIdentity(aggregate: VariationListingAggregateSnapshot)
   if (group.listing_format !== LISTING_FORMAT) throw new Error('Variation listing listing_format must be FIXED_PRICE.');
   if (!group.title || group.title !== group.title.trim() || group.title.length > 80) throw new Error('Variation listing group title must be present, outer-trimmed, and at most 80 characters.');
   if (!group.description || group.description !== group.description.trim() || group.description.length > 4000) throw new Error('Variation listing group description must be present, outer-trimmed, and at most 4000 characters.');
+  if (group.condition_description !== null && group.condition_description.length > 1000) throw new Error('Variation listing condition description must be at most 1000 characters.');
   if (variations.length < 2) throw new Error('Variation listing payload builder requires at least two variations.');
 
   const ordered = [...variations].sort((left, right) => left.position - right.position);
@@ -267,12 +288,18 @@ function validateAggregateIdentity(aggregate: VariationListingAggregateSnapshot)
 function buildVariationListingInventoryPayloadBundleInternal(input: {
   aggregate: VariationListingAggregateSnapshot;
   representativeImages: readonly VariationListingRepresentativeImage[];
-}, historicalOverlongSelector: boolean): VariationListingInventoryPayloadBundle {
+}, historicalOverlongSelector: boolean, historicalConditionDescriptors: boolean): VariationListingInventoryPayloadBundle {
   const aggregate = input.aggregate;
   validateAggregateIdentity(aggregate);
   const group = aggregate.group;
   const orderedVariations = [...aggregate.variations].sort((left, right) => left.position - right.position);
-  const conditionDescriptors = parseConditionDescriptors(group.condition_descriptors);
+  const persistedConditionDescriptors = parseConditionDescriptors(group.condition_descriptors);
+  // New/desired payloads derive from the authoritative shared condition token.
+  // Historical frozen revisions preserve their recorded descriptor array so
+  // reconciliation remains exact across this contract correction.
+  const conditionDescriptors = historicalConditionDescriptors
+    ? persistedConditionDescriptors
+    : deriveVariationListingRawCardConditionDescriptors(group.category_id, group.condition_token);
   const condition = mapListingConditionIdToInventoryCondition(group.condition_id);
   const commonAspects = normalizeCommonAspects(group.derived_common_ebay_aspects);
 
@@ -372,7 +399,7 @@ export function buildVariationListingInventoryPayloadBundle(input: {
   aggregate: VariationListingAggregateSnapshot;
   representativeImages: readonly VariationListingRepresentativeImage[];
 }): VariationListingInventoryPayloadBundle {
-  return buildVariationListingInventoryPayloadBundleInternal(input, false);
+  return buildVariationListingInventoryPayloadBundleInternal(input, false, false);
 }
 
 /** Historical-only reconstruction used to prove ownership of a frozen failed
@@ -382,5 +409,5 @@ export function buildVariationListingHistoricalInventoryPayloadBundle(input: {
   aggregate: VariationListingAggregateSnapshot;
   representativeImages: readonly VariationListingRepresentativeImage[];
 }): VariationListingInventoryPayloadBundle {
-  return buildVariationListingInventoryPayloadBundleInternal(input, true);
+  return buildVariationListingInventoryPayloadBundleInternal(input, true, true);
 }

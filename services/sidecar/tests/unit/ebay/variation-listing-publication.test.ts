@@ -231,6 +231,15 @@ function testHarness(withMedia = false, historicalOverlong = false) {
 }
 
 describe('executeVariationListingPublication', () => {
+  it('freezes the derived Card Condition descriptor into new publication snapshots', () => {
+    const plan = frozen();
+    expect(plan.snapshot.aggregate.group.condition_descriptors).toEqual([
+      { name: '40001', values: ['400012'] },
+    ]);
+    expect((plan.captureInput.snapshot as { aggregate: VariationListingAggregateSnapshot }).aggregate.group.condition_descriptors).toEqual([
+      { name: '40001', values: ['400012'] },
+    ]);
+  });
   it('resumes a historical overlong frozen revision after terminal Media with no child checkpoint', async () => {
     const h = testHarness(true, true);
     await expect(h.execute()).resolves.toEqual({ revisionId: 'revision-1', confirmedRevision: 1, listingId: 'listing-1' });

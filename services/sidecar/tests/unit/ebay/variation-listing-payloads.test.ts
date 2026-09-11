@@ -20,7 +20,9 @@ function group(overrides: Partial<VariationListingGroupRow> = {}): VariationList
   return {
     category_id: '261328',
     condition_description: null,
-    condition_descriptors: [{ name: '40001', values: ['400012'] }],
+    // Real bucket creation currently leaves this legacy field empty; the
+    // outbound eBay descriptor is derived from condition_token.
+    condition_descriptors: [],
     condition_id: '4000',
     condition_token: 'VERY_GOOD',
     created_at: '2026-09-01T00:00:00Z',
@@ -163,6 +165,15 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
     const result = buildVariationListingInventoryPayloadBundle(input);
 
     expect(result.group.aspects).toEqual({ Sport: ['Basketball'], Manufacturer: ['Topps'] });
+  });
+
+  it('derives Card Condition for new payloads while historical reconstruction preserves frozen descriptors', () => {
+    const input = fixture();
+
+    expect(buildVariationListingInventoryPayloadBundle(input).children[0]?.inventoryItem.conditionDescriptors).toEqual([
+      { name: '40001', values: ['400012'] },
+    ]);
+    expect(buildVariationListingHistoricalInventoryPayloadBundle(input).children[0]?.inventoryItem.conditionDescriptors).toEqual([]);
   });
 
   it.each([

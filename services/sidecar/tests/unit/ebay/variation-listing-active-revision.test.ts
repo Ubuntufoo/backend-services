@@ -10,7 +10,10 @@ import type {
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { buildVariationListingInventoryPayloadBundle } from '@/ebay/variation-listing-payloads.js';
+import {
+  buildVariationListingHistoricalInventoryPayloadBundle,
+  buildVariationListingInventoryPayloadBundle,
+} from '@/ebay/variation-listing-payloads.js';
 import {
   executeVariationListingActiveRevision,
   prepareVariationListingFrozenActiveRevision,
@@ -25,7 +28,7 @@ const timestamp = '2026-09-01T00:00:00Z';
 
 function group(overrides: Partial<VariationListingGroupRow> = {}): VariationListingGroupRow {
   return {
-    category_id: '261328', condition_description: null, condition_descriptors: [], condition_id: '4000', condition_token: 'VERY_GOOD', created_at: timestamp, derived_common_ebay_aspects: { Sport: ['Baseball'] }, description: 'Cards', desired_revision: 2, fulfillment_policy_id: 'fulfillment', group_id: 'group-1', group_key: 'GROUP-1', last_confirmed_revision: 1, lifecycle_state: 'active', listing_format: 'FIXED_PRICE', marketplace_id: 'EBAY_US', merchant_location_key: 'warehouse', next_inventory_serial: 3, payment_policy_id: 'payment', return_policy_id: 'return', selector_name: 'Card', sku_bucket_token: 'bucket', sku_category_code: 'sports', title: 'Cards', updated_at: timestamp, ...overrides,
+    category_id: '261328', condition_description: null, condition_descriptors: [{ name: '40001', values: ['400012'] }], condition_id: '4000', condition_token: 'VERY_GOOD', created_at: timestamp, derived_common_ebay_aspects: { Sport: ['Baseball'] }, description: 'Cards', desired_revision: 2, fulfillment_policy_id: 'fulfillment', group_id: 'group-1', group_key: 'GROUP-1', last_confirmed_revision: 1, lifecycle_state: 'active', listing_format: 'FIXED_PRICE', marketplace_id: 'EBAY_US', merchant_location_key: 'warehouse', next_inventory_serial: 3, payment_policy_id: 'payment', return_policy_id: 'return', selector_name: 'Card', sku_bucket_token: 'bucket', sku_category_code: 'sports', title: 'Cards', updated_at: timestamp, ...overrides,
   };
 }
 function variation(id: string, position: number, representativeCopyId = `copy-${id}`, price = 0.99): VariationListingVariationRow {
@@ -70,10 +73,14 @@ function version1Checkpoints(previous: VariationListingAggregateSnapshot): Varia
 }
 function remoteFor(
   previous: VariationListingAggregateSnapshot,
-  quantityOverrides: Record<string, { inventoryItemQuantity?: number; offerQuantity?: number }> = {}
+  quantityOverrides: Record<string, { inventoryItemQuantity?: number; offerQuantity?: number }> = {},
+  historicalConditionPayload = false
 ) {
   const images = [{ copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') }, { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') }];
-  const bundle = buildVariationListingInventoryPayloadBundle({ aggregate: previous, representativeImages: images });
+  const bundleBuilder = historicalConditionPayload
+    ? buildVariationListingHistoricalInventoryPayloadBundle
+    : buildVariationListingInventoryPayloadBundle;
+  const bundle = bundleBuilder({ aggregate: previous, representativeImages: images });
   const items = new Map(bundle.children.map((child) => {
     const payload = structuredClone(child.inventoryItem) as unknown as Record<string, Json>;
     const quantity = quantityOverrides[child.sku]?.inventoryItemQuantity;
@@ -199,6 +206,43 @@ describe('YP8.2 active revision preparation', () => {
     expect(prepared.snapshot.confirmed.remote.offerIdsBySku).toEqual({ 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' });
     expect(prepared.desiredBundlePreview?.children[0]?.offer.pricingSummary.price.value).toBe('1.49');
     expect(prepared.captureInput.operationPlan.at(-1)?.operationKind).toBe('revision_reconcile');
+  });
+
+  it('reconciles a legacy empty-descriptor listing and stages the corrected Card Condition descriptor', async () => {
+    const previous = aggregate({
+      group: group({
+        condition_descriptors: [],
+        desired_revision: 1,
+        last_confirmed_revision: null,
+        lifecycle_state: 'publish-ready',
+      }),
+    });
+    const current = aggregate({
+      group: group({
+        condition_descriptors: [],
+        desired_revision: 2,
+        last_confirmed_revision: 1,
+        lifecycle_state: 'active',
+      }),
+      variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1)],
+    });
+    const { remote } = remoteFor(previous, {}, true);
+
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote,
+      revisionId: 'revision-2',
+    });
+
+    expect(prepared.confirmedBundle.children[0]?.inventoryItem.conditionDescriptors).toEqual([]);
+    expect(prepared.desiredBundlePreview?.children[0]?.inventoryItem.conditionDescriptors).toEqual([
+      { name: '40001', values: ['400012'] },
+    ]);
+    expect(prepared.snapshot.aggregate.group.condition_descriptors).toEqual([
+      { name: '40001', values: ['400012'] },
+    ]);
   });
 
   it('uses the lower live Inventory Item/Offer quantity and adds exactly one eligible new copy', async () => {
