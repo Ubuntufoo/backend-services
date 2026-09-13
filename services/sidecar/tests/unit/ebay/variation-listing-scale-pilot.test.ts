@@ -72,10 +72,15 @@ describe('variation listing scale pilot', () => {
 
   it('records operation-count expectations from current application revision plans', () => {
     expect(expectedInitialMediaBackedPublicationOperations(10)).toBe(43);
-    expect(expectedDuplicateOnlyActiveRevisionOperations(10)).toBe(22);
+    expect(expectedDuplicateOnlyActiveRevisionOperations(1)).toBe(3);
+    expect(expectedDuplicateOnlyActiveRevisionOperations(3)).toBe(7);
+    expect(buildVariationListingScaleFixture(10).expectedOperationCounts).toEqual({
+      initialMediaBackedPublication: 43,
+      duplicateOnlyActiveRevision: 7,
+    });
     expect(buildVariationListingScaleFixture(20).expectedOperationCounts).toEqual({
       initialMediaBackedPublication: 83,
-      duplicateOnlyActiveRevision: 42,
+      duplicateOnlyActiveRevision: 7,
     });
   });
 

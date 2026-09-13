@@ -20,10 +20,11 @@ Current revision builders make the dominant scaling behavior explicit:
   - `2N` Media ingest operations (front/back per representative copy)
   - `2N` child item/offer writes
   - complete-group + group-publish + revision-reconcile
-- **Duplicate-only active Publish Changes with no new variations or representative-image changes:** `2N + 2` planned operations.
-  - child item/offer operation pair for every current variation
-  - complete-group + revision-reconcile
-- Exact remote reconciliation reads the complete group and each child item/offer. Work is therefore linear in group size.
+- **Duplicate-only active Publish Changes with no new variations or representative-image changes:** `2K + 1` planned operations, where `K` is the number of variations whose remote child payload actually changes.
+  - one Inventory Item + Offer operation pair per changed/replenished variation
+  - revision-reconcile only when group membership/content is unchanged
+  - untouched child resources are not rewritten
+- Exact preflight/final remote reconciliation still reads the complete group and each child item/offer. Read-only verification therefore remains linear in total group size even though mutation work scales with the changed subset.
 - Buyer-view selector/image verification is also operator work proportional to `N`.
 - Existing action progress events can anchor elapsed-time observation; YP9.2 does not add durable telemetry persistence.
 

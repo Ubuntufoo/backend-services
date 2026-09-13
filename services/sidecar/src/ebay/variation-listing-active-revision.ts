@@ -605,12 +605,33 @@ export function reconstructConfirmedRemoteIdentity(
   const expectedVariationIds = new Set(aggregate.variations.map((variation) => variation.variation_id));
   const expectedSkus = new Set(aggregate.variations.map((variation) => variation.sku));
   const childOfferOperations = normalizedOperations.filter((operation) => operation.kind === 'child_offer_write');
-  if (childOfferOperations.length !== expectedVariationIds.size) {
-    throw new Error('Variation listing previous revision child-offer operation coverage is incomplete.');
-  }
   const offerIdsBySku: Record<string, string> = {};
   const listingIds = new Set<string>();
   const terminalOfferIds = new Map<string, string>();
+
+  // Version-2 active revisions inherit the previously confirmed remote IDs in
+  // their immutable snapshot. Sparse active plans therefore only need journal
+  // evidence for offers that actually changed or were newly created.
+  if (revision.snapshot_version === 2) {
+    const root = object(revision.snapshot, 'confirmed active revision snapshot');
+    const confirmed = object(root.confirmed, 'confirmed active revision parent');
+    const remote = object(confirmed.remote, 'confirmed active revision remote identity');
+    const inheritedListingId = activeString(remote.listingId, 'confirmed active revision listingId');
+    const inheritedOfferIds = object(remote.offerIdsBySku, 'confirmed active revision offerIdsBySku');
+    listingIds.add(inheritedListingId);
+    for (const [sku, rawOfferId] of Object.entries(inheritedOfferIds)) {
+      if (!expectedSkus.has(sku)) {
+        throw new Error(`Variation listing previous revision inherited an unknown SKU ${sku}.`);
+      }
+      const offerId = activeString(rawOfferId, `confirmed active revision offerIdsBySku.${sku}`);
+      if (Object.values(offerIdsBySku).includes(offerId)) {
+        throw new Error('Variation listing previous revision inherited offer IDs must be unique.');
+      }
+      offerIdsBySku[sku] = offerId;
+    }
+  } else if (childOfferOperations.length !== expectedVariationIds.size) {
+    throw new Error('Variation listing previous revision child-offer operation coverage is incomplete.');
+  }
   for (const operation of childOfferOperations) {
     const variationId = operation.key.startsWith('child-offer:') ? operation.key.slice('child-offer:'.length) : '';
     if (!expectedVariationIds.has(variationId)) throw new Error(`Variation listing previous revision has an unknown child-offer operation ${operation.key}.`);
@@ -619,7 +640,13 @@ export function reconstructConfirmedRemoteIdentity(
     const sku = activeString(evidence.sku, `previous revision ${operation.key} sku`);
     const variation = aggregate.variations.find((candidate) => candidate.variation_id === variationId)!;
     if (sku !== variation.sku || operation.targetRef !== variation.sku || !expectedSkus.has(sku)) throw new Error(`Variation listing previous revision ${operation.key} SKU coverage is invalid.`);
-    if (offerIdsBySku[sku] || [...terminalOfferIds.values()].includes(offerId)) throw new Error('Variation listing previous revision offer IDs must be unique.');
+    const inheritedOfferId = offerIdsBySku[sku];
+    if (inheritedOfferId && inheritedOfferId !== offerId) {
+      throw new Error(`Variation listing previous revision ${operation.key} changed an existing offer identity.`);
+    }
+    if (!inheritedOfferId && Object.values(offerIdsBySku).includes(offerId)) {
+      throw new Error('Variation listing previous revision offer IDs must be unique.');
+    }
     offerIdsBySku[sku] = offerId;
     terminalOfferIds.set(variationId, offerId);
     const listingId = optionalEvidenceString(evidence.listingId, `previous revision ${operation.key} listingId`);
@@ -752,34 +779,30 @@ export async function prepareVariationListingFrozenActiveRevision(
     previousImages,
     mediaResources,
   });
-  if (desiredImages.unresolvedMediaCopyIds.length > 0) {
-    const placeholders = new Map(desiredImages.representativeImages.map((image) => [image.copyId, image]));
-    for (const copyId of desiredImages.unresolvedMediaCopyIds) {
-      const token = digestJson(copyId).slice(0, 24);
-      placeholders.set(copyId, {
-        copyId,
-        frontEpsUrl: `https://i.ebayimg.com/images/g/${token}-front/s-l1600.jpg`,
-        backEpsUrl: `https://i.ebayimg.com/images/g/${token}-back/s-l1600.jpg`,
-      });
-    }
-    buildVariationListingInventoryPayloadBundle({
-      aggregate: current,
-      representativeImages: [...new Set(current.variations.map((variation) => variation.representative_copy_id))].map((copyId) => {
-        if (!copyId) throw new Error('Variation listing active revision has a missing representative copy.');
-        const image = placeholders.get(copyId);
-        if (!image) throw new Error(`Variation listing representative copy ${copyId} has no structural image input.`);
-        return image;
-      }),
+  const planningImages = new Map(desiredImages.representativeImages.map((image) => [image.copyId, image]));
+  for (const copyId of desiredImages.unresolvedMediaCopyIds) {
+    const token = digestJson(copyId).slice(0, 24);
+    planningImages.set(copyId, {
+      copyId,
+      frontEpsUrl: `https://i.ebayimg.com/images/g/${token}-front/s-l1600.jpg`,
+      backEpsUrl: `https://i.ebayimg.com/images/g/${token}-back/s-l1600.jpg`,
     });
   }
+  const planningRepresentativeImages = [...new Set(current.variations.map((variation) => variation.representative_copy_id))].map((copyId) => {
+    if (!copyId) throw new Error('Variation listing active revision has a missing representative copy.');
+    const image = planningImages.get(copyId);
+    if (!image) throw new Error(`Variation listing representative copy ${copyId} has no structural image input.`);
+    return image;
+  });
+  const desiredBundleForPlanning = applyUniformActiveQuantities(
+    buildVariationListingInventoryPayloadBundle({
+      aggregate: current,
+      representativeImages: planningRepresentativeImages,
+    }),
+    desiredQuantitiesBySku
+  );
   const desiredBundlePreview = desiredImages.unresolvedMediaCopyIds.length === 0
-    ? applyUniformActiveQuantities(
-        buildVariationListingInventoryPayloadBundle({
-          aggregate: current,
-          representativeImages: desiredImages.representativeImages,
-        }),
-        desiredQuantitiesBySku
-      )
+    ? desiredBundleForPlanning
     : null;
 
   const snapshot: VariationListingFrozenActiveRevisionSnapshot = {
@@ -806,30 +829,48 @@ export async function prepareVariationListingFrozenActiveRevision(
       intent: asJson(mediaResource),
     }));
   }
+  const unresolvedMediaCopyIds = new Set(desiredImages.unresolvedMediaCopyIds);
+  const confirmedChildByVariation = new Map(confirmedBundle.children.map((child) => [child.variationId, child]));
+  const desiredChildByVariation = new Map(desiredBundleForPlanning.children.map((child) => [child.variationId, child]));
   for (const variation of [...current.variations].sort((a, b) => a.position - b.position)) {
     const existed = previousAggregate.variations.some((candidate) => candidate.variation_id === variation.variation_id);
+    const previousChild = confirmedChildByVariation.get(variation.variation_id);
+    const desiredChild = desiredChildByVariation.get(variation.variation_id);
+    if (!desiredChild) throw new Error(`Variation listing desired payload is missing variation ${variation.variation_id}.`);
+    const representativeNeedsMedia = variation.representative_copy_id !== null && unresolvedMediaCopyIds.has(variation.representative_copy_id);
+    const itemChanged = !existed || !previousChild || representativeNeedsMedia ||
+      canonicalJson(asJson(previousChild.inventoryItem)) !== canonicalJson(asJson(desiredChild.inventoryItem));
+    const offerChanged = !existed || !previousChild ||
+      canonicalJson(asJson(previousChild.offer)) !== canonicalJson(asJson(desiredChild.offer));
+    if (itemChanged) {
+      operations.push(operation({
+        sequenceNo: sequenceNo++,
+        key: `child-item:${variation.variation_id}`,
+        kind: 'child_inventory_item_write',
+        targetRef: variation.sku,
+        intent: asJson({ existed, sku: variation.sku, variationId: variation.variation_id }),
+      }));
+    }
+    if (offerChanged) {
+      operations.push(operation({
+        sequenceNo: sequenceNo++,
+        key: `child-offer:${variation.variation_id}`,
+        kind: 'child_offer_write',
+        targetRef: variation.sku,
+        intent: asJson({ existed, sku: variation.sku, variationId: variation.variation_id }),
+      }));
+    }
+  }
+  const groupChanged = canonicalJson(asJson(confirmedBundle.group)) !== canonicalJson(asJson(desiredBundleForPlanning.group));
+  if (groupChanged) {
     operations.push(operation({
       sequenceNo: sequenceNo++,
-      key: `child-item:${variation.variation_id}`,
-      kind: 'child_inventory_item_write',
-      targetRef: variation.sku,
-      intent: asJson({ existed, sku: variation.sku, variationId: variation.variation_id }),
-    }));
-    operations.push(operation({
-      sequenceNo: sequenceNo++,
-      key: `child-offer:${variation.variation_id}`,
-      kind: 'child_offer_write',
-      targetRef: variation.sku,
-      intent: asJson({ existed, sku: variation.sku, variationId: variation.variation_id }),
+      key: 'complete-group',
+      kind: 'complete_group_replace',
+      targetRef: current.group.group_key,
+      intent: asJson({ groupId: current.group.group_id, groupKey: current.group.group_key }),
     }));
   }
-  operations.push(operation({
-    sequenceNo: sequenceNo++,
-    key: 'complete-group',
-    kind: 'complete_group_replace',
-    targetRef: current.group.group_key,
-    intent: asJson({ groupId: current.group.group_id, groupKey: current.group.group_key }),
-  }));
   for (const variation of [...current.variations]
     .sort((a, b) => a.position - b.position)
     .filter((variation) => !previousAggregate.variations.some((candidate) => candidate.variation_id === variation.variation_id))) {
@@ -930,18 +971,21 @@ function activeErrorEvidence(error: unknown): Json {
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
-function hasQuantityMutationCheckpoint(
+function hasListingMutationCheckpoint(
   frozen: VariationListingFrozenActiveRevision,
   checkpoints: readonly VariationListingPublishingCheckpointRow[]
 ): boolean {
-  const quantityOperationKeys = new Set(
+  const listingMutationOperationKeys = new Set(
     frozen.captureInput.operationPlan
-      .filter((operation) => operation.operationKind === 'child_inventory_item_write' || operation.operationKind === 'child_offer_write')
+      .filter((operation) =>
+        ['child_inventory_item_write', 'child_offer_write', 'complete_group_replace', 'group_publish']
+          .includes(operation.operationKind)
+      )
       .map((operation) => operation.operationKey)
   );
   const byOperation = new Map<string, VariationListingPublishingCheckpointRow[]>();
   for (const checkpoint of checkpoints) {
-    if (!quantityOperationKeys.has(checkpoint.operation_key)) continue;
+    if (!listingMutationOperationKeys.has(checkpoint.operation_key)) continue;
     byOperation.set(checkpoint.operation_key, [...(byOperation.get(checkpoint.operation_key) ?? []), checkpoint]);
   }
   return [...byOperation.values()].some((rows) => activeLatest(rows)?.state !== 'confirmed_no_op');
@@ -1047,6 +1091,68 @@ function makeActiveHistory(
     }
   }
   return history;
+}
+
+function validateFrozenActiveOperationPlanCompleteness(
+  frozen: VariationListingFrozenActiveRevision
+): void {
+  const operationsByKey = new Map(
+    frozen.captureInput.operationPlan.map((operation) => [operation.operationKey, operation])
+  );
+  const requireOperation = (operationKey: string, operationKind: string): void => {
+    const operation = operationsByKey.get(operationKey);
+    if (!operation || operation.operationKind !== operationKind) {
+      throw new Error(
+        `Variation listing active revision frozen plan is missing required ${operationKey} (${operationKind}) operation.`
+      );
+    }
+  };
+
+  const previousVariationIds = new Set(
+    frozen.snapshot.confirmed.aggregate.variations.map((variation) => variation.variation_id)
+  );
+  const confirmedQuantities = frozen.snapshot.confirmed.remote.quantitiesBySku;
+  // Legacy version-2 snapshots do not carry eBay-authoritative quantities.
+  // Leave the complete-plan guard entirely inactive for those snapshots so
+  // execution reaches the established reprepare/reconciliation gate below;
+  // applying only the new-variation half here would intercept that path with
+  // a misleading frozen-plan error.
+  if (!confirmedQuantities) return;
+  const desiredQuantities = desiredActiveQuantities(
+    frozen.snapshot.aggregate,
+    frozen.snapshot.confirmed.aggregate,
+    confirmedQuantities
+  );
+  for (const variation of frozen.snapshot.aggregate.variations) {
+    if (!previousVariationIds.has(variation.variation_id)) continue;
+    const confirmed = parseConfirmedRemoteQuantity(confirmedQuantities[variation.sku], variation.sku);
+    const desired = requireRemoteQuantity(
+      desiredQuantities[variation.sku],
+      `frozen desired ${variation.sku} quantity`
+    );
+    if (desired !== confirmed.inventoryItemQuantity) {
+      requireOperation(`child-item:${variation.variation_id}`, 'child_inventory_item_write');
+    }
+    if (desired !== confirmed.offerQuantity) {
+      requireOperation(`child-offer:${variation.variation_id}`, 'child_offer_write');
+    }
+  }
+
+  const newVariations = frozen.snapshot.aggregate.variations.filter(
+    (variation) => !previousVariationIds.has(variation.variation_id)
+  );
+  for (const variation of newVariations) {
+    requireOperation(`child-item:${variation.variation_id}`, 'child_inventory_item_write');
+    requireOperation(`child-offer:${variation.variation_id}`, 'child_offer_write');
+    requireOperation(`publish-offer:${variation.variation_id}`, 'group_publish');
+  }
+
+  // New variations always alter group membership, so the group replacement
+  // must be frozen alongside their child writes. Existing-child sparse plans
+  // may omit this operation when no new child is present.
+  if (newVariations.length > 0) {
+    requireOperation('complete-group', 'complete_group_replace');
+  }
 }
 
 function activeObjectEvidence(value: Json, label: string): Record<string, Json> {
@@ -1365,6 +1471,7 @@ export async function executeVariationListingActiveRevision(
       throw new Error(`Frozen variation listing operation ${operation.operationKey} intent digest does not match its intent.`);
     }
   }
+  validateFrozenActiveOperationPlanCompleteness(input.frozen);
 
   // The lookup is intentionally mandatory. The capture RPC rejects duplicate
   // revision rows, so skipping this read on restart would turn a resumable
@@ -1386,12 +1493,12 @@ export async function executeVariationListingActiveRevision(
   // remote work already recorded must fail reconciliation rather than replay
   // stale quantities.
   if (!input.frozen.snapshot.confirmed.remote.quantitiesBySku) {
-    if (!existingRevision || !hasQuantityMutationCheckpoint(input.frozen, existingCheckpoints)) {
+    if (!existingRevision || !hasListingMutationCheckpoint(input.frozen, existingCheckpoints)) {
       throw new Error('active_revision_reprepare_required: Variation listing active revision lacks frozen eBay quantities; stage a new change and prepare again before mutation.');
     }
     throw new Error('Variation listing active revision lacks frozen eBay quantities; reconciliation is required before resume.');
   }
-  if (!existingRevision || !hasQuantityMutationCheckpoint(input.frozen, existingCheckpoints)) {
+  if (!existingRevision || !hasListingMutationCheckpoint(input.frozen, existingCheckpoints)) {
     await verifyFrozenRemoteBaseline(input, Boolean(existingRevision));
   }
   const captured = existingRevision
@@ -1502,7 +1609,8 @@ export async function executeVariationListingActiveRevision(
     const existed = Boolean(priorVariation);
     const priorOfferId = priorOfferIds[child.sku];
     const itemOperationKey = `child-item:${child.variationId}`;
-    const itemRows = history.get(itemOperationKey)!;
+    const itemRows = history.get(itemOperationKey);
+    if (itemRows) {
     const itemAfter = async (): Promise<Json | null> => {
       const terminal = activeTerminal(activeLatest(itemRows));
       return terminal
@@ -1560,11 +1668,15 @@ export async function executeVariationListingActiveRevision(
       await input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem));
     };
     await executeActiveOperation(input, history, itemOperationKey, guardedItemAfter, itemPre, itemMutate);
+    } else if (!existed) {
+      throw new Error(`Variation listing new item ${child.sku} is missing its frozen mutation operation.`);
+    }
 
     const offerIdentity = { offerId: priorOfferId ?? '', listingId: frozenListingId };
     let returnedOfferId: string | null = null;
     const offerOperationKey = `child-offer:${child.variationId}`;
-    const offerRows = history.get(offerOperationKey)!;
+    const offerRows = history.get(offerOperationKey);
+    if (offerRows) {
     const offerAfter = async (): Promise<Json | null> => {
       const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (!existed) {
@@ -1689,11 +1801,16 @@ export async function executeVariationListingActiveRevision(
       );
       newOfferIdsByVariation.set(child.variationId, durableOfferId);
     }
+    } else if (!existed) {
+      throw new Error(`Variation listing new offer ${child.sku} is missing its frozen mutation operation.`);
+    }
   }
 
-  const groupPre = async (): Promise<Json | null> => activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), previousBundle.group);
-  const groupAfter = async (): Promise<Json | null> => activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), desiredBundle.group);
-  await executeActiveOperation(input, history, 'complete-group', groupAfter, groupPre, () => input.mutations.createOrReplaceInventoryItemGroup(desiredBundle.groupKey, asJson(desiredBundle.group)));
+  if (history.has('complete-group')) {
+    const groupPre = async (): Promise<Json | null> => activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), previousBundle.group);
+    const groupAfter = async (): Promise<Json | null> => activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), desiredBundle.group);
+    await executeActiveOperation(input, history, 'complete-group', groupAfter, groupPre, () => input.mutations.createOrReplaceInventoryItemGroup(desiredBundle.groupKey, asJson(desiredBundle.group)));
+  }
 
   const newChildren = desiredBundle.children.filter((child) => !previousByVariation.has(child.variationId));
   for (const child of newChildren) {

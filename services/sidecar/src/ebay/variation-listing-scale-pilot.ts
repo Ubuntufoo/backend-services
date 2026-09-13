@@ -190,11 +190,13 @@ export function expectedInitialMediaBackedPublicationOperations(variationCount: 
   return variationCount * 4 + 3;
 }
 
-export function expectedDuplicateOnlyActiveRevisionOperations(variationCount: number): number {
-  if (!Number.isSafeInteger(variationCount) || variationCount < 2) {
-    throw new Error('Variation count must be an integer of at least 2.');
+export function expectedDuplicateOnlyActiveRevisionOperations(changedVariationCount: number): number {
+  if (!Number.isSafeInteger(changedVariationCount) || changedVariationCount < 1) {
+    throw new Error('Changed variation count must be a positive integer.');
   }
-  return variationCount * 2 + 2;
+  // Sparse active revisions mutate only changed child item/offer resources;
+  // unchanged siblings are still covered by full read-only reconciliation.
+  return changedVariationCount * 2 + 1;
 }
 
 export function buildVariationListingScaleFixture(
@@ -216,7 +218,7 @@ export function buildVariationListingScaleFixture(
     replenishmentSlots: replenishmentPositions(variationCount).map(scaleSlot),
     expectedOperationCounts: {
       initialMediaBackedPublication: expectedInitialMediaBackedPublicationOperations(variationCount),
-      duplicateOnlyActiveRevision: expectedDuplicateOnlyActiveRevisionOperations(variationCount),
+      duplicateOnlyActiveRevision: expectedDuplicateOnlyActiveRevisionOperations(replenishmentPositions(variationCount).length),
     },
   };
 }

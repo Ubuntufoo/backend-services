@@ -557,6 +557,45 @@ describe('YP6.1 variation listing API router', () => {
     }
   });
 
+  it('falls back to a confirmed active-revision snapshot listing identity when reconcile evidence is unavailable', async () => {
+    const confirmedRevision = {
+      ...latestRevision(),
+      capturedDesiredRevision: 3,
+      revisionId: '77777777-7777-4777-8777-777777777777',
+      source: {
+        captured_at: now,
+        snapshot: {
+          confirmed: {
+            remote: {
+              listingId: '987654321098',
+            },
+          },
+        },
+      },
+    } as unknown as VariationListingRevision;
+    const listCheckpointsByRevisionId = vi.fn(async (revisionId: string) =>
+      revisionId === confirmedRevision.revisionId ? [] : [checkpoint()]
+    );
+    const ebayEnvironment = process.env.EBAY_ENVIRONMENT;
+    process.env.EBAY_ENVIRONMENT = 'sandbox';
+    try {
+      const response = await request(app(dataAccess({
+        listRevisionsByGroupId: vi.fn(async () => [latestRevision(), confirmedRevision]),
+        listCheckpointsByRevisionId,
+      }))).get(`/api/variation-listings/${groupId}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        listingId: '987654321098',
+        listingUrl: 'https://www.sandbox.ebay.com/itm/987654321098',
+      });
+      expect(listCheckpointsByRevisionId).toHaveBeenCalledWith(confirmedRevision.revisionId);
+    } finally {
+      if (ebayEnvironment === undefined) delete process.env.EBAY_ENVIRONMENT;
+      else process.env.EBAY_ENVIRONMENT = ebayEnvironment;
+    }
+  });
+
   it('serializes authoritative recovery metadata from the latest unresolved checkpoint', async () => {
     const access = dataAccess({listCheckpointsByRevisionId: vi.fn(async () => [checkpointWithState('retry_authorized')])});
     const response = await request(app(access)).get(`/api/variation-listings/${groupId}`);

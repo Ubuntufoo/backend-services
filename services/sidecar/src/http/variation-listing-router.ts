@@ -561,18 +561,41 @@ function summarizeJournal(
   };
 }
 
-function confirmedListingId(checkpoints: readonly VariationListingPublishingCheckpoint[]): string | null {
-  const checkpoint = [...checkpoints]
+function nonEmptyListingId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function listingIdFromConfirmedRevisionSnapshot(revision: VariationListingRevision | null): string | null {
+  if (!revision) return null;
+  const snapshot = revision.source.snapshot;
+  if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+  const confirmed = snapshot.confirmed;
+  if (confirmed === null || typeof confirmed !== 'object' || Array.isArray(confirmed)) return null;
+  const remote = confirmed.remote;
+  if (remote === null || typeof remote !== 'object' || Array.isArray(remote)) return null;
+  return nonEmptyListingId(remote.listingId);
+}
+
+function confirmedListingId(
+  revision: VariationListingRevision | null,
+  checkpoints: readonly VariationListingPublishingCheckpoint[]
+): string | null {
+  const reconcileCheckpoint = [...checkpoints]
     .filter((candidate) =>
       candidate.operationKey === 'revision-reconcile' &&
-      candidate.state === 'confirmed_complete'
+      (candidate.state === 'confirmed_complete' || candidate.state === 'confirmed_no_op')
     )
     .sort((left, right) =>
       left.attemptNumber - right.attemptNumber || left.checkpointNumber - right.checkpointNumber
     )
     .at(-1);
-  const listingId = checkpoint?.evidence?.listingId;
-  return typeof listingId === 'string' && listingId.trim() ? listingId.trim() : null;
+  const reconciled = nonEmptyListingId(reconcileCheckpoint?.evidence?.listingId);
+  if (reconciled) return reconciled;
+
+  // Active revision snapshots freeze the previously confirmed remote identity.
+  // This is durable evidence and remains valid even if the terminal checkpoint
+  // is unavailable during an immediate post-action refresh.
+  return listingIdFromConfirmedRevisionSnapshot(revision);
 }
 
 function configuredListingUrl(listingId: string | null): string | null {
@@ -597,7 +620,7 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
     : confirmedRevision.revisionId === latestRevision?.revisionId
       ? checkpoints
       : await dataAccess.listCheckpointsByRevisionId(confirmedRevision.revisionId);
-  const listingId = confirmedListingId(confirmedCheckpoints);
+  const listingId = confirmedListingId(confirmedRevision, confirmedCheckpoints);
   const variations = [...aggregate.variations]
     .sort((left, right) => left.position - right.position)
     .map((variation) => serializeVariation(variation, aggregate.copies));
