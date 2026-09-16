@@ -13,6 +13,28 @@ const request = {
 };
 
 describe('variation listing Sidecar client', () => {
+  it('surfaces a deterministic non-retryable identity validation message', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          error: 'gemini_identity_validation_failed',
+          message: 'Variation identity does not contain enough proven components to construct a safe selector.',
+          retryable: false,
+        }),
+        { status: 422, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    await expect(
+      requestVariationListingIdentityHandoff(request, {
+        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        fetch: fetch as typeof globalThis.fetch,
+      })
+    ).rejects.toThrow(
+      'Variation listing Sidecar client failed: identity request failed: Variation identity does not contain enough proven components to construct a safe selector.'
+    );
+  });
+
   it('maps explicit retryable 503 identity exhaustion to a typed retryable error', async () => {
     const fetch = vi.fn(async () =>
       new Response(

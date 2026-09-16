@@ -130,6 +130,10 @@ const DETERMINISTIC_GEMINI_MESSAGE_KINDS = new Map<string, GeminiDeterministicFa
   ['Gemini returned JSON for the listing draft, but it was not an object.', 'schema'],
   ['Gemini returned an empty variation identity response.', 'schema'],
   ['Gemini returned invalid JSON for variation identity.', 'schema'],
+  ['Variation identity cardNumber is malformed.', 'validation'],
+  ['Variation identity does not contain enough proven components to construct a safe selector.', 'validation'],
+  ['Variation identity does not contain a card-distinguishing component for a safe selector.', 'validation'],
+  ["Variation identity cannot construct a truthful Card selector within eBay's 65-character limit.", 'validation'],
   ['Gemini returned an empty variation group content response.', 'schema'],
   ['Gemini returned invalid JSON for variation group content.', 'schema'],
 ]);

@@ -29,7 +29,10 @@ import {
   generateVariationListingGroupReview,
   generateVariationListingGroupReviewWithFallback,
 } from '@/gemini/variation-listing-group-review.js';
-import { GeminiFallbackExecutionError } from '@/gemini/gemini-model-router.js';
+import {
+  GeminiFallbackExecutionError,
+  getGeminiDeterministicFailure,
+} from '@/gemini/gemini-model-router.js';
 import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
 import {
   getVariationListingTrustedCommonEbayAspects,
@@ -257,7 +260,11 @@ function groupRefreshWarning(action: VariationListingActionName, groupId: string
   };
 }
 
-function sendError(res: Response, error: unknown): void {
+function sendError(
+  res: Response,
+  error: unknown,
+  options: { exposeGeminiIdentityValidation?: boolean } = {}
+): void {
   if (error instanceof VariationListingIntakeConflictError) {
     res.status(409).json({ error: error.code, message: error.message });
     return;
@@ -283,6 +290,24 @@ function sendError(res: Response, error: unknown): void {
     });
     return;
   }
+  const deterministicFailure =
+    options.exposeGeminiIdentityValidation === true &&
+    error instanceof GeminiFallbackExecutionError &&
+    error.finalFallbackKind === 'none'
+      ? getGeminiDeterministicFailure(error.finalError)
+      : undefined;
+  if (
+    deterministicFailure &&
+    ['schema', 'validation'].includes(deterministicFailure.kind) &&
+    deterministicFailure.error instanceof Error
+  ) {
+    res.status(422).json({
+      error: 'gemini_identity_validation_failed',
+      message: deterministicFailure.error.message,
+      retryable: false,
+    });
+    return;
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (/pending pair locks intake target/i.test(message)) {
     res.status(409).json({ error: 'variation_listing_intake_pending', message });
@@ -304,11 +329,15 @@ function sendError(res: Response, error: unknown): void {
   res.status(500).json({ error: 'server_error', message: 'An unexpected server error occurred.' });
 }
 
-async function runRoute(res: Response, handler: () => Promise<void>): Promise<void> {
+async function runRoute(
+  res: Response,
+  handler: () => Promise<void>,
+  options: { exposeGeminiIdentityValidation?: boolean } = {}
+): Promise<void> {
   try {
     await handler();
   } catch (error) {
-    sendError(res, error);
+    sendError(res, error, options);
   }
 }
 
@@ -796,10 +825,14 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   router.post('/intake-identity', async (req: Request, res: Response) => {
     const body = parseOrSend(res, generateVariationListingIntakeIdentityRequestSchema, req.body);
     if (!body) return;
-    return await runRoute(res, async () => {
-      const handoff = await (options.generateIntakeIdentity ?? generateVariationListingIntakeIdentityHandoff)(body);
-      res.json(handoff);
-    });
+    return await runRoute(
+      res,
+      async () => {
+        const handoff = await (options.generateIntakeIdentity ?? generateVariationListingIntakeIdentityHandoff)(body);
+        res.json(handoff);
+      },
+      { exposeGeminiIdentityValidation: true }
+    );
   });
 
   router.get('/:groupId/actions/events', (req: Request, res: Response) => {

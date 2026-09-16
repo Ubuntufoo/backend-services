@@ -256,7 +256,7 @@ describe('variation-listing Gemini identity', () => {
     ).toThrow();
   });
 
-  it('requires source-specific year evidence and rejects season-only year claims', () => {
+  it('requires source-specific year evidence but drops unsupported optional year claims instead of aborting identity generation', () => {
     const seasonOnly = {
       ...modelResponse,
       seasonEvidence: null,
@@ -267,9 +267,36 @@ describe('variation-listing Gemini identity', () => {
         imageIndex: 1,
       },
     };
-    expect(() =>
-      parseVariationListingIdentityResponse(JSON.stringify(seasonOnly), undefined, input)
-    ).toThrow(/yearEvidence/);
+    const seasonOnlyResult = parseVariationListingIdentityResponse(
+      JSON.stringify(seasonOnly),
+      undefined,
+      input
+    );
+    expect(seasonOnlyResult.identity.year).toBeUndefined();
+    expect(seasonOnlyResult.evidence).not.toHaveProperty('yearEvidence');
+    expect(seasonOnlyResult.warnings).toContain(
+      'Gemini yearEvidence was ignored because visibleText did not contain a matching standalone supported year.'
+    );
+
+    const mismatchedSourceType = {
+      ...seasonOnly,
+      yearEvidence: {
+        year: '1997',
+        sourceType: 'manufacture_line',
+        visibleText: '© 1997 Skybox',
+        imageIndex: 1,
+      },
+    };
+    const mismatchedSourceTypeResult = parseVariationListingIdentityResponse(
+      JSON.stringify(mismatchedSourceType),
+      undefined,
+      input
+    );
+    expect(mismatchedSourceTypeResult.identity.year).toBeUndefined();
+    expect(mismatchedSourceTypeResult.evidence).not.toHaveProperty('yearEvidence');
+    expect(mismatchedSourceTypeResult.warnings).toContain(
+      'Gemini yearEvidence was ignored because visibleText did not match its sourceType.'
+    );
 
     const accepted = {
       ...seasonOnly,
@@ -323,10 +350,84 @@ describe('variation-listing Gemini identity', () => {
     expect(result.identity.set).toBe('Metal Universe');
   });
 
+  it('drops malformed optional year and serial evidence while preserving the rest of the identity response', () => {
+    const response = {
+      ...modelResponse,
+      yearEvidence: {
+        year: 'not-a-year',
+        sourceType: 'copyright_line',
+        visibleText: '© not-a-year',
+        imageIndex: 1,
+      },
+      serialEvidence: {
+        visibleText: '10/99',
+        imageIndex: 4,
+        numerator: 10,
+        denominator: 99,
+      },
+    };
+
+    const result = parseVariationListingIdentityResponse(JSON.stringify(response), undefined, input);
+
+    expect(result.identity.year).toBeUndefined();
+    expect(result.identity.serialNumber).toBeUndefined();
+    expect(result.evidence).not.toHaveProperty('yearEvidence');
+    expect(result.evidence).not.toHaveProperty('serialEvidence');
+    expect(result.warnings).toContain(
+      'Gemini yearEvidence was ignored because the optional field was malformed.'
+    );
+    expect(result.warnings).toContain(
+      'Gemini serialEvidence was ignored because the optional field was malformed.'
+    );
+    expect(result.identity.playerAthlete).toBe('Marcus Camby');
+  });
+
+  it('drops semantically inconsistent optional serial evidence instead of aborting identity generation', () => {
+    const response = {
+      ...modelResponse,
+      facts: {
+        ...modelResponse.facts,
+        features: [
+          ...modelResponse.facts.features,
+          { value: 'Serial Numbered', imageIndex: 1, visibleEvidence: '037/199' },
+        ],
+      },
+      serialEvidence: {
+        visibleText: '037/199',
+        imageIndex: 1,
+        numerator: 38,
+        denominator: 199,
+      },
+    };
+
+    const result = parseVariationListingIdentityResponse(JSON.stringify(response), undefined, input);
+
+    expect(result.identity.serialNumber).toBeUndefined();
+    expect(result.identity.printRun).toBeUndefined();
+    expect(result.identity.features).not.toContain('Serial Numbered');
+    expect(result.variationMetadata.Features).not.toContain('Serial Numbered');
+    expect(result.evidence).not.toMatchObject({
+      features: expect.arrayContaining([expect.objectContaining({ value: 'Serial Numbered' })]),
+    });
+    expect(result.evidence).not.toHaveProperty('serialEvidence');
+    expect(result.warnings).toContain(
+      'Gemini serialEvidence was ignored because it did not match the visible fraction.'
+    );
+    expect(result.warnings).toContain(
+      'Gemini Serial Numbered feature was ignored because valid serialEvidence was absent.'
+    );
+  });
+
   it('rejects malformed or unsupported model keys instead of widening the contract', () => {
     const response = {
       ...modelResponse,
       priceSuggestion: 9.99,
+      yearEvidence: {
+        year: 'not-a-year',
+        sourceType: 'copyright_line',
+        visibleText: '© not-a-year',
+        imageIndex: 1,
+      },
       facts: {
         ...modelResponse.facts,
         Autographed: { value: 'Yes', imageIndex: 0, visibleEvidence: 'signature visible' },
@@ -403,6 +504,43 @@ describe('variation-listing Gemini identity', () => {
       selectorValue: result.selectorValue,
       variationMetadata: result.variationMetadata,
     });
+  });
+
+  it('continues identity handoff when optional year evidence has a mismatched sourceType', async () => {
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(async () => ({
+        imageParts: [{ text: 'front' }, { text: 'back' }],
+        inlineImageBytesApprox: 0,
+      })),
+      generateDraftRaw: vi.fn(async () => ({
+        text: JSON.stringify({
+          ...modelResponse,
+          seasonEvidence: null,
+          yearEvidence: {
+            year: '1997',
+            sourceType: 'manufacture_line',
+            visibleText: '© 1997 Skybox',
+            imageIndex: 1,
+          },
+        }),
+        rawResponse: { fixture: true },
+      })),
+    };
+
+    const result = await generateVariationListingIdentity(
+      input,
+      { model: 'gemini-test' },
+      {
+        getClient: () => client,
+        loadConfig: () => ({ apiKey: 'test-key' }),
+      }
+    );
+
+    expect(result.identity.year).toBeUndefined();
+    expect(result.warnings).toContain(
+      'Gemini yearEvidence was ignored because visibleText did not match its sourceType.'
+    );
+    expect(toVariationListingNewVariationIdentityHandoff(result).selectorValue).toContain('Marcus Camby');
   });
 
   it('continues identity handoff when optional season evidence is semantically invalid', async () => {

@@ -15,7 +15,9 @@ import {
   type VariationListingSerialEvidence,
   type VariationListingYearEvidence,
   validateGenerateVariationListingIdentityInput,
+  variationListingYearEvidenceSchema,
   variationListingSeasonEvidenceSchema,
+  variationListingSerialEvidenceSchema,
   variationListingIdentityModelResponseSchema,
 } from './variation-listing-identity-contracts.js';
 import { buildVariationListingIdentityPrompt } from './variation-listing-identity-prompt.js';
@@ -113,10 +115,16 @@ function validateYearEvidence(
   }
   if (!evidence) return null;
   if (!isSupportedCardYear(evidence.year) || !containsYearOutsideSeasonRange(evidence.visibleText, evidence.year)) {
-    throw new GeminiDraftServiceError('Variation identity yearEvidence is inconsistent with visibleText.');
+    warnings.push(
+      'Gemini yearEvidence was ignored because visibleText did not contain a matching standalone supported year.'
+    );
+    return null;
   }
   if (!YEAR_EVIDENCE_MARKER_PATTERNS[evidence.sourceType].test(evidence.visibleText)) {
-    throw new GeminiDraftServiceError('Variation identity yearEvidence is inconsistent with its sourceType.');
+    warnings.push(
+      'Gemini yearEvidence was ignored because visibleText did not match its sourceType.'
+    );
+    return null;
   }
   return {
     ...evidence,
@@ -147,24 +155,29 @@ function validateSeasonEvidence(
 }
 
 function validateSerialEvidence(
-  evidence: VariationListingSerialEvidence | null | undefined
+  evidence: VariationListingSerialEvidence | null | undefined,
+  warnings: string[]
 ): VariationListingSerialEvidence | null {
   if (!evidence) return null;
   if (evidence.numerator > evidence.denominator) {
-    throw new GeminiDraftServiceError('Variation identity serialEvidence numerator exceeds denominator.');
+    warnings.push('Gemini serialEvidence was ignored because numerator exceeded denominator.');
+    return null;
   }
   const visibleText = normalizeText(evidence.visibleText).replace(/\s*\/\s*/gu, '/');
   const matches = [...visibleText.matchAll(SERIAL_FRACTION_PATTERN)];
   if (matches.length !== 1) {
-    throw new GeminiDraftServiceError('Variation identity serialEvidence must contain exactly one visible fraction.');
+    warnings.push('Gemini serialEvidence was ignored because visibleText did not contain exactly one serial fraction.');
+    return null;
   }
   const numerator = Number.parseInt(matches[0]![1]!, 10);
   const denominator = Number.parseInt(matches[0]![2]!, 10);
   if (numerator !== evidence.numerator || denominator !== evidence.denominator) {
-    throw new GeminiDraftServiceError('Variation identity serialEvidence does not match its visible fraction.');
+    warnings.push('Gemini serialEvidence was ignored because it did not match the visible fraction.');
+    return null;
   }
   if (/\bcard(?:\s+(?:number|no\.?))?\s*#?\s*\d+\s+of\s+\d+/iu.test(visibleText)) {
-    throw new GeminiDraftServiceError('Variation identity serialEvidence is ambiguous with a card-number range.');
+    warnings.push('Gemini serialEvidence was ignored because the visible fraction was ambiguous with a card-number range.');
+    return null;
   }
   return { ...evidence, visibleText };
 }
@@ -359,28 +372,53 @@ export function parseVariationListingIdentityResponse(
     });
   }
 
-  // Season evidence is optional and must not abort identity capture when Gemini
-  // returns a malformed season-only object. Keep strict validation for every
-  // other response key while dropping only this optional field.
+  // Evidence annotations are optional. A malformed annotation must never
+  // promote an unsupported fact, but it also must not discard an otherwise
+  // usable card identity. Keep the core facts/response contract strict and
+  // drop only malformed optional evidence fields before full validation.
   let responseForValidation = json;
+  let malformedYearEvidence = false;
   let malformedSeasonEvidence = false;
-  if (json !== null && typeof json === 'object' && !Array.isArray(json) && 'seasonEvidence' in json) {
-    const seasonResult = variationListingSeasonEvidenceSchema.nullable().optional().safeParse(
-      (json as Record<string, unknown>).seasonEvidence
-    );
-    if (!seasonResult.success) {
-      responseForValidation = { ...(json as Record<string, unknown>) };
-      delete (responseForValidation as Record<string, unknown>).seasonEvidence;
-      malformedSeasonEvidence = true;
+  let malformedSerialEvidence = false;
+  if (json !== null && typeof json === 'object' && !Array.isArray(json)) {
+    const source = json as Record<string, unknown>;
+    const candidate = { ...source };
+    if ('yearEvidence' in source) {
+      const result = variationListingYearEvidenceSchema.nullable().optional().safeParse(source.yearEvidence);
+      if (!result.success) {
+        delete candidate.yearEvidence;
+        malformedYearEvidence = true;
+      }
     }
+    if ('seasonEvidence' in source) {
+      const result = variationListingSeasonEvidenceSchema.nullable().optional().safeParse(source.seasonEvidence);
+      if (!result.success) {
+        delete candidate.seasonEvidence;
+        malformedSeasonEvidence = true;
+      }
+    }
+    if ('serialEvidence' in source) {
+      const result = variationListingSerialEvidenceSchema.nullable().optional().safeParse(source.serialEvidence);
+      if (!result.success) {
+        delete candidate.serialEvidence;
+        malformedSerialEvidence = true;
+      }
+    }
+    responseForValidation = candidate;
   }
   const parsedResult = variationListingIdentityModelResponseSchema.safeParse(responseForValidation);
   if (!parsedResult.success) throw new GeminiDraftValidationError(parsedResult.error.issues);
   const parsed = parsedResult.data;
   const warnings = dedupeStrings([
     ...parsed.warnings,
+    ...(malformedYearEvidence
+      ? ['Gemini yearEvidence was ignored because the optional field was malformed.']
+      : []),
     ...(malformedSeasonEvidence
       ? ['Gemini seasonEvidence was ignored because the optional field was malformed.']
+      : []),
+    ...(malformedSerialEvidence
+      ? ['Gemini serialEvidence was ignored because the optional field was malformed.']
       : []),
   ]);
   const reviewNotes = dedupeStrings(parsed.reviewNotes);
@@ -388,7 +426,17 @@ export function parseVariationListingIdentityResponse(
   const explicitYear = validatedInput.userHints?.explicitYear;
   const yearEvidence = validateYearEvidence(parsed.yearEvidence, explicitYear, warnings);
   const seasonEvidence = validateSeasonEvidence(parsed.seasonEvidence, warnings);
-  const serialEvidence = validateSerialEvidence(parsed.serialEvidence);
+  const serialEvidence = validateSerialEvidence(parsed.serialEvidence, warnings);
+  if (!serialEvidence) {
+    const claimedSerialNumbered = identity.features.includes('Serial Numbered');
+    identity.features = identity.features.filter((feature) => feature !== 'Serial Numbered');
+    facts.features = facts.features?.filter((feature) => feature.value !== 'Serial Numbered');
+    if (claimedSerialNumbered) {
+      warnings.push(
+        'Gemini Serial Numbered feature was ignored because valid serialEvidence was absent.'
+      );
+    }
+  }
   if (explicitYear) identity.year = explicitYear;
   else if (yearEvidence) identity.year = yearEvidence.year;
   if (seasonEvidence) identity.season = seasonEvidence.season;
