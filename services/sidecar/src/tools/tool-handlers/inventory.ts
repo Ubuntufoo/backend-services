@@ -7,6 +7,12 @@ import type { ToolHandlerMap } from './types.js';
 
 /** Handler map for Inventory API item, offer, location, and bulk tools. */
 /* eslint-disable @typescript-eslint/naming-convention -- handler keys must match published tool ids */
+
+function assertBuyerLivePublishEnabled(): void {
+  if (process.env.EBAY_PUBLISH_ENABLED === 'true') return;
+  throw new Error('eBay publishing is disabled. Set EBAY_PUBLISH_ENABLED=true only for an authorized publish window.');
+}
+
 export const inventoryHandlers: ToolHandlerMap = {
   ebay_get_inventory_items: async (api, args) => {
     return await api.inventory.getInventoryItems(args.limit as number, args.offset as number);
@@ -133,6 +139,7 @@ export const inventoryHandlers: ToolHandlerMap = {
   },
 
   ebay_publish_offer: async (api, args) => {
+    assertBuyerLivePublishEnabled();
     return await api.inventory.publishOffer(args.offerId as string);
   },
 
@@ -145,6 +152,7 @@ export const inventoryHandlers: ToolHandlerMap = {
   },
 
   ebay_bulk_publish_offer: async (api, args) => {
+    assertBuyerLivePublishEnabled();
     return await api.inventory.bulkPublishOffer(args.requests as Record<string, unknown>);
   },
 
@@ -176,6 +184,7 @@ export const inventoryHandlers: ToolHandlerMap = {
   },
 
   ebay_publish_offer_by_inventory_item_group: async (api, args) => {
+    assertBuyerLivePublishEnabled();
     return await api.inventory.publishOfferByInventoryItemGroup(
       args.request as PublishByInventoryItemGroupRequest
     );

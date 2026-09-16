@@ -653,6 +653,20 @@ export function createVariationListingActionService(options: VariationListingAct
   const ids = options.createId ?? randomUUID;
   const publicBaseUrl = () => options.publicImageBaseUrl ?? loadR2ImageStorageConfig().publicBaseUrl;
   const dependencies = options.remoteFactory ?? createProductionRemote;
+  const assertPublicationMutationEnabled = (action: 'publish' | 'publish_changes' | 'retry', groupId: string): void => {
+    // Dependency-injected remotes are explicit test/harness boundaries. The
+    // default gateway is the real configured eBay environment and must honor
+    // the same authorized publish-window guard as Standard publishing.
+    if (options.remoteFactory !== undefined) return;
+    if (process.env.EBAY_PUBLISH_ENABLED === 'true') return;
+    throw validationError(
+      action,
+      groupId,
+      'publish_disabled',
+      'eBay publishing is disabled. Set EBAY_PUBLISH_ENABLED=true only for an authorized publish window.',
+      ['enable_publish_window'],
+    );
+  };
   const resolveDependencies = async () => {
     const resolved = await dependencies();
     if (!resolved) throw new Error('Variation listing remote dependencies were not created.');
@@ -903,6 +917,7 @@ export function createVariationListingActionService(options: VariationListingAct
   };
 
   const publish = (groupId: string, expectedDesiredRevision: number) => run('publish', groupId, async (progress) => {
+    assertPublicationMutationEnabled('publish', groupId);
     let aggregate = await requireAggregate(groupId, 'publish', expectedDesiredRevision);
     if (aggregate.group.last_confirmed_revision !== null) throw validationError('publish', groupId, 'initial_publish_already_completed', 'This group is already published. Use Publish Changes for staged updates.', ['publish_changes']);
     if (aggregate.group.lifecycle_state === 'review') {
@@ -943,6 +958,7 @@ export function createVariationListingActionService(options: VariationListingAct
   });
 
   const publishChanges = (groupId: string, expectedDesiredRevision: number) => run('publish_changes', groupId, async (progress) => {
+    assertPublicationMutationEnabled('publish_changes', groupId);
     const aggregate = await requireAggregate(groupId, 'publish_changes', expectedDesiredRevision);
     if (aggregate.group.lifecycle_state !== 'active' || aggregate.group.last_confirmed_revision === null) throw validationError('publish_changes', groupId, 'publish_changes_lifecycle_blocked', 'Publish Changes requires an active published variation listing.', ['refresh_group']);
     if (aggregate.group.desired_revision <= aggregate.group.last_confirmed_revision) throw validationError('publish_changes', groupId, 'no_pending_changes', 'There are no staged changes to publish.', ['edit_group_or_variations']);
@@ -1004,6 +1020,9 @@ export function createVariationListingActionService(options: VariationListingAct
       summary: 'The one bounded replay is exhausted; another automatic retry is not permitted.',
       userActionRequired: true,
     });
+    if (revisionKind(revision) === 'initial' || revisionKind(revision) === 'active') {
+      assertPublicationMutationEnabled('retry', groupId);
+    }
     const deps = await resolveDependencies();
     progress('reconcile_remote_state', { operationKey: unresolved.operation_key, revisionId: revision.revision_id });
     if (revisionKind(revision) === 'initial') return await executeInitial(aggregate, revision);

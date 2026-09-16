@@ -15,6 +15,8 @@
 | `pnpm sync` | Sidecar dev sync helper | side effects depend on current implementation |
 | `pnpm update:api-status` | Refresh generated eBay status doc | writes `docs/API_STATUS.md` |
 
+Variation Listing `Publish`, `Publish Changes`, and publication-retry actions use the same authorized publish-window requirement as Standard listings when they use the real eBay gateway: `EBAY_PUBLISH_ENABLED=true`. The guard is checked before local publication state is advanced or any eBay mutation is attempted. Withdrawal remains available as a safety/recovery action when new publishing is disabled.
+
 ## Mutating eBay/Admin Commands
 
 | Command | Purpose |
@@ -66,3 +68,4 @@ The frontend-facing equivalent is `POST /api/listings/:listingId/delete-sandbox`
 - eBay config/publish notes: [ebay-integration.md](ebay-integration.md)
 - Troubleshooting: [troubleshooting.md](troubleshooting.md)
 - Generated eBay status feed snapshot: [API_STATUS.md](API_STATUS.md)
+- Guarded Variation production pilot: [variation-listings/production-pilot-checklist.md](variation-listings/production-pilot-checklist.md)

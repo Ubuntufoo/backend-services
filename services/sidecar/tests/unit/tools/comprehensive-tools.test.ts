@@ -722,6 +722,7 @@ describe('Comprehensive Tools Coverage', () => {
     });
 
     it('ebay_publish_offer', async () => {
+      process.env.EBAY_PUBLISH_ENABLED = 'true';
       const mockResponse = { listingId: 'LISTING123' };
       vi.mocked(mockApi.inventory.publishOffer).mockResolvedValue(mockResponse);
       await executeTool(mockApi, 'ebay_publish_offer', { offerId: 'OFFER123' });
@@ -744,6 +745,7 @@ describe('Comprehensive Tools Coverage', () => {
     });
 
     it('ebay_bulk_publish_offer', async () => {
+      process.env.EBAY_PUBLISH_ENABLED = 'true';
       const mockResponse = { responses: [] };
       const requests = { requests: [] };
       vi.mocked(mockApi.inventory.bulkPublishOffer).mockResolvedValue(mockResponse);

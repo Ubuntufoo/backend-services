@@ -39,6 +39,11 @@ function assertEqual(actual: unknown, expected: unknown, label: string): void {
   }
 }
 
+function assertPublishEnabled(): void {
+  if (process.env.EBAY_PUBLISH_ENABLED === 'true') return;
+  throw new Error('eBay publishing is disabled. Set EBAY_PUBLISH_ENABLED=true only for an authorized publish window.');
+}
+
 function selectOfferFields(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null) {
     return {};
@@ -61,6 +66,8 @@ function selectOfferFields(value: unknown): Record<string, unknown> {
 
 async function main(): Promise<void> {
   loadRootEnvironment();
+  const execute = process.argv.slice(2).includes('--execute');
+  if (execute) assertPublishEnabled();
 
   const data = getSidecarDataAccess();
   const listing = await data.listings.getByListingId(LISTING_ID);
@@ -74,7 +81,6 @@ async function main(): Promise<void> {
     right.created_at.localeCompare(left.created_at)
   );
 
-  const execute = process.argv.slice(2).includes('--execute');
   let result: Record<string, unknown> | undefined;
 
   if (execute) {

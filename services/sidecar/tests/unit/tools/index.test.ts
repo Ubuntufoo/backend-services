@@ -764,15 +764,22 @@ describe('Tools Layer', () => {
     });
 
     it('should publish offer', async () => {
-      const mockResponse = { listingId: 'LISTING123' };
-      vi.mocked(mockApi.inventory.publishOffer).mockResolvedValue(mockResponse);
+      const previousPublishEnabled = process.env.EBAY_PUBLISH_ENABLED;
+      process.env.EBAY_PUBLISH_ENABLED = 'true';
+      try {
+        const mockResponse = { listingId: 'LISTING123' };
+        vi.mocked(mockApi.inventory.publishOffer).mockResolvedValue(mockResponse);
 
-      const result = await executeTool(mockApi, 'ebay_publish_offer', {
-        offerId: 'OFFER123',
-      });
+        const result = await executeTool(mockApi, 'ebay_publish_offer', {
+          offerId: 'OFFER123',
+        });
 
-      expect(mockApi.inventory.publishOffer).toHaveBeenCalledWith('OFFER123');
-      expect(result).toBe(mockResponse);
+        expect(mockApi.inventory.publishOffer).toHaveBeenCalledWith('OFFER123');
+        expect(result).toBe(mockResponse);
+      } finally {
+        if (previousPublishEnabled === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+        else process.env.EBAY_PUBLISH_ENABLED = previousPublishEnabled;
+      }
     });
   });
 

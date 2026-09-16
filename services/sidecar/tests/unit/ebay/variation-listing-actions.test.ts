@@ -147,6 +147,10 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
   if (options.historicalOverlong) {
     current.variations[0]!.selector_value = 'x'.repeat(66);
   }
+  // Production frozen publication snapshots persist the derived raw-card
+  // condition descriptor before payload construction. Keep this harness
+  // aligned so historical ownership reconstruction compares the same payload.
+  current.group.condition_descriptors = [{ name: '40001', values: ['400012'] }];
   const representativeImages = [
     { copyId, frontEpsUrl: 'https://i.ebayimg.com/images/g/front-a/s-l1600.jpg', backEpsUrl: 'https://i.ebayimg.com/images/g/back-a/s-l1600.jpg' },
     { copyId: copyBId, frontEpsUrl: 'https://i.ebayimg.com/images/g/front-b/s-l1600.jpg', backEpsUrl: 'https://i.ebayimg.com/images/g/back-b/s-l1600.jpg' },
@@ -224,6 +228,126 @@ describe('YP6.2 variation listing actions', () => {
   it('does not expose a manual quantity action', () => {
     const service = createVariationListingActionService({ data: data().value, publicImageBaseUrl: 'https://images.example.test' });
     expect('quantity' in service).toBe(false);
+  });
+
+  it('blocks the default eBay gateway for initial publish when the publish window is disabled', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    delete process.env.EBAY_PUBLISH_ENABLED;
+    try {
+      const access = data();
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+      });
+      await expect(service.publish(groupId, 3)).rejects.toMatchObject({
+        status: {
+          code: 'publish_disabled',
+          remoteState: 'known_unchanged',
+          stage: 'preflight',
+        },
+      });
+      expect(access.value.loadAggregate).not.toHaveBeenCalled();
+      expect(access.value.markPublishReady).not.toHaveBeenCalled();
+      expect(access.value.captureRevision).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
+  });
+
+  it('blocks the default eBay gateway for Publish Changes when the publish window is disabled', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'false';
+    try {
+      const access = data({ aggregate: aggregate({ lifecycle_state: 'active', last_confirmed_revision: 2 }) });
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+      });
+      await expect(service.publishChanges(groupId, 3)).rejects.toMatchObject({
+        status: {
+          code: 'publish_disabled',
+          remoteState: 'known_unchanged',
+          stage: 'preflight',
+        },
+      });
+      expect(access.value.loadAggregate).not.toHaveBeenCalled();
+      expect(access.value.captureRevision).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
+  });
+
+  it('blocks retry of an unresolved initial publication when the publish window is disabled', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'false';
+    try {
+      const access = data({ revisions: [revision()], checkpoints: [checkpoint('unknown', 'unknown')] });
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+      });
+      await expect(service.retry(groupId)).rejects.toMatchObject({
+        status: {
+          code: 'publish_disabled',
+          remoteState: 'known_unchanged',
+          stage: 'preflight',
+        },
+      });
+      expect(access.value.captureRevision).not.toHaveBeenCalled();
+      expect(access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
+  });
+
+  it('blocks retry of an unresolved active revision when the publish window is disabled', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'false';
+    try {
+      const access = data({ revisions: [revision(2)], checkpoints: [checkpoint('unknown', 'unknown')] });
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+      });
+      await expect(service.retry(groupId)).rejects.toMatchObject({
+        status: {
+          code: 'publish_disabled',
+          remoteState: 'known_unchanged',
+          stage: 'preflight',
+        },
+      });
+      expect(access.value.captureRevision).not.toHaveBeenCalled();
+      expect(access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
+  });
+
+  it('keeps dependency-injected remotes available as an explicit harness seam when publishing is disabled', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'false';
+    try {
+      const access = data();
+      const remoteFactory = vi.fn(async () => {
+        throw new Error('injected harness failure');
+      });
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory,
+      });
+      await expect(service.publish(groupId, 3)).rejects.not.toMatchObject({
+        status: { code: 'publish_disabled' },
+      });
+      expect(remoteFactory).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
   });
 
   it('returns a stable lifecycle error before remote publication', async () => {
