@@ -6,11 +6,31 @@ import {
   consumeImageGrouping,
   createEmptyWatcherGroupingState,
   startWatcherRuntime,
-  VariationListingSidecarRetryableError,
+  VariationListingCaptureRetryableError,
   WatcherBatchProcessingError,
   type VariationListingRuntimeProcessor,
   type VariationListingRuntimeOwnership,
 } from '../../src/index.js';
+
+const RETRY_PAIR_ID = '22222222-2222-4222-8222-222222222222';
+
+function retryableVariationError(
+  message = 'unavailable',
+  pairId = RETRY_PAIR_ID,
+  ownedSourcePaths: readonly string[] = [],
+): VariationListingCaptureRetryableError {
+  return new VariationListingCaptureRetryableError(message, 'gemini', pairId, ownedSourcePaths);
+}
+
+function stubRetryApproval(): void {
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) as { canRetry?: boolean } : {};
+    return new Response(JSON.stringify({ approved: body.canRetry === true }), {
+      status: 200,
+      headers: {'Content-Type': 'application/json'},
+    });
+  }));
+}
 
 class FakeWatcher {
   private addListeners: Array<(pathValue: string) => void> = [];
@@ -85,6 +105,7 @@ function createLogger() {
 describe('watcher runtime', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('renders default terminal events as readable stage lines with failure detail', async () => {
@@ -707,13 +728,14 @@ describe('watcher runtime', () => {
   it('automatically requeues retryable variation identity failures with the shared 1m/5m policy', async () => {
     vi.useFakeTimers();
     try {
+      stubRetryApproval();
       const fakeWatcher = new FakeWatcher();
       const logger = createLogger();
       const processor = {
         process: vi
           .fn()
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('all Gemini routes unavailable'))
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('all Gemini routes unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('all Gemini routes unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('all Gemini routes unavailable'))
           .mockResolvedValueOnce({
             kind: 'completed' as const,
             completionKind: 'new_variation' as const,
@@ -749,19 +771,16 @@ describe('watcher runtime', () => {
       await vi.runAllTicks();
       expect(processor.process).toHaveBeenCalledTimes(1);
       expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back.jpg']);
-      expect(logger.info).toHaveBeenCalledWith(
-        'variation_retry_scheduled',
-        expect.objectContaining({ delayMs: 60000, attemptsUsed: 1 })
-      );
-
-      await vi.advanceTimersByTimeAsync(60000);
+      await vi.runOnlyPendingTimersAsync();
+      await flushMicrotasks();
       expect(processor.process).toHaveBeenCalledTimes(2);
       expect(logger.info).toHaveBeenCalledWith(
-        'variation_retry_scheduled',
-        expect.objectContaining({ delayMs: 300000, attemptsUsed: 2 })
+        'variation_retry_authorized',
+        expect.objectContaining({ attemptNumber: 1, maxAttempts: 3 })
       );
 
-      await vi.advanceTimersByTimeAsync(300000);
+      await vi.runOnlyPendingTimersAsync();
+      await flushMicrotasks();
       expect(processor.process).toHaveBeenCalledTimes(3);
       expect(runtime.state.pendingQueue).toEqual([]);
       await runtime.close();
@@ -775,13 +794,14 @@ describe('watcher runtime', () => {
     const originalNextDelay = process.env.SIDECAR_JOB_RETRY_DELAY_NEXT_MS;
     process.env.SIDECAR_JOB_RETRY_DELAY_NEXT_MS = '20';
     try {
+      stubRetryApproval();
       const fakeWatcher = new FakeWatcher();
       const logger = createLogger();
       const processor = {
         process: vi
           .fn()
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('unavailable'))
           .mockResolvedValueOnce({
             kind: 'completed' as const,
             completionKind: 'new_variation' as const,
@@ -815,8 +835,8 @@ describe('watcher runtime', () => {
       await vi.runAllTicks();
       await vi.advanceTimersByTimeAsync(10);
       expect(logger.info).toHaveBeenCalledWith(
-        'variation_retry_scheduled',
-        expect.objectContaining({ attemptsUsed: 2, delayMs: 20 })
+        'variation_retry_authorized',
+        expect.objectContaining({ attemptNumber: 1, maxAttempts: 3 })
       );
 
       await runtime.close();
@@ -830,11 +850,12 @@ describe('watcher runtime', () => {
   it('does not let a new add bypass an active variation retry backoff', async () => {
     vi.useFakeTimers();
     try {
+      stubRetryApproval();
       const fakeWatcher = new FakeWatcher();
       const processor = {
         process: vi
           .fn()
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('all Gemini routes unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('all Gemini routes unavailable'))
           .mockResolvedValueOnce({
             kind: 'completed' as const,
             completionKind: 'new_variation' as const,
@@ -880,13 +901,80 @@ describe('watcher runtime', () => {
         '/watcher/incoming/new-front.jpg',
       ]);
 
-      await vi.advanceTimersByTimeAsync(59999);
+      await vi.advanceTimersByTimeAsync(999);
       expect(processor.process).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.runOnlyPendingTimersAsync();
+      await flushMicrotasks();
       expect(processor.process).toHaveBeenCalledTimes(3);
       expect(processor.process).toHaveBeenNthCalledWith(2, '/watcher/incoming/back.jpg');
       expect(processor.process).toHaveBeenNthCalledWith(3, '/watcher/incoming/new-front.jpg');
       expect(runtime.state.pendingQueue).toEqual([]);
+      await runtime.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores restored source files owned by a blocked retry pair and leaves the queue clean after retry', async () => {
+    vi.useFakeTimers();
+    try {
+      stubRetryApproval();
+      const fakeWatcher = new FakeWatcher();
+      const logger = createLogger();
+      const frontPath = '/watcher/incoming/front.jpg';
+      const backPath = '/watcher/incoming/back.jpg';
+      const processor = {
+        process: vi
+          .fn()
+          .mockRejectedValueOnce(retryableVariationError('front missing', RETRY_PAIR_ID, [frontPath, backPath]))
+          .mockResolvedValueOnce({
+            kind: 'completed' as const,
+            completionKind: 'duplicate_copy' as const,
+            copyId: 'copy',
+            groupId: 'group',
+            status: 'completed' as const,
+            variationId: 'variation',
+          })
+          .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group-2', pairId: 'pair-2' }),
+      };
+      const runtime = startWatcherRuntime({
+        config: {
+          baseDirectory: '/watcher',
+          incomingDirectory: '/watcher/incoming',
+          processedDirectory: '/watcher/processed',
+          variationListingCaptureSourceKey: 'station-main',
+          supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+          supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+        },
+        configInput: { env: { SIDECAR_JOB_RETRY_DELAY_FIRST_MS: '1' } },
+        logger,
+        processIncomingImageBatch: vi.fn(),
+        variationListingRuntimeProcessor: processor,
+        watch: () => fakeWatcher,
+      });
+
+      fakeWatcher.emitAdd(backPath);
+      await vi.runAllTicks();
+      expect(processor.process).toHaveBeenCalledTimes(1);
+      expect(runtime.state.pendingQueue).toEqual([backPath]);
+
+      fakeWatcher.emitAdd(frontPath);
+      await vi.runAllTicks();
+      expect(runtime.state.pendingQueue).toEqual([backPath]);
+      expect(logger.info).toHaveBeenCalledWith(
+        'variation_retry_support_input_ignored',
+        { path: frontPath, pairId: RETRY_PAIR_ID },
+      );
+
+      await vi.runOnlyPendingTimersAsync();
+      await flushMicrotasks();
+      expect(processor.process).toHaveBeenCalledTimes(2);
+      expect(processor.process).toHaveBeenNthCalledWith(2, backPath);
+      expect(runtime.state.pendingQueue).toEqual([]);
+
+      fakeWatcher.emitAdd('/watcher/incoming/new-front.jpg');
+      await flushMicrotasks();
+      expect(processor.process).toHaveBeenCalledTimes(3);
       await runtime.close();
     } finally {
       vi.useRealTimers();
@@ -966,9 +1054,10 @@ describe('watcher runtime', () => {
   it('stops a retryable variation after exactly three total waterfalls', async () => {
     vi.useFakeTimers();
     try {
+      stubRetryApproval();
       const fakeWatcher = new FakeWatcher();
       const processor = {
-        process: vi.fn().mockRejectedValue(new VariationListingSidecarRetryableError('unavailable')),
+        process: vi.fn().mockRejectedValue(retryableVariationError('unavailable')),
       };
       const runtime = startWatcherRuntime({
         config: {
@@ -995,7 +1084,11 @@ describe('watcher runtime', () => {
       fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
       await vi.runAllTicks();
       await vi.advanceTimersByTimeAsync(10);
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.runAllTicks();
       expect(processor.process).toHaveBeenCalledTimes(3);
       expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back.jpg']);
 
@@ -1015,6 +1108,7 @@ describe('watcher runtime', () => {
   it('does not replay consumed fronts when a later pair fails', async () => {
     vi.useFakeTimers();
     try {
+      stubRetryApproval();
       const fakeWatcher = new FakeWatcher();
       const processor = {
         process: vi
@@ -1029,7 +1123,7 @@ describe('watcher runtime', () => {
             variationId: 'variation-1',
           })
           .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group-2', pairId: 'pair-2' })
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('unavailable'))
           .mockResolvedValueOnce({
             kind: 'completed' as const,
             completionKind: 'new_variation' as const,
@@ -1075,7 +1169,7 @@ describe('watcher runtime', () => {
       expect(processor.process).toHaveBeenCalledTimes(4);
       expect(runtime.state.pendingQueue).toEqual(['/watcher/incoming/back-2.jpg']);
 
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(processor.process).toHaveBeenCalledTimes(5);
       expect(processor.process).toHaveBeenNthCalledWith(5, '/watcher/incoming/back-2.jpg');
       expect(runtime.state.pendingQueue).toEqual([]);
@@ -1092,7 +1186,7 @@ describe('watcher runtime', () => {
       const processor = {
         process: vi
           .fn()
-          .mockRejectedValue(new VariationListingSidecarRetryableError('unavailable')),
+          .mockRejectedValue(retryableVariationError('unavailable')),
       };
       const runtime = startWatcherRuntime({
         config: {
@@ -1146,7 +1240,7 @@ describe('watcher runtime', () => {
       fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
       await flushMicrotasks();
       const closePromise = runtime.close();
-      deferred.reject(new VariationListingSidecarRetryableError('unavailable'));
+      deferred.reject(retryableVariationError('unavailable'));
       await closePromise;
       expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(100);
@@ -1159,12 +1253,13 @@ describe('watcher runtime', () => {
   it('preserves a previously legacy-classified prefix across variation retries', async () => {
     vi.useFakeTimers();
     try {
+      stubRetryApproval();
       const fakeWatcher = new FakeWatcher();
       const processor = {
         process: vi
           .fn()
           .mockResolvedValueOnce({ kind: 'legacy' as const })
-          .mockRejectedValueOnce(new VariationListingSidecarRetryableError('unavailable'))
+          .mockRejectedValueOnce(retryableVariationError('unavailable'))
           .mockResolvedValueOnce({ kind: 'started' as const, groupId: 'group', pairId: 'pair' }),
       };
       const processIncomingImageBatch = vi.fn(async (input) => ({
@@ -1198,7 +1293,7 @@ describe('watcher runtime', () => {
       fakeWatcher.emitAdd('/watcher/incoming/back.jpg');
       await vi.runAllTicks();
       expect(processor.process).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(processor.process).toHaveBeenCalledTimes(3);
       expect(processor.process).toHaveBeenNthCalledWith(3, '/watcher/incoming/back.jpg');
       expect(processIncomingImageBatch).toHaveBeenLastCalledWith(

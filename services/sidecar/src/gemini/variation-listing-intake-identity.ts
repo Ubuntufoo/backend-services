@@ -40,6 +40,21 @@ export interface VariationListingIntakeIdentityDependencies {
   routeDataAccess?: Pick<SidecarDataAccess, 'aiModelRoutes' | 'dailyUsage'>;
 }
 
+export class VariationListingIntakeIdentitySourceUnavailableError extends Error {
+  readonly sourceLabel: string;
+
+  constructor(sourceLabel: string) {
+    super(`Variation listing intake identity source is temporarily unavailable: ${sourceLabel}.`);
+    this.name = 'VariationListingIntakeIdentitySourceUnavailableError';
+    this.sourceLabel = sourceLabel;
+  }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error &&
+    (error as { code?: unknown }).code === 'ENOENT';
+}
+
 function fail(message: string): never {
   throw new Error(`Variation listing intake identity failed: ${message}`);
 }
@@ -116,7 +131,10 @@ async function resolveCanonicalSourceRef(
   let canonicalSourceRef: string;
   try {
     canonicalSourceRef = await realpath(sourceRef);
-  } catch {
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      throw new VariationListingIntakeIdentitySourceUnavailableError(label);
+    }
     return fail(`${label} must resolve to a file inside WATCHER_INCOMING_DIR.`);
   }
   assertInsideIncomingDirectory(canonicalSourceRef, incomingDirectory, label);
@@ -135,7 +153,15 @@ function assertMatchingImageMimeTypes(
 }
 
 async function readBoundedImage(sourcePath: string, label: string): Promise<Buffer> {
-  const file = await open(sourcePath, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  let file;
+  try {
+    file = await open(sourcePath, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      throw new VariationListingIntakeIdentitySourceUnavailableError(label);
+    }
+    throw error;
+  }
   try {
     const stats = await file.stat();
     if (!stats.isFile()) {

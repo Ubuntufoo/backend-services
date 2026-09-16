@@ -36,11 +36,14 @@ export interface VariationListingIntakeStatusRequest {
   phase: VariationListingIntakeProcessingPhase;
   completionKind: 'new_variation' | 'duplicate_copy';
   message: string | null;
+  failureKind?: 'gemini' | 'storage' | 'gemini_and_storage' | 'persistence' | null;
+  retryable?: boolean;
 }
 
 export interface VariationListingSidecarClientDependencies {
   env?: VariationListingSidecarEnvironment;
   fetch?: typeof fetch;
+  signal?: AbortSignal;
 }
 
 export class VariationListingSidecarRetryableError extends Error {
@@ -132,6 +135,31 @@ export async function reportVariationListingIntakeStatus(
   }
 }
 
+export async function claimVariationListingRetryApproval(
+  captureSourceKey: string,
+  pairId: string,
+  canRetry: boolean,
+  dependencies: VariationListingSidecarClientDependencies = {},
+): Promise<boolean> {
+  const env = dependencies.env ?? process.env;
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const apiUrl = resolveSidecarApiUrl(env);
+  const headers = buildHeaders(env);
+  assertBearerTransportSafety(apiUrl, headers);
+  const response = await fetchImpl(`${apiUrl}/api/variation-listings/intake-retry/claim`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ captureSourceKey, pairId, canRetry }),
+    signal: dependencies.signal,
+  });
+  const payload = asObject(await response.json().catch(() => null));
+  if (!response.ok) {
+    const message = typeof payload?.message === 'string' ? payload.message : typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+    return fail(`retry approval claim failed: ${message}`);
+  }
+  return payload?.approved === true;
+}
+
 export async function requestVariationListingIdentityHandoff(
   input: VariationListingIdentityHandoffRequest,
   dependencies: VariationListingSidecarClientDependencies = {}
@@ -153,6 +181,15 @@ export async function requestVariationListingIdentityHandoff(
       : typeof payload?.error === 'string'
         ? payload.error
         : `HTTP ${response.status}`;
+    if (
+      response.status === 409 &&
+      payload?.error === 'variation_listing_identity_source_temporarily_unavailable' &&
+      payload?.retryable === true
+    ) {
+      throw new VariationListingSidecarRetryableError(
+        `Variation listing Sidecar identity source is retryable: ${message}`
+      );
+    }
     if (
       response.status === 503 &&
       payload?.error === 'gemini_routes_temporarily_unavailable' &&

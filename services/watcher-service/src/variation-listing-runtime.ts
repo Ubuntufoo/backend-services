@@ -9,13 +9,18 @@ import {
 
 import {
   VARIATION_LISTING_COPY_CONDITION_TOKENS,
+  buildVariationListingStorageReadyCompletionCommand,
+  cleanupVariationListingPreparedCompletionMedia,
   createVariationListingIntakeSessionReader,
+  prepareVariationListingCompletionMedia,
   routeVariationListingWatcherEvent,
   storeVariationListingCompletionCandidate,
   type VariationListingCopyConditionToken,
   type VariationListingManualPriceAmount,
   type VariationListingPendingMode,
+  VariationListingStoragePreparationError,
   type VariationListingStorageReadyCompletionCommand,
+  type VariationListingPreparedCompletionMedia,
   type VariationListingWatcherEventRoute,
 } from './variation-listing-intake.js';
 import {
@@ -25,6 +30,7 @@ import {
 import {
   reportVariationListingIntakeStatus,
   requestVariationListingIdentityHandoff,
+  VariationListingSidecarRetryableError,
   type VariationListingIntakeStatusRequest,
   type VariationListingSidecarEnvironment,
 } from './variation-listing-sidecar.js';
@@ -70,6 +76,7 @@ export type VariationListingRuntimeOwnership =
   | 'ignored'
   | {
       kind: 'variation';
+      pairId?: string;
       mode: VariationListingPendingMode;
       targetGroupId: string;
       targetVariationId: string | null;
@@ -83,6 +90,31 @@ export interface CreateVariationListingRuntimeProcessorInput {
   env?: NodeJS.ProcessEnv & VariationListingSidecarEnvironment;
 }
 
+export type VariationListingCaptureFailureKind =
+  | 'gemini'
+  | 'storage'
+  | 'gemini_and_storage'
+  | 'persistence';
+
+export class VariationListingCaptureRetryableError extends Error {
+  readonly failureKind: VariationListingCaptureFailureKind;
+  readonly pairId: string;
+  readonly ownedSourcePaths: readonly string[];
+
+  constructor(
+    message: string,
+    failureKind: VariationListingCaptureFailureKind,
+    pairId: string,
+    ownedSourcePaths: readonly string[] = [],
+  ) {
+    super(message);
+    this.name = 'VariationListingCaptureRetryableError';
+    this.failureKind = failureKind;
+    this.pairId = pairId;
+    this.ownedSourcePaths = [...new Set(ownedSourcePaths)];
+  }
+}
+
 export interface VariationListingRuntimeProcessorDependencies {
   getGroupCaptureState?: (groupId: string) => Promise<{
     conditionToken: VariationListingCopyConditionToken;
@@ -92,6 +124,9 @@ export interface VariationListingRuntimeProcessorDependencies {
   routeEvent?: typeof routeVariationListingWatcherEvent;
   startPersistence?: typeof startVariationListingIntakePersistence;
   storeCompletionCandidate?: typeof storeVariationListingCompletionCandidate;
+  prepareCompletionMedia?: typeof prepareVariationListingCompletionMedia;
+  buildCompletionCommand?: typeof buildVariationListingStorageReadyCompletionCommand;
+  cleanupCompletionMedia?: (media: VariationListingPreparedCompletionMedia) => Promise<void>;
   persistCompletion?: typeof persistVariationListingCompletion;
   requestIdentityHandoff?: typeof requestVariationListingIdentityHandoff;
   reportIntakeStatus?: (input: VariationListingIntakeStatusRequest) => Promise<void>;
@@ -198,6 +233,7 @@ function routeOwnership(route: VariationListingWatcherEventRoute): VariationList
   const pending = route.pendingPair;
   return {
     kind: 'variation',
+    pairId: pending.pairId,
     mode: pending.mode,
     targetGroupId: pending.targetGroupId,
     targetVariationId: pending.targetVariationId,
@@ -214,6 +250,7 @@ function sameOwnership(
   if (typeof left === 'string' || typeof right === 'string') return left === right;
   return (
     left.kind === right.kind &&
+    (left.pairId ?? null) === (right.pairId ?? null) &&
     left.mode === right.mode &&
     left.targetGroupId === right.targetGroupId &&
     left.targetVariationId === right.targetVariationId &&
@@ -221,6 +258,35 @@ function sameOwnership(
     left.priceAmount === right.priceAmount &&
     left.priceCurrency === right.priceCurrency
   );
+}
+
+function operatorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const firstLine = raw.split(/\r?\n/u, 1)[0]?.trim() ?? '';
+  const withoutObjectKeys = firstLine.replace(
+    /\bvariation-listing\/[A-Za-z0-9._~:/-]+/gu,
+    '[stored image]'
+  );
+  return withoutObjectKeys.replace(
+    /\/(?:[A-Za-z0-9._~-]+\/)+[A-Za-z0-9._~-]+/gu,
+    '[path]'
+  ).slice(0, 500);
+}
+
+function storageOperatorMessage(error: unknown): string {
+  const base = operatorMessage(error);
+  if (!(error instanceof VariationListingStoragePreparationError) || !error.cleanupMessage) {
+    return base;
+  }
+  return `${base} Cleanup: ${operatorMessage(error.cleanupMessage)}`.slice(0, 500);
+}
+
+function isRetryableIdentityError(error: unknown): boolean {
+  return error instanceof VariationListingSidecarRetryableError;
+}
+
+function isRetryableStorageError(error: unknown): boolean {
+  return error instanceof VariationListingStoragePreparationError && error.retryable;
 }
 
 export function createVariationListingRuntimeProcessor(
@@ -243,6 +309,12 @@ export function createVariationListingRuntimeProcessor(
     await persistVariationListingCompletion(command, { client: getClient() }));
   const storeCompletionCandidate =
     dependencies.storeCompletionCandidate ?? storeVariationListingCompletionCandidate;
+  const prepareCompletionMedia =
+    dependencies.prepareCompletionMedia ?? prepareVariationListingCompletionMedia;
+  const buildCompletionCommand =
+    dependencies.buildCompletionCommand ?? buildVariationListingStorageReadyCompletionCommand;
+  const cleanupCompletionMedia = dependencies.cleanupCompletionMedia ?? (async (media) =>
+    await cleanupVariationListingPreparedCompletionMedia(media));
   const requestIdentityHandoff = dependencies.requestIdentityHandoff ?? (async (request) =>
     await requestVariationListingIdentityHandoff(request, { env }));
   const reportIntakeStatus = dependencies.reportIntakeStatus ?? (async (status) =>
@@ -278,6 +350,27 @@ export function createVariationListingRuntimeProcessor(
     return state;
   };
   const pendingCompletionCommands = new Map<string, VariationListingStorageReadyCompletionCommand>();
+  const pendingCompletionKeysBySource = new Map<string, string>();
+  const completionCacheKey = (command: VariationListingStorageReadyCompletionCommand): string =>
+    `${command.captureSourceKey}\u0000${command.capturePairId}\u0000${command.backSourceRef}`;
+  const getPendingCompletionCommand = (sourcePath: string): VariationListingStorageReadyCompletionCommand | undefined => {
+    const key = pendingCompletionKeysBySource.get(sourcePath);
+    return key === undefined ? undefined : pendingCompletionCommands.get(key);
+  };
+  const cachePendingCompletionCommand = (command: VariationListingStorageReadyCompletionCommand): void => {
+    const key = completionCacheKey(command);
+    const previousKey = pendingCompletionKeysBySource.get(command.backSourceRef);
+    if (previousKey !== undefined && previousKey !== key) pendingCompletionCommands.delete(previousKey);
+    pendingCompletionCommands.set(key, command);
+    pendingCompletionKeysBySource.set(command.backSourceRef, key);
+  };
+  const clearPendingCompletionCommand = (command: VariationListingStorageReadyCompletionCommand): void => {
+    const key = completionCacheKey(command);
+    if (pendingCompletionCommands.get(key) === command) pendingCompletionCommands.delete(key);
+    if (pendingCompletionKeysBySource.get(command.backSourceRef) === key) {
+      pendingCompletionKeysBySource.delete(command.backSourceRef);
+    }
+  };
 
   return {
     snapshot: async (sourcePath) =>
@@ -288,8 +381,12 @@ export function createVariationListingRuntimeProcessor(
         }),
       ),
     process: async (sourcePath, capturedOwnership) => {
-      const cachedCommand = pendingCompletionCommands.get(sourcePath);
-      if (cachedCommand) {
+      const cachedCommand = getPendingCompletionCommand(sourcePath);
+      const cachedPairMatchesOwnership =
+        cachedCommand !== undefined &&
+        (capturedOwnership === undefined ||
+          (typeof capturedOwnership === 'object' && capturedOwnership.pairId === cachedCommand.capturePairId));
+      if (cachedCommand && cachedPairMatchesOwnership) {
         await safeReportIntakeStatus({
           captureSourceKey: cachedCommand.captureSourceKey,
           targetGroupId: cachedCommand.targetGroupId,
@@ -301,7 +398,7 @@ export function createVariationListingRuntimeProcessor(
         try {
           const persistenceStartedAt = Date.now();
           const persisted = await persistCompletion(cachedCommand);
-          pendingCompletionCommands.delete(sourcePath);
+          clearPendingCompletionCommand(cachedCommand);
           await safeReportIntakeStatus({
             captureSourceKey: cachedCommand.captureSourceKey,
             targetGroupId: cachedCommand.targetGroupId,
@@ -325,15 +422,23 @@ export function createVariationListingRuntimeProcessor(
             variationId: cachedCommand.variationId,
           };
         } catch (error) {
+          const message = storageOperatorMessage(error);
           await safeReportIntakeStatus({
             captureSourceKey: cachedCommand.captureSourceKey,
             targetGroupId: cachedCommand.targetGroupId,
             pairId: cachedCommand.capturePairId,
             phase: 'failed',
             completionKind: cachedCommand.completionKind,
-            message: error instanceof Error ? error.message.slice(0, 500) : 'Variation capture persistence retry failed.',
+            message,
+            failureKind: 'persistence',
+            retryable: true,
           });
-          throw error;
+          throw new VariationListingCaptureRetryableError(
+            message,
+            'persistence',
+            cachedCommand.capturePairId,
+            [cachedCommand.frontSourceRef, cachedCommand.backSourceRef],
+          );
         }
       }
 
@@ -349,6 +454,12 @@ export function createVariationListingRuntimeProcessor(
       });
       if (capturedOwnership !== undefined && !sameOwnership(routeOwnership(route), capturedOwnership)) {
         return fail('capture workspace ownership or target configuration changed while the image was queued.');
+      }
+      const routePairId = route.kind === 'completion_candidate' || route.kind === 'duplicate_front'
+        ? route.pendingPair.pairId
+        : null;
+      if (cachedCommand && routePairId !== cachedCommand.capturePairId) {
+        clearPendingCompletionCommand(cachedCommand);
       }
       if (route.kind === 'legacy') return { kind: 'legacy' };
       if (route.kind === 'ignored') return { kind: 'ignored', reason: route.reason };
@@ -392,28 +503,87 @@ export function createVariationListingRuntimeProcessor(
         completionKind: route.completionKind,
         message: null,
       });
-      const identityStartedAt = Date.now();
-      let identityHandoff;
-      try {
-        identityHandoff = route.completionKind === 'new_variation'
-          ? await requestIdentityHandoff({
-              variationId,
-              frontSourceRef: route.pendingPair.frontSourceRef,
-              backSourceRef: route.backSourceRef,
-            })
-          : null;
-      } catch (error) {
-        await safeReportIntakeStatus({
-          captureSourceKey: route.captureSourceKey,
-          targetGroupId: route.pendingPair.targetGroupId,
-          pairId: route.pendingPair.pairId,
-          phase: 'failed',
-          completionKind: route.completionKind,
-          message: error instanceof Error ? error.message.slice(0, 500) : 'Variation capture processing failed.',
-        });
-        throw error;
-      }
+      let identityHandoff = null;
+      let identityMs = 0;
+      let storageMs = 0;
+      let command: VariationListingStorageReadyCompletionCommand;
+
       if (route.completionKind === 'new_variation') {
+        const identityStartedAt = Date.now();
+        const storageStartedAt = Date.now();
+        const identityPromise = Promise.resolve()
+          .then(() => requestIdentityHandoff({
+            variationId,
+            frontSourceRef: route.pendingPair.frontSourceRef,
+            backSourceRef: route.backSourceRef,
+          }))
+          .then((value) => ({ value, durationMs: elapsedMs(identityStartedAt) }));
+        const storagePromise = Promise.resolve()
+          .then(() => prepareCompletionMedia(
+            completionRoute,
+            { copyId, variationId },
+          ))
+          .then((value) => ({ value, durationMs: elapsedMs(storageStartedAt) }));
+        const [identityResult, storageResult] = await Promise.allSettled([
+          identityPromise,
+          storagePromise,
+        ]);
+
+        if (identityResult.status === 'rejected' || storageResult.status === 'rejected') {
+          let cleanupFailure: string | null = null;
+          if (identityResult.status === 'rejected' && storageResult.status === 'fulfilled') {
+            try {
+              await cleanupCompletionMedia(storageResult.value.value);
+            } catch (error) {
+              cleanupFailure = error instanceof VariationListingStoragePreparationError
+                ? error.cleanupMessage ?? operatorMessage(error)
+                : operatorMessage(error);
+            }
+          }
+          const identityFailure = identityResult.status === 'rejected' ? operatorMessage(identityResult.reason) : null;
+          const storageFailure = storageResult.status === 'rejected' ? storageOperatorMessage(storageResult.reason) : null;
+          const failureKind: VariationListingCaptureFailureKind = identityFailure && storageFailure
+            ? 'gemini_and_storage'
+            : identityFailure
+              ? 'gemini'
+              : 'storage';
+          const failureParts = [
+            identityFailure ? `Gemini: ${identityFailure}` : null,
+            storageFailure ? `Image storage: ${storageFailure}` : null,
+            cleanupFailure ? `Cleanup: ${cleanupFailure}` : null,
+          ].filter((value): value is string => value !== null);
+          const retryable = cleanupFailure === null &&
+            (identityResult.status === 'fulfilled' || isRetryableIdentityError(identityResult.reason)) &&
+            (storageResult.status === 'fulfilled' || isRetryableStorageError(storageResult.reason));
+          const message = failureParts.join(' | ').slice(0, 500);
+          await safeReportIntakeStatus({
+            captureSourceKey: route.captureSourceKey,
+            targetGroupId: route.pendingPair.targetGroupId,
+            pairId: route.pendingPair.pairId,
+            phase: 'failed',
+            completionKind: route.completionKind,
+            message,
+            failureKind,
+            retryable,
+          });
+          if (retryable) {
+            throw new VariationListingCaptureRetryableError(
+              message,
+              failureKind,
+              route.pendingPair.pairId,
+              [route.pendingPair.frontSourceRef, route.backSourceRef],
+            );
+          }
+          throw (identityResult.status === 'rejected'
+            ? identityResult.reason
+            : storageResult.status === 'rejected'
+              ? storageResult.reason
+              : new Error(message));
+        }
+
+        identityHandoff = identityResult.value.value;
+        identityMs = identityResult.value.durationMs;
+        storageMs = storageResult.value.durationMs;
         await safeReportIntakeStatus({
           captureSourceKey: route.captureSourceKey,
           targetGroupId: route.pendingPair.targetGroupId,
@@ -422,61 +592,105 @@ export function createVariationListingRuntimeProcessor(
           completionKind: route.completionKind,
           message: null,
         });
-      }
-      const identityMs = route.completionKind === 'new_variation' ? elapsedMs(identityStartedAt) : 0;
-      const storageStartedAt = Date.now();
-      const ids = route.completionKind === 'new_variation'
-        ? [copyId, variationId]
-        : [copyId];
-      let idIndex = 0;
-      let command: VariationListingStorageReadyCompletionCommand;
-      try {
-        command = await storeCompletionCandidate(
-        completionRoute,
-        route.completionKind === 'new_variation'
-          ? {
+        try {
+          command = buildCompletionCommand(
+            completionRoute,
+            {
               completionKind: 'new_variation',
               conditionToken,
-              selectorValue: identityHandoff!.selectorValue,
-              variationMetadata: identityHandoff!.variationMetadata,
-            }
-          : {
+              selectorValue: identityHandoff.selectorValue,
+              variationMetadata: identityHandoff.variationMetadata,
+            },
+            storageResult.value.value,
+          );
+        } catch (error) {
+          let cleanupFailure: string | null = null;
+          try {
+            await cleanupCompletionMedia(storageResult.value.value);
+          } catch (cleanupError) {
+            cleanupFailure = cleanupError instanceof VariationListingStoragePreparationError
+              ? cleanupError.cleanupMessage ?? operatorMessage(cleanupError)
+              : operatorMessage(cleanupError);
+          }
+          const message = [
+            `Image storage: ${operatorMessage(error)}`,
+            cleanupFailure ? `Cleanup: ${cleanupFailure}` : null,
+          ].filter((value): value is string => value !== null).join(' | ').slice(0, 500);
+          await safeReportIntakeStatus({
+            captureSourceKey: route.captureSourceKey,
+            targetGroupId: route.pendingPair.targetGroupId,
+            pairId: route.pendingPair.pairId,
+            phase: 'failed',
+            completionKind: route.completionKind,
+            message,
+            failureKind: 'storage',
+            retryable: false,
+          });
+          throw error;
+        }
+      } else {
+        const storageStartedAt = Date.now();
+        try {
+          command = await storeCompletionCandidate(
+            completionRoute,
+            {
               completionKind: 'duplicate_copy',
               conditionToken,
             },
-        {
-          createId: () => ids[idIndex++] ?? fail('storage requested more capture-owned IDs than expected.'),
+            {
+              createId: () => copyId,
+            },
+          );
+          storageMs = elapsedMs(storageStartedAt);
+        } catch (error) {
+          const message = storageOperatorMessage(error);
+          const retryable = isRetryableStorageError(error);
+          await safeReportIntakeStatus({
+            captureSourceKey: route.captureSourceKey,
+            targetGroupId: route.pendingPair.targetGroupId,
+            pairId: route.pendingPair.pairId,
+            phase: 'failed',
+            completionKind: route.completionKind,
+            message,
+            failureKind: 'storage',
+            retryable,
+          });
+          if (retryable) {
+            throw new VariationListingCaptureRetryableError(
+              message,
+              'storage',
+              route.pendingPair.pairId,
+              [route.pendingPair.frontSourceRef, route.backSourceRef],
+            );
+          }
+          throw error;
         }
-      );
-      } catch (error) {
-        await safeReportIntakeStatus({
-          captureSourceKey: route.captureSourceKey,
-          targetGroupId: route.pendingPair.targetGroupId,
-          pairId: route.pendingPair.pairId,
-          phase: 'failed',
-          completionKind: route.completionKind,
-          message: error instanceof Error ? error.message.slice(0, 500) : 'Variation capture saving failed.',
-        });
-        throw error;
       }
-      pendingCompletionCommands.set(route.backSourceRef, command);
-      const storageMs = elapsedMs(storageStartedAt);
+      cachePendingCompletionCommand(command);
       const persistenceStartedAt = Date.now();
       let persisted;
       try {
         persisted = await persistCompletion(command);
       } catch (error) {
+        const message = storageOperatorMessage(error);
         await safeReportIntakeStatus({
           captureSourceKey: route.captureSourceKey,
           targetGroupId: route.pendingPair.targetGroupId,
           pairId: route.pendingPair.pairId,
           phase: 'failed',
           completionKind: route.completionKind,
-          message: error instanceof Error ? error.message.slice(0, 500) : 'Variation capture persistence failed.',
+          message,
+          failureKind: 'persistence',
+          retryable: true,
         });
-        throw error;
+        throw new VariationListingCaptureRetryableError(
+          message,
+          'persistence',
+          route.pendingPair.pairId,
+          [route.pendingPair.frontSourceRef, route.backSourceRef],
+        );
       }
-      pendingCompletionCommands.delete(route.backSourceRef);
+      clearPendingCompletionCommand(command);
       const persistenceMs = elapsedMs(persistenceStartedAt);
       await safeReportIntakeStatus({
         captureSourceKey: route.captureSourceKey,

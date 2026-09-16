@@ -33,20 +33,26 @@ import {
   GeminiFallbackExecutionError,
   getGeminiDeterministicFailure,
 } from '@/gemini/gemini-model-router.js';
-import { generateVariationListingIntakeIdentityHandoff } from '@/gemini/variation-listing-intake-identity.js';
+import {
+  generateVariationListingIntakeIdentityHandoff,
+  VariationListingIntakeIdentitySourceUnavailableError,
+} from '@/gemini/variation-listing-intake-identity.js';
 import {
   getVariationListingTrustedCommonEbayAspects,
   requireVariationListingCreationProfile,
 } from '@/ebay/variation-listing-profiles.js';
 import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
 import {
+  claimVariationListingIntakeRetry,
   clearVariationListingIntakeProcessingStatus,
   getVariationListingIntakeProcessingStatus,
+  requestVariationListingIntakeRetry,
   setVariationListingIntakeProcessingStatus,
 } from '@/http/variation-listing-intake-status.js';
 import {
   createVariationListingGroupRequestSchema,
   configureVariationListingIntakeRequestSchema,
+  claimVariationListingIntakeRetryRequestSchema,
   updateVariationListingIntakeStatusRequestSchema,
   generateVariationListingIntakeIdentityRequestSchema,
   updateVariationListingPriceRequestSchema,
@@ -277,6 +283,14 @@ function sendError(
     res.status(409).json({ error: 'variation_listing_state_stale', message: error.message });
     return;
   }
+  if (error instanceof VariationListingIntakeIdentitySourceUnavailableError) {
+    res.status(409).json({
+      error: 'variation_listing_identity_source_temporarily_unavailable',
+      message: error.message,
+      retryable: true,
+    });
+    return;
+  }
   if (
     error instanceof GeminiFallbackExecutionError &&
     error.fallbackExhausted &&
@@ -372,10 +386,12 @@ function serializeCopy(copy: VariationListingAggregateSnapshot['copies'][number]
 function serializeIntakeSession(session: VariationListingIntakeSession) {
   const pendingPair = session.pendingPair;
   const processingStatus = getVariationListingIntakeProcessingStatus(session.captureSourceKey);
+  const pendingPairId = pendingPair?.pair_id ?? null;
   const visibleProcessingStatus =
     processingStatus !== null &&
     session.targetGroupId !== null &&
-    processingStatus.targetGroupId === session.targetGroupId
+    processingStatus.targetGroupId === session.targetGroupId &&
+    (processingStatus.pairId === pendingPairId || (pendingPair === null && processingStatus.phase === 'ready'))
       ? processingStatus
       : null;
   return {
@@ -748,6 +764,57 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     })
   );
 
+  router.post('/intake-session/retry', async (_req: Request, res: Response) =>
+    await runRoute(res, async () => {
+      const session = await readIntakeSessionOrNull(getDataAccess());
+      const pendingPair = session?.pendingPair;
+      const pairId = pendingPair && typeof pendingPair === 'object' && !Array.isArray(pendingPair)
+        ? (pendingPair as { pair_id?: unknown }).pair_id
+        : null;
+      if (!session || typeof pairId !== 'string') {
+        throw new VariationListingIntakeConflictError(
+          'variation_listing_retry_unavailable',
+          'There is no pending Variation capture pair to retry.'
+        );
+      }
+      const status = requestVariationListingIntakeRetry(session.captureSourceKey, pairId);
+      if (!status) {
+        throw new VariationListingIntakeConflictError(
+          'variation_listing_retry_unavailable',
+          'The current Variation capture failure is not safely retryable.'
+        );
+      }
+      res.json({ session: serializeIntakeSession(session) });
+    })
+  );
+
+  router.post('/intake-retry/claim', async (req: Request, res: Response) => {
+    const body = parseOrSend(res, claimVariationListingIntakeRetryRequestSchema, req.body);
+    if (!body) return;
+    return await runRoute(res, async () => {
+      const session = await readIntakeSessionOrNull(getDataAccess());
+      const pendingPair = session?.pendingPair;
+      const currentPairId = pendingPair && typeof pendingPair === 'object' && !Array.isArray(pendingPair)
+        ? (pendingPair as { pair_id?: unknown }).pair_id
+        : null;
+      if (
+        !session ||
+        session.captureSourceKey !== body.captureSourceKey ||
+        typeof currentPairId !== 'string' ||
+        currentPairId !== body.pairId
+      ) {
+        res.json({ approved: false });
+        return;
+      }
+      const claimed = claimVariationListingIntakeRetry(
+        body.captureSourceKey,
+        body.pairId,
+        { canRetry: body.canRetry },
+      );
+      res.json({ approved: claimed.approved });
+    });
+  });
+
   router.post('/intake-status', async (req: Request, res: Response) => {
     const body = parseOrSend(res, updateVariationListingIntakeStatusRequestSchema, req.body);
     if (!body) return;
@@ -817,6 +884,8 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         phase: body.phase,
         completionKind: body.completionKind,
         message: body.message ?? null,
+        failureKind: body.failureKind ?? null,
+        retryable: body.retryable ?? false,
       });
       res.json({ status });
     });

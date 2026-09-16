@@ -430,6 +430,7 @@ describe('variation listing image ownership and storage', () => {
 
   it('stops on a storage failure and never invokes any persistence seam', async () => {
     const uploadStoredImage = vi.fn().mockRejectedValueOnce(new Error('R2 unavailable'));
+    const deleteStoredImages = vi.fn(async () => undefined);
 
     await expect(
       storeVariationListingCompletionCandidate(
@@ -440,15 +441,21 @@ describe('variation listing image ownership and storage', () => {
         },
         {
           createId: () => COPY_ID,
+          deleteStoredImages,
           readImage: async (sourcePath) => Buffer.from(sourcePath),
           uploadStoredImage,
         }
       )
     ).rejects.toThrow('R2 unavailable');
 
-    // Both uploads are launched together; Promise.all still rejects on the
-    // first failure, but the sibling request has already started.
+    // Both uploads fully settle, then both deterministic intended keys are
+    // deleted even though only one upload reported a failure.
     expect(uploadStoredImage).toHaveBeenCalledTimes(2);
+    expect(deleteStoredImages).toHaveBeenCalledTimes(1);
+    expect(deleteStoredImages.mock.calls[0]?.[0]).toEqual([
+      expect.stringMatching(/\/front-[0-9a-f]{12}\./),
+      expect.stringMatching(/\/back-[0-9a-f]{12}\./),
+    ]);
   });
 
   it('starts front/back reads and uploads concurrently with deterministic ordering', async () => {
@@ -526,9 +533,19 @@ describe('variation listing runtime retry ownership', () => {
       variationMetadata: { Set: 'Topps' } as Json,
     };
     const storeCompletionCandidate = vi.fn(async () => command);
+    const prepareCompletionMedia = vi.fn(async (_route, ids: {copyId: string; variationId: string}) => ({
+      backR2Key: command.backR2Key,
+      backSourceRef: command.backSourceRef,
+      copyId: ids.copyId,
+      frontR2Key: command.frontR2Key,
+      frontSourceRef: command.frontSourceRef,
+      variationId: ids.variationId,
+    }));
+    const buildCompletionCommand = vi.fn(() => command);
     const persistCompletion = vi
       .fn()
       .mockRejectedValueOnce(new Error('completion response lost'))
+      .mockRejectedValueOnce(new Error('completion response still unavailable'))
       .mockResolvedValueOnce({ status: 'already_completed' });
     const reportIntakeStatus = vi.fn(async () => undefined);
     const processor = createVariationListingRuntimeProcessor(
@@ -537,13 +554,24 @@ describe('variation listing runtime retry ownership', () => {
         routeEvent,
         getGroupConditionToken: vi.fn(async () => 'EXCELLENT'),
         requestIdentityHandoff,
+        prepareCompletionMedia,
+        buildCompletionCommand,
         storeCompletionCandidate,
         persistCompletion,
         reportIntakeStatus,
       }
     );
 
-    await expect(processor.process('/incoming/back.png')).rejects.toThrow('completion response lost');
+    await expect(processor.process('/incoming/back.png')).rejects.toMatchObject({
+      name: 'VariationListingCaptureRetryableError',
+      pairId: PAIR_ID,
+      failureKind: 'persistence',
+    });
+    await expect(processor.process('/incoming/back.png')).rejects.toMatchObject({
+      name: 'VariationListingCaptureRetryableError',
+      pairId: PAIR_ID,
+      failureKind: 'persistence',
+    });
     const retry = await processor.process('/incoming/back.png');
 
     expect(retry).toMatchObject({
@@ -555,10 +583,13 @@ describe('variation listing runtime retry ownership', () => {
       variationId: NEW_VARIATION_ID,
     });
     expect(routeEvent).toHaveBeenCalledTimes(1);
-    expect(storeCompletionCandidate).toHaveBeenCalledTimes(1);
-    expect(persistCompletion).toHaveBeenCalledTimes(2);
+    expect(prepareCompletionMedia).toHaveBeenCalledTimes(1);
+    expect(buildCompletionCommand).toHaveBeenCalledTimes(1);
+    expect(persistCompletion).toHaveBeenCalledTimes(3);
     expect(reportIntakeStatus.mock.calls.map(([status]) => status.phase)).toEqual([
       'generating_identity',
+      'saving',
+      'failed',
       'saving',
       'failed',
       'saving',
@@ -617,6 +648,11 @@ describe('variation listing runtime retry ownership', () => {
           selectorValue: 'Card', variationMetadata: {} as Json,
           timings: { imageReadEncodeMs: 2, generationMs: 3, totalMs: 5 },
         })),
+        prepareCompletionMedia: vi.fn(async (_route, ids: {copyId: string; variationId: string}) => ({
+          backR2Key: 'back', backSourceRef: '/incoming/back.png', copyId: ids.copyId,
+          frontR2Key: 'front', frontSourceRef: '/incoming/front.JPG', variationId: ids.variationId,
+        })),
+        buildCompletionCommand: vi.fn(() => command),
         storeCompletionCandidate: vi.fn(async () => command),
         persistCompletion: vi.fn(async () => ({ status: 'completed' as const })),
         reportIntakeStatus: vi.fn(async () => undefined),

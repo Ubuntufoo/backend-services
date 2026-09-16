@@ -3,8 +3,6 @@ import { basename, isAbsolute, normalize, resolve } from 'node:path';
 import {
   DEFAULT_AI_GENERATION_MAX_ATTEMPTS,
   DEFAULT_RECOVERABLE_RETRY_DELAY_FIRST_MS,
-  DEFAULT_RECOVERABLE_RETRY_DELAY_NEXT_MS,
-  getRecoverableRetryDelayMs,
   resolvePositiveIntegerSetting,
 } from '@ebay-inventory/types';
 
@@ -18,10 +16,11 @@ import {
 } from './process-image-batch.js';
 import {
   createVariationListingRuntimeProcessor,
+  VariationListingCaptureRetryableError,
   type VariationListingRuntimeProcessor,
   type VariationListingRuntimeOwnership,
 } from './variation-listing-runtime.js';
-import { VariationListingSidecarRetryableError } from './variation-listing-sidecar.js';
+import { claimVariationListingRetryApproval } from './variation-listing-sidecar.js';
 
 export interface WatcherRuntimeState {
   pendingQueue: string[];
@@ -248,7 +247,11 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
   let closePromise: Promise<void> | null = null;
   const variationRetryAttempts = new Map<string, number>();
   let variationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let variationRetryPollPromise: Promise<void> | null = null;
+  let variationRetryAbortController: AbortController | null = null;
   let blockedVariationPath: string | null = null;
+  let blockedVariationPairId: string | null = null;
+  const blockedVariationOwnedSourcePaths = new Set<string>();
   let standardGroupingPersistenceHealthy = true;
   const consumedVariationPaths = new Set<string>();
   const legacyPathHints = new Set<string>(initialStandardReplayPaths);
@@ -272,42 +275,82 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
     }
   }
 
-  function scheduleVariationRetry(sourcePath: string): boolean {
-    if (state.isClosed) return false;
-    const attemptsUsed = (variationRetryAttempts.get(sourcePath) ?? 0) + 1;
-    variationRetryAttempts.set(sourcePath, attemptsUsed);
-    // Preserve process-level retry settings while allowing explicit watcher
-    // embedder/test overrides to win on a per-key basis.
+  function scheduleVariationRetryApprovalPoll(sourcePath: string, pairId: string): void {
+    if (state.isClosed || variationRetryTimer || variationRetryPollPromise || !captureSourceKey) return;
     const retryEnv = {
       ...process.env,
       ...(input.configInput?.env ?? {}),
     } as NodeJS.ProcessEnv;
+    const attemptsUsed = variationRetryAttempts.get(sourcePath) ?? 0;
     const maxAttempts = resolvePositiveIntegerSetting(
       retryEnv.SIDECAR_JOB_MAX_ATTEMPTS_GENERATE_AI,
       DEFAULT_AI_GENERATION_MAX_ATTEMPTS
     );
-    if (attemptsUsed >= maxAttempts) {
-      logger.error('variation_retry_exhausted', { sourcePath, attemptsUsed, maxAttempts });
-      return false;
-    }
-    const firstDelayMs = resolvePositiveIntegerSetting(
+    const canRetry = attemptsUsed + 1 < maxAttempts;
+    const pollDelayMs = resolvePositiveIntegerSetting(
       retryEnv.SIDECAR_JOB_RETRY_DELAY_FIRST_MS,
       DEFAULT_RECOVERABLE_RETRY_DELAY_FIRST_MS
     );
-    const nextDelayMs = resolvePositiveIntegerSetting(
-      retryEnv.SIDECAR_JOB_RETRY_DELAY_NEXT_MS,
-      DEFAULT_RECOVERABLE_RETRY_DELAY_NEXT_MS
-    );
-    const delayMs = getRecoverableRetryDelayMs(attemptsUsed, firstDelayMs, nextDelayMs);
-    logger.info('variation_retry_scheduled', { sourcePath, attemptsUsed, maxAttempts, delayMs });
-    // There is one authoritative retry deadline. New add events append to the
-    // retained queue but never replace or bypass an existing timer.
-    if (variationRetryTimer) return true;
     variationRetryTimer = setTimeout(() => {
       variationRetryTimer = null;
-      void drainQueue();
-    }, delayMs);
-    return true;
+      const controller = new AbortController();
+      variationRetryAbortController = controller;
+      let retryAuthorized = false;
+      let retryPollAgain = false;
+      const poll = (async () => {
+        try {
+          const approved = await claimVariationListingRetryApproval(
+            captureSourceKey,
+            pairId,
+            canRetry,
+            { env: retryEnv, signal: controller.signal },
+          );
+          if (approved) {
+            variationRetryAttempts.set(sourcePath, attemptsUsed + 1);
+            blockedVariationPath = null;
+            blockedVariationPairId = null;
+            retryAuthorized = true;
+            logger.info('variation_retry_authorized', {
+              sourcePath,
+              attemptNumber: attemptsUsed + 1,
+              maxAttempts,
+            });
+            return;
+          }
+          if (!canRetry) {
+            logger.error('variation_retry_exhausted', { sourcePath, attemptsUsed, maxAttempts });
+            return;
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            logger.error('variation_retry_approval_check_failed', {
+              sourcePath,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        retryPollAgain = !state.isClosed && blockedVariationPath === sourcePath && blockedVariationPairId === pairId;
+      })();
+      const trackedPoll = poll.then(() => {
+        if (variationRetryPollPromise === trackedPoll) {
+          variationRetryPollPromise = null;
+          variationRetryAbortController = null;
+        }
+        if (retryAuthorized && !state.isClosed) {
+          void drainQueue();
+        }
+        if (retryPollAgain && !state.isClosed) {
+          scheduleVariationRetryApprovalPoll(sourcePath, pairId);
+        }
+      }, () => {
+        if (variationRetryPollPromise === trackedPoll) {
+          variationRetryPollPromise = null;
+          variationRetryAbortController = null;
+        }
+      });
+      variationRetryPollPromise = trackedPoll;
+    }, pollDelayMs);
+    variationRetryTimer.unref?.();
   }
 
   function removeConsumedVariationInputs(): void {
@@ -337,6 +380,7 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
       variationRetryAttempts.delete(blockedVariationPath);
       variationRouteSnapshots.delete(blockedVariationPath);
       blockedVariationPath = null;
+      blockedVariationPairId = null;
     }
 
     state.isProcessing = true;
@@ -350,6 +394,8 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
           let variationRetryInputs: string[] = [];
           let variationRetrySource: string | null = null;
           let variationRetryable = false;
+          let variationRetryPairId: string | null = null;
+          let variationRetryOwnedSourcePaths: readonly string[] = [];
           let legacyInputsForBatch: string[] = [];
           try {
             const legacyInputs: string[] = [];
@@ -407,11 +453,18 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                 variationProcessedCount += 1;
                 consumedVariationPaths.add(sourcePath);
                 variationRetryAttempts.delete(sourcePath);
+                if (blockedVariationOwnedSourcePaths.has(sourcePath)) {
+                  blockedVariationOwnedSourcePaths.clear();
+                }
                 logger.info(`variation_${outcome.kind}`, outcome);
               } catch (error) {
                 variationRetryInputs = [...legacyInputs, ...snapshot.slice(sourceIndex)];
                 variationRetrySource = sourcePath;
-                variationRetryable = error instanceof VariationListingSidecarRetryableError;
+                if (error instanceof VariationListingCaptureRetryableError) {
+                  variationRetryable = true;
+                  variationRetryPairId = error.pairId;
+                  variationRetryOwnedSourcePaths = error.ownedSourcePaths;
+                }
                 throw error;
               }
             }
@@ -517,13 +570,22 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
               stack: error instanceof Error ? error.stack : undefined,
             });
 
-            if (variationRetryable && variationRetrySource) {
-              if (!scheduleVariationRetry(variationRetrySource)) {
-                blockedVariationPath = variationRetrySource;
-              }
-            } else if (variationRetrySource) {
-              variationRetryAttempts.delete(variationRetrySource);
+            if (variationRetrySource) {
               blockedVariationPath = variationRetrySource;
+              if (variationRetryable) {
+                blockedVariationPairId = variationRetryPairId;
+                blockedVariationOwnedSourcePaths.clear();
+                for (const ownedPath of variationRetryOwnedSourcePaths) {
+                  blockedVariationOwnedSourcePaths.add(normalizeWatcherRuntimePath(ownedPath));
+                }
+                if (variationRetryPairId) {
+                  scheduleVariationRetryApprovalPoll(variationRetrySource, variationRetryPairId);
+                }
+              } else {
+                variationRetryAttempts.delete(variationRetrySource);
+                blockedVariationPairId = null;
+                blockedVariationOwnedSourcePaths.clear();
+              }
             }
 
             if (error instanceof WatcherBatchProcessingError || variationRetryInputs.length > 0) {
@@ -556,6 +618,13 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
     }
 
     const normalizedPath = normalizeWatcherRuntimePath(pathValue);
+    if (blockedVariationOwnedSourcePaths.has(normalizedPath)) {
+      logger.info('variation_retry_support_input_ignored', {
+        path: normalizedPath,
+        pairId: blockedVariationPairId,
+      });
+      return;
+    }
     if (variationRuntime && consumedVariationPaths.has(normalizedPath)) {
       logger.info('variation_input_ignored_consumed', {
         path: normalizedPath,
@@ -621,10 +690,16 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
           clearTimeout(variationRetryTimer);
           variationRetryTimer = null;
         }
+        variationRetryAbortController?.abort();
         await watcher.close();
 
         if (activeDrainPromise) {
           await activeDrainPromise;
+        }
+        if (variationRetryPollPromise) {
+          await variationRetryPollPromise;
+          variationRetryPollPromise = null;
+          variationRetryAbortController = null;
         }
       })();
 

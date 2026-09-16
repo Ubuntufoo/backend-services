@@ -6,6 +6,7 @@ import {
   VARIATION_LISTING_COPY_CONDITION_TOKENS,
   VARIATION_LISTING_MANUAL_PRICE_AMOUNTS,
   createSupabaseServiceClient,
+  deleteR2Objects,
   getVariationListingIntakeSessionBySourceKey,
   isVariationListingManualPriceAmount,
   uploadImage,
@@ -153,6 +154,33 @@ export interface StoreVariationListingCompletionDependencies {
     sourcePath: string;
     targetGroupId: string;
   }) => Promise<UploadImageResult>;
+  deleteStoredImages?: (objectKeys: readonly string[]) => Promise<void>;
+}
+
+export interface VariationListingPreparedCompletionMedia {
+  backR2Key: string;
+  backSourceRef: string;
+  copyId: string;
+  frontR2Key: string;
+  frontSourceRef: string;
+  variationId: string;
+}
+
+export type PrepareVariationListingCompletionMediaDependencies = Omit<
+  StoreVariationListingCompletionDependencies,
+  'createId'
+>;
+
+export class VariationListingStoragePreparationError extends Error {
+  readonly retryable: boolean;
+  readonly cleanupMessage: string | null;
+
+  constructor(message: string, options: { retryable: boolean; cleanupMessage?: string | null }) {
+    super(message);
+    this.name = 'VariationListingStoragePreparationError';
+    this.retryable = options.retryable;
+    this.cleanupMessage = options.cleanupMessage ?? null;
+  }
 }
 
 const UUID_PATTERN =
@@ -479,28 +507,26 @@ async function defaultUploadStoredImage(input: {
   );
 }
 
-export async function storeVariationListingCompletionCandidate(
+function validateStorageHandoffBeforeMedia(
   route: Extract<VariationListingWatcherEventRoute, { kind: 'completion_candidate' }>,
   handoff: VariationListingStorageHandoff,
-  dependencies: StoreVariationListingCompletionDependencies = {}
-): Promise<VariationListingStorageReadyCompletionCommand> {
+): void {
   if (handoff.completionKind !== route.completionKind) {
-    return fail('storage handoff completion kind does not match the frozen pending pair mode.');
+    fail('storage handoff completion kind does not match the frozen pending pair mode.');
   }
-
   const handoffConditionToken = requireConditionToken(handoff.conditionToken);
-  const conditionToken = route.completionKind === 'duplicate_copy'
-    ? requireConditionToken(requireNonEmptyExact(route.pendingPair.conditionToken, 'pending copy conditionToken'))
-    : handoffConditionToken;
-  if (route.completionKind === 'duplicate_copy' && handoffConditionToken !== conditionToken) {
-    return fail('duplicate-copy completion condition disagrees with frozen pending condition.');
+  if (route.completionKind === 'duplicate_copy') {
+    const frozenConditionToken = requireConditionToken(
+      requireNonEmptyExact(route.pendingPair.conditionToken, 'pending copy conditionToken')
+    );
+    if (handoffConditionToken !== frozenConditionToken) {
+      fail('duplicate-copy completion condition disagrees with frozen pending condition.');
+    }
   }
-  const newVariationHandoff = handoff.completionKind === 'new_variation'
-    ? {
-        selectorValue: requireNonEmptyExact(handoff.selectorValue, 'selectorValue'),
-        variationMetadata: requireJsonObject(handoff.variationMetadata),
-      }
-    : null;
+  if (handoff.completionKind === 'new_variation') {
+    requireNonEmptyExact(handoff.selectorValue, 'selectorValue');
+    requireJsonObject(handoff.variationMetadata);
+  }
   const capturedAtInput: unknown = handoff.capturedAt;
   const capturedAt =
     capturedAtInput === undefined
@@ -512,21 +538,69 @@ export async function storeVariationListingCompletionCandidate(
     capturedAt !== undefined &&
     new Date(capturedAt).getTime() < new Date(route.pendingPair.startedAt).getTime()
   ) {
-    return fail('capturedAt cannot be earlier than captureStartedAt.');
+    fail('capturedAt cannot be earlier than captureStartedAt.');
+  }
+}
+
+async function cleanupStoredObjectKeys(
+  objectKeys: readonly string[],
+  dependencies: PrepareVariationListingCompletionMediaDependencies,
+): Promise<string | null> {
+  try {
+    await (dependencies.deleteStoredImages ?? deleteR2Objects)(objectKeys);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+export async function cleanupVariationListingPreparedCompletionMedia(
+  media: VariationListingPreparedCompletionMedia,
+  dependencies: PrepareVariationListingCompletionMediaDependencies = {},
+): Promise<void> {
+  const cleanupMessage = await cleanupStoredObjectKeys(
+    [media.frontR2Key, media.backR2Key],
+    dependencies,
+  );
+  if (cleanupMessage !== null) {
+    throw new VariationListingStoragePreparationError(
+      'Prepared image cleanup failed.',
+      { retryable: false, cleanupMessage },
+    );
+  }
+}
+
+export async function prepareVariationListingCompletionMedia(
+  route: Extract<VariationListingWatcherEventRoute, { kind: 'completion_candidate' }>,
+  ids: { copyId: string; variationId: string },
+  dependencies: PrepareVariationListingCompletionMediaDependencies = {},
+): Promise<VariationListingPreparedCompletionMedia> {
+  const copyId = requireUuid(ids.copyId, 'copyId');
+  const variationId = requireUuid(ids.variationId, 'variationId');
+  if (
+    route.completionKind === 'duplicate_copy' &&
+    variationId !== requireUuid(route.pendingPair.targetVariationId, 'pending targetVariationId')
+  ) {
+    return fail('duplicate-copy media variationId disagrees with frozen pending targetVariationId.');
   }
 
-  const createId = dependencies.createId ?? randomUUID;
-  const copyId = requireUuid(createId(), 'generated copyId');
-  const variationId =
-    route.completionKind === 'duplicate_copy'
-      ? requireUuid(route.pendingPair.targetVariationId, 'pending targetVariationId')
-      : requireUuid(createId(), 'generated variationId');
-
   const readImage = dependencies.readImage ?? readFile;
-  const [frontBody, backBody] = await Promise.all([
-    readImage(route.pendingPair.frontSourceRef),
-    readImage(route.backSourceRef),
+  const [frontRead, backRead] = await Promise.allSettled([
+    Promise.resolve().then(() => readImage(route.pendingPair.frontSourceRef)),
+    Promise.resolve().then(() => readImage(route.backSourceRef)),
   ]);
+  if (frontRead.status === 'rejected' || backRead.status === 'rejected') {
+    const messages = [
+      frontRead.status === 'rejected' ? `front read: ${frontRead.reason instanceof Error ? frontRead.reason.message : String(frontRead.reason)}` : null,
+      backRead.status === 'rejected' ? `back read: ${backRead.reason instanceof Error ? backRead.reason.message : String(backRead.reason)}` : null,
+    ].filter((value): value is string => value !== null);
+    throw new VariationListingStoragePreparationError(
+      `Image read failed (${messages.join('; ')}).`,
+      { retryable: true },
+    );
+  }
+  const frontBody = frontRead.value;
+  const backBody = backRead.value;
   const frontR2Key = buildVariationListingR2ImageObjectKey({
     body: frontBody,
     copyId,
@@ -544,34 +618,84 @@ export async function storeVariationListingCompletionCandidate(
     variationId,
   });
   const uploadStoredImage = dependencies.uploadStoredImage ?? defaultUploadStoredImage;
-
-  const [frontUpload, backUpload] = await Promise.all([
-    uploadStoredImage({
+  const [frontUpload, backUpload] = await Promise.allSettled([
+    Promise.resolve().then(() => uploadStoredImage({
       body: frontBody,
       contentType: getContentType(route.pendingPair.frontSourceRef),
       objectKey: frontR2Key,
       sourcePath: route.pendingPair.frontSourceRef,
       targetGroupId: route.pendingPair.targetGroupId,
-    }),
-    uploadStoredImage({
+    })),
+    Promise.resolve().then(() => uploadStoredImage({
       body: backBody,
       contentType: getContentType(route.backSourceRef),
       objectKey: backR2Key,
       sourcePath: route.backSourceRef,
       targetGroupId: route.pendingPair.targetGroupId,
-    }),
+    })),
   ]);
-  if (frontUpload.objectKey !== frontR2Key) {
-    return fail('front R2 upload returned a different object key than requested.');
+  if (frontUpload.status === 'rejected' || backUpload.status === 'rejected') {
+    const cleanupMessage = await cleanupStoredObjectKeys([frontR2Key, backR2Key], dependencies);
+    const messages = [
+      frontUpload.status === 'rejected' ? `front upload: ${frontUpload.reason instanceof Error ? frontUpload.reason.message : String(frontUpload.reason)}` : null,
+      backUpload.status === 'rejected' ? `back upload: ${backUpload.reason instanceof Error ? backUpload.reason.message : String(backUpload.reason)}` : null,
+    ].filter((value): value is string => value !== null);
+    throw new VariationListingStoragePreparationError(
+      `R2 upload failed (${messages.join('; ')}).`,
+      { retryable: cleanupMessage === null, cleanupMessage },
+    );
+  }
+  if (frontUpload.value.objectKey !== frontR2Key || backUpload.value.objectKey !== backR2Key) {
+    const cleanupMessage = await cleanupStoredObjectKeys(
+      [frontR2Key, backR2Key],
+      dependencies,
+    );
+    throw new VariationListingStoragePreparationError(
+      'R2 upload returned an unexpected object key.',
+      { retryable: false, cleanupMessage },
+    );
   }
 
-  if (backUpload.objectKey !== backR2Key) {
-    return fail('back R2 upload returned a different object key than requested.');
-  }
-
-  const common = {
+  return {
     backR2Key,
     backSourceRef: route.backSourceRef,
+    copyId,
+    frontR2Key,
+    frontSourceRef: route.pendingPair.frontSourceRef,
+    variationId,
+  };
+}
+
+export function buildVariationListingStorageReadyCompletionCommand(
+  route: Extract<VariationListingWatcherEventRoute, { kind: 'completion_candidate' }>,
+  handoff: VariationListingStorageHandoff,
+  media: VariationListingPreparedCompletionMedia,
+): VariationListingStorageReadyCompletionCommand {
+  validateStorageHandoffBeforeMedia(route, handoff);
+  const conditionToken = route.completionKind === 'duplicate_copy'
+    ? requireConditionToken(requireNonEmptyExact(route.pendingPair.conditionToken, 'pending copy conditionToken'))
+    : requireConditionToken(handoff.conditionToken);
+  const copyId = requireUuid(media.copyId, 'media copyId');
+  const variationId = requireUuid(media.variationId, 'media variationId');
+  if (
+    media.frontSourceRef !== route.pendingPair.frontSourceRef ||
+    media.backSourceRef !== route.backSourceRef
+  ) {
+    return fail('prepared media source references disagree with the completion route.');
+  }
+  if (
+    route.completionKind === 'duplicate_copy' &&
+    variationId !== requireUuid(route.pendingPair.targetVariationId, 'pending targetVariationId')
+  ) {
+    return fail('duplicate-copy media variationId disagrees with frozen pending targetVariationId.');
+  }
+  const capturedAtInput: unknown = handoff.capturedAt;
+  const capturedAt = capturedAtInput === undefined
+    ? undefined
+    : normalizeInstant(capturedAtInput as string, 'capturedAt');
+  const common = {
+    backR2Key: requireNonEmptyExact(media.backR2Key, 'backR2Key'),
+    backSourceRef: media.backSourceRef,
     capturePairId: route.pendingPair.pairId,
     captureSourceKey: route.captureSourceKey,
     captureStartedAt: route.pendingPair.startedAt,
@@ -579,30 +703,43 @@ export async function storeVariationListingCompletionCandidate(
     conditionToken,
     copyId,
     expectedDesiredRevision: route.pendingPair.expectedDesiredRevision,
-    frontR2Key,
-    frontSourceRef: route.pendingPair.frontSourceRef,
+    frontR2Key: requireNonEmptyExact(media.frontR2Key, 'frontR2Key'),
+    frontSourceRef: media.frontSourceRef,
     frozenPriceAmount: route.pendingPair.priceAmount,
     frozenPriceCurrency: route.pendingPair.priceCurrency,
     targetGroupId: route.pendingPair.targetGroupId,
   };
 
   if (handoff.completionKind === 'duplicate_copy') {
-    return {
-      ...common,
-      completionKind: 'duplicate_copy',
-      variationId,
-    };
+    return { ...common, completionKind: 'duplicate_copy', variationId };
   }
-
-  if (newVariationHandoff === null) {
-    return fail('new-variation storage handoff is missing selector metadata.');
-  }
-
   return {
     ...common,
     completionKind: 'new_variation',
-    selectorValue: newVariationHandoff.selectorValue,
+    selectorValue: requireNonEmptyExact(handoff.selectorValue, 'selectorValue'),
     variationId,
-    variationMetadata: newVariationHandoff.variationMetadata,
+    variationMetadata: requireJsonObject(handoff.variationMetadata),
   };
+}
+
+export async function storeVariationListingCompletionCandidate(
+  route: Extract<VariationListingWatcherEventRoute, { kind: 'completion_candidate' }>,
+  handoff: VariationListingStorageHandoff,
+  dependencies: StoreVariationListingCompletionDependencies = {}
+): Promise<VariationListingStorageReadyCompletionCommand> {
+  // Preserve the historical fail-before-side-effects contract for callers that
+  // use this combined helper. The runtime's new-variation pipeline may prepare
+  // media concurrently with Gemini and joins both branches before persistence.
+  validateStorageHandoffBeforeMedia(route, handoff);
+  const createId = dependencies.createId ?? randomUUID;
+  const copyId = requireUuid(createId(), 'generated copyId');
+  const variationId = route.completionKind === 'duplicate_copy'
+    ? requireUuid(route.pendingPair.targetVariationId, 'pending targetVariationId')
+    : requireUuid(createId(), 'generated variationId');
+  const media = await prepareVariationListingCompletionMedia(
+    route,
+    { copyId, variationId },
+    dependencies,
+  );
+  return buildVariationListingStorageReadyCompletionCommand(route, handoff, media);
 }

@@ -117,8 +117,16 @@ export const updateVariationListingIntakeStatusRequestSchema = z
     phase: variationListingIntakeProcessingPhaseSchema,
     completionKind: z.enum(['new_variation', 'duplicate_copy']),
     message: z.string().trim().min(1).max(500).nullable().default(null),
+    failureKind: z.enum(['gemini', 'storage', 'gemini_and_storage', 'persistence']).nullable().default(null),
+    retryable: z.boolean().default(false),
   })
   .strict();
+
+export const claimVariationListingIntakeRetryRequestSchema = z.object({
+  captureSourceKey: trimmed('captureSourceKey'),
+  pairId: z.string().uuid(),
+  canRetry: z.boolean(),
+}).strict();
 
 export const generateVariationListingIntakeIdentityRequestSchema = z
   .object({
