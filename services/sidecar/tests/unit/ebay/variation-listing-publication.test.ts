@@ -226,7 +226,7 @@ function testHarness(withMedia = false, historicalOverlong = false) {
     setBlockMediaReads: (value: boolean) => { blockMediaReads = value; },
     setMediaReadExpirationMismatch: (value: boolean) => { mediaReadExpirationMismatch = value; },
     mutationsApi, transaction,
-    execute: () => executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows], loadRevision: async () => capturedRevision }, mutations: mutationsApi, remote, transaction, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() }),
+    execute: (reconcileOnly = false) => executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows], loadRevision: async () => capturedRevision }, mutations: mutationsApi, remote, transaction, reconcileOnly, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() }),
   };
 }
 
@@ -341,6 +341,49 @@ describe('executeVariationListingPublication', () => {
     expect(getInventoryItem).toHaveBeenCalledTimes(3);
     expect(getInventoryItem).toHaveBeenNthCalledWith(2, firstChild.sku, { expectedNotFound: false });
     expect(getInventoryItem).toHaveBeenNthCalledWith(3, firstChild.sku);
+  });
+
+  it('reconciles an existing child offer without starting the next offer mutation', async () => {
+    const h = testHarness();
+    for (const child of h.bundle.children) {
+      await h.mutationsApi.createOrReplaceInventoryItem(child.sku, child.inventoryItem);
+      h.journalRows.push(
+        { attempt_number: 1, checkpoint_id: `item-start-${child.variationId}`, checkpoint_number: 1, created_at: '2026-09-01T00:00:00Z', evidence: {}, observed_remote_state: null, operation_key: `child-item:${child.variationId}`, revision_id: 'revision-1', state: 'started' } as VariationListingPublishingCheckpointRow,
+        { attempt_number: 1, checkpoint_id: `item-done-${child.variationId}`, checkpoint_number: 2, created_at: '2026-09-01T00:00:01Z', evidence: { sku: child.sku }, observed_remote_state: 'present', operation_key: `child-item:${child.variationId}`, revision_id: 'revision-1', state: 'confirmed_complete' } as VariationListingPublishingCheckpointRow,
+      );
+    }
+    const firstChild = h.bundle.children[0]!;
+    await h.mutationsApi.createOffer(firstChild.offer);
+    h.journalRows.push(
+      { attempt_number: 1, checkpoint_id: 'offer-start', checkpoint_number: 1, created_at: '2026-09-01T00:00:00Z', evidence: {}, observed_remote_state: null, operation_key: `child-offer:${firstChild.variationId}`, revision_id: 'revision-1', state: 'started' } as VariationListingPublishingCheckpointRow,
+      { attempt_number: 1, checkpoint_id: 'offer-unknown', checkpoint_number: 2, created_at: '2026-09-01T00:00:01Z', evidence: { error: 'connection dropped' }, observed_remote_state: 'unknown', operation_key: `child-offer:${firstChild.variationId}`, revision_id: 'revision-1', state: 'unknown' } as VariationListingPublishingCheckpointRow,
+    );
+    const calls = h.mutations();
+
+    await expect(h.execute(true)).resolves.toMatchObject({ reconciledOperationKey: `child-offer:${firstChild.variationId}`, revisionId: 'revision-1' });
+    expect(h.mutations()).toBe(calls);
+  });
+
+  it('records an absent unknown child offer as read-only reconciliation without authorizing replay', async () => {
+    const h = testHarness();
+    for (const child of h.bundle.children) {
+      await h.mutationsApi.createOrReplaceInventoryItem(child.sku, child.inventoryItem);
+      h.journalRows.push(
+        { attempt_number: 1, checkpoint_id: `item-start-${child.variationId}`, checkpoint_number: 1, created_at: '2026-09-01T00:00:00Z', evidence: {}, observed_remote_state: null, operation_key: `child-item:${child.variationId}`, revision_id: 'revision-1', state: 'started' } as VariationListingPublishingCheckpointRow,
+        { attempt_number: 1, checkpoint_id: `item-done-${child.variationId}`, checkpoint_number: 2, created_at: '2026-09-01T00:00:01Z', evidence: { sku: child.sku }, observed_remote_state: 'present', operation_key: `child-item:${child.variationId}`, revision_id: 'revision-1', state: 'confirmed_complete' } as VariationListingPublishingCheckpointRow,
+      );
+    }
+    const firstChild = h.bundle.children[0]!;
+    h.journalRows.push(
+      { attempt_number: 1, checkpoint_id: 'offer-start', checkpoint_number: 1, created_at: '2026-09-01T00:00:00Z', evidence: {}, observed_remote_state: null, operation_key: `child-offer:${firstChild.variationId}`, revision_id: 'revision-1', state: 'started' } as VariationListingPublishingCheckpointRow,
+      { attempt_number: 1, checkpoint_id: 'offer-unknown', checkpoint_number: 2, created_at: '2026-09-01T00:00:01Z', evidence: { error: 'connection dropped' }, observed_remote_state: 'unknown', operation_key: `child-offer:${firstChild.variationId}`, revision_id: 'revision-1', state: 'unknown' } as VariationListingPublishingCheckpointRow,
+    );
+    const calls = h.mutations();
+
+    await expect(h.execute(true)).resolves.toMatchObject({ reconciledOperationKey: `child-offer:${firstChild.variationId}`, revisionId: 'revision-1' });
+    expect(h.mutations()).toBe(calls);
+    expect(h.confirmations()).toBe(0);
+    expect(h.journalRows.filter((row) => row.operation_key === `child-offer:${firstChild.variationId}`).at(-1)).toMatchObject({ state: 'confirmed_no_op', observed_remote_state: 'proven_absent' });
   });
 
   it('rejects foreign, duplicate, and split-listing remote states while group membership remains set-based', async () => {

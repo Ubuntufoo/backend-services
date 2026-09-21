@@ -211,10 +211,22 @@ function dataAccess(overrides: Partial<VariationListingApiDataAccess> = {}): Var
   };
 }
 
-function app(access: VariationListingApiDataAccess, createId?: () => string) {
+const creationDefaults = async () => ({
+  fulfillmentPolicyId: 'fulfillment',
+  marketplaceId: 'EBAY_US',
+  merchantLocationKey: 'main',
+  paymentPolicyId: 'payment',
+  returnPolicyId: 'returns',
+});
+
+function app(
+  access: VariationListingApiDataAccess,
+  createId?: () => string,
+  resolveCreationDefaults = creationDefaults
+) {
   const instance = express();
   instance.use(express.json());
-  instance.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess: access, createId }));
+  instance.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess: access, createId, resolveCreationDefaults }));
   return instance;
 }
 
@@ -718,10 +730,6 @@ describe('YP6.1 variation listing API router', () => {
       .send({
         skuCategoryCode: 'BSKBL',
         skuBucketToken: 'McGrady',
-        merchantLocationKey: 'main',
-        fulfillmentPolicyId: 'fulfillment',
-        paymentPolicyId: 'payment',
-        returnPolicyId: 'returns',
         conditionId: '4000',
         conditionToken: 'VERY_GOOD',
       });
@@ -742,6 +750,25 @@ describe('YP6.1 variation listing API router', () => {
     });
   });
 
+  it('fails closed before persistence when environment publish defaults cannot resolve', async () => {
+    const access = dataAccess();
+    const response = await request(
+      app(access, () => groupId, async () => {
+        throw new Error('production publish config marketplace mismatch');
+      })
+    )
+      .post('/api/variation-listings')
+      .send({
+        skuCategoryCode: 'BSKBL',
+        skuBucketToken: 'McGrady',
+        conditionId: '4000',
+        conditionToken: 'VERY_GOOD',
+      });
+
+    expect(response.status).toBe(500);
+    expect(access.createGroup).not.toHaveBeenCalled();
+  });
+
   it('maps the Baseball listing profile to the same validated eBay category', async () => {
     const access = dataAccess();
     const response = await request(app(access, () => groupId))
@@ -749,10 +776,6 @@ describe('YP6.1 variation listing API router', () => {
       .send({
         skuCategoryCode: 'BSBL',
         skuBucketToken: 'Jeter',
-        merchantLocationKey: 'main',
-        fulfillmentPolicyId: 'fulfillment',
-        paymentPolicyId: 'payment',
-        returnPolicyId: 'returns',
         conditionId: '4000',
         conditionToken: 'VERY_GOOD',
       });
@@ -769,10 +792,6 @@ describe('YP6.1 variation listing API router', () => {
       .send({
         skuCategoryCode: 'OTHER',
         skuBucketToken: 'Misc',
-        merchantLocationKey: 'main',
-        fulfillmentPolicyId: 'fulfillment',
-        paymentPolicyId: 'payment',
-        returnPolicyId: 'returns',
         conditionId: '4000',
         conditionToken: 'VERY_GOOD',
       });

@@ -3,6 +3,7 @@ import { EbayApiRequestError } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import type { EbayOAuthValidationConfig } from '@/ebay/config.js';
 import { resolvePublishConfig } from '@/ebay/publish-config.js';
+import { validateVariationListingMerchantLocation } from '@/ebay/inventory-location-validation.js';
 import { EbayOAuthRequestError, type ExchangeRefreshTokenOptions } from '@/ebay/oauth-client.js';
 import {
   validateEbayOAuth,
@@ -16,7 +17,7 @@ import type { components as InventoryComponents } from '@/types/sell-apps/listin
 
 type PaymentPolicy = AccountComponents['schemas']['PaymentPolicy'];
 type ReturnPolicy = AccountComponents['schemas']['ReturnPolicy'];
-type InventoryLocationFull = InventoryComponents['schemas']['InventoryLocationFull'];
+type InventoryLocationResponse = InventoryComponents['schemas']['InventoryLocationResponse'];
 
 const PRODUCTION_API_BASE_URL = 'https://api.ebay.com';
 const PRODUCTION_OAUTH_BASE_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
@@ -772,7 +773,22 @@ async function runInventoryLocationCheck(
   }
 
   try {
-    const location = (await api.inventory.getInventoryLocation(merchantLocationKey)) as InventoryLocationFull;
+    const location = (await api.inventory.getInventoryLocation(merchantLocationKey)) as InventoryLocationResponse;
+    const validation = validateVariationListingMerchantLocation(location, merchantLocationKey);
+    if (!validation.valid) {
+      return buildCheck(
+        'inventory_location',
+        'fail',
+        'Inventory location is not an exact enabled location with a usable shipping address.',
+        {
+          merchantLocationKey,
+          returnedMerchantLocationKey: validation.returnedMerchantLocationKey,
+          status: validation.status,
+          hasPostalAddress: validation.hasPostalAddress,
+          hasRegionalAddress: validation.hasRegionalAddress,
+        }
+      );
+    }
     return buildCheck(
       'inventory_location',
       'pass',
@@ -780,7 +796,7 @@ async function runInventoryLocationCheck(
       {
         merchantLocationKey,
         name: normalizeText(location.name),
-        status: normalizeText(location.merchantLocationStatus),
+        status: validation.status,
       }
     );
   } catch (error) {

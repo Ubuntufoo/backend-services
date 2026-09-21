@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 export type VariationListingActionName =
   | 'publish'
   | 'publish_changes'
+  | 'reconcile'
   | 'retry'
   | 'withdraw'
   | 'abandon'

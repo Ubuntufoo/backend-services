@@ -152,12 +152,6 @@ export const createVariationListingGroupRequestSchema = z
       .max(32)
       .regex(/^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$/, 'skuBucketToken has invalid characters')
       .refine((value) => value !== 'Single' && value !== 'Lot', 'skuBucketToken is reserved'),
-    categoryId: z.literal('261328').default('261328'),
-    marketplaceId: z.literal('EBAY_US').default('EBAY_US'),
-    merchantLocationKey: trimmed('merchantLocationKey'),
-    fulfillmentPolicyId: trimmed('fulfillmentPolicyId'),
-    paymentPolicyId: trimmed('paymentPolicyId'),
-    returnPolicyId: trimmed('returnPolicyId'),
     conditionId: trimmed('conditionId'),
     conditionToken: z.enum(['NEAR_MINT_OR_BETTER', 'EXCELLENT', 'VERY_GOOD', 'POOR']),
   })

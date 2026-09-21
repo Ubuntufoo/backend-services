@@ -13,6 +13,8 @@ import { Router, type Request, type Response } from 'express';
 import type { ZodType } from 'zod';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+import { getEbayConfig } from '@/config/environment.js';
+import { resolvePublishConfig } from '@/ebay/publish-config.js';
 import {
   createVariationListingActionService,
   VariationListingActionError,
@@ -89,12 +91,22 @@ export interface VariationListingApiRouterOptions {
   generateIntakeIdentity?: typeof generateVariationListingIntakeIdentityHandoff;
   generateGroupReview?: typeof generateVariationListingGroupReview;
   actions?: VariationListingApiActions;
+  resolveCreationDefaults?: () => Promise<VariationListingCreationDefaults>;
+}
+
+export interface VariationListingCreationDefaults {
+  fulfillmentPolicyId: string;
+  merchantLocationKey: string;
+  marketplaceId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
 }
 
 
 export interface VariationListingApiActions {
   publish(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   publishChanges(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
+  reconcile(groupId: string): Promise<unknown>;
   retry(groupId: string): Promise<unknown>;
   withdraw(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
   abandon(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
@@ -543,6 +555,14 @@ function summarizeJournal(
       (sequenceByKey.get(left.operationKey) ?? Number.MAX_SAFE_INTEGER) -
       (sequenceByKey.get(right.operationKey) ?? Number.MAX_SAFE_INTEGER)
     )[0];
+  const reconciliationSupported =
+    revision.source.snapshot_version === 1 &&
+    revision.operationPlan.every(
+      (operation) =>
+        !operation.operation_kind.startsWith('cleanup_') &&
+        operation.operation_kind !== 'withdrawal' &&
+        operation.operation_kind !== 'final_absence_verification'
+    );
   const recovery = unresolved
     ? unresolved.state === 'retry_authorized'
       ? {
@@ -566,8 +586,11 @@ function summarizeJournal(
             operationKey: unresolved.operationKey,
             revisionId: revision.revisionId,
             requiresReconciliation: true,
+            reconciliationSupported,
             remoteState: 'unknown',
-            recommendedActions: ['reconcile_remote_state', 'do_not_retry_blindly'],
+            recommendedActions: reconciliationSupported
+              ? ['reconcile_remote_state', 'do_not_retry_blindly']
+              : ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
             retryStatus: 'reconciliation_required',
           }
     : {
@@ -723,6 +746,9 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   const router = Router();
   const getDataAccess = (): VariationListingApiDataAccess =>
     options.dataAccess ?? getSidecarDataAccess().variationListings;
+  const resolveCreationDefaults =
+    options.resolveCreationDefaults ??
+    (async () => await resolveVariationListingCreationDefaults(getSidecarDataAccess()));
   let cachedActions: VariationListingApiActions | undefined = options.actions;
   const getActions = (): VariationListingApiActions => {
     cachedActions ??= createVariationListingActionService({
@@ -981,6 +1007,17 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     });
   });
 
+  router.post('/:groupId/actions/reconcile', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    const body = parseActionOrSend(res, 'reconcile', params.groupId, variationListingRetryActionRequestSchema, req.body ?? {});
+    if (!body) return;
+    return await runRoute(res, async () => {
+      await prepareIntakeForPublicationAction(getDataAccess(), params.groupId);
+      await actionResponse(res, 'reconcile', params.groupId, await getActions().reconcile(params.groupId));
+    });
+  });
+
   router.post('/:groupId/actions/return-to-review', async (req: Request, res: Response) => {
     const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
     if (!params) return;
@@ -1023,6 +1060,12 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     })
   );
 
+  router.get('/creation-defaults', async (_req: Request, res: Response) =>
+    await runRoute(res, async () => {
+      res.json({ creationDefaults: await resolveCreationDefaults() });
+    })
+  );
+
   router.get('/:groupId', async (req: Request, res: Response) => {
     const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
     if (!params) return;
@@ -1040,7 +1083,11 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     return await runRoute(res, async () => {
       const dataAccess = getDataAccess();
       const groupId = (options.createId ?? randomUUID)();
-      const input = buildCreateGroupInput(groupId, body);
+      const input = buildCreateGroupInput(
+        groupId,
+        body,
+        await resolveCreationDefaults()
+      );
       await dataAccess.createGroup(input);
       const aggregate = await requireAggregate(res, dataAccess, groupId);
       if (!aggregate) return;
@@ -1149,7 +1196,8 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
 
 function buildCreateGroupInput(
   groupId: string,
-  body: CreateVariationListingGroupRequest
+  body: CreateVariationListingGroupRequest,
+  defaults: VariationListingCreationDefaults
 ): Parameters<VariationListingApiDataAccess['createGroup']>[0] {
   const profile = requireVariationListingCreationProfile(body.skuCategoryCode);
   return {
@@ -1158,12 +1206,44 @@ function buildCreateGroupInput(
     skuCategoryCode: body.skuCategoryCode,
     skuBucketToken: body.skuBucketToken,
     categoryId: profile.categoryId,
-    marketplaceId: 'EBAY_US',
-    merchantLocationKey: body.merchantLocationKey,
-    fulfillmentPolicyId: body.fulfillmentPolicyId,
-    paymentPolicyId: body.paymentPolicyId,
-    returnPolicyId: body.returnPolicyId,
+    marketplaceId: defaults.marketplaceId,
+    merchantLocationKey: defaults.merchantLocationKey,
+    fulfillmentPolicyId: defaults.fulfillmentPolicyId,
+    paymentPolicyId: defaults.paymentPolicyId,
+    returnPolicyId: defaults.returnPolicyId,
     conditionId: body.conditionId,
     conditionToken: body.conditionToken,
+  };
+}
+
+async function resolveVariationListingCreationDefaults(
+  dataAccess: Pick<SidecarDataAccess, 'appSettings'>
+): Promise<VariationListingCreationDefaults> {
+  const appSettings = await dataAccess.appSettings.get();
+  if (!appSettings) {
+    throw new VariationListingIntakeConflictError(
+      'variation_listing_publish_config_unavailable',
+      'Variation Listing bucket creation is blocked because app settings are unavailable.'
+    );
+  }
+
+  const runtimeConfig = getEbayConfig();
+  const resolved = resolvePublishConfig(appSettings, {
+    environment: runtimeConfig.environment,
+    runtimeMarketplaceId: runtimeConfig.marketplaceId,
+  });
+  if (!resolved.config) {
+    throw new VariationListingIntakeConflictError(
+      'variation_listing_publish_config_invalid',
+      `Variation Listing bucket creation is blocked by publish configuration: ${resolved.issues.join(' ')}`
+    );
+  }
+
+  return {
+    fulfillmentPolicyId: resolved.config.fulfillmentPolicyId,
+    marketplaceId: resolved.config.marketplaceId,
+    merchantLocationKey: resolved.config.merchantLocationKey,
+    paymentPolicyId: resolved.config.paymentPolicyId,
+    returnPolicyId: resolved.config.returnPolicyId,
   };
 }

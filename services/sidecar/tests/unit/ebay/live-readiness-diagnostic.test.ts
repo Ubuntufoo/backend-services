@@ -111,6 +111,7 @@ function createApi() {
       createOrReplaceInventoryLocation: vi.fn(),
       enableInventoryLocation: vi.fn(),
       getInventoryLocation: vi.fn().mockResolvedValue({
+        location: { address: { country: 'US', postalCode: '10001' } },
         merchantLocationKey: 'warehouse-main',
         merchantLocationStatus: 'ENABLED',
         name: 'Warehouse Main',
@@ -255,6 +256,29 @@ describe('live readiness diagnostic', () => {
     expect(api.inventory.createOrReplaceInventoryLocation).not.toHaveBeenCalled();
     expect(api.inventory.updateLocationDetails).not.toHaveBeenCalled();
     expect(api.inventory.enableInventoryLocation).not.toHaveBeenCalled();
+  });
+
+  it('fails readiness when eBay returns a different or unusable inventory location', async () => {
+    process.env.EBAY_ENVIRONMENT = 'production';
+    const api = createApi();
+    api.inventory.getInventoryLocation = vi.fn().mockResolvedValue({
+      location: { address: { country: 'US' } },
+      merchantLocationKey: 'other-location',
+      merchantLocationStatus: 'DISABLED',
+    });
+
+    const report = await getLiveReadinessDiagnostic({
+      api,
+      dataAccess: createDataAccess(createAppSettings()),
+      oauthConfig: createOauthConfig(),
+      runtimeConfig: createRuntimeConfig(),
+      validateOAuth: vi.fn().mockResolvedValue({ environment: 'production', expiresIn: 7200, marketplaceId: 'EBAY_US', ok: true, tokenType: 'Bearer' }),
+    });
+
+    expect(report.checks.find((check) => check.name === 'inventory_location')).toMatchObject({
+      status: 'fail',
+      details: { returnedMerchantLocationKey: 'other-location', status: 'DISABLED' },
+    });
   });
 
   it('blocks when either configured fulfillment policy cannot be verified remotely', async () => {

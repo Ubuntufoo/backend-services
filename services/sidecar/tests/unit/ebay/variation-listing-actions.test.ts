@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
 
-import { createVariationListingActionService, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
+import { assertVariationListingMerchantLocation, createVariationListingActionService, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
 import { subscribeVariationListingActionEvents } from '@/ebay/variation-listing-action-events.js';
 import {
   buildVariationListingHistoricalInventoryPayloadBundle,
@@ -225,6 +225,11 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
 const failingRemote = (error: unknown) => async () => { throw error; };
 
 describe('YP6.2 variation listing actions', () => {
+  it('rejects a missing or mismatched frozen merchant location before publication can start', async () => {
+    await expect(assertVariationListingMerchantLocation(async () => ({ merchantLocationKey: 'other', merchantLocationStatus: 'ENABLED' }), 'frozen-location')).rejects.toThrow('not an exact enabled');
+    await expect(assertVariationListingMerchantLocation(async () => ({ merchantLocationKey: 'frozen-location', merchantLocationStatus: 'DISABLED' }), 'frozen-location')).rejects.toThrow('not an exact enabled');
+    await expect(assertVariationListingMerchantLocation(async () => ({ merchantLocationKey: 'frozen-location', merchantLocationStatus: 'ENABLED', location: { address: { country: 'US' } } }), 'frozen-location')).rejects.toThrow('usable shipping address');
+  });
   it('does not expose a manual quantity action', () => {
     const service = createVariationListingActionService({ data: data().value, publicImageBaseUrl: 'https://images.example.test' });
     expect('quantity' in service).toBe(false);

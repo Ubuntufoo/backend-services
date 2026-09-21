@@ -484,11 +484,15 @@ export interface VariationListingPublicationExecutionInput {
     'appendJournalCheckpoint' | 'captureRevision' | 'confirmRevision' | 'loadAggregate'
   >;
   checkpointId?: () => string;
+  /** Resolve one existing unknown checkpoint through exact reads, then stop
+   * before any previously unstarted operation can mutate eBay. */
+  reconcileOnly?: boolean;
 }
 
 export interface VariationListingPublicationExecutionResult {
-  confirmedRevision: number;
-  listingId: string;
+  confirmedRevision?: number;
+  listingId?: string;
+  reconciledOperationKey?: string;
   revisionId: string;
 }
 
@@ -670,13 +674,13 @@ async function finishExistingUnknown(
   operationKey: string,
   after: (expectedNotFound: boolean) => Promise<Json | null>,
   pre: () => Promise<Json | null>
-): Promise<void> {
+): Promise<boolean> {
   const current = latest(history.get(operationKey)!);
-  if (!current) return;
+  if (!current) return false;
   if (isTerminal(current)) {
     const evidence = await after(false);
     if (evidence === null) throw new Error(`Variation listing operation ${operationKey} terminal state no longer reconciles exactly.`);
-    return;
+    return false;
   }
   // A started or unknown checkpoint is a recovery reconciliation, not the
   // initial absence probe. Keep that read independently observable.
@@ -689,7 +693,7 @@ async function finishExistingUnknown(
       observedRemoteState: 'present',
       state: 'confirmed_complete',
     });
-    return;
+    return false;
   }
   const preEvidence = await pre();
   if (preEvidence === null) {
@@ -721,6 +725,7 @@ async function finishExistingUnknown(
       state: 'confirmed_no_op',
     });
   }
+  if (input.reconcileOnly) return true;
   throw new Error(`Variation listing operation ${operationKey} is proven unchanged after an unknown mutation outcome; a new revision is required before retry.`);
 }
 
@@ -732,13 +737,13 @@ async function executeMutationOperation(
   pre: () => Promise<Json | null>,
   mutate: () => Promise<void>,
   freshAbsentEvidence?: Json
-): Promise<void> {
+): Promise<boolean> {
   const operation = planOperation(input.frozen, operationKey);
   const checkpoints = history.get(operationKey)!;
   const current = latest(checkpoints);
   if (current) {
-    await finishExistingUnknown(input, history, operationKey, after, pre);
-    return;
+    const reconciledNoOp = await finishExistingUnknown(input, history, operationKey, after, pre);
+    return Boolean(input.reconcileOnly && (!isTerminal(current) || reconciledNoOp));
   }
   const before = await after(freshAbsentEvidence !== undefined);
   if (before !== null) {
@@ -755,7 +760,7 @@ async function executeMutationOperation(
       observedRemoteState: 'present',
       state: 'confirmed_no_op',
     });
-    return;
+    return false;
   }
   // For fresh creates, a null exact-after probe already proves the resource is
   // absent. Reuse that evidence instead of issuing an identical second GET.
@@ -800,6 +805,7 @@ async function executeMutationOperation(
     observedRemoteState: 'present',
     state: 'confirmed_complete',
   });
+  return false;
 }
 
 function exactItemEvidence(
@@ -917,6 +923,9 @@ export async function executeVariationListingPublication(
           state: 'confirmed_complete',
         });
         resolvedMediaImages.set(`${media.copyId}:${media.role}`, read.value.imageUrl);
+        if (input.reconcileOnly) {
+          return { reconciledOperationKey: operationKey, revisionId: input.frozen.captureInput.revisionId };
+        }
         continue;
       }
       throw new Error(`Variation listing Media operation ${operationKey} has started without a durably captured Media identity; replay is forbidden.`);
@@ -985,7 +994,7 @@ export async function executeVariationListingPublication(
   const bundle = buildBundleFromImages(input.frozen, representativeImages, historicalPayloadAlreadyUsed);
 
   for (const child of bundle.children) {
-    await executeMutationOperation(
+    const reconciled = await executeMutationOperation(
       input,
       history,
       `child-item:${child.variationId}`,
@@ -1002,10 +1011,11 @@ export async function executeVariationListingPublication(
       () => input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem)),
       { sku: child.sku }
     );
+    if (reconciled) return { reconciledOperationKey: `child-item:${child.variationId}`, revisionId: input.frozen.captureInput.revisionId };
   }
   for (const child of bundle.children) {
     let returnedOfferId: string | null = null;
-    await executeMutationOperation(
+    const reconciled = await executeMutationOperation(
       input,
       history,
       `child-offer:${child.variationId}`,
@@ -1036,10 +1046,11 @@ export async function executeVariationListingPublication(
       },
       { sku: child.sku }
     );
+    if (reconciled) return { reconciledOperationKey: `child-offer:${child.variationId}`, revisionId: input.frozen.captureInput.revisionId };
   }
 
   let returnedListingId: string | null = null;
-  await executeMutationOperation(
+  const reconciledGroup = await executeMutationOperation(
     input,
     history,
     'complete-group',
@@ -1063,8 +1074,9 @@ export async function executeVariationListingPublication(
     () => input.mutations.createOrReplaceInventoryItemGroup(bundle.groupKey, asJson(bundle.group)),
     { groupKey: bundle.groupKey }
   );
+  if (reconciledGroup) return { reconciledOperationKey: 'complete-group', revisionId: input.frozen.captureInput.revisionId };
 
-  await executeMutationOperation(
+  const reconciledPublish = await executeMutationOperation(
     input,
     history,
     'group-publish',
@@ -1093,6 +1105,7 @@ export async function executeVariationListingPublication(
       returnedListingId = (await input.mutations.publishInventoryItemGroup(asJson(bundle.publishRequest))).listingId;
     }
   );
+  if (reconciledPublish) return { reconciledOperationKey: 'group-publish', revisionId: input.frozen.captureInput.revisionId };
 
   const reconcileKey = 'revision-reconcile';
   const reconcileHistory = history.get(reconcileKey)!;

@@ -70,6 +70,7 @@ function actions(): VariationListingApiActions {
   return {
     publish: vi.fn(async () => ({ revisionId: 'initial' })),
     publishChanges: vi.fn(async () => ({ revisionId: 'changes' })),
+    reconcile: vi.fn(async () => ({ reconciledOperationKey: 'child-offer:variation' })),
     retry: vi.fn(async () => ({ reconciled: true })),
     withdraw: vi.fn(async () => ({ lifecycleState: 'withdrawn' })),
     abandon: vi.fn(async () => ({ lifecycleState: 'abandoned' })),
@@ -101,6 +102,17 @@ describe('YP6.2 action routes', () => {
       .send({ expectedDesiredRevision: 4 });
     expect(returnToReview.status).toBe(200);
     expect(actionService.returnToReview).toHaveBeenCalledWith(groupId, 4);
+  });
+
+  it('delegates Reconcile without routing it through retry', async () => {
+    const actionService = actions();
+    const response = await request(app(access(), actionService))
+      .post(`/api/variation-listings/${groupId}/actions/reconcile`)
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(actionService.reconcile).toHaveBeenCalledWith(groupId);
+    expect(actionService.retry).not.toHaveBeenCalled();
   });
 
   it('serializes the UI-ready action status and omits raw stack traces', async () => {

@@ -27,6 +27,7 @@ import {
   type VariationListingPublicationRemoteGateway,
   type VariationListingRemoteRead,
 } from '@/ebay/variation-listing-publication.js';
+import { validateVariationListingMerchantLocation } from '@/ebay/inventory-location-validation.js';
 import {
   applyVariationListingConfirmedRemoteQuantities,
   executeVariationListingActiveRevisionPublication,
@@ -124,6 +125,7 @@ export interface VariationListingActionServiceOptions {
       withdrawInventoryItemGroup(groupKey: string, marketplaceId: string): Promise<void>;
     };
     remote: VariationListingPublicationRemoteGateway;
+    assertMerchantLocation?: (merchantLocationKey: string) => Promise<void>;
   }>;
   publicImageBaseUrl?: string;
   createId?: () => string;
@@ -355,6 +357,17 @@ function normalizeOffers(raw: unknown) {
 }
 
 let productionRemotePromise: ReturnType<NonNullable<VariationListingActionServiceOptions['remoteFactory']>> | undefined;
+
+export async function assertVariationListingMerchantLocation(
+  getInventoryLocation: (merchantLocationKey: string) => Promise<unknown>,
+  merchantLocationKey: string
+): Promise<void> {
+  const location = await getInventoryLocation(merchantLocationKey);
+  if (!validateVariationListingMerchantLocation(location, merchantLocationKey).valid) {
+    throw new Error(`Variation listing merchant location ${merchantLocationKey} is not an exact enabled eBay inventory location with a usable shipping address.`);
+  }
+}
+
 async function createProductionRemote() {
   productionRemotePromise ??= (async () => {
     const api = new EbaySellerApi(getEbayConfig());
@@ -380,6 +393,11 @@ async function createProductionRemote() {
     };
     return {
       remote,
+      assertMerchantLocation: async (merchantLocationKey) =>
+        await assertVariationListingMerchantLocation(
+          async (key) => await api.inventory.getInventoryLocation(key),
+          merchantLocationKey
+        ),
       mutations: {
         createMedia: async (sourceUrl) => await api.media.createImageFromUrl(sourceUrl),
         createOrReplaceInventoryItem: async (sku, payload) => { await api.inventory.createOrReplaceInventoryItem(sku, payload as never, headers); },
@@ -891,7 +909,8 @@ export function createVariationListingActionService(options: VariationListingAct
   const executeInitial = async (
     aggregate: VariationListingAggregateSnapshot,
     existing?: VariationListingRevisionRow,
-    inheritedRepresentativeImages?: ReturnType<typeof reconstructVariationListingConfirmedRepresentativeImages>
+    inheritedRepresentativeImages?: ReturnType<typeof reconstructVariationListingConfirmedRepresentativeImages>,
+    reconcileOnly = false
   ) => {
     const deps = await resolveDependencies();
     const frozen = existing
@@ -907,11 +926,15 @@ export function createVariationListingActionService(options: VariationListingAct
             mediaResources: mediaResourcesForAggregate(aggregate, publicBaseUrl()),
             revisionId: ids(),
           });
+    if (!reconcileOnly && deps.assertMerchantLocation) {
+      await deps.assertMerchantLocation(frozen.snapshot.aggregate.group.merchant_location_key);
+    }
     return await executeVariationListingPublication({
       frozen,
       journal: journalFor(existing),
       mutations: deps.mutations,
       remote: deps.remote,
+      reconcileOnly,
       transaction,
     });
   };
@@ -985,6 +1008,9 @@ export function createVariationListingActionService(options: VariationListingAct
       });
       progress('execute_publish_changes');
     }
+    if (deps.assertMerchantLocation) {
+      await deps.assertMerchantLocation(frozen.snapshot.aggregate.group.merchant_location_key);
+    }
     return await executeVariationListingActiveRevisionPublication({
       frozen,
       journal: journalFor(existing),
@@ -1023,11 +1049,20 @@ export function createVariationListingActionService(options: VariationListingAct
     if (revisionKind(revision) === 'initial' || revisionKind(revision) === 'active') {
       assertPublicationMutationEnabled('retry', groupId);
     }
+    if (unresolved.state !== 'retry_authorized') {
+      if (revisionKind(revision) === 'initial' || revisionKind(revision) === 'active') {
+        throw unresolvedError('retry', groupId, revision, unresolved);
+      }
+    }
     const deps = await resolveDependencies();
     progress('reconcile_remote_state', { operationKey: unresolved.operation_key, revisionId: revision.revision_id });
     if (revisionKind(revision) === 'initial') return await executeInitial(aggregate, revision);
     if (revisionKind(revision) === 'active') {
-      return await executeVariationListingActiveRevisionPublication({ frozen: hydrateActive(revision), journal: journalFor(revision), mutations: deps.mutations, remote: deps.remote, transaction });
+      const frozen = hydrateActive(revision);
+      if (deps.assertMerchantLocation) {
+        await deps.assertMerchantLocation(frozen.snapshot.aggregate.group.merchant_location_key);
+      }
+      return await executeVariationListingActiveRevisionPublication({ frozen, journal: journalFor(revision), mutations: deps.mutations, remote: deps.remote, transaction });
     }
     const cleanupFrozen = hydrateCleanup(revision, aggregate.group.last_confirmed_revision);
     if (aggregate.group.last_confirmed_revision !== null) {
@@ -1038,6 +1073,19 @@ export function createVariationListingActionService(options: VariationListingAct
       return await executeVariationListingWithdrawal({ frozen: cleanupFrozen, journal: journalFor(revision), mutations: deps.mutations, remote: deps.remote, transaction });
     }
     return await executeVariationListingCleanup({ frozen: cleanupFrozen, journal: journalFor(revision), mutations: deps.mutations, remote: deps.remote, transaction });
+  });
+
+  const reconcile = (groupId: string) => run('reconcile', groupId, async (progress) => {
+    const aggregate = await requireAggregate(groupId, 'reconcile');
+    const pending = await unresolvedRevision(await rows(groupId));
+    if (!pending) {
+      throw validationError('reconcile', groupId, 'reconcile_not_required', 'No unresolved operation requires reconciliation.', ['refresh_group']);
+    }
+    if (revisionKind(pending.revision) !== 'initial') {
+      throw validationError('reconcile', groupId, 'reconcile_revision_unsupported', 'This recovery revision requires an explicit safe Retry or manual resolution; Reconcile will not start a mutation-capable executor.', ['retry_action', 'inspect_remote_state']);
+    }
+    progress('reconcile_remote_state', { operationKey: pending.operation.operation_key, revisionId: pending.revision.revision_id });
+    return await executeInitial(aggregate, pending.revision, undefined, true);
   });
 
   async function exactOwnedHistory(groupId: string, aggregate: VariationListingAggregateSnapshot, deps: Awaited<ReturnType<typeof resolveDependencies>>) {
@@ -1300,5 +1348,5 @@ export function createVariationListingActionService(options: VariationListingAct
   const cleanup = (groupId: string, expectedDesiredRevision: number) =>
     run('cleanup', groupId, async (progress) => await performUnpublishedAbandon('cleanup', groupId, expectedDesiredRevision, progress));
 
-  return { abandon, cleanup, publish, publishChanges, retry, returnToReview, withdraw };
+  return { abandon, cleanup, publish, publishChanges, reconcile, retry, returnToReview, withdraw };
 }

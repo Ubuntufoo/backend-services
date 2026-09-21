@@ -153,7 +153,7 @@ Completed hosted applies and exact verification are recorded in their Phase 2 ro
 
 ## Current next action
 
-**YP9.2b is in progress. The 10-variation `ScalePilot10Ver2McGradyVariation` Sandbox pilot passed its functional gates, including buyer-facing listing URL/condition verification and sparse one-child replenishment with no writes to untouched siblings. Next: run the canonical 20-variation Sandbox candidate using the normal application workflow, with replenishment at V02/V10/V19, record the YP9.2a timing/operator evidence, compare against the 10-variation baseline, and then decide whether to stop, choose a smaller increment, or consider the next candidate.** Production eBay remains out of scope.
+**YP9.3b — Execute the explicitly authorized low-value production pilot.** Begin only with the non-mutating/guarded phases in `docs/variation-listings/production-pilot-checklist.md`: production configuration with `EBAY_PUBLISH_ENABLED=false`, read-only readiness checks, one fresh 2-variation low-value production bucket, persisted production identity/config verification, and a disabled-guard Publish attempt that must fail locally with `publish_disabled` without creating a publication revision or remote eBay resource. Do not enable production publishing or perform any production eBay mutation until a separate explicit authorization opens the publish window.
 
 ## Final post-feature cleanup
 
