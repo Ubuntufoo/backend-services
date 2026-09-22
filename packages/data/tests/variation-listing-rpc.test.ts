@@ -91,6 +91,22 @@ describe('YP4.2b group review-draft RPC', () => {
     const c = { rpc: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data:null, error:{ code:'VR001', message:'stale' } })) })) } as unknown as SupabaseDataClient;
     await expect(createSupabaseVariationListingTransactionGateway(c).applyGroupReviewDraft({ groupId:'g', expectedDesiredRevision:2, title:'Title', description:'Description', derivedCommonEbayAspects:{} })).rejects.toMatchObject({ name:'VariationListingTransactionConflictError', code:'VR001' });
   });
+
+  it('rejects an 81-character review title before invoking the RPC', async () => {
+    const c = clientFor('apply_variation_listing_group_review_draft', { group_row: group });
+    await expect(createSupabaseVariationListingTransactionGateway(c).applyGroupReviewDraft({
+      groupId: 'g', expectedDesiredRevision: 2, title: 't'.repeat(81), description: 'Description', derivedCommonEbayAspects: {},
+    })).rejects.toThrow(/at most 80 characters/);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
+
+  it.each([65, 77, 79, 80])('accepts a %i-character review title before invoking the RPC', async (length) => {
+    const title = 't'.repeat(length);
+    const c = clientFor('apply_variation_listing_group_review_draft', { group_row: { ...group, title } });
+    await expect(createSupabaseVariationListingTransactionGateway(c).applyGroupReviewDraft({
+      groupId: 'g', expectedDesiredRevision: 2, title, description: 'Approved description', derivedCommonEbayAspects: { Manufacturer: 'Topps', Year: '2024' },
+    })).resolves.toMatchObject({ title });
+  });
 });
 
 
@@ -144,6 +160,25 @@ describe('variation selector-value RPC', () => {
       groupId:'g', variationId:'v', expectedDesiredRevision:3, selectorValue:' Card A updated',
     })).rejects.toThrow(/outer-trimmed/);
     expect(c.rpc).not.toHaveBeenCalled();
+  });
+
+  it('rejects a 66-character selector before invoking the selector RPC', async () => {
+    const c = clientFor('update_variation_listing_selector_value', { group_row: group, variation_row: variation });
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationSelectorValue({
+      groupId: 'g', variationId: 'v', expectedDesiredRevision: 3, selectorValue: 's'.repeat(66),
+    })).rejects.toThrow(/at most 65 characters/);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
+
+  it.each([64, 65])('accepts a %i-character selector before invoking the selector RPC', async (length) => {
+    const selectorValue = 's'.repeat(length);
+    const c = clientFor('update_variation_listing_selector_value', {
+      group_row: group,
+      variation_row: { ...variation, selector_value: selectorValue },
+    });
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationSelectorValue({
+      groupId: 'g', variationId: 'v', expectedDesiredRevision: 3, selectorValue,
+    })).resolves.toMatchObject({ variation: { selector_value: selectorValue } });
   });
 
   it('maps selector CAS conflicts to the shared transaction conflict error', async () => {

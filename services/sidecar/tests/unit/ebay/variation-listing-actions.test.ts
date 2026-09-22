@@ -271,6 +271,57 @@ describe('YP6.2 variation listing actions', () => {
     }
   });
 
+  it('rejects invalid review content before markPublishReady', async () => {
+    const access = data({ aggregate: aggregate({ lifecycle_state: 'review', title: 't'.repeat(81) }) });
+    const remoteFactory = vi.fn();
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory,
+    });
+
+    await expect(service.publish(groupId, 3)).rejects.toMatchObject({
+      status: { code: 'initial_publish_content_invalid', remoteState: 'known_unchanged' },
+    });
+    expect(access.value.markPublishReady).not.toHaveBeenCalled();
+    expect(remoteFactory).not.toHaveBeenCalled();
+  });
+
+  it('runs the complete payload contract before markPublishReady', async () => {
+    const review = aggregate({ lifecycle_state: 'review', fulfillment_policy_id: '' });
+    review.variations.push({
+      ...review.variations[0]!,
+      variation_id: variationBId,
+      inventory_serial: 2,
+      position: 1,
+      sku: 'BSKBL-McGrady-000002',
+      selector_value: 'Card B',
+      representative_copy_id: copyBId,
+    });
+    review.copies.push({
+      ...review.copies[0]!,
+      copy_id: copyBId,
+      variation_id: variationBId,
+      front_r2_key: 'variation/front-b.jpg',
+      back_r2_key: 'variation/back-b.jpg',
+    });
+    review.group.next_inventory_serial = 3;
+    const access = data({ aggregate: review });
+    const remoteFactory = vi.fn();
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory,
+    });
+
+    await expect(service.publish(groupId, 3)).rejects.toMatchObject({
+      status: { code: 'initial_publish_content_invalid', remoteState: 'known_unchanged' },
+    });
+    expect(access.value.markPublishReady).not.toHaveBeenCalled();
+    expect(access.value.captureRevision).not.toHaveBeenCalled();
+    expect(remoteFactory).not.toHaveBeenCalled();
+  });
+
   it('blocks the default eBay gateway for Publish Changes when the publish window is disabled', async () => {
     const previous = process.env.EBAY_PUBLISH_ENABLED;
     process.env.EBAY_PUBLISH_ENABLED = 'false';

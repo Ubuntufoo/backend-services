@@ -7,6 +7,10 @@ import {
   getRawCardConditionDescriptorValueId,
   type RawCardConditionToken,
 } from '@/listings/trading-card-conditions.js';
+import {
+  MAX_VARIATION_CARD_SELECTOR_LENGTH,
+  MAX_VARIATION_GROUP_TITLE_LENGTH,
+} from '@/ebay/variation-listing-limits.js';
 
 const CATEGORY_ID = '261328' as const;
 const MARKETPLACE_ID = 'EBAY_US' as const;
@@ -14,7 +18,6 @@ const SELECTOR_NAME = 'Card' as const;
 const LISTING_FORMAT = 'FIXED_PRICE' as const;
 const CURRENCY = 'USD' as const;
 const MAX_INVENTORY_KEY_LENGTH = 50;
-const MAX_SELECTOR_VALUE_LENGTH = 65;
 
 const CONDITION_RANK: Record<string, number> = {
   POOR: 0,
@@ -36,7 +39,7 @@ const aspectValueSchema = trimmedText();
 const selectorValueSchema = z
   .string()
   .min(1)
-  .max(MAX_SELECTOR_VALUE_LENGTH, `Card selector value must be at most ${MAX_SELECTOR_VALUE_LENGTH} characters.`)
+  .max(MAX_VARIATION_CARD_SELECTOR_LENGTH, `Card selector value must be at most ${MAX_VARIATION_CARD_SELECTOR_LENGTH} characters.`)
   .refine((value) => value === value.trim(), 'Value must be outer-trimmed.');
 const conditionDescriptorSchema = z
   .object({
@@ -124,13 +127,16 @@ export const variationListingOfferPayloadSchema = z
   })
   .strict();
 
-const inventoryItemGroupPayloadSchema = (selectorSchema: z.ZodType<string>) =>
+const inventoryItemGroupPayloadSchema = (
+  selectorSchema: z.ZodType<string>,
+  titleMaxLength: number,
+) =>
   z
     .object({
       aspects: z.record(aspectNameSchema, z.array(aspectValueSchema).min(1)),
       description: trimmedText(4000),
       inventoryItemGroupKey: inventoryKeySchema,
-      title: trimmedText(80),
+      title: trimmedText(titleMaxLength),
       variantSKUs: z.array(inventoryKeySchema).min(2),
       variesBy: z
         .object({
@@ -155,8 +161,14 @@ const inventoryItemGroupPayloadSchema = (selectorSchema: z.ZodType<string>) =>
       }
     });
 
-export const variationListingInventoryItemGroupPayloadSchema = inventoryItemGroupPayloadSchema(selectorValueSchema);
-const historicalVariationListingInventoryItemGroupPayloadSchema = inventoryItemGroupPayloadSchema(aspectValueSchema);
+export const variationListingInventoryItemGroupPayloadSchema = inventoryItemGroupPayloadSchema(
+  selectorValueSchema,
+  MAX_VARIATION_GROUP_TITLE_LENGTH,
+);
+const historicalVariationListingInventoryItemGroupPayloadSchema = inventoryItemGroupPayloadSchema(
+  aspectValueSchema,
+  MAX_VARIATION_GROUP_TITLE_LENGTH,
+);
 
 export const variationListingPublishGroupRequestSchema = z
   .object({
@@ -237,14 +249,27 @@ function normalizeCommonAspects(value: Json): Record<string, string[]> {
   );
 }
 
-function validateAggregateIdentity(aggregate: VariationListingAggregateSnapshot): void {
+function validateVariationListingText(value: string | null, label: string, maxLength: number): void {
+  if (!value || value !== value.trim() || value.length > maxLength) {
+    throw new Error(`Variation listing ${label} must be present, outer-trimmed, and at most ${maxLength} characters.`);
+  }
+}
+
+function validateAggregateIdentity(
+  aggregate: VariationListingAggregateSnapshot,
+  historicalPayload: boolean,
+): void {
   const { group, variations, copies } = aggregate;
   if (group.category_id !== CATEGORY_ID) throw new Error(`Variation listing payload builder supports category ${CATEGORY_ID} only.`);
   if (group.marketplace_id !== MARKETPLACE_ID) throw new Error(`Variation listing payload builder supports ${MARKETPLACE_ID} only.`);
   if (group.condition_id !== '4000') throw new Error('Category 261328 variation listings require raw-card condition_id 4000.');
   if (group.selector_name !== SELECTOR_NAME) throw new Error('Variation listing selector_name must be Card.');
   if (group.listing_format !== LISTING_FORMAT) throw new Error('Variation listing listing_format must be FIXED_PRICE.');
-  if (!group.title || group.title !== group.title.trim() || group.title.length > 80) throw new Error('Variation listing group title must be present, outer-trimmed, and at most 80 characters.');
+  validateVariationListingText(
+    group.title,
+    'group title',
+    MAX_VARIATION_GROUP_TITLE_LENGTH,
+  );
   if (!group.description || group.description !== group.description.trim() || group.description.length > 4000) throw new Error('Variation listing group description must be present, outer-trimmed, and at most 4000 characters.');
   if (group.condition_description !== null && group.condition_description.length > 1000) throw new Error('Variation listing condition description must be at most 1000 characters.');
   if (variations.length < 2) throw new Error('Variation listing payload builder requires at least two variations.');
@@ -256,9 +281,11 @@ function validateAggregateIdentity(aggregate: VariationListingAggregateSnapshot)
     if (variation.price_currency !== CURRENCY || !isVariationListingManualPriceAmount(variation.price_amount)) {
       throw new Error('Variation prices must be persisted USD manual tiers.');
     }
-    if (!variation.selector_value || variation.selector_value !== variation.selector_value.trim()) {
-      throw new Error('Variation selector values must be present and outer-trimmed.');
-    }
+    validateVariationListingText(
+      variation.selector_value,
+      `selector value for variation ${variation.variation_id}`,
+      historicalPayload ? Number.MAX_SAFE_INTEGER : MAX_VARIATION_CARD_SELECTOR_LENGTH,
+    );
   });
   if (new Set(ordered.map((variation) => variation.variation_id)).size !== ordered.length) {
     throw new Error('Variation ids must be unique.');
@@ -290,7 +317,7 @@ function buildVariationListingInventoryPayloadBundleInternal(input: {
   representativeImages: readonly VariationListingRepresentativeImage[];
 }, historicalOverlongSelector: boolean, historicalConditionDescriptors: boolean): VariationListingInventoryPayloadBundle {
   const aggregate = input.aggregate;
-  validateAggregateIdentity(aggregate);
+  validateAggregateIdentity(aggregate, historicalOverlongSelector);
   const group = aggregate.group;
   const orderedVariations = [...aggregate.variations].sort((left, right) => left.position - right.position);
   const persistedConditionDescriptors = parseConditionDescriptors(group.condition_descriptors);
@@ -400,6 +427,28 @@ export function buildVariationListingInventoryPayloadBundle(input: {
   representativeImages: readonly VariationListingRepresentativeImage[];
 }): VariationListingInventoryPayloadBundle {
   return buildVariationListingInventoryPayloadBundleInternal(input, false, false);
+}
+
+/** Run the complete new-publication payload contract before a review group is
+ * transitioned to publish-ready or a Media-backed operation plan is frozen. */
+export function validateVariationListingNewPublicationPayload(
+  aggregate: VariationListingAggregateSnapshot,
+): void {
+  const representativeImages = [...aggregate.variations]
+    .sort((left, right) => left.position - right.position)
+    .map((variation) => {
+      const copyId = variation.representative_copy_id;
+      if (!copyId) {
+        throw new Error(`Variation ${variation.variation_id} is missing representative_copy_id.`);
+      }
+      const encodedCopyId = encodeURIComponent(copyId);
+      return {
+        copyId,
+        frontEpsUrl: `https://i.ebayimg.com/variation-listing-preflight/${encodedCopyId}-front.jpg`,
+        backEpsUrl: `https://i.ebayimg.com/variation-listing-preflight/${encodedCopyId}-back.jpg`,
+      };
+    });
+  buildVariationListingInventoryPayloadBundle({ aggregate, representativeImages });
 }
 
 /** Historical-only reconstruction used to prove ownership of a frozen failed

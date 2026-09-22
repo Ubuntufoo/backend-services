@@ -17,6 +17,7 @@ import { withExpectedApiNotFound } from '@/utils/logger.js';
 import {
   buildVariationListingInventoryPayloadBundle,
   buildVariationListingHistoricalInventoryPayloadBundle,
+  validateVariationListingNewPublicationPayload,
   type VariationListingInventoryPayloadBundle,
 } from '@/ebay/variation-listing-payloads.js';
 import {
@@ -1010,6 +1011,17 @@ export function createVariationListingActionService(options: VariationListingAct
     let aggregate = await requireAggregate(groupId, 'publish', expectedDesiredRevision);
     if (aggregate.group.last_confirmed_revision !== null) throw validationError('publish', groupId, 'initial_publish_already_completed', 'This group is already published. Use Publish Changes for staged updates.', ['publish_changes']);
     if (aggregate.group.lifecycle_state === 'review') {
+      try {
+        validateVariationListingNewPublicationPayload(aggregate);
+      } catch (error) {
+        throw validationError(
+          'publish',
+          groupId,
+          'initial_publish_content_invalid',
+          error instanceof Error ? error.message : 'Variation listing content does not satisfy the new-publication contract.',
+          ['complete_group_review'],
+        );
+      }
       progress('mark_publish_ready');
       await options.data.markPublishReady({ groupId, expectedDesiredRevision });
       aggregate = await requireAggregate(groupId, 'publish', expectedDesiredRevision);

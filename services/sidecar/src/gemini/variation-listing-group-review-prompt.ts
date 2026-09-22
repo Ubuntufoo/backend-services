@@ -1,7 +1,8 @@
 import type { GenerateVariationListingGroupReviewInput } from './variation-listing-group-review-contracts.js';
+import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
 
 const OUTPUT_SHAPE = `{
-  "title": "string, 1-80 characters",
+  "title": "string, 1-${MAX_VARIATION_GROUP_TITLE_LENGTH} characters",
   "description": "string",
   "warnings": ["string"]
 }`;
@@ -20,7 +21,7 @@ export function buildVariationListingGroupReviewPrompt(
     'Generate buyer-facing GROUP content for one fixed-price eBay trading-card variation listing.',
     'The application has already reviewed each child card identity. Treat the supplied selector values and variation metadata as canonical application facts; do not invent or correct card identities using model knowledge.',
     'Generate only one group title and one group description. Do not generate per-card titles or descriptions.',
-    'The group title must be factual, concise, and at most 80 characters.',
+    `The group title must be factual, concise, and at most ${MAX_VARIATION_GROUP_TITLE_LENGTH} characters.`,
     'The title should describe the common merchandising theme of the complete group rather than pretending every heterogeneous child has the same optional facts.',
     'The description should explain that the buyer selects one card using the Card variation selector and that the corresponding images identify that selected card.',
     'Do not include condition/grading claims in the title. Do not invent condition details in the description.',

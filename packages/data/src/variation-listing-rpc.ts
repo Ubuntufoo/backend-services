@@ -6,6 +6,11 @@ import type { AbandonUntouchedVariationListingGroupInput, AdvanceVariationListin
 import { isVariationListingManualPriceAmount } from './variation-listing-pricing.js';
 import { isVariationListingCopyConditionToken } from './variation-listing-condition.js';
 
+// Keep this client-side guard aligned with the Sidecar Variation payload
+// contract. Standard listing titles are unrelated and retain their 80-char cap.
+const MAX_VARIATION_GROUP_TITLE_LENGTH = 80;
+const MAX_VARIATION_CARD_SELECTOR_LENGTH = 65;
+
 export class VariationListingTransactionConflictError extends Error { readonly code: string; constructor(code: string, message: string) { super(message); this.name = 'VariationListingTransactionConflictError'; this.code = code; } }
 type RecordJson = Record<string, Json>;
 const record = (v: unknown, label: string): RecordJson => { if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`Variation listing RPC ${label} must be a JSON object.`); return v as RecordJson; };
@@ -146,6 +151,7 @@ async function applyGroupReviewDraft(client: SupabaseDataClient, input: ApplyVar
   const title = input.title.trim();
   const description = input.description.trim();
   if (!title || !description) throw new Error('Variation listing review draft title and description must be non-empty.');
+  if (title.length > MAX_VARIATION_GROUP_TITLE_LENGTH) throw new Error(`Variation listing review draft title must be at most ${MAX_VARIATION_GROUP_TITLE_LENGTH} characters.`);
   if (input.derivedCommonEbayAspects === null || typeof input.derivedCommonEbayAspects !== 'object' || Array.isArray(input.derivedCommonEbayAspects)) throw new Error('Variation listing review draft common aspects must be a JSON object.');
   const row = await rpcSingle<{ group_row: Json }>(client, 'apply_variation_listing_group_review_draft', {
     p_group_id: input.groupId,
@@ -209,6 +215,7 @@ async function updateVariationSelectorValue(client: SupabaseDataClient, input: U
   if (!Number.isInteger(input.expectedDesiredRevision) || input.expectedDesiredRevision < 0) throw new Error('Variation listing selector edit expected revision must be a non-negative integer.');
   const selectorValue = input.selectorValue.trim();
   if (!selectorValue || selectorValue !== input.selectorValue) throw new Error('Variation listing selector value must be a non-empty outer-trimmed string.');
+  if (selectorValue.length > MAX_VARIATION_CARD_SELECTOR_LENGTH) throw new Error(`Variation listing selector value must be at most ${MAX_VARIATION_CARD_SELECTOR_LENGTH} characters.`);
   const row = await rpcSingle<{ group_row: Json; variation_row: Json }>(client, 'update_variation_listing_selector_value', {
     p_group_id: input.groupId,
     p_variation_id: input.variationId,

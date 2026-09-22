@@ -67,11 +67,13 @@ Requirements:
 
 Before publication, inspect the created group and verify its persisted publication identity is consistent with the production readiness output:
 
+- compare the exact `groupId`, `groupKey`, both variation IDs, and both SKUs in the direct Sidecar response and the frontend list response;
+- stop if a displayed revision, operation, variation ID, or group identity differs from the current direct response; never attach historical recovery evidence to a new group by inference;
 - `marketplaceId` is `EBAY_US`;
 - merchant-location key is the intended production location;
 - payment, fulfillment, and return-policy IDs are the intended production IDs;
 - category/profile and trusted Sport aspect match the selected profile;
-- title/description/common aspects are reviewed and saved;
+- group listing title is 1–80 characters, every Card selector is 1–65 characters, and description/common aspects are reviewed and saved;
 - both variations are publish-ready with positive derived quantity;
 - desired revision has no unresolved action history;
 - no Standard or Variation intake pair is pending.

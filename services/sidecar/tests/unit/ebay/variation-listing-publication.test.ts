@@ -63,7 +63,9 @@ function testHarness(withMedia = false, historicalOverlong = false) {
   if (historicalOverlong) {
     const longSelector = 'x'.repeat(66);
     plan.historicalPayload = true;
+    plan.snapshot.aggregate.group.title = 't'.repeat(77);
     plan.snapshot.aggregate.variations[0]!.selector_value = longSelector;
+    (plan.captureInput.snapshot as { aggregate: VariationListingAggregateSnapshot }).aggregate.group.title = 't'.repeat(77);
     (plan.captureInput.snapshot as { aggregate: VariationListingAggregateSnapshot }).aggregate.variations[0]!.selector_value = longSelector;
   }
   const expectedImages = [
@@ -231,6 +233,26 @@ function testHarness(withMedia = false, historicalOverlong = false) {
 }
 
 describe('executeVariationListingPublication', () => {
+  it.each([
+    ['title', (value: VariationListingAggregateSnapshot) => { value.group.title = 'x'.repeat(81); }],
+    ['Card selector', (value: VariationListingAggregateSnapshot) => { value.variations[0]!.selector_value = 'x'.repeat(66); }],
+    ['group key', (value: VariationListingAggregateSnapshot) => { value.group.group_key = 'x'.repeat(51); }],
+  ])('rejects a new media-backed %s before returning a frozen operation plan', (_label, mutate) => {
+    const value = aggregate();
+    mutate(value);
+
+    expect(() => buildVariationListingFrozenPublicationRevision({
+      aggregate: value,
+      mediaResources: [
+        { copyId: 'copy-A', role: 'front', sourceUrl: 'https://source.test/A/front' },
+        { copyId: 'copy-A', role: 'back', sourceUrl: 'https://source.test/A/back' },
+        { copyId: 'copy-B', role: 'front', sourceUrl: 'https://source.test/B/front' },
+        { copyId: 'copy-B', role: 'back', sourceUrl: 'https://source.test/B/back' },
+      ],
+      revisionId: 'revision-invalid',
+    })).toThrow();
+  });
+
   it('freezes the derived Card Condition descriptor into new publication snapshots', () => {
     const plan = frozen();
     expect(plan.snapshot.aggregate.group.condition_descriptors).toEqual([

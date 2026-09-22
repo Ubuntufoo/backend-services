@@ -15,6 +15,7 @@ import {
 } from './variation-listing-group-review-contracts.js';
 import { buildVariationListingGroupReviewPrompt } from './variation-listing-group-review-prompt.js';
 import { getVariationListingTrustedCommonEbayAspects } from '@/ebay/variation-listing-profiles.js';
+import { MAX_VARIATION_CARD_SELECTOR_LENGTH } from '@/ebay/variation-listing-limits.js';
 
 const CODE_FENCE_PATTERN = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu;
 const CONDITION_RANK: Record<string, number> = {
@@ -179,8 +180,8 @@ export function evaluateVariationListingGroupReadiness(
     blockers.push('Variation listing publish readiness requires at least two variations.');
   }
   for (const variation of validated.variations) {
-    if (variation.selectorValue.length > 65) {
-      blockers.push(`Card selector for variation ${variation.variationId} exceeds eBay's 65-character limit.`);
+    if (variation.selectorValue.length > MAX_VARIATION_CARD_SELECTOR_LENGTH) {
+      blockers.push(`Card selector for variation ${variation.variationId} exceeds eBay's ${MAX_VARIATION_CARD_SELECTOR_LENGTH}-character limit.`);
     }
   }
   const required = REQUIRED_COMMON_ASPECT_KEYS_BY_CATEGORY[validated.categoryId];

@@ -43,6 +43,7 @@ import {
   getVariationListingTrustedCommonEbayAspects,
   requireVariationListingCreationProfile,
 } from '@/ebay/variation-listing-profiles.js';
+import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
 import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
 import {
   claimVariationListingIntakeRetry,
@@ -503,6 +504,9 @@ function buildValidation(aggregate: VariationListingAggregateSnapshot) {
   }
   const prePublication = aggregate.group.last_confirmed_revision === null;
   if (!aggregate.group.title) blockers.push('Group title is required.');
+  else if (aggregate.group.title.length > MAX_VARIATION_GROUP_TITLE_LENGTH) {
+    blockers.push(`Group title exceeds the ${MAX_VARIATION_GROUP_TITLE_LENGTH}-character Variation listing limit.`);
+  }
   if (!aggregate.group.description) blockers.push('Group description is required.');
   for (const variation of aggregate.variations) {
     const copies = aggregate.copies.filter((copy) => copy.variation_id === variation.variation_id);

@@ -239,6 +239,24 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
     expect(buildVariationListingHistoricalInventoryPayloadBundle(rejected).children[1]?.selectorValue).toHaveLength(66);
   });
 
+  it.each([65, 77, 79, 80])('accepts a %i-character new Variation group title', (length) => {
+    expect(() => build({ aggregate: { group: group({ title: 'x'.repeat(length) }) } })).not.toThrow();
+  });
+
+  it('rejects an 81-character new title while reconstructing a valid 77-character historical title with an overlong selector', () => {
+    const rejected = fixture();
+    rejected.aggregate.group.title = 'x'.repeat(81);
+    expect(() => buildVariationListingInventoryPayloadBundle(rejected)).toThrow(/at most 80 characters/);
+
+    const historical = fixture();
+    historical.aggregate.group.title = 'x'.repeat(77);
+    historical.aggregate.variations[0]!.selector_value = 's'.repeat(66);
+    const payload = buildVariationListingHistoricalInventoryPayloadBundle(historical);
+    expect(payload.group.title).toHaveLength(77);
+    expect(payload.group.variesBy.specifications[0]?.values).toContain('s'.repeat(66));
+    expect(() => buildVariationListingInventoryPayloadBundle(historical)).toThrow(/at most 65 characters/);
+  });
+
   it('accepts the proven Sandbox EPS host while rejecting lookalike hosts', () => {
     const sandboxFront = 'https://i.sandbox.ebayimg.com/00/s/MTIxN1g5NjA=/z/MREAAeSwBhRqezb1/$_1.JPG?set_id=8800005007';
     const sandboxBack = 'https://i.sandbox.ebayimg.com/00/s/MTIyNlg5NTE=/z/MGEAAeSwHu9qezb2/$_1.JPG?set_id=8800005007';

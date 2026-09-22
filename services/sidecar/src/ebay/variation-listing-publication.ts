@@ -15,6 +15,7 @@ import {
   buildVariationListingHistoricalInventoryPayloadBundle,
   buildVariationListingInventoryPayloadBundle,
   deriveVariationListingRawCardConditionDescriptors,
+  validateVariationListingNewPublicationPayload,
   variationListingEpsImageUrlSchema,
   type VariationListingInventoryPayloadBundle,
   type VariationListingRepresentativeImage,
@@ -216,6 +217,11 @@ export function buildVariationListingFrozenPublicationRevision(input: {
     if (mediaResources.length !== representativeCopyIds.length * 2) {
       throw new Error('Variation listing Media source intents must exactly match representative copy roles.');
     }
+
+    // Media-backed publication has no EPS URLs yet. Validate the complete new
+    // payload before freezing the operation plan; this keeps structural
+    // failures ahead of captureRevision and every remote Media mutation.
+    validateVariationListingNewPublicationPayload(aggregate);
   } else {
     buildVariationListingInventoryPayloadBundle({ aggregate, representativeImages: representativeImages! });
   }

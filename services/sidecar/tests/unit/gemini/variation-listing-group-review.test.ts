@@ -437,6 +437,33 @@ describe('variation-listing group review', () => {
     expect(readiness.blockers.some((blocker) => blocker.includes('65-character limit'))).toBe(true);
   });
 
+  it.each([64, 65])('does not block a %i-character Card selector at readiness', (length) => {
+    const input: GenerateVariationListingGroupReviewInput = {
+      ...baseInput,
+      variations: [
+        { ...baseInput.variations[0]!, selectorValue: 'x'.repeat(length) },
+        baseInput.variations[1]!,
+      ],
+    };
+    const readiness = evaluateVariationListingGroupReadiness(input);
+    expect(readiness.blockers.some((blocker) => blocker.includes('65-character limit'))).toBe(false);
+  });
+
+  it.each([65, 77, 79, 80])('accepts a %i-character generated group title', (length) => {
+    const result = parseVariationListingGroupContentResponse(
+      JSON.stringify({ title: 't'.repeat(length), description: 'Description', warnings: [] }),
+      undefined,
+    );
+    expect(result.title).toHaveLength(length);
+  });
+
+  it('rejects an 81-character generated group title', () => {
+    expect(() => parseVariationListingGroupContentResponse(
+      JSON.stringify({ title: 't'.repeat(81), description: 'Description', warnings: [] }),
+      undefined,
+    )).toThrow();
+  });
+
   it('requires at least two variations for publish readiness', () => {
     const input: GenerateVariationListingGroupReviewInput = {
       ...baseInput,

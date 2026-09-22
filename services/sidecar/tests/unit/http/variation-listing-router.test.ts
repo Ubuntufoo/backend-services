@@ -18,6 +18,7 @@ import {
   getVariationListingIntakeProcessingStatus,
   setVariationListingIntakeProcessingStatus,
 } from '@/http/variation-listing-intake-status.js';
+import { updateVariationListingReviewDraftRequestSchema } from '@/schemas/variation-listing-api.js';
 
 const groupId = '11111111-1111-4111-8111-111111111111';
 const variationA = '22222222-2222-4222-8222-222222222222';
@@ -231,6 +232,24 @@ function app(
 }
 
 describe('YP6.1 variation listing API router', () => {
+  it.each([65, 77, 79, 80])('accepts a %i-character review title at the API schema boundary', (length) => {
+    expect(updateVariationListingReviewDraftRequestSchema.parse({
+      expectedDesiredRevision: 4,
+      title: 't'.repeat(length),
+      description: 'Description',
+      derivedCommonEbayAspects: {},
+    }).title).toHaveLength(length);
+  });
+
+  it('rejects an 81-character review title at the API schema boundary', () => {
+    expect(() => updateVariationListingReviewDraftRequestSchema.parse({
+      expectedDesiredRevision: 4,
+      title: 't'.repeat(81),
+      description: 'Description',
+      derivedCommonEbayAspects: {},
+    })).toThrow();
+  });
+
   it('returns the canonical durable intake session in camelCase', async () => {
     const session = intakeSession({
       mode: 'new_variation',
@@ -692,6 +711,20 @@ describe('YP6.1 variation listing API router', () => {
     );
   });
 
+  it('keeps persisted overlong Variation titles blocked in serialized readiness', async () => {
+    const current = aggregate();
+    current.group = { ...current.group, title: 't'.repeat(81), last_confirmed_revision: null, lifecycle_state: 'review' };
+    const response = await request(
+      app(dataAccess({ loadAggregate: vi.fn(async () => current) }))
+    ).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.validation.initialPublicationReady).toBe(false);
+    expect(response.body.validation.blockers).toContain(
+      'Group title exceeds the 80-character Variation listing limit.'
+    );
+  });
+
   it('blocks initial readiness when an available copy is below group condition', async () => {
     const current = aggregate();
     current.group.condition_token = 'EXCELLENT';
@@ -849,6 +882,21 @@ describe('YP6.1 variation listing API router', () => {
       description: 'Updated description',
       derivedCommonEbayAspects: { Manufacturer: 'Topps' },
     });
+  });
+
+  it('rejects an overlong Variation group title before persistence', async () => {
+    const access = dataAccess();
+    const response = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/review-draft`)
+      .send({
+        expectedDesiredRevision: 4,
+        title: 't'.repeat(81),
+        description: 'Updated description',
+        derivedCommonEbayAspects: { Manufacturer: 'Topps' },
+      });
+
+    expect(response.status).toBe(400);
+    expect(access.applyGroupReviewDraft).not.toHaveBeenCalled();
   });
 
   it('generates a non-persistent group review draft with the current desired revision', async () => {

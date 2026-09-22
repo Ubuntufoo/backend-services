@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RAW_CARD_CONDITION_TOKENS } from '@/listings/trading-card-conditions.js';
+import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const rawConditionTokenSchema = z.enum(RAW_CARD_CONDITION_TOKENS);
@@ -84,7 +85,7 @@ export const generateVariationListingGroupReviewInputSchema = z
 
 export const variationListingGroupContentModelResponseSchema = z
   .object({
-    title: nonEmptyStringSchema.max(80),
+    title: nonEmptyStringSchema.max(MAX_VARIATION_GROUP_TITLE_LENGTH),
     description: nonEmptyStringSchema.max(4000),
     warnings: z.array(nonEmptyStringSchema.max(500)).max(12).default([]),
   })

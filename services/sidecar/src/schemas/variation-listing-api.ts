@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
 
 export const variationListingGroupIdParamsSchema = z.object({
   groupId: z.string().uuid(),
@@ -160,7 +161,10 @@ export const createVariationListingGroupRequestSchema = z
 export const updateVariationListingReviewDraftRequestSchema = z
   .object({
     expectedDesiredRevision: expectedDesiredRevisionSchema,
-    title: trimmed('title'),
+    title: trimmed('title').max(
+      MAX_VARIATION_GROUP_TITLE_LENGTH,
+      `title must be at most ${MAX_VARIATION_GROUP_TITLE_LENGTH} characters`,
+    ),
     description: trimmed('description'),
     derivedCommonEbayAspects: z.record(z.string(), z.unknown()),
   })
