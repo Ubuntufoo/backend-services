@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   VariationListingTransactionConflictError,
   buildPublicImageUrl,
+  inspectVariationListingJournal,
   loadR2ImageStorageConfig,
   type Json,
   type VariationListingAggregateSnapshot,
@@ -544,20 +545,53 @@ function durableOfferIds(
   history: readonly VariationListingPublishingCheckpointRow[]
 ): Record<string, string> {
   const ids: Record<string, string> = {};
-  for (const operation of operationPlan(revision).filter((candidate) => candidate.operationKind === 'child_offer_write')) {
-    const latest = [...history]
-      .filter((checkpoint) => checkpoint.operation_key === operation.operationKey)
-      .sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number)
-      .at(-1);
+  const plan = operationPlan(revision);
+  const allowedOperationKeys = new Set(plan.map((operation) => operation.operationKey));
+  if (history.some((checkpoint) => checkpoint.revision_id !== revision.revision_id || !allowedOperationKeys.has(checkpoint.operation_key))) {
+    throw new Error('Frozen variation listing offer history contains a checkpoint outside its captured revision plan.');
+  }
+  const inspections = new Map<string, ReturnType<typeof inspectVariationListingJournal>>();
+  for (const operation of plan) {
+    const operationHistory = history.filter((checkpoint) => checkpoint.operation_key === operation.operationKey);
+    if (operationHistory.length === 0) continue;
+    inspections.set(operation.operationKey, inspectVariationListingJournal({
+      intent: operation.intent,
+      intent_digest: operation.intentDigest,
+      intent_version: operation.intentVersion,
+      operation_key: operation.operationKey,
+      operation_kind: operation.operationKind,
+      sequence_no: operation.sequenceNo,
+      target_ref: operation.targetRef,
+    }, operationHistory));
+  }
+  for (const operation of plan.filter((candidate) => candidate.operationKind === 'child_offer_write')) {
+    const operationHistory = history.filter((checkpoint) => checkpoint.operation_key === operation.operationKey);
+    // An offer operation with no checkpoint never started and therefore owns
+    // no durable remote identity. Keep the empty case distinct from a
+    // partially written journal: any non-empty history must satisfy the
+    // shared journal grammar before cleanup can infer ownership.
+    if (operationHistory.length === 0) continue;
+    const inspection = inspections.get(operation.operationKey)!;
+    const latest = inspection.latestCheckpoint;
     if (!latest || !['confirmed_complete', 'confirmed_no_op'].includes(latest.state)) {
       throw new Error(`Frozen variation listing offer operation ${operation.operationKey} lacks a terminal durable checkpoint.`);
     }
     const evidence = record(latest.evidence);
     const offerId = readString(evidence, 'offerId');
-    if (!offerId) continue;
-    const sku = readString(evidence, 'sku') || operation.targetRef;
-    if (sku !== operation.targetRef) throw new Error(`Frozen variation listing offer operation ${operation.operationKey} identity mismatch.`);
-    ids[sku] = offerId;
+    const sku = readString(evidence, 'sku');
+    if (!sku || sku !== operation.targetRef) {
+      throw new Error(`Frozen variation listing offer operation ${operation.operationKey} identity evidence is missing or mismatched.`);
+    }
+    if (latest.state === 'confirmed_complete' && (latest.observed_remote_state !== 'present' || !offerId)) {
+      throw new Error(`Frozen variation listing offer operation ${operation.operationKey} confirmed completion lacks exact offer identity evidence.`);
+    }
+    if (latest.state === 'confirmed_no_op' && latest.observed_remote_state === 'present' && !offerId) {
+      throw new Error(`Frozen variation listing offer operation ${operation.operationKey} no-op present evidence lacks exact offer identity.`);
+    }
+    if (latest.observed_remote_state === 'proven_absent' && offerId) {
+      throw new Error(`Frozen variation listing offer operation ${operation.operationKey} absent evidence cannot carry an offer identity.`);
+    }
+    if (offerId) ids[sku] = offerId;
   }
   return ids;
 }
@@ -793,6 +827,19 @@ export function createVariationListingActionService(options: VariationListingAct
     const history = await checkpoints(revision.revision_id);
     for (const operation of plan) {
       const operationHistory = history.filter((checkpoint) => checkpoint.operation_key === operation.operationKey);
+      try {
+        inspectVariationListingJournal({
+          intent: operation.intent,
+          intent_digest: operation.intentDigest,
+          intent_version: operation.intentVersion,
+          operation_key: operation.operationKey,
+          operation_kind: operation.operationKind,
+          sequence_no: operation.sequenceNo,
+          target_ref: operation.targetRef,
+        }, operationHistory);
+      } catch (error) {
+        invalid(error instanceof Error ? error.message : 'The durable cleanup revision journal history is invalid.');
+      }
       const latest = [...operationHistory]
         .sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number)
         .at(-1);
@@ -802,15 +849,30 @@ export function createVariationListingActionService(options: VariationListingAct
           attempt_number: 1, checkpoint_number: 1, state: 'started', observed_remote_state: null, evidence: {}, created_at: revision.captured_at,
         });
       }
-      if ((latest.observed_remote_state !== 'present' && latest.observed_remote_state !== 'proven_absent') ||
-        latest.evidence === null || typeof latest.evidence !== 'object' || Array.isArray(latest.evidence) || Object.keys(latest.evidence).length === 0) {
+      if (latest.observed_remote_state !== 'proven_absent') {
+        if (operation.operationKind === 'final_absence_verification') {
+          throw validationError(action, groupId, 'unpublished_cleanup_absence_unproven', 'This action requires durable proof that the unpublished remote state is absent.', ['cleanup_failed_initial_publication']);
+        }
         throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'The durable cleanup revision lacks exact terminal evidence for every operation.', ['cleanup_failed_initial_publication']);
+      }
+      if (latest.evidence === null || typeof latest.evidence !== 'object' || Array.isArray(latest.evidence) || Object.keys(latest.evidence).length === 0) {
+        throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'The durable cleanup revision lacks exact terminal evidence for every operation.', ['cleanup_failed_initial_publication']);
+      }
+      const terminalIntent = record(operation.intent);
+      const terminalOfferId = readString(terminalIntent, 'offerId');
+      const terminalSku = readString(terminalIntent, 'sku');
+      const expectedEvidence = operation.operationKind === 'cleanup_offer'
+        ? { offerId: terminalOfferId, state: 'proven_absent' }
+        : operation.operationKind === 'cleanup_group'
+          ? { groupKey, state: 'proven_absent' }
+          : operation.operationKind === 'cleanup_child_inventory_item'
+            ? { sku: terminalSku, state: 'proven_absent' }
+            : { groupKey, offersBySku: offerIdsBySku, skus: validatedOrderedSkus, state: 'proven_absent' };
+      if (canonicalJson(latest.evidence) !== canonicalJson(expectedEvidence)) {
+        throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'The durable cleanup revision terminal evidence does not match the exact executor proof.', ['cleanup_failed_initial_publication']);
       }
       if (latest.state === 'confirmed_no_op' && operationHistory.some((checkpoint) => checkpoint.state === 'unknown' || checkpoint.observed_remote_state === 'unknown')) {
         throw validationError(action, groupId, 'unpublished_cleanup_invalid', 'A cleanup operation reconciled to no effect after an unknown outcome and cannot be reused safely.', ['cleanup_failed_initial_publication']);
-      }
-      if (operation.operationKind === 'final_absence_verification' && latest.observed_remote_state !== 'proven_absent') {
-        throw validationError(action, groupId, 'unpublished_cleanup_absence_unproven', 'This action requires durable proof that the unpublished remote state is absent.', ['cleanup_failed_initial_publication']);
       }
     }
   };
@@ -858,12 +920,16 @@ export function createVariationListingActionService(options: VariationListingAct
     const unknown = unresolved?.state === 'unknown' || unresolved?.observed_remote_state === 'unknown' || unresolved?.state === 'started';
     const exhausted = unresolved?.state === 'retry_exhausted';
     const issues = eBayIssues(error);
-    const knownUnchanged = issues.length > 0;
+    // Preflight is read-only. A generic validation/journal failure before any
+    // operation is unresolved cannot represent an ambiguous eBay mutation and
+    // must not lock every action behind reconciliation.
+    const noMutationAmbiguity = stage === 'preflight' && !unresolved && issues.length === 0;
+    const knownUnchanged = issues.length > 0 || noMutationAmbiguity;
     const reconciliationRequired = !knownUnchanged || unknown;
-    return new VariationListingActionError(reconciliationRequired ? 409 : 502, {
+    return new VariationListingActionError(noMutationAmbiguity || reconciliationRequired ? 409 : 502, {
       action,
       affected: { groupId },
-      category: exhausted ? 'terminal' : reconciliationRequired ? 'reconciliation' : 'remote',
+      category: exhausted ? 'terminal' : reconciliationRequired ? 'reconciliation' : noMutationAmbiguity ? 'state' : 'remote',
       code: exhausted ? 'retry_exhausted' : unknown ? 'variation_listing_remote_outcome_unknown' : issues.length ? 'ebay_validation_failed' : 'variation_listing_action_failed',
       diagnostic: conciseDiagnostic(error),
       issues,
@@ -877,7 +943,7 @@ export function createVariationListingActionService(options: VariationListingAct
             : ['refresh_group', 'inspect_action_status'],
       remoteState: reconciliationRequired ? 'unknown' : 'known_unchanged',
       requiresReconciliation: reconciliationRequired,
-      retryStatus: exhausted ? 'retry_exhausted' : reconciliationRequired ? 'reconciliation_required' : 'safe_to_retry',
+      retryStatus: exhausted ? 'retry_exhausted' : reconciliationRequired ? 'reconciliation_required' : noMutationAmbiguity ? 'not_applicable' : 'safe_to_retry',
       ...(revision ? { revisionId: revision.revision_id } : {}),
       severity: 'error',
       stage,

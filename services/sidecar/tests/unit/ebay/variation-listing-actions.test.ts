@@ -222,6 +222,17 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
   return { access, remoteFactory, remote, journal, deletes, withdrawalCalls, aggregate: () => aggregateState, captured: () => captured };
 }
 
+function replaceOfferHistory(
+  harness: ReturnType<typeof activeWithdrawalHarness>,
+  operationKey: string,
+  entries: VariationListingPublishingCheckpointRow[]
+): void {
+  for (let index = harness.journal.length - 1; index >= 0; index -= 1) {
+    if (harness.journal[index]?.operation_key === operationKey) harness.journal.splice(index, 1);
+  }
+  harness.journal.push(...entries);
+}
+
 const failingRemote = (error: unknown) => async () => { throw error; };
 
 describe('YP6.2 variation listing actions', () => {
@@ -382,6 +393,7 @@ describe('YP6.2 variation listing actions', () => {
     const access = data({ revisions: [revision()], checkpoints: [checkpoint('unknown', 'unknown')] });
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: failingRemote(new Error('network timeout')) });
     await expect(service.publish(groupId, 3)).rejects.toMatchObject({
+      httpStatus: 409,
       status: {
         code: 'variation_listing_remote_outcome_unknown',
         remoteState: 'unknown',
@@ -479,6 +491,214 @@ describe('YP6.2 variation listing actions', () => {
     expect(harness.deletes).toEqual([]);
   });
 
+  it('cleans an unpublished partial initial publication when a later offer never started', async () => {
+    const harness = activeWithdrawalHarness({ unpublished: true });
+    const firstSku = 'BSKBL-McGrady-000001';
+    const secondKey = `child-offer:${variationBId}`;
+    const firstKey = `child-offer:${variationId}`;
+    replaceOfferHistory(harness, firstKey, [
+      {
+        checkpoint_id: 'first-offer-started',
+        revision_id: revisionId,
+        operation_key: firstKey,
+        attempt_number: 1,
+        checkpoint_number: 1,
+        state: 'started',
+        observed_remote_state: null,
+        evidence: {},
+        created_at: '2026-09-02T00:00:00Z',
+      },
+      {
+        checkpoint_id: 'first-offer-absent',
+        revision_id: revisionId,
+        operation_key: firstKey,
+        attempt_number: 1,
+        checkpoint_number: 2,
+        state: 'confirmed_no_op',
+        observed_remote_state: 'proven_absent',
+        evidence: { sku: firstSku },
+        created_at: '2026-09-02T00:00:00Z',
+      },
+    ]);
+    replaceOfferHistory(harness, secondKey, []);
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.cleanup(groupId, 3)).resolves.toMatchObject({ lifecycleState: 'abandoned', revisionId: withdrawalRevisionId });
+    expect(harness.access.value.reserveActionRevision).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 3 });
+    expect(harness.access.value.advanceCleanupLifecycle).toHaveBeenCalledWith(expect.objectContaining({ targetLifecycle: 'abandoned' }));
+    expect(harness.deletes).toEqual([]);
+  });
+
+  it('blocks an unexpected remote offer for an initial offer operation with no checkpoints', async () => {
+    const harness = activeWithdrawalHarness({ unpublished: true });
+    const secondSku = 'BSKBL-McGrady-000002';
+    const secondKey = `child-offer:${variationBId}`;
+    replaceOfferHistory(harness, secondKey, []);
+    harness.remote.getOffers.mockImplementation(async (sku) => {
+      if (sku === secondSku) {
+        return {
+          state: 'present' as const,
+          value: [{
+            offerId: 'unexpected-offer',
+            sku,
+            marketplaceId: 'EBAY_US',
+            payload: {},
+            status: 'UNPUBLISHED' as const,
+            lifecycleClass: null,
+            listingId: null,
+          }],
+        };
+      }
+      return { state: 'present' as const, value: [] };
+    });
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.cleanup(groupId, 3)).rejects.toMatchObject({
+      httpStatus: 409,
+      status: {
+        category: 'state',
+        remoteState: 'known_unchanged',
+        requiresReconciliation: false,
+        retryStatus: 'not_applicable',
+      },
+    });
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+    expect(harness.deletes).toEqual([]);
+  });
+
+  it('blocks unresolved initial offer journal states before unpublished cleanup', async () => {
+    const harness = activeWithdrawalHarness({ unpublished: true });
+    const secondKey = `child-offer:${variationBId}`;
+    replaceOfferHistory(harness, secondKey, [{
+      checkpoint_id: 'second-offer-started',
+      revision_id: revisionId,
+      operation_key: secondKey,
+      attempt_number: 1,
+      checkpoint_number: 1,
+      state: 'started',
+      observed_remote_state: null,
+      evidence: {},
+      created_at: '2026-09-02T00:00:00Z',
+    }]);
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.cleanup(groupId, 3)).rejects.toMatchObject({ status: { code: 'variation_listing_remote_outcome_unknown', requiresReconciliation: true } });
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+    expect(harness.deletes).toEqual([]);
+  });
+
+  it('blocks malformed reopened initial offer journal history without locking remote reconciliation', async () => {
+    const harness = activeWithdrawalHarness({ unpublished: true });
+    const secondSku = 'BSKBL-McGrady-000002';
+    const secondKey = `child-offer:${variationBId}`;
+    replaceOfferHistory(harness, secondKey, [
+      {
+        checkpoint_id: 'second-offer-started',
+        revision_id: revisionId,
+        operation_key: secondKey,
+        attempt_number: 1,
+        checkpoint_number: 1,
+        state: 'started',
+        observed_remote_state: null,
+        evidence: {},
+        created_at: '2026-09-02T00:00:00Z',
+      },
+      {
+        checkpoint_id: 'second-offer-absent',
+        revision_id: revisionId,
+        operation_key: secondKey,
+        attempt_number: 1,
+        checkpoint_number: 2,
+        state: 'confirmed_no_op',
+        observed_remote_state: 'proven_absent',
+        evidence: { sku: secondSku },
+        created_at: '2026-09-02T00:00:00Z',
+      },
+      {
+        checkpoint_id: 'second-offer-reopened',
+        revision_id: revisionId,
+        operation_key: secondKey,
+        attempt_number: 2,
+        checkpoint_number: 1,
+        state: 'confirmed_no_op',
+        observed_remote_state: 'proven_absent',
+        evidence: { sku: secondSku },
+        created_at: '2026-09-02T00:00:00Z',
+      },
+    ]);
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.cleanup(groupId, 3)).rejects.toMatchObject({
+      httpStatus: 409,
+      status: {
+        code: 'variation_listing_action_failed',
+        category: 'state',
+        remoteState: 'known_unchanged',
+        requiresReconciliation: false,
+        retryStatus: 'not_applicable',
+      },
+    });
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+    expect(harness.deletes).toEqual([]);
+  });
+
+  it('blocks malformed reopened non-offer history before unpublished cleanup reservation', async () => {
+    const harness = activeWithdrawalHarness({ unpublished: true });
+    replaceOfferHistory(harness, 'group-publish', [
+      {
+        checkpoint_id: 'group-publish-started',
+        revision_id: revisionId,
+        operation_key: 'group-publish',
+        attempt_number: 1,
+        checkpoint_number: 1,
+        state: 'started',
+        observed_remote_state: null,
+        evidence: {},
+        created_at: '2026-09-02T00:00:00Z',
+      },
+      {
+        checkpoint_id: 'group-publish-complete',
+        revision_id: revisionId,
+        operation_key: 'group-publish',
+        attempt_number: 1,
+        checkpoint_number: 2,
+        state: 'confirmed_complete',
+        observed_remote_state: 'present',
+        evidence: { listingId: 'listing-1' },
+        created_at: '2026-09-02T00:00:00Z',
+      },
+      {
+        checkpoint_id: 'group-publish-reopened',
+        revision_id: revisionId,
+        operation_key: 'group-publish',
+        attempt_number: 2,
+        checkpoint_number: 1,
+        state: 'confirmed_complete',
+        observed_remote_state: 'present',
+        evidence: { listingId: 'listing-1' },
+        created_at: '2026-09-02T00:00:00Z',
+      },
+    ]);
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.cleanup(groupId, 3)).rejects.toMatchObject({
+      httpStatus: 409,
+      status: {
+        code: 'variation_listing_action_failed',
+        category: 'state',
+        remoteState: 'known_unchanged',
+        requiresReconciliation: false,
+        retryStatus: 'not_applicable',
+      },
+    });
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+    expect(harness.deletes).toEqual([]);
+  });
+
   it('resumes return to review from abandoned after cleanup succeeded but reopen acknowledgement failed', async () => {
     const current = aggregate({ desired_revision: 4, lifecycle_state: 'abandoned' });
     const cleanupId = '99999999-9999-4999-8999-999999999999';
@@ -507,18 +727,24 @@ describe('YP6.2 variation listing actions', () => {
     };
     const cleanupCheckpoints: VariationListingPublishingCheckpointRow[] = [
       {
+        ...checkpoint('started', null),
+        revision_id: cleanupId,
+        operation_key: 'cleanup-group',
+        evidence: {},
+      },
+      {
         ...checkpoint('confirmed_complete', 'proven_absent'),
         revision_id: cleanupId,
         operation_key: 'cleanup-group',
         checkpoint_number: 2,
-        evidence: { groupKey: current.group.group_key },
+        evidence: { groupKey: current.group.group_key, state: 'proven_absent' },
       },
       {
         ...checkpoint('confirmed_complete', 'proven_absent'),
         revision_id: cleanupId,
         operation_key: 'final-absence',
         checkpoint_number: 1,
-        evidence: { state: 'proven_absent' },
+        evidence: { groupKey: current.group.group_key, offersBySku: {}, skus: [], state: 'proven_absent' },
       },
     ];
     const access = data({ aggregate: current, revisions: [cleanupRevision], checkpoints: cleanupCheckpoints });
@@ -528,6 +754,12 @@ describe('YP6.2 variation listing actions', () => {
 
     await expect(service.returnToReview(groupId, 4)).resolves.toMatchObject({ lifecycleState: 'review', desiredRevision: 5, cleanupRevisionId: cleanupId });
     expect(access.value.returnToReview).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 4, cleanupRevisionId: cleanupId });
+    expect(remoteFactory).not.toHaveBeenCalled();
+
+    cleanupCheckpoints[1]!.evidence = { groupKey: current.group.group_key, state: 'proven_absent', forged: true };
+    access.value.returnToReview.mockClear();
+    await expect(service.returnToReview(groupId, 4)).rejects.toMatchObject({ status: { code: 'unpublished_cleanup_invalid' } });
+    expect(access.value.returnToReview).not.toHaveBeenCalled();
     expect(remoteFactory).not.toHaveBeenCalled();
   });
 
@@ -665,11 +897,14 @@ describe('YP6.2 variation listing actions', () => {
     const remoteFactory = vi.fn();
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
     await expect(service.publish(groupId, 3)).rejects.toMatchObject({
+      httpStatus: 409,
       status: {
         code: 'variation_listing_action_failed',
         diagnostic: 'Unsupported variation listing revision snapshot version 3.',
-        remoteState: 'unknown',
-        requiresReconciliation: true,
+        category: 'state',
+        remoteState: 'known_unchanged',
+        requiresReconciliation: false,
+        retryStatus: 'not_applicable',
       },
     });
     expect(remoteFactory).not.toHaveBeenCalled();

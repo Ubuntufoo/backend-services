@@ -124,6 +124,100 @@ describe('YP5.4 variation listing cleanup planning', () => {
     expect(plan.operationPlan.map((entry) => entry.operationKey)).toEqual(['cleanup-offer:SKU-A', 'cleanup-item:SKU-A', 'final-absence']);
   });
 
+  it('executes unpublished cleanup in dependency order and proves final absence', async () => {
+    const current = bundle(['A', 'B']);
+    const items = new Set(['SKU-A']);
+    const offers = new Map<string, VariationListingRemoteOffer>([
+      ['SKU-A', offerFor(current, 'SKU-A', { lifecycleClass: null, listingId: null, status: 'UNPUBLISHED' })],
+    ]);
+    const remote: VariationListingPublicationReadGateway = {
+      async getInventoryItem(sku) {
+        if (!items.has(sku)) return { state: 'proven_absent' as const };
+        const child = current.children.find((entry) => entry.sku === sku)!;
+        return { state: 'present' as const, value: { groupKeys: null, payload: child.inventoryItem as unknown as Json, sku } };
+      },
+      async getOffers(sku) {
+        const offer = offers.get(sku);
+        return { state: 'present' as const, value: offer ? [offer] : [] };
+      },
+      async getInventoryItemGroup() { return { state: 'proven_absent' as const }; },
+    };
+    const plan = await prepareVariationListingCleanupPlan({
+      ownedBundles: [current],
+      ownedRemote: ownedRemote(['SKU-A', 'SKU-B'], false),
+      protection: { state: 'clear' },
+      remote,
+    });
+    expect(plan.operationPlan.map((entry) => entry.operationKey)).toEqual(['cleanup-offer:SKU-A', 'cleanup-item:SKU-A', 'final-absence']);
+    const frozen = freezeVariationListingCleanupRevision({
+      capturedDesiredRevision: 1,
+      expectedPreviousConfirmedRevision: null,
+      groupId: 'group-1',
+      plan,
+      revisionId: 'cleanup-revision-unpublished',
+    });
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    let durableRevision: VariationListingRevisionRow | null = null;
+    let checkpointNo = 0;
+    const calls: string[] = [];
+    let lifecycleState: VariationListingGroupRow['lifecycle_state'] = 'publish-ready';
+    const aggregateState = aggregate(['A', 'B']);
+    aggregateState.group.desired_revision = 1;
+    aggregateState.group.last_confirmed_revision = null;
+    aggregateState.group.lifecycle_state = 'publish-ready';
+
+    const result = await executeVariationListingCleanup({
+      frozen,
+      remote,
+      journal: {
+        listCheckpoints: async () => [...checkpoints],
+        loadRevision: async () => durableRevision,
+      },
+      mutations: {
+        withdrawInventoryItemGroup: async () => { calls.push('withdraw'); },
+        deleteOffer: async (offerId) => { calls.push(`offer:${offerId}`); offers.delete('SKU-A'); },
+        deleteInventoryItemGroup: async () => { calls.push('group'); },
+        deleteInventoryItem: async (sku) => { calls.push(`item:${sku}`); items.delete(sku); },
+      },
+      transaction: {
+        loadAggregate: async () => aggregateState,
+        captureRevision: async (input) => {
+          durableRevision = {
+            captured_at: timestamp,
+            captured_desired_revision: input.capturedDesiredRevision,
+            group_id: input.groupId,
+            operation_count: input.operationPlan.length,
+            operation_plan: input.operationPlan.map((operation) => ({ intent: operation.intent, intent_digest: operation.intentDigest, intent_version: operation.intentVersion, operation_key: operation.operationKey, operation_kind: operation.operationKind, sequence_no: operation.sequenceNo, target_ref: operation.targetRef })),
+            revision_id: input.revisionId,
+            snapshot: input.snapshot,
+            snapshot_digest: input.snapshotDigest,
+            snapshot_version: input.snapshotVersion,
+          } as unknown as VariationListingRevisionRow;
+          return { revision: durableRevision };
+        },
+        appendJournalCheckpoint: async (input) => {
+          const checkpoint = { checkpoint_id: `checkpoint-${++checkpointNo}`, revision_id: input.revisionId, operation_key: input.operationKey, attempt_number: input.attemptNumber, checkpoint_number: input.checkpointNumber, state: input.state, observed_remote_state: input.observedRemoteState ?? null, evidence: input.evidence, created_at: timestamp } as VariationListingPublishingCheckpointRow;
+          checkpoints.push(checkpoint);
+          return { checkpoint };
+        },
+        advanceCleanupLifecycle: async (input) => {
+          lifecycleState = input.targetLifecycle;
+          calls.push(`lifecycle:${input.targetLifecycle}`);
+          return { ...aggregateState.group, lifecycle_state: input.targetLifecycle };
+        },
+      },
+      checkpointId: () => `checkpoint-id-${checkpointNo + 1}`,
+    });
+
+    expect(result).toEqual({ lifecycleState: 'abandoned', revisionId: 'cleanup-revision-unpublished' });
+    expect(calls).toEqual(['lifecycle:cleanup', 'offer:offer-SKU-A', 'item:SKU-A', 'lifecycle:abandoned']);
+    expect(lifecycleState).toBe('abandoned');
+    expect(checkpoints.filter((checkpoint) => checkpoint.state === 'confirmed_complete').map((checkpoint) => checkpoint.operation_key)).toEqual(['cleanup-offer:SKU-A', 'cleanup-item:SKU-A', 'final-absence']);
+    expect(await remote.getInventoryItemGroup('GROUP-1')).toEqual({ state: 'proven_absent' });
+    expect(await remote.getOffers('SKU-A', 'EBAY_US')).toEqual({ state: 'present', value: [] });
+    expect(await remote.getInventoryItem('SKU-A')).toEqual({ state: 'proven_absent' });
+  });
+
   it('accepts exact unpublished staged additions outside the still-active confirmed group', async () => {
     const prior = bundle(['A', 'B']);
     const desired = bundle(['A', 'B', 'C']);
