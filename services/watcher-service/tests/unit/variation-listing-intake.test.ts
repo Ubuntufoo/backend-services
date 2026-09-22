@@ -706,6 +706,30 @@ describe('variation listing Sidecar client', () => {
     expect((fetch.mock.calls[0]?.[1] as RequestInit).headers).not.toHaveProperty('Authorization');
   });
 
+  it('uses the general fallback or an explicitly configured Sidecar port', async () => {
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ selectorValue: 'Card A', variationMetadata: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await requestVariationListingIdentityHandoff(handoffRequest, { env: {}, fetch });
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:3000/api/variation-listings/intake-identity',
+      expect.anything()
+    );
+
+    await requestVariationListingIdentityHandoff(handoffRequest, {
+      env: { MCP_PORT: '3001' },
+      fetch,
+    });
+    expect(fetch).toHaveBeenLastCalledWith(
+      'http://localhost:3001/api/variation-listings/intake-identity',
+      expect.anything()
+    );
+  });
+
   it('adds Authorization only from the server-side bearer-token environment value', async () => {
     const fetch = vi.fn(async () =>
       new Response(JSON.stringify({ selectorValue: 'Card A', variationMetadata: {} }), {
@@ -716,7 +740,7 @@ describe('variation listing Sidecar client', () => {
 
     await requestVariationListingIdentityHandoff(handoffRequest, {
       env: {
-        SIDECAR_API_URL: 'https://sidecar.example.test',
+        SIDECAR_API_URL: 'https://sidecar.example.test:3001',
         SIDECAR_API_BEARER_TOKEN: 'server-token',
       },
       fetch,

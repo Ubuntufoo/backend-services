@@ -241,6 +241,10 @@ describe('HTTP MCP transport', () => {
     expect(config.oauth.requiredScopes).toEqual(['mcp:tools', 'mcp:admin']);
   });
 
+  it('retains the general HTTP default when MCP_PORT is omitted', () => {
+    expect(createHttpTransportConfigFromEnv({}).port).toBe(3000);
+  });
+
   it('keeps health available in DB-only mode without OAuth', async () => {
     const app = await createHttpMcpApp(createTestConfig({ ebayEnabled: false, ebayConfig: undefined }));
     const response = await request(app).get('/health');

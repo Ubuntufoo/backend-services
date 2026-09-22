@@ -34,8 +34,13 @@ Primary root commands:
 - `pnpm lint`
 - `pnpm test`
 
-The HTTP sidecar's code default is `http://localhost:3000`; the checked-in
-`.env.example` sets `MCP_PORT=3001`, so a copied example uses port `3001`.
+Feature-branch local development reserves `http://localhost:3000` for the
+companion Next.js UI. The Sidecar HTTP API listens on
+`http://localhost:3002`; the watcher connects to that URL and does not bind a
+second HTTP listener. Keep `MCP_PORT=3002`, `SIDECAR_API_URL=http://localhost:3002`,
+and trusted-local `OAUTH_ENABLED=false` aligned using the explicit development
+commands in `docs/local-development.md` (shell values override dotenv files).
+The generic runtime default remains 3000 when `MCP_PORT` is unset.
 Background job processing is opt-in: set `SIDECAR_JOB_RUNNER_ENABLED=true`
 only when you intend to run the polling loop.
 

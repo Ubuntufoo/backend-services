@@ -26,6 +26,7 @@ pnpm --filter @ebay-inventory/watcher-service test
 
 The watcher CLI loads repo-root `backend-services/.env`, then `backend-services/.env.local` for
 unset variables. Existing `.env` values are not overwritten by the local file.
+Shell variables take precedence over both files.
 
 Set the local incoming folder path in the repo-root env file:
 

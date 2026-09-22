@@ -26,11 +26,11 @@ describe('variation listing Sidecar client', () => {
       'camera-1',
       '22222222-2222-4222-8222-222222222222',
       true,
-      { env: { SIDECAR_API_URL: 'http://localhost:3001' }, fetch: fetch as typeof globalThis.fetch },
+      { env: { SIDECAR_API_URL: 'http://localhost:3002' }, fetch: fetch as typeof globalThis.fetch },
     )).resolves.toBe(true);
 
     expect(fetch).toHaveBeenCalledWith(
-      'http://localhost:3001/api/variation-listings/intake-retry/claim',
+      'http://localhost:3002/api/variation-listings/intake-retry/claim',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -56,7 +56,7 @@ describe('variation listing Sidecar client', () => {
 
     await expect(
       requestVariationListingIdentityHandoff(request, {
-        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        env: { SIDECAR_API_URL: 'http://localhost:3002' },
         fetch: fetch as typeof globalThis.fetch,
       })
     ).rejects.toThrow(
@@ -78,7 +78,7 @@ describe('variation listing Sidecar client', () => {
 
     await expect(
       requestVariationListingIdentityHandoff(request, {
-        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        env: { SIDECAR_API_URL: 'http://localhost:3002' },
         fetch: fetch as typeof globalThis.fetch,
       })
     ).rejects.toBeInstanceOf(VariationListingSidecarRetryableError);
@@ -99,7 +99,7 @@ describe('variation listing Sidecar client', () => {
 
     await expect(
       requestVariationListingIdentityHandoff(request, {
-        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        env: { SIDECAR_API_URL: 'http://localhost:3002' },
         fetch: fetch as typeof globalThis.fetch,
       })
     ).rejects.toBeInstanceOf(VariationListingSidecarRetryableError);
@@ -115,7 +115,7 @@ describe('variation listing Sidecar client', () => {
 
     await expect(
       requestVariationListingIdentityHandoff(request, {
-        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        env: { SIDECAR_API_URL: 'http://localhost:3002' },
         fetch: fetch as typeof globalThis.fetch,
       })
     ).rejects.toThrow('Variation listing Sidecar client failed: identity request failed');
@@ -136,7 +136,7 @@ describe('variation listing Sidecar client', () => {
 
     await expect(
       requestVariationListingIdentityHandoff(request, {
-        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        env: { SIDECAR_API_URL: 'http://localhost:3002' },
         fetch: fetch as typeof globalThis.fetch,
       })
     ).rejects.toThrow('Variation listing Sidecar client failed: identity request failed');
@@ -155,7 +155,7 @@ describe('variation listing Sidecar client', () => {
 
     await expect(
       requestVariationListingIdentityHandoff(request, {
-        env: { SIDECAR_API_URL: 'http://localhost:3001' },
+        env: { SIDECAR_API_URL: 'http://localhost:3002' },
         fetch: fetch as typeof globalThis.fetch,
       })
     ).rejects.toThrow('Variation listing Sidecar client failed: identity request failed');
@@ -174,7 +174,7 @@ describe('variation listing Sidecar client', () => {
       .mockResolvedValueOnce(new Response('{}', { status: 200 }));
 
     const handoff = await requestVariationListingIdentityHandoff(request, {
-      env: { SIDECAR_API_URL: 'http://localhost:3001' },
+      env: { SIDECAR_API_URL: 'http://localhost:3002' },
       fetch: fetch as typeof globalThis.fetch,
     });
     expect(handoff.timings).toEqual({ imageReadEncodeMs: 4, generationMs: 12, totalMs: 16 });
@@ -186,11 +186,11 @@ describe('variation listing Sidecar client', () => {
       completionKind: 'new_variation',
       message: null,
     }, {
-      env: { SIDECAR_API_URL: 'http://localhost:3001' },
+      env: { SIDECAR_API_URL: 'http://localhost:3002' },
       fetch: fetch as typeof globalThis.fetch,
     });
     expect(fetch).toHaveBeenNthCalledWith(2,
-      'http://localhost:3001/api/variation-listings/intake-status',
+      'http://localhost:3002/api/variation-listings/intake-status',
       expect.objectContaining({ method: 'POST' })
     );
   });

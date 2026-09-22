@@ -1,9 +1,10 @@
 # Sidecar HTTP Contract
 
 The Express HTTP sidecar mounts the data router at `/api` and the
-Streamable-HTTP MCP transport at `/`. Defaults are `MCP_HOST=localhost` and
-`MCP_PORT=3000`, so local URLs are `http://localhost:3000/api/...` and
-`http://localhost:3000/`. `GET /health` is a small unauthenticated health
+Streamable-HTTP MCP transport at `/`. The code defaults to
+`MCP_HOST=localhost` and `MCP_PORT=3000`; the feature-branch launch commands
+explicitly use `MCP_PORT=3002`, yielding `http://localhost:3002/api/...` and
+`http://localhost:3002/`. `GET /health` is a small unauthenticated health
 response. OAuth protects MCP and `/api` when `OAUTH_ENABLED` is not `false`;
 keep the HTTP server on a trusted local boundary when OAuth is disabled.
 

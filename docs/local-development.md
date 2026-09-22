@@ -29,6 +29,48 @@ Run `pnpm setup` only when configuring eBay credentials/OAuth; it is an
 interactive wizard that persists the resulting eBay values into the repo-root
 `.env`. It is not required for a DB-only sidecar with `EBAY_ENABLED=false`.
 
+## Feature-branch three-process launch
+
+Use three terminals, with the explicit endpoint values below. The UI owns
+port 3000; only the Sidecar owns port 3002; the watcher is a client and binds
+no HTTP listener.
+
+```bash
+# 1. backend-services — Sidecar HTTP
+MCP_HOST=localhost MCP_PORT=3002 SIDECAR_API_URL=http://localhost:3002 OAUTH_ENABLED=false EBAY_PUBLISH_ENABLED=false pnpm dev:sidecar
+
+# 2. backend-services — watcher client (no listener)
+SIDECAR_API_URL=http://localhost:3002 MCP_PORT=3002 pnpm --filter @ebay-inventory/watcher-service dev
+
+# 3. ebay-ui-app — Next.js UI
+SIDECAR_API_URL=http://localhost:3002 PORT=3000 pnpm dev
+```
+
+Stop each process with `Ctrl-C`. After changing `.env`, `.env.local`, or a
+shell override, stop and restart all three processes; running processes keep
+their already-loaded environment. The watcher loads `.env` before
+`.env.local`, while shell variables remain highest precedence. The explicit
+launch commands prevent an older local `3001` setting from taking effect.
+
+Read-only checks:
+
+```bash
+curl --fail-with-body http://localhost:3002/health
+curl --fail-with-body http://localhost:3002/api/variation-listings/f6364eb4-489b-450b-9a83-ced85526b90f
+curl --fail-with-body http://localhost:3000/api/variation-listings
+
+# Compare the same ProductionPilot02 group through the UI proxy and Sidecar.
+GROUP_ID=f6364eb4-489b-450b-9a83-ced85526b90f
+curl --fail-with-body http://localhost:3000/api/variation-listings \
+  | jq --arg id "$GROUP_ID" '.groups[] | select(.groupId == $id) | {groupId, desiredRevision, lifecycleState, journal}'
+curl --fail-with-body "http://localhost:3002/api/variation-listings/$GROUP_ID" \
+  | jq '{groupId, desiredRevision, lifecycleState, journal}'
+```
+
+Compare `groupId`, `desiredRevision`, `lifecycleState`, and the `journal`
+summary (especially its latest revision/checkpoint state). These commands are
+GET-only; they do not publish, retry, reconcile, or otherwise mutate state.
+
 ## Service Commands
 
 | Area | Command |
@@ -56,9 +98,10 @@ pnpm --filter @ebay-inventory/image-service check
 
 ## Notes
 
-- `pnpm dev` starts `services/sidecar/src/server-http.ts`. Its code default is
-  `http://localhost:3000`; the checked-in `.env.example` sets `MCP_PORT=3001`.
-  `MCP_HOST` and `MCP_PORT` override the code defaults.
+- `pnpm dev` starts `services/sidecar/src/server-http.ts`. For this
+  feature-branch workflow the effective Sidecar URL is
+  `http://localhost:3002`; `MCP_HOST` and `MCP_PORT` override code defaults,
+  and shell values override dotenv files.
 - HTTP MCP is served at `/`; health is `/health`; data routes are mounted at
   `/api`. OAuth is enabled unless `OAUTH_ENABLED=false`.
 - `pnpm dev:sidecar:stdio` starts `services/sidecar/src/index.ts` for MCP

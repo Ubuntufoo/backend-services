@@ -35,6 +35,19 @@ describe('sidecar startup profiles', () => {
     assert.equal(env.SOLDCOMPS_ENABLED, 'false');
   });
 
+  it('preserves explicit Sidecar port configuration in an existing profile', () => {
+    const env = buildStartupProfileEnv('dev:safe', {
+      MCP_PORT: '3001',
+      SIDECAR_API_URL: 'http://localhost:3001',
+      OAUTH_ENABLED: 'true',
+      EBAY_PUBLISH_ENABLED: 'false',
+    });
+    assert.equal(env.MCP_PORT, '3001');
+    assert.equal(env.SIDECAR_API_URL, 'http://localhost:3001');
+    assert.equal(env.OAUTH_ENABLED, 'true');
+    assert.equal(env.EBAY_PUBLISH_ENABLED, 'false');
+  });
+
   it('supports a dry run that prints only profile state and never starts the server', () => {
     const lines = [];
     let spawnCalled = false;
