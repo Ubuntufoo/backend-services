@@ -24,7 +24,7 @@ describe('YP3.3 RPC parity',()=>{
       capture_source_key: 'camera', mode: 'duplicate_copy',
       target_group_id: '11111111-1111-4111-8111-111111111111',
       target_variation_id: '22222222-2222-4222-8222-222222222222',
-      copy_condition_token: 'EXCELLENT', sticky_price_amount: 1.49,
+      copy_condition_token: 'EXCELLENT', sticky_price_amount: 2.99,
       sticky_price_currency: 'USD', pending_pair: null,
       created_at: 'now', updated_at: 'now',
     };
@@ -35,12 +35,12 @@ describe('YP3.3 RPC parity',()=>{
       captureSourceKey: 'camera', mode: 'duplicate_copy',
       targetGroupId: session.target_group_id,
       targetVariationId: session.target_variation_id,
-      copyConditionToken: 'EXCELLENT', stickyPriceAmount: 1.49,
-    })).resolves.toMatchObject({ copy_condition_token: 'EXCELLENT' });
+      copyConditionToken: 'EXCELLENT', stickyPriceAmount: 2.99,
+    })).resolves.toMatchObject({ copy_condition_token: 'EXCELLENT', sticky_price_amount: 2.99 });
   });
 
-  it('accepts equivalent start timestamps with different offset spelling',async()=>{
-    const session={capture_source_key:'camera',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,copy_condition_token:null,sticky_price_amount:1.49,sticky_price_currency:'USD',pending_pair:{pair_id:'44444444-4444-4444-8444-444444444444',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,price_amount:1.49,price_currency:'USD',condition_token:null,front_source_ref:'front',started_at:'2026-09-01T05:00:00+00:00',expected_desired_revision:0},created_at:'now',updated_at:'now'};
+  it('accepts equivalent start timestamps with different offset spelling for a frozen 4.99 pending pair',async()=>{
+    const session={capture_source_key:'camera',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,copy_condition_token:null,sticky_price_amount:4.99,sticky_price_currency:'USD',pending_pair:{pair_id:'44444444-4444-4444-8444-444444444444',mode:'new_variation',target_group_id:'11111111-1111-4111-8111-111111111111',target_variation_id:null,price_amount:4.99,price_currency:'USD',condition_token:null,front_source_ref:'front',started_at:'2026-09-01T05:00:00+00:00',expected_desired_revision:0},created_at:'now',updated_at:'now'};
     const c=clientFor('start_variation_listing_intake_pair',{session_row:session});
     await expect(createSupabaseVariationListingTransactionGateway(c).startIntakePair({captureSourceKey:'camera',pairId:'44444444-4444-4444-8444-444444444444',frontSourceRef:'front',startedAt:'2026-09-01T01:00:00-04:00'})).resolves.toMatchObject({capture_source_key:'camera'});
   });
@@ -115,19 +115,19 @@ describe('YP4.3 manual variation price RPC', () => {
     group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:4, last_confirmed_revision:null, lifecycle_state:'review', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:2, derived_common_ebay_aspects:{}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'now', updated_at:'now',
   };
   const variation = {
-    variation_id:'v', group_id:'g', inventory_serial:1, position:0, sku:'BSKBL-BucketA-000001', selector_value:'Card A', price_amount:1.99, price_currency:'USD', representative_copy_id:'c', variation_metadata:{}, created_at:'now', updated_at:'now',
+    variation_id:'v', group_id:'g', inventory_serial:1, position:0, sku:'BSKBL-BucketA-000001', selector_value:'Card A', price_amount:4.99, price_currency:'USD', representative_copy_id:'c', variation_metadata:{}, created_at:'now', updated_at:'now',
   };
 
   it('maps narrow args and verifies returned group/variation parity', async () => {
     const c = clientFor('update_variation_listing_manual_price', { group_row:group, variation_row:variation }, args => {
-      expect(args).toEqual({ p_group_id:'g', p_variation_id:'v', p_expected_desired_revision:3, p_price_amount:1.99 });
+      expect(args).toEqual({ p_group_id:'g', p_variation_id:'v', p_expected_desired_revision:3, p_price_amount:4.99 });
     });
-    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:1.99 })).resolves.toMatchObject({ group:{group_id:'g',desired_revision:4}, variation:{variation_id:'v',price_amount:1.99,price_currency:'USD'} });
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:4.99 })).resolves.toMatchObject({ group:{group_id:'g',desired_revision:4}, variation:{variation_id:'v',price_amount:4.99,price_currency:'USD'} });
   });
 
   it('fails before RPC invocation for an unsupported runtime price', async () => {
     const c = clientFor('update_variation_listing_manual_price', { group_row:group, variation_row:variation });
-    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:2.99 as never })).rejects.toThrow(/price edit amount/);
+    await expect(createSupabaseVariationListingTransactionGateway(c).updateVariationPrice({ groupId:'g', variationId:'v', expectedDesiredRevision:3, priceAmount:5.49 as never })).rejects.toThrow(/price edit amount/);
     expect(c.rpc).not.toHaveBeenCalled();
   });
 

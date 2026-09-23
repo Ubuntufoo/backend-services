@@ -342,7 +342,7 @@ describe('EbayApiClient Unit Tests', () => {
 
   describe('Server Error Retry Logic', () => {
     it('should retry on 500 errors with exponential backoff', async () => {
-      const apiErrorSpy = vi.spyOn(apiLogger, 'error').mockImplementation(() => {});
+      const apiInfoSpy = vi.spyOn(apiLogger, 'info').mockImplementation(() => {});
 
       // First two attempts fail with 500
       nock('https://api.sandbox.ebay.com')
@@ -361,9 +361,12 @@ describe('EbayApiClient Unit Tests', () => {
       const result = await apiClient.get('/sell/inventory/v1/test');
 
       expect(result).toEqual({ success: true });
-      expect(apiErrorSpy).toHaveBeenCalled();
+      expect(apiInfoSpy).toHaveBeenCalledWith(
+        'eBay read recovered after a transient server error.',
+        { method: 'GET', retryAttempts: 2, status: 200 }
+      );
 
-      apiErrorSpy.mockRestore();
+      apiInfoSpy.mockRestore();
     }, 10000);
 
     it('should give up after 3 retry attempts', async () => {

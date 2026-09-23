@@ -176,6 +176,15 @@ export class EbayApiClient {
         const remaining = response.headers['x-ebay-c-ratelimit-remaining'] as string | undefined;
         const limit = response.headers['x-ebay-c-ratelimit-limit'] as string | undefined;
 
+        const requestConfig = response.config as AxiosConfigWithRetry;
+        if (requestConfig.retryCount && requestConfig.method?.toUpperCase() === 'GET') {
+          apiLogger.info('eBay read recovered after a transient server error.', {
+            method: 'GET',
+            retryAttempts: requestConfig.retryCount,
+            status: response.status,
+          });
+        }
+
         // Log response details
         logResponse(response.status, response.statusText, response.data, remaining, limit);
 
@@ -185,14 +194,20 @@ export class EbayApiClient {
         const axiosError = error;
         const config = axiosError.config as AxiosConfigWithRetry | undefined;
 
-        // Log error response details
+        const status = axiosError.response?.status;
+        const isServerError = status !== undefined && status >= 500 && status < 600;
+
+        // Server-error retry diagnostics are intentionally sanitized below. Keep the
+        // existing detailed error log for other response classes only.
         if (axiosError.response) {
-          logErrorResponse(
-            axiosError.response.status,
-            axiosError.response.statusText,
-            `${config?.baseURL}${config?.url}`,
-            axiosError.response.data
-          );
+          if (!isServerError) {
+            logErrorResponse(
+              axiosError.response.status,
+              axiosError.response.statusText,
+              `${config?.baseURL}${config?.url}`,
+              axiosError.response.data
+            );
+          }
         } else if (axiosError.request) {
           apiLogger.error('No response received from server', {
             url: `${config?.baseURL}${config?.url}`,
@@ -269,23 +284,33 @@ export class EbayApiClient {
           );
         }
 
-        // Handle server errors with retry suggestion (500, 502, 503, 504)
-        if (axiosError.response?.status && axiosError.response.status >= 500 && config) {
+        // Retry ambiguous server outcomes only for idempotent GET reads. A missing or
+        // non-GET method must fail after its first attempt rather than replaying a
+        // potentially completed mutation.
+        if (isServerError && config) {
+          const method = config.method?.toUpperCase();
           const retryCount = config.retryCount ?? 0;
 
-          if (retryCount < 3) {
+          if (method === 'GET' && retryCount < 3) {
             config.retryCount = retryCount + 1;
             const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
-
-            apiLogger.warn(`Server error (${axiosError.response.status}). Retrying...`, {
-              attempt: `${retryCount + 1}/3`,
-              delayMs: Math.min(delay, 5000),
-            });
 
             await new Promise<void>((resolve) => {
               setTimeout(resolve, Math.min(delay, 5000));
             });
             return await this.httpClient.request(config);
+          }
+
+          if (method === 'GET') {
+            apiLogger.warn('eBay GET exhausted its server-error retries.', {
+              retryAttempts: retryCount,
+              status,
+            });
+          } else {
+            apiLogger.warn(
+              'eBay non-GET server error: automatic retry suppressed; remote outcome may be unknown.',
+              { method: method ?? 'UNKNOWN', status }
+            );
           }
         }
 

@@ -7,14 +7,16 @@ import {
 
 describe('variation listing manual price contract', () => {
   it('exposes the exact current manual price tiers from one canonical application constant', () => {
-    expect(VARIATION_LISTING_MANUAL_PRICE_AMOUNTS).toEqual([0.99, 1.49, 1.99, 2.49]);
+    expect(VARIATION_LISTING_MANUAL_PRICE_AMOUNTS).toEqual([
+      0.99, 1.49, 1.99, 2.49, 2.99, 3.49, 3.99, 4.49, 4.99,
+    ]);
   });
 
-  it.each([0.99, 1.49, 1.99, 2.49])('accepts supported tier %s', (price) => {
+  it.each([0.99, 1.49, 1.99, 2.49, 2.99, 3.49, 3.99, 4.49, 4.99])('accepts supported tier %s', (price) => {
     expect(isVariationListingManualPriceAmount(price)).toBe(true);
   });
 
-  it.each([0, 1, 1.29, 2.99, NaN, Infinity, '1.49', null])(
+  it.each([0, 1, 1.29, 5.49, NaN, Infinity, '1.49', null])(
     'rejects unsupported value %s',
     (price) => {
       expect(isVariationListingManualPriceAmount(price)).toBe(false);

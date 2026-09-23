@@ -85,7 +85,7 @@ function copy(
 
 function fixture(): { aggregate: VariationListingAggregateSnapshot; representativeImages: { copyId: string; frontEpsUrl: string; backEpsUrl: string }[] } {
   const v1 = variation({ variation_id: 'v1', position: 0, sku: 'SKU-1', selector_value: 'Card One', representative_copy_id: 'c1' });
-  const v2 = variation({ variation_id: 'v2', position: 1, sku: 'SKU-2', selector_value: 'Card Two', representative_copy_id: 'c2', price_amount: 2.49 });
+  const v2 = variation({ variation_id: 'v2', position: 1, sku: 'SKU-2', selector_value: 'Card Two', representative_copy_id: 'c2', price_amount: 4.99 });
   return {
     aggregate: {
       group: group(),
@@ -152,7 +152,7 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
       pricingSummary: { price: { currency: 'USD', value: '0.99' } },
       sku: 'SKU-1',
     });
-    expect(result.children[1]?.offer.pricingSummary.price.value).toBe('2.49');
+    expect(result.children[1]?.offer.pricingSummary.price.value).toBe('4.99');
   });
 
   it('uses the persisted group common-aspect projection without re-deriving child metadata', () => {

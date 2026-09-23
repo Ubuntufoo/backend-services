@@ -254,12 +254,13 @@ describe('YP6.1 variation listing API router', () => {
     const session = intakeSession({
       mode: 'new_variation',
       targetGroupId: groupId,
+      stickyPriceAmount: 4.99,
       pendingPair: {
         pair_id: '66666666-6666-4666-8666-666666666666',
         mode: 'new_variation',
         target_group_id: groupId,
         target_variation_id: null,
-        price_amount: 1.49,
+        price_amount: 4.99,
         price_currency: 'USD',
         front_source_ref: '/incoming/front.jpg',
         started_at: now,
@@ -277,7 +278,7 @@ describe('YP6.1 variation listing API router', () => {
         targetGroupId: groupId,
         targetVariationId: null,
         copyConditionToken: null,
-        stickyPriceAmount: 1.49,
+        stickyPriceAmount: 4.99,
         stickyPriceCurrency: 'USD',
         pendingPair: {
           pairId: '66666666-6666-4666-8666-666666666666',
@@ -285,7 +286,7 @@ describe('YP6.1 variation listing API router', () => {
           targetGroupId: groupId,
           targetVariationId: null,
           conditionToken: null,
-          priceAmount: 1.49,
+          priceAmount: 4.99,
           priceCurrency: 'USD',
           frontSourceRef: '/incoming/front.jpg',
           startedAt: now,
@@ -472,7 +473,7 @@ describe('YP6.1 variation listing API router', () => {
 
   it.each([
     ['idle', { mode: 'idle' as const, targetGroupId: null, targetVariationId: null, copyConditionToken: null, stickyPriceAmount: 1.99 as const }],
-    ['new_variation', { mode: 'new_variation' as const, targetGroupId: groupId, targetVariationId: null, copyConditionToken: null, stickyPriceAmount: 2.49 as const }],
+    ['new_variation', { mode: 'new_variation' as const, targetGroupId: groupId, targetVariationId: null, copyConditionToken: null, stickyPriceAmount: 4.99 as const }],
   ])('configures %s through the existing intake RPC seam', async (_label, body) => {
     const access = dataAccess({ configureIntake: vi.fn(async () => intakeSession({ mode: body.mode, targetGroupId: body.targetGroupId, stickyPriceAmount: body.stickyPriceAmount })) });
     const response = await request(app(access)).patch('/api/variation-listings/intake-session').send(body);
@@ -836,19 +837,19 @@ describe('YP6.1 variation listing API router', () => {
     const access = dataAccess();
     const good = await request(app(access))
       .patch(`/api/variation-listings/${groupId}/variations/${variationA}/price`)
-      .send({ expectedDesiredRevision: 4, priceAmount: 1.99 });
+      .send({ expectedDesiredRevision: 4, priceAmount: 4.99 });
     expect(good.status).toBe(200);
     expect(access.updateVariationPrice).toHaveBeenCalledWith({
       groupId,
       variationId: variationA,
       expectedDesiredRevision: 4,
-      priceAmount: 1.99,
+      priceAmount: 4.99,
     });
 
     vi.mocked(access.updateVariationPrice).mockClear();
     const invalid = await request(app(access))
       .patch(`/api/variation-listings/${groupId}/variations/${variationA}/price`)
-      .send({ expectedDesiredRevision: 4, priceAmount: 2.99 });
+      .send({ expectedDesiredRevision: 4, priceAmount: 5.49 });
     expect(invalid.status).toBe(400);
     expect(access.updateVariationPrice).not.toHaveBeenCalled();
   });

@@ -1,4 +1,14 @@
-export const VARIATION_LISTING_MANUAL_PRICE_AMOUNTS = [0.99, 1.49, 1.99, 2.49] as const;
+export const VARIATION_LISTING_MANUAL_PRICE_AMOUNTS = [
+  0.99,
+  1.49,
+  1.99,
+  2.49,
+  2.99,
+  3.49,
+  3.99,
+  4.49,
+  4.99,
+] as const;
 
 export type VariationListingManualPriceAmount =
   (typeof VARIATION_LISTING_MANUAL_PRICE_AMOUNTS)[number];

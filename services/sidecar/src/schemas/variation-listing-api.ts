@@ -20,6 +20,11 @@ const manualPriceAmountSchema = z.union([
   z.literal(1.49),
   z.literal(1.99),
   z.literal(2.49),
+  z.literal(2.99),
+  z.literal(3.49),
+  z.literal(3.99),
+  z.literal(4.49),
+  z.literal(4.99),
 ]);
 
 const variationListingIntakeModeSchema = z.enum(['idle', 'new_variation', 'duplicate_copy']);
