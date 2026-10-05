@@ -102,6 +102,7 @@ import {
   type CreateVariationListingGroupInput,
   type UpdateVariationListingCopyAvailabilityInput,
   type UpdateVariationListingManualPriceInput,
+  type UpdateVariationListingQuantityAdjustmentInput,
   type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingRepresentativeCopyInput,
   type VariationListingAggregateSnapshot,
@@ -208,6 +209,7 @@ export interface SidecarDataAccess {
     advanceCleanupLifecycle(input: AdvanceVariationListingCleanupLifecycleInput): Promise<VariationListingGroupRow>;
     abandonUntouchedGroup(input: AbandonUntouchedVariationListingGroupInput): Promise<VariationListingGroupRow>;
     updateVariationPrice(input: UpdateVariationListingManualPriceInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+    updateVariationQuantityAdjustment(input: UpdateVariationListingQuantityAdjustmentInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
     updateVariationSelectorValue(input: UpdateVariationListingSelectorValueInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
     updateCopyAvailability(input: UpdateVariationListingCopyAvailabilityInput): Promise<{ copy: VariationListingCopyRow; group: VariationListingGroupRow }>;
     updateRepresentativeCopy(input: UpdateVariationListingRepresentativeCopyInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
@@ -310,6 +312,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       advanceCleanupLifecycle: async (input) => await variationListingTransactions.advanceCleanupLifecycle(input),
       abandonUntouchedGroup: async (input) => await variationListingTransactions.abandonUntouchedGroup(input),
       updateVariationPrice: async (input) => await variationListingTransactions.updateVariationPrice(input),
+      updateVariationQuantityAdjustment: async (input) => await variationListingTransactions.updateVariationQuantityAdjustment(input),
       updateVariationSelectorValue: async (input) => await variationListingTransactions.updateVariationSelectorValue(input),
       updateCopyAvailability: async (input) => await variationListingTransactions.updateCopyAvailability(input),
       updateRepresentativeCopy: async (input) => await variationListingTransactions.updateRepresentativeCopy(input),

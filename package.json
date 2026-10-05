@@ -34,6 +34,7 @@
     "pricing:smoke-soldcomps": "pnpm --filter sidecar pricing:smoke-soldcomps",
     "ebay:cleanup-sandbox": "pnpm --filter sidecar ebay:cleanup-sandbox",
     "ebay:list-live-publish-config": "pnpm --filter sidecar ebay:list-live-publish-config",
+    "ebay:verify-variation-listing-live-status": "pnpm --filter sidecar ebay:verify-variation-listing-live-status",
     "ebay:opt-in-selling-policies": "pnpm --filter sidecar ebay:opt-in-selling-policies",
     "ebay:reconcile-published-listing": "pnpm --filter sidecar ebay:reconcile-published-listing",
     "ebay:setup-sandbox": "pnpm --filter sidecar ebay:setup-sandbox",

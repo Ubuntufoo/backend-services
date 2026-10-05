@@ -61,6 +61,7 @@ function aggregate(overrides: Partial<VariationListingAggregateSnapshot['group']
       price_currency: 'USD',
       representative_copy_id: copyId,
       variation_metadata: {},
+      quantity_adjustment_counter: 0,
       created_at: '2026-09-02T00:00:00Z',
       updated_at: '2026-09-02T00:00:00Z',
     }],
@@ -85,13 +86,29 @@ function aggregate(overrides: Partial<VariationListingAggregateSnapshot['group']
 }
 
 function revision(snapshotVersion = 1): VariationListingRevisionRow {
+  const current = aggregate();
+  const activeSnapshot = {
+    aggregate: current,
+    confirmed: {
+      aggregate: current,
+      representativeImages: [{ copyId, frontEpsUrl: 'https://i.ebayimg.com/images/g/front/s-l1600.jpg', backEpsUrl: 'https://i.ebayimg.com/images/g/back/s-l1600.jpg' }],
+      remote: {
+        listingId: 'listing-1',
+        offerIdsBySku: { [current.variations[0]!.sku]: 'offer-1' },
+        quantitiesBySku: { [current.variations[0]!.sku]: { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 } },
+      },
+      revisionId,
+    },
+    mediaResources: [],
+    representativeImages: [{ copyId, frontEpsUrl: 'https://i.ebayimg.com/images/g/front/s-l1600.jpg', backEpsUrl: 'https://i.ebayimg.com/images/g/back/s-l1600.jpg' }],
+  };
   return {
     revision_id: revisionId,
     group_id: groupId,
     captured_desired_revision: 3,
     snapshot_version: snapshotVersion,
     snapshot_digest: 'a'.repeat(64),
-    snapshot: { aggregate: aggregate() },
+    snapshot: snapshotVersion === 3 ? activeSnapshot : { aggregate: current },
     operation_plan: [{
       sequence_no: 1,
       operation_key: 'child-item:one',
@@ -158,9 +175,26 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
   const bundle = (options.historicalOverlong
     ? buildVariationListingHistoricalInventoryPayloadBundle
     : buildVariationListingInventoryPayloadBundle)({ aggregate: current, representativeImages });
+  const confirmedQuantities = Object.fromEntries(bundle.children.map((child) => [child.sku, {
+    inventoryItemQuantity: child.quantity,
+    offerQuantity: child.quantity,
+    sellableQuantity: child.quantity,
+  }]));
   const confirmedRevision: VariationListingRevisionRow = {
-    revision_id: revisionId, group_id: groupId, captured_desired_revision: 3, snapshot_version: 1, snapshot_digest: 'a'.repeat(64),
-    snapshot: { aggregate: current, representativeImages }, operation_plan: [
+    revision_id: revisionId, group_id: groupId, captured_desired_revision: 3, snapshot_version: options.unpublished ? 1 : 3, snapshot_digest: 'a'.repeat(64),
+    snapshot: options.unpublished
+      ? { aggregate: current, representativeImages }
+      : {
+        aggregate: current,
+        confirmed: {
+          aggregate: current,
+          representativeImages,
+          remote: { listingId: 'listing-1', offerIdsBySku: Object.fromEntries(bundle.children.map((child) => [child.sku, `offer-${child.sku}`])), quantitiesBySku: confirmedQuantities },
+          revisionId,
+        },
+        mediaResources: [],
+        representativeImages,
+      }, operation_plan: [
       ...current.variations.flatMap((variation, index) => [
         { sequence_no: index * 2 + 1, operation_key: `child-item:${variation.variation_id}`, operation_kind: 'child_inventory_item_write', target_ref: variation.sku, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
         { sequence_no: index * 2 + 2, operation_key: `child-offer:${variation.variation_id}`, operation_kind: 'child_offer_write', target_ref: variation.sku, intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
@@ -374,7 +408,7 @@ describe('YP6.2 variation listing actions', () => {
     const previous = process.env.EBAY_PUBLISH_ENABLED;
     process.env.EBAY_PUBLISH_ENABLED = 'false';
     try {
-      const access = data({ revisions: [revision(2)], checkpoints: [checkpoint('unknown', 'unknown')] });
+      const access = data({ revisions: [revision(3)], checkpoints: [checkpoint('unknown', 'unknown')] });
       const service = createVariationListingActionService({
         data: access.value,
         publicImageBaseUrl: 'https://images.example.test',
@@ -388,6 +422,29 @@ describe('YP6.2 variation listing actions', () => {
       });
       expect(access.value.captureRevision).not.toHaveBeenCalled();
       expect(access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
+  });
+
+  it('dispatches v1 initial history and v3 active withdrawal through their dedicated action paths', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'false';
+    try {
+      const initialAccess = data({ revisions: [revision()], checkpoints: [checkpoint('unknown', 'unknown')] });
+      const initialService = createVariationListingActionService({ data: initialAccess.value, publicImageBaseUrl: 'https://images.example.test' });
+      await expect(initialService.retry(groupId)).rejects.toMatchObject({ status: { code: 'publish_disabled', remoteState: 'known_unchanged' } });
+
+      const activeHarness = activeWithdrawalHarness();
+      const activeService = createVariationListingActionService({
+        data: activeHarness.access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory: activeHarness.remoteFactory,
+        createId: () => withdrawalRevisionId,
+      });
+      await expect(activeService.withdraw(groupId, 3)).resolves.toMatchObject({ lifecycleState: 'withdrawn', revisionId: withdrawalRevisionId });
+      expect(activeHarness.remoteFactory).toHaveBeenCalledTimes(1);
     } finally {
       if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
       else process.env.EBAY_PUBLISH_ENABLED = previous;
@@ -944,14 +1001,14 @@ describe('YP6.2 variation listing actions', () => {
   });
 
   it('fails closed instead of classifying an unsupported revision snapshot as initial publication', async () => {
-    const access = data({ revisions: [revision(3)] });
+    const access = data({ revisions: [revision(2)] });
     const remoteFactory = vi.fn();
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
     await expect(service.publish(groupId, 3)).rejects.toMatchObject({
       httpStatus: 409,
       status: {
         code: 'variation_listing_action_failed',
-        diagnostic: 'Unsupported variation listing revision snapshot version 3.',
+        diagnostic: 'Unsupported variation listing revision snapshot version 2.',
         category: 'state',
         remoteState: 'known_unchanged',
         requiresReconciliation: false,

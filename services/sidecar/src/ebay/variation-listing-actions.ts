@@ -36,6 +36,7 @@ import {
   prepareVariationListingFrozenActiveRevision,
   reconstructConfirmedRemoteIdentity,
   reconstructVariationListingConfirmedRepresentativeImages,
+  revisionSnapshotAggregate,
   type VariationListingFrozenActiveRevision,
 } from '@/ebay/variation-listing-active-revision.js';
 import {
@@ -482,6 +483,7 @@ function hydrateInitial(row: VariationListingRevisionRow): VariationListingFroze
 }
 
 function hydrateActive(row: VariationListingRevisionRow): VariationListingFrozenActiveRevision {
+  revisionSnapshotAggregate(row);
   const snapshot = row.snapshot as unknown as VariationListingFrozenActiveRevision['snapshot'];
   const historicalConfirmedBundle = buildVariationListingHistoricalInventoryPayloadBundle({
     aggregate: snapshot.confirmed.aggregate,
@@ -530,12 +532,13 @@ function revisionKind(row: VariationListingRevisionRow): RevisionKind {
     if (row.snapshot_version !== 1) throw new Error(`Unsupported variation listing cleanup snapshot version ${row.snapshot_version}.`);
     return 'cleanup';
   }
-  if (row.snapshot_version === 2) return 'active';
+  if (row.snapshot_version === 3) return 'active';
   if (row.snapshot_version === 1) return 'initial';
   throw new Error(`Unsupported variation listing revision snapshot version ${row.snapshot_version}.`);
 }
 
 function snapshotAggregate(row: VariationListingRevisionRow): VariationListingAggregateSnapshot {
+  if (row.snapshot_version === 1 || row.snapshot_version === 3) return revisionSnapshotAggregate(row);
   const root = row.snapshot as unknown as { aggregate?: VariationListingAggregateSnapshot };
   if (!root.aggregate) throw new Error('Frozen variation listing revision lacks aggregate snapshot.');
   return root.aggregate;

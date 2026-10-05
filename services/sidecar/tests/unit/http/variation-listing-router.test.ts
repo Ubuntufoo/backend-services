@@ -647,6 +647,23 @@ describe('YP6.1 variation listing API router', () => {
     expect(parity.body.journal.latestRevision.recovery).toMatchObject({operationKey: 'child-offer:1', retryStatus: 'reconciliation_required'});
   });
 
+  it('exposes reconciliation for an unresolved v3 active revision', async () => {
+    const active = {
+      ...latestRevision(),
+      source: { captured_at: now, snapshot_version: 3 },
+    } as unknown as VariationListingRevision;
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [active]),
+      listCheckpointsByRevisionId: vi.fn(async () => [checkpointWithState('started')]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      reconciliationSupported: true,
+      recommendedActions: expect.arrayContaining(['reconcile_remote_state']),
+    });
+  });
+
   it('clears historical unknown outcome after a valid terminal checkpoint', async () => {
     const rows = [
       {

@@ -8,6 +8,7 @@ import type {
   VariationListingRevisionPlanOperationInput,
   VariationListingRevisionRow,
   VariationListingTransactionGateway,
+  VariationListingVariationRow,
 } from '@ebay-inventory/data';
 
 import {
@@ -25,7 +26,7 @@ import {
   type VariationListingRemoteMedia,
 } from '@/ebay/variation-listing-publication.js';
 
-const SNAPSHOT_VERSION = 2;
+const SNAPSHOT_VERSION = 3;
 const INTENT_VERSION = 1;
 
 function canonicalJson(value: Json): string {
@@ -128,18 +129,43 @@ export interface PrepareVariationListingActiveRevisionInput {
   mediaResources?: readonly VariationListingMediaResource[];
 }
 
-function revisionSnapshotAggregate(revision: VariationListingRevisionRow): VariationListingAggregateSnapshot {
+export function revisionSnapshotAggregate(revision: VariationListingRevisionRow): VariationListingAggregateSnapshot {
   const root = object(revision.snapshot, 'confirmed revision snapshot');
-  const snapshotVersion = revision.snapshot_version;
-  if (snapshotVersion === 1) {
+  if (revision.snapshot_version === 1) {
     const aggregate = object(root.aggregate, 'confirmed revision aggregate');
-    return aggregate as unknown as VariationListingAggregateSnapshot;
+    return validateSnapshotAggregate(aggregate as unknown as VariationListingAggregateSnapshot);
   }
-  if (snapshotVersion === 2) {
-    const aggregate = object(root.aggregate, 'confirmed active revision aggregate');
-    return aggregate as unknown as VariationListingAggregateSnapshot;
+  if (revision.snapshot_version !== SNAPSHOT_VERSION) {
+    throw new Error(`Unsupported confirmed variation listing snapshot version ${revision.snapshot_version}.`);
   }
-  throw new Error(`Unsupported confirmed variation listing snapshot version ${snapshotVersion}.`);
+  const aggregate = object(root.aggregate, 'confirmed active revision aggregate');
+  const confirmed = object(root.confirmed, 'confirmed active revision parent');
+  const confirmedAggregate = object(confirmed.aggregate, 'confirmed active revision parent aggregate');
+  validateSnapshotAggregate(confirmedAggregate as unknown as VariationListingAggregateSnapshot);
+  return validateSnapshotAggregate(aggregate as unknown as VariationListingAggregateSnapshot);
+}
+
+function quantityAdjustmentCounter(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+    throw new Error(`Variation listing ${label} quantity adjustment counter must be an int32.`);
+  }
+  return value;
+}
+
+function validateSnapshotAggregate(aggregate: VariationListingAggregateSnapshot): VariationListingAggregateSnapshot {
+  if (!Array.isArray(aggregate.variations)) {
+    throw new Error('Variation listing confirmed revision aggregate variations must be an array.');
+  }
+  return {
+    ...aggregate,
+    variations: aggregate.variations.map((variation) => {
+      const rawCounter = (variation as VariationListingVariationRow & { quantity_adjustment_counter?: unknown }).quantity_adjustment_counter;
+      if (rawCounter === undefined) {
+        throw new Error(`Variation listing confirmed revision variation ${variation.variation_id} is missing quantity_adjustment_counter.`);
+      }
+      return { ...variation, quantity_adjustment_counter: quantityAdjustmentCounter(rawCounter, `confirmed revision variation ${variation.variation_id}`) };
+    }),
+  };
 }
 
 function parseRepresentativeImage(value: Json, label: string): VariationListingRepresentativeImage {
@@ -194,93 +220,92 @@ export function reconstructVariationListingConfirmedRepresentativeImages(input: 
   checkpoints: readonly VariationListingPublishingCheckpointRow[];
 }): VariationListingRepresentativeImage[] {
   const root = object(input.revision.snapshot, 'confirmed revision snapshot');
-  if (input.revision.snapshot_version === 2) {
-    if (!Array.isArray(root.representativeImages)) {
-      throw new Error('Variation listing version-2 confirmed snapshot is missing representativeImages.');
-    }
-    const images = root.representativeImages.map((entry, index) =>
-      parseRepresentativeImage(entry, `confirmed representative image ${index}`)
-    );
-    if (new Set(images.map((image) => image.copyId)).size !== images.length) {
-      throw new Error('Variation listing confirmed representative image copy IDs must be unique.');
-    }
-    // A v2 snapshot may have captured a desired representative refresh before
-    // Media completed. Resolve those own intents from terminal Media evidence.
-    if (Array.isArray(root.mediaResources) && root.mediaResources.length > 0) {
-      const replacements = new Map<string, { front?: string; back?: string }>();
-      const keys = new Set<string>();
-      for (const [index, entry] of root.mediaResources.entries()) {
-        const row = object(entry, `confirmed Media resource ${index}`);
-        const copyId = stringValue(row.copyId, `confirmed Media resource ${index} copyId`);
-        const role = stringValue(row.role, `confirmed Media resource ${index} role`);
-        if (role !== 'front' && role !== 'back') {
-          throw new Error(`Variation listing confirmed Media resource ${index} has invalid role.`);
-        }
-        const key = `${copyId}:${role}`;
-        if (keys.has(key)) throw new Error(`Variation listing confirmed Media resource ${index} is duplicated.`);
-        keys.add(key);
-        const pair = replacements.get(copyId) ?? {};
-        pair[role] = terminalMediaEvidence(input.revision.revision_id, input.checkpoints, copyId, role);
-        replacements.set(copyId, pair);
+  if (input.revision.snapshot_version === 1) {
+    if (Array.isArray(root.representativeImages)) {
+      const images = root.representativeImages.map((entry, index) =>
+        parseRepresentativeImage(entry, `confirmed representative image ${index}`)
+      );
+      if (new Set(images.map((image) => image.copyId)).size !== images.length) {
+        throw new Error('Variation listing confirmed representative image copy IDs must be unique.');
       }
-      const merged = new Map(images.map((image) => [image.copyId, image]));
-      for (const [copyId, pair] of replacements) {
-        if (!pair.front || !pair.back) {
-          throw new Error(`Variation listing confirmed Media copy ${copyId} lacks front/back terminal evidence.`);
-        }
-        merged.set(copyId, { copyId, frontEpsUrl: pair.front, backEpsUrl: pair.back });
-      }
-      return [...merged.values()];
+      return images;
     }
-    return images;
+    if (!Array.isArray(root.mediaResources)) {
+      throw new Error('Variation listing version-1 confirmed snapshot has no reconstructable representative image source.');
+    }
+    const media = root.mediaResources.map((entry, index) => {
+      const row = object(entry, `confirmed Media resource ${index}`);
+      const role = stringValue(row.role, `confirmed Media resource ${index} role`);
+      if (role !== 'front' && role !== 'back') {
+        throw new Error(`Variation listing confirmed Media resource ${index} has invalid role.`);
+      }
+      return {
+        copyId: stringValue(row.copyId, `confirmed Media resource ${index} copyId`),
+        role,
+      } as const;
+    });
+    const mediaKeys = new Set<string>();
+    for (const resource of media) {
+      const key = `${resource.copyId}:${resource.role}`;
+      if (mediaKeys.has(key)) throw new Error(`Variation listing confirmed Media resource ${key} is duplicated.`);
+      mediaKeys.add(key);
+    }
+    const aggregate = object(root.aggregate, 'confirmed revision aggregate') as unknown as VariationListingAggregateSnapshot;
+    const expectedRepresentatives = aggregate.variations.map((variation) => variation.representative_copy_id);
+    if (expectedRepresentatives.some((copyId) => typeof copyId !== 'string')) {
+      throw new Error('Variation listing confirmed aggregate has a missing representative copy.');
+    }
+    const copyIds = [...new Set(media.map((resource) => resource.copyId))];
+    if (copyIds.length !== expectedRepresentatives.length || expectedRepresentatives.some((copyId) => !copyIds.includes(copyId!))) {
+      throw new Error('Variation listing confirmed Media resources do not cover every representative copy.');
+    }
+    return copyIds.map((copyId) => ({
+      copyId,
+      frontEpsUrl: terminalMediaEvidence(input.revision.revision_id, input.checkpoints, copyId, 'front'),
+      backEpsUrl: terminalMediaEvidence(input.revision.revision_id, input.checkpoints, copyId, 'back'),
+    }));
   }
-  if (input.revision.snapshot_version !== 1) {
+  if (input.revision.snapshot_version !== SNAPSHOT_VERSION) {
     throw new Error(`Unsupported confirmed variation listing snapshot version ${input.revision.snapshot_version}.`);
   }
-
-  if (Array.isArray(root.representativeImages)) {
-    const images = root.representativeImages.map((entry, index) =>
-      parseRepresentativeImage(entry, `confirmed representative image ${index}`)
-    );
-    if (new Set(images.map((image) => image.copyId)).size !== images.length) {
-      throw new Error('Variation listing confirmed representative image copy IDs must be unique.');
+  if (!Array.isArray(root.representativeImages)) {
+    throw new Error('Variation listing version-3 confirmed snapshot is missing representativeImages.');
+  }
+  const images = root.representativeImages.map((entry, index) =>
+    parseRepresentativeImage(entry, `confirmed representative image ${index}`)
+  );
+  if (new Set(images.map((image) => image.copyId)).size !== images.length) {
+    throw new Error('Variation listing confirmed representative image copy IDs must be unique.');
+  }
+  // A v3 snapshot may have captured a desired representative refresh before
+  // Media completed. Resolve those own intents from terminal Media evidence.
+  if (Array.isArray(root.mediaResources) && root.mediaResources.length > 0) {
+    const replacements = new Map<string, { front?: string; back?: string }>();
+    const keys = new Set<string>();
+    for (const [index, entry] of root.mediaResources.entries()) {
+      const row = object(entry, `confirmed Media resource ${index}`);
+      const copyId = stringValue(row.copyId, `confirmed Media resource ${index} copyId`);
+      const role = stringValue(row.role, `confirmed Media resource ${index} role`);
+      if (role !== 'front' && role !== 'back') {
+        throw new Error(`Variation listing confirmed Media resource ${index} has invalid role.`);
+      }
+      const key = `${copyId}:${role}`;
+      if (keys.has(key)) throw new Error(`Variation listing confirmed Media resource ${index} is duplicated.`);
+      keys.add(key);
+      const pair = replacements.get(copyId) ?? {};
+      pair[role] = terminalMediaEvidence(input.revision.revision_id, input.checkpoints, copyId, role);
+      replacements.set(copyId, pair);
     }
-    return images;
-  }
-  if (!Array.isArray(root.mediaResources)) {
-    throw new Error('Variation listing version-1 confirmed snapshot has no reconstructable representative image source.');
-  }
-  const media = root.mediaResources.map((entry, index) => {
-    const row = object(entry, `confirmed Media resource ${index}`);
-    const role = stringValue(row.role, `confirmed Media resource ${index} role`);
-    if (role !== 'front' && role !== 'back') {
-      throw new Error(`Variation listing confirmed Media resource ${index} has invalid role.`);
+    const merged = new Map(images.map((image) => [image.copyId, image]));
+    for (const [copyId, pair] of replacements) {
+      if (!pair.front || !pair.back) {
+        throw new Error(`Variation listing confirmed Media copy ${copyId} lacks front/back terminal evidence.`);
+      }
+      merged.set(copyId, { copyId, frontEpsUrl: pair.front, backEpsUrl: pair.back });
     }
-    return {
-      copyId: stringValue(row.copyId, `confirmed Media resource ${index} copyId`),
-      role,
-    } as const;
-  });
-  const mediaKeys = new Set<string>();
-  for (const resource of media) {
-    const key = `${resource.copyId}:${resource.role}`;
-    if (mediaKeys.has(key)) throw new Error(`Variation listing confirmed Media resource ${key} is duplicated.`);
-    mediaKeys.add(key);
+    return [...merged.values()];
   }
-  const aggregate = object(root.aggregate, 'confirmed revision aggregate') as unknown as VariationListingAggregateSnapshot;
-  const expectedRepresentatives = aggregate.variations.map((variation) => variation.representative_copy_id);
-  if (expectedRepresentatives.some((copyId) => typeof copyId !== 'string')) {
-    throw new Error('Variation listing confirmed aggregate has a missing representative copy.');
-  }
-  const copyIds = [...new Set(media.map((resource) => resource.copyId))];
-  if (copyIds.length !== expectedRepresentatives.length || expectedRepresentatives.some((copyId) => !copyIds.includes(copyId!))) {
-    throw new Error('Variation listing confirmed Media resources do not cover every representative copy.');
-  }
-  return copyIds.map((copyId) => ({
-    copyId,
-    frontEpsUrl: terminalMediaEvidence(input.revision.revision_id, input.checkpoints, copyId, 'front'),
-    backEpsUrl: terminalMediaEvidence(input.revision.revision_id, input.checkpoints, copyId, 'back'),
-  }));
+  return images;
 }
 
 function validateExistingVariationIdentity(
@@ -448,21 +473,35 @@ function desiredActiveQuantities(
   previous: VariationListingAggregateSnapshot,
   remoteQuantities: Readonly<Record<string, VariationListingConfirmedRemoteQuantity>>
 ): Record<string, number> {
-  const previousVariationIds = new Set(previous.variations.map((variation) => variation.variation_id));
-  const previousCopyIds = new Set(previous.copies.map((copy) => copy.copy_id));
+  const previousVariationsById = new Map(previous.variations.map((variation) => [variation.variation_id, variation]));
   const quantities: Record<string, number> = {};
   for (const variation of current.variations) {
+    const currentCounter = quantityAdjustmentCounter(
+      (variation as VariationListingVariationRow & { quantity_adjustment_counter?: unknown }).quantity_adjustment_counter,
+      `current variation ${variation.variation_id}`
+    );
     const copies = current.copies.filter((copy) => copy.variation_id === variation.variation_id);
-    if (!previousVariationIds.has(variation.variation_id)) {
+    const previousVariation = previousVariationsById.get(variation.variation_id);
+    if (!previousVariation) {
       quantities[variation.sku] = copies.filter((copy) => copy.availability_state === 'available').length;
       continue;
     }
+
+    const previousCounter = quantityAdjustmentCounter(
+      (previousVariation as VariationListingVariationRow & { quantity_adjustment_counter?: unknown }).quantity_adjustment_counter,
+      `previous variation ${variation.sku}`
+    );
+
     const baseline = parseConfirmedRemoteQuantity(remoteQuantities[variation.sku], variation.sku).sellableQuantity;
-    const addedCopies = copies.filter(
-      (copy) => !previousCopyIds.has(copy.copy_id) && copy.availability_state === 'available'
-    ).length;
-    const desired = baseline + addedCopies;
-    if (!Number.isSafeInteger(desired) || desired > MAX_ACTIVE_QUANTITY) {
+    const adjustmentDelta = currentCounter - previousCounter;
+    if (!Number.isSafeInteger(adjustmentDelta)) {
+      throw new Error(`Variation listing quantity adjustment delta for ${variation.sku} is invalid.`);
+    }
+    const desired = baseline + adjustmentDelta;
+    if (!Number.isSafeInteger(desired) || desired < 0) {
+      throw new Error(`Variation listing desired quantity for ${variation.sku} cannot be negative.`);
+    }
+    if (desired > MAX_ACTIVE_QUANTITY) {
       throw new Error(`Variation listing desired quantity for ${variation.sku} exceeds the supported int32 range.`);
     }
     quantities[variation.sku] = desired;
@@ -609,10 +648,10 @@ export function reconstructConfirmedRemoteIdentity(
   const listingIds = new Set<string>();
   const terminalOfferIds = new Map<string, string>();
 
-  // Version-2 active revisions inherit the previously confirmed remote IDs in
-  // their immutable snapshot. Sparse active plans therefore only need journal
+  // v3 active revisions inherit the previously confirmed remote IDs in their
+  // immutable snapshot. Sparse active plans therefore only need journal
   // evidence for offers that actually changed or were newly created.
-  if (revision.snapshot_version === 2) {
+  if (revision.snapshot_version === SNAPSHOT_VERSION) {
     const root = object(revision.snapshot, 'confirmed active revision snapshot');
     const confirmed = object(root.confirmed, 'confirmed active revision parent');
     const remote = object(confirmed.remote, 'confirmed active revision remote identity');
@@ -1112,10 +1151,8 @@ function validateFrozenActiveOperationPlanCompleteness(
     frozen.snapshot.confirmed.aggregate.variations.map((variation) => variation.variation_id)
   );
   const confirmedQuantities = frozen.snapshot.confirmed.remote.quantitiesBySku;
-  // Legacy version-2 snapshots do not carry eBay-authoritative quantities.
-  // Leave the complete-plan guard entirely inactive for those snapshots so
-  // execution reaches the established reprepare/reconciliation gate below;
-  // applying only the new-variation half here would intercept that path with
+  // A malformed v3 snapshot without frozen eBay quantities must reach the
+  // established reprepare/reconciliation gate below rather than fail here with
   // a misleading frozen-plan error.
   if (!confirmedQuantities) return;
   const desiredQuantities = desiredActiveQuantities(
@@ -1487,7 +1524,7 @@ export async function executeVariationListingActiveRevision(
   // the current reserve RPC; fail with a stable reprepare instruction instead
   // of pinning the group to stale quantities or writing a counterpart blindly.
   const existingCheckpoints = await input.journal.listCheckpoints(captureInput.revisionId);
-  // Version-2 active snapshots must carry the eBay-authoritative quantity
+  // Active snapshots must carry the eBay-authoritative quantity
   // map. A missing map is legacy local-count intent and is never safe to
   // resume after a sale. A clean captured row can be reprepared; a row with
   // remote work already recorded must fail reconciliation rather than replay

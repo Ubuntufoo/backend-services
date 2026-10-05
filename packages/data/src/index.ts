@@ -262,6 +262,7 @@ export {
   type ReserveVariationListingActionRevisionInput,
   type ReturnVariationListingToReviewInput,
   type UpdateVariationListingManualPriceInput,
+  type UpdateVariationListingQuantityAdjustmentInput,
   type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingCopyAvailabilityInput,
   type UpdateVariationListingRepresentativeCopyInput,

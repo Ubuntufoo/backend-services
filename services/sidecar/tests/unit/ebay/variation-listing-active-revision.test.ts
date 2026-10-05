@@ -32,8 +32,8 @@ function group(overrides: Partial<VariationListingGroupRow> = {}): VariationList
     category_id: '261328', condition_description: null, condition_descriptors: [{ name: '40001', values: ['400012'] }], condition_id: '4000', condition_token: 'VERY_GOOD', created_at: timestamp, derived_common_ebay_aspects: { Sport: ['Baseball'] }, description: 'Cards', desired_revision: 2, fulfillment_policy_id: 'fulfillment', group_id: 'group-1', group_key: 'GROUP-1', last_confirmed_revision: 1, lifecycle_state: 'active', listing_format: 'FIXED_PRICE', marketplace_id: 'EBAY_US', merchant_location_key: 'warehouse', next_inventory_serial: 3, payment_policy_id: 'payment', return_policy_id: 'return', selector_name: 'Card', sku_bucket_token: 'bucket', sku_category_code: 'sports', title: 'Cards', updated_at: timestamp, ...overrides,
   };
 }
-function variation(id: string, position: number, representativeCopyId = `copy-${id}`, price = 0.99): VariationListingVariationRow {
-  return { created_at: timestamp, group_id: 'group-1', inventory_serial: position + 1, position, price_amount: price as 0.99 | 1.49, price_currency: 'USD', representative_copy_id: representativeCopyId, selector_value: `Card ${id}`, sku: `SKU-${id}`, updated_at: timestamp, variation_id: `variation-${id}`, variation_metadata: {} };
+function variation(id: string, position: number, representativeCopyId = `copy-${id}`, price = 0.99, quantityAdjustmentCounter = 0): VariationListingVariationRow {
+  return { created_at: timestamp, group_id: 'group-1', inventory_serial: position + 1, position, price_amount: price as 0.99 | 1.49, price_currency: 'USD', quantity_adjustment_counter: quantityAdjustmentCounter, representative_copy_id: representativeCopyId, selector_value: `Card ${id}`, sku: `SKU-${id}`, updated_at: timestamp, variation_id: `variation-${id}`, variation_metadata: {} };
 }
 function copy(id: string, variationId = `variation-${id}`): VariationListingCopyRow {
   return { availability_state: 'available', back_r2_key: `r2/${id}/back`, capture_back_source_ref: `source/${id}/back`, capture_front_source_ref: `source/${id}/front`, capture_pair_id: `pair-${id}`, capture_source_key: `capture-${id}`, capture_started_at: timestamp, captured_at: timestamp, condition_notes: null, condition_token: 'VERY_GOOD', copy_id: `copy-${id}`, created_at: timestamp, front_r2_key: `r2/${id}/front`, updated_at: timestamp, variation_id: variationId };
@@ -41,19 +41,39 @@ function copy(id: string, variationId = `variation-${id}`): VariationListingCopy
 function aggregate(overrides: Partial<VariationListingAggregateSnapshot> = {}): VariationListingAggregateSnapshot {
   return { group: group(), variations: [variation('A', 0), variation('B', 1)], copies: [copy('A'), copy('B')], ...overrides };
 }
+function withoutQuantityAdjustmentCounters(aggregateSnapshot: VariationListingAggregateSnapshot): VariationListingAggregateSnapshot {
+  return {
+    ...aggregateSnapshot,
+    variations: aggregateSnapshot.variations.map(({ quantity_adjustment_counter: _counter, ...entry }) => entry as VariationListingVariationRow),
+  };
+}
 function digest(value: Json): string {
   const canonical = (v: Json): string => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v !== null && typeof v === 'object' ? `{${Object.entries(v).sort(([a],[b]) => a.localeCompare(b)).map(([k,c]) => `${JSON.stringify(k)}:${canonical(c as Json)}`).join(',')}}` : JSON.stringify(v);
   return createHash('sha256').update(canonical(value)).digest('hex');
 }
 function version1Revision(previous: VariationListingAggregateSnapshot): VariationListingRevisionRow {
-  const snapshot = { aggregate: previous, mediaResources: [], representativeImages: [{ copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') }, { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') }] } as Json;
+  const representativeImages = [{ copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') }, { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') }];
+  const snapshot = {
+    aggregate: previous,
+    confirmed: {
+      aggregate: previous,
+      representativeImages,
+      remote: {
+        listingId: 'listing-1',
+        offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
+      },
+      revisionId: 'revision-1',
+    },
+    mediaResources: [],
+    representativeImages,
+  } as Json;
   const offerOperations = previous.variations.map((entry, index) => ({ intent: {}, intent_digest: digest({}), intent_version: 1, operation_key: `child-offer:${entry.variation_id}`, operation_kind: 'child_offer_write', sequence_no: index + 1, target_ref: entry.sku }));
   const operationPlan = [
     ...offerOperations,
     { intent: {}, intent_digest: digest({}), intent_version: 1, operation_key: 'group-publish', operation_kind: 'group_publish', sequence_no: offerOperations.length + 1, target_ref: previous.group.group_key },
     { intent: {}, intent_digest: digest({}), intent_version: 1, operation_key: 'revision-reconcile', operation_kind: 'revision_reconcile', sequence_no: offerOperations.length + 2, target_ref: previous.group.group_key },
   ];
-  return { captured_at: timestamp, captured_desired_revision: 1, group_id: 'group-1', operation_count: operationPlan.length, operation_plan: operationPlan, revision_id: 'revision-1', snapshot, snapshot_digest: digest(snapshot), snapshot_version: 1 };
+  return { captured_at: timestamp, captured_desired_revision: previous.group.desired_revision, group_id: 'group-1', operation_count: operationPlan.length, operation_plan: operationPlan, revision_id: 'revision-1', snapshot, snapshot_digest: digest(snapshot), snapshot_version: 3 };
 }
 
 function version1Checkpoints(previous: VariationListingAggregateSnapshot): VariationListingPublishingCheckpointRow[] {
@@ -197,12 +217,12 @@ function activeExecutionInput(
 }
 
 describe('YP8.2 active revision preparation', () => {
-  it('freezes a self-contained version-2 revision after exact confirmed active preflight', async () => {
+  it('freezes a self-contained version-3 revision after exact confirmed active preflight', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({ variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1)] });
     const { remote } = remoteFor(previous);
     const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' });
-    expect(prepared.captureInput.snapshotVersion).toBe(2);
+    expect(prepared.captureInput.snapshotVersion).toBe(3);
     expect(prepared.snapshot.confirmed.remote.listingId).toBe('listing-1');
     expect(prepared.snapshot.confirmed.remote.offerIdsBySku).toEqual({ 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' });
     expect(prepared.desiredBundlePreview?.children[0]?.offer.pricingSummary.price.value).toBe('1.49');
@@ -246,10 +266,11 @@ describe('YP8.2 active revision preparation', () => {
     ]);
   });
 
-  it('uses the lower live Inventory Item/Offer quantity and adds exactly one eligible new copy', async () => {
+  it('uses the lower live Inventory Item/Offer quantity and applies exactly the new cumulative adjustment delta', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)],
       copies: [copy('A'), copy('A2', 'variation-A'), copy('B')],
     });
     const { remote } = remoteFor(previous, {
@@ -267,10 +288,172 @@ describe('YP8.2 active revision preparation', () => {
     expect(childA?.offer.availableQuantity).toBe(2);
   });
 
+  it('ignores newly captured-copy count when the active variation counter did not change', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      copies: [copy('A'), copy('A2', 'variation-A'), copy('B')],
+    });
+    const { remote } = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 2, offerQuantity: 2 } });
+    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' });
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-A')?.quantity).toBe(2);
+  });
+
+  it('applies a staged -1 to a fresh remote quantity without inferring a sold copy', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, -1), variation('B', 1)],
+    });
+    const { remote } = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 2, offerQuantity: 2 } });
+    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' });
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-A')?.quantity).toBe(1);
+  });
+
+  it('uses the delta between non-zero confirmed and current counters rather than the absolute counter', async () => {
+    const previous = aggregate({
+      group: group({ desired_revision: 4, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 3), variation('B', 1)],
+    });
+    const current = aggregate({
+      group: group({ desired_revision: 5, last_confirmed_revision: 4, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 2), variation('B', 1)],
+    });
+    const { remote } = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 2, offerQuantity: 2 } });
+    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-5' });
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-A')?.quantity).toBe(1);
+  });
+
+  it('rejects a current variation missing the cumulative counter, including a new variation', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const missingCounter = { ...variation('C', 2), quantity_adjustment_counter: undefined } as unknown as VariationListingVariationRow;
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [...aggregate().variations, missingCounter],
+      copies: [...aggregate().copies, copy('C')],
+    });
+    const { remote } = remoteFor(previous);
+    await expect(prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' })).rejects.toThrow(/current variation variation-C.*int32/);
+  });
+
+  it('rejects missing counters in a version-3 current or confirmed parent aggregate', async () => {
+    const initial = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
+    const { remote } = remoteFor(initial);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(initial),
+      previousCheckpoints: version1Checkpoints(initial),
+      remote,
+      revisionId: 'revision-2',
+    });
+    const revision = durableRevision(prepared);
+    revision.snapshot = {
+      ...revision.snapshot as object,
+      aggregate: withoutQuantityAdjustmentCounters(prepared.snapshot.aggregate),
+    } as unknown as Json;
+    revision.snapshot_digest = digest(revision.snapshot);
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: aggregate({ group: group({ desired_revision: 3, last_confirmed_revision: 2, lifecycle_state: 'active' }) }),
+      previousRevision: revision,
+      previousCheckpoints: [checkpointFrom({ revisionId: 'revision-2', operationKey: 'revision-reconcile', attemptNumber: 1, checkpointNumber: 2, state: 'confirmed_complete', observedRemoteState: 'present', evidence: { listingId: 'listing-1', skus: ['SKU-A', 'SKU-B'] } })],
+      remote,
+      revisionId: 'revision-3',
+    })).rejects.toThrow(/missing quantity_adjustment_counter/);
+
+    const confirmedParentMissing = durableRevision(prepared);
+    confirmedParentMissing.snapshot = {
+      ...confirmedParentMissing.snapshot as object,
+      confirmed: {
+        ...prepared.snapshot.confirmed,
+        aggregate: withoutQuantityAdjustmentCounters(prepared.snapshot.confirmed.aggregate),
+      },
+    } as unknown as Json;
+    confirmedParentMissing.snapshot_digest = digest(confirmedParentMissing.snapshot);
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: aggregate({ group: group({ desired_revision: 3, last_confirmed_revision: 2, lifecycle_state: 'active' }) }),
+      previousRevision: confirmedParentMissing,
+      previousCheckpoints: [checkpointFrom({ revisionId: 'revision-2', operationKey: 'revision-reconcile', attemptNumber: 1, checkpointNumber: 2, state: 'confirmed_complete', observedRemoteState: 'present', evidence: { listingId: 'listing-1', skus: ['SKU-A', 'SKU-B'] } })],
+      remote,
+      revisionId: 'revision-3',
+    })).rejects.toThrow(/missing quantity_adjustment_counter/);
+  });
+
+  it('rejects legacy v2 and future confirmed snapshot versions', async () => {
+    const initial = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
+    const { remote } = remoteFor(initial);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(initial),
+      previousCheckpoints: version1Checkpoints(initial),
+      remote,
+      revisionId: 'revision-2',
+    });
+    for (const unsupportedVersion of [2, 4]) {
+      const revision = durableRevision(prepared);
+      revision.snapshot_version = unsupportedVersion;
+      revision.snapshot_digest = digest(revision.snapshot);
+      await expect(prepareVariationListingFrozenActiveRevision({
+        currentAggregate: aggregate({ group: group({ desired_revision: 3, last_confirmed_revision: 2, lifecycle_state: 'active' }) }),
+        previousRevision: revision,
+        previousCheckpoints: [checkpointFrom({ revisionId: 'revision-2', operationKey: 'revision-reconcile', attemptNumber: 1, checkpointNumber: 2, state: 'confirmed_complete', observedRemoteState: 'present', evidence: { listingId: 'listing-1', skus: ['SKU-A', 'SKU-B'] } })],
+        remote,
+        revisionId: 'revision-3',
+      })).rejects.toThrow(`Unsupported confirmed variation listing snapshot version ${unsupportedVersion}.`);
+    }
+  });
+
+  it('bridges a quantity-validated v1 initial parent into a v3 active revision', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
+    const initial = version1Revision(previous);
+    initial.snapshot_version = 1;
+    initial.snapshot = {
+      aggregate: previous,
+      representativeImages: [
+        { copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') },
+        { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') },
+      ],
+    } as Json;
+    initial.snapshot_digest = digest(initial.snapshot);
+    const { remote } = remoteFor(previous);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: initial,
+      previousCheckpoints: version1Checkpoints(previous),
+      remote,
+      revisionId: 'revision-2',
+    });
+    expect(prepared.captureInput.snapshotVersion).toBe(3);
+    expect(prepared.snapshot.confirmed.remote.listingId).toBe('listing-1');
+  });
+
+  it('rejects a current counter outside int32 even for an otherwise valid active revision', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [{ ...variation('A', 0), quantity_adjustment_counter: 2147483648 }, variation('B', 1)],
+    });
+    const { remote } = remoteFor(previous);
+    await expect(prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' })).rejects.toThrow(/current variation variation-A.*int32/);
+  });
+
+  it('rejects a staged decrement that would make the fresh remote quantity negative', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, -1), variation('B', 1)],
+    });
+    const { remote } = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 0, offerQuantity: 0 } });
+    await expect(prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' })).rejects.toThrow('cannot be negative');
+  });
+
   it('plans only changed child resources for duplicate replenishment and preserves full inherited remote identity', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)],
       copies: [copy('A'), copy('A2', 'variation-A'), copy('B')],
     });
     const { remote } = remoteFor(previous);
@@ -313,73 +496,6 @@ describe('YP8.2 active revision preparation', () => {
       listingId: 'listing-1',
       offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
     });
-  });
-
-  it('uses a sparse version-2 revision as the next confirmed parent without losing untouched identities', async () => {
-    const initial = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
-    const sparseAggregate = aggregate({
-      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
-      copies: [copy('A'), copy('A2', 'variation-A'), copy('B')],
-    });
-    const { remote } = remoteFor(initial);
-    const sparse = await prepareVariationListingFrozenActiveRevision({
-      currentAggregate: sparseAggregate,
-      previousRevision: version1Revision(initial),
-      previousCheckpoints: version1Checkpoints(initial),
-      remote,
-      revisionId: 'revision-2',
-    });
-    const sparseRevision = durableRevision(sparse);
-    const sparseCheckpoints = [
-      checkpointFrom({
-        revisionId: 'revision-2',
-        operationKey: 'child-item:variation-A',
-        attemptNumber: 1,
-        checkpointNumber: 2,
-        state: 'confirmed_complete',
-        observedRemoteState: 'present',
-        evidence: { sku: 'SKU-A' },
-      }),
-      checkpointFrom({
-        revisionId: 'revision-2',
-        operationKey: 'child-offer:variation-A',
-        attemptNumber: 1,
-        checkpointNumber: 2,
-        state: 'confirmed_complete',
-        observedRemoteState: 'present',
-        evidence: { offerId: 'offer-SKU-A', listingId: 'listing-1', sku: 'SKU-A' },
-      }),
-      checkpointFrom({
-        revisionId: 'revision-2',
-        operationKey: 'revision-reconcile',
-        attemptNumber: 1,
-        checkpointNumber: 2,
-        state: 'confirmed_complete',
-        observedRemoteState: 'present',
-        evidence: { listingId: 'listing-1', skus: ['SKU-A', 'SKU-B'] },
-      }),
-    ];
-    const nextAggregate = {
-      ...sparseAggregate,
-      group: group({ desired_revision: 3, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-      variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1)],
-    };
-    const next = await prepareVariationListingFrozenActiveRevision({
-      currentAggregate: nextAggregate,
-      previousRevision: sparseRevision,
-      previousCheckpoints: sparseCheckpoints,
-      remote,
-      revisionId: 'revision-3',
-    });
-
-    expect(next.snapshot.confirmed.remote).toMatchObject({
-      listingId: 'listing-1',
-      offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
-    });
-    expect(next.captureInput.operationPlan.map((entry) => entry.operationKey)).toEqual([
-      'child-offer:variation-A',
-      'revision-reconcile',
-    ]);
   });
 
   it('plans an offer-only mutation for a price-only edit', async () => {
@@ -463,20 +579,9 @@ describe('YP8.2 active revision preparation', () => {
     await expect(prepareVariationListingFrozenActiveRevision({ currentAggregate: aggregate({ variations: [{ ...variation('A', 0), sku: 'CHANGED' }, variation('B', 1)] }), previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' })).rejects.toThrow('identity changed');
   });
 
-  it('reconstructs version-1 Media EPS output only from exact terminal journal evidence', () => {
-    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
-    const revision = version1Revision(previous);
-    revision.snapshot = { aggregate: previous, mediaResources: [{ copyId: 'copy-A', role: 'front', sourceUrl: 'https://source/A/front' }, { copyId: 'copy-A', role: 'back', sourceUrl: 'https://source/A/back' }, { copyId: 'copy-B', role: 'front', sourceUrl: 'https://source/B/front' }, { copyId: 'copy-B', role: 'back', sourceUrl: 'https://source/B/back' }], representativeImages: null } as Json;
-    const checkpoints = ['A:front:AF','A:back:AB','B:front:BF','B:back:BB'].map((entry, index) => {
-      const [copyId, role, imageName] = entry.split(':');
-      return { attempt_number: 1, checkpoint_id: `cp-${index}`, checkpoint_number: 2, created_at: timestamp, evidence: { imageId: `image-${index}`, location: `https://api.ebay.test/${index}`, imageUrl: eps(imageName!), expirationDate: '2026-10-01T00:00:00Z' }, observed_remote_state: 'present', operation_key: `media:copy-${copyId}:${role}`, revision_id: 'revision-1', state: 'confirmed_complete' } as VariationListingPublishingCheckpointRow;
-    });
-    expect(reconstructVariationListingConfirmedRepresentativeImages({ revision, checkpoints })).toEqual([{ copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') }, { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') }]);
-  });
-
   it('does not confirm a started operation from its pre-state after a crash', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
-    const current = aggregate({ copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
+    const current = aggregate({ variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)], copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
     const { remote } = remoteFor(previous);
     const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote, revisionId: 'revision-2' });
     const checkpoints = [checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-item:variation-A', attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} })];
@@ -493,6 +598,25 @@ describe('YP8.2 active revision preparation', () => {
     expect(mutationCalls).toBe(0);
     expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'child-item:variation-A', state: 'unknown', observed_remote_state: 'unknown' });
     expect(checkpoints.at(-1)?.evidence).toMatchObject({ sku: 'SKU-A' });
+  });
+
+  it('keeps active execution strict to the current version-3 snapshot contract', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
+    const base = remoteFor(previous);
+    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: base.remote, revisionId: 'revision-2' });
+    const tampered = structuredClone(prepared);
+    tampered.captureInput.snapshotVersion = 2;
+    const revisions = { current: null as VariationListingRevisionRow | null, captureCalls: [] as number[] };
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => ({ offerId: 'unexpected' }),
+      createOrReplaceInventoryItem: async () => {},
+      createOrReplaceInventoryItemGroup: async () => {},
+      publishOffer: async () => ({ listingId: 'listing-1' }),
+      updateOffer: async () => {},
+    };
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(tampered, revisions, [], base.remote, mutations))).rejects.toThrow('Unsupported active revision snapshot version 2.');
+    expect(revisions.captureCalls).toHaveLength(0);
   });
 
   it('rejects a tampered frozen snapshot before capture or mutation', async () => {
@@ -601,7 +725,7 @@ describe('YP8.2 active revision preparation', () => {
     expect(mutationCalls).toBe(0);
   });
 
-  it('rejects a legacy version-2 snapshot without frozen remote quantities before any write', async () => {
+  it('rejects a v3 snapshot without frozen remote quantities before any write', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
     const base = remoteFor(previous);
@@ -624,7 +748,7 @@ describe('YP8.2 active revision preparation', () => {
     expect(mutationCalls).toBe(0);
   });
 
-  it('keeps legacy snapshots on reprepare when a new-child operation is missing', async () => {
+  it('keeps v3 snapshots on reprepare when a new-child operation is missing', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active', next_inventory_serial: 4 }),
@@ -676,6 +800,7 @@ describe('YP8.2 active revision preparation', () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1, 'copy-B', 0.99, 1)],
       copies: [copy('A'), copy('A2', 'variation-A'), copy('B'), copy('B2', 'variation-B')],
     });
     const base = remoteFor(previous);
@@ -686,12 +811,14 @@ describe('YP8.2 active revision preparation', () => {
       checkpointFrom({ revisionId: 'revision-2', operationKey, attemptNumber: 1, checkpointNumber: 2, state: 'confirmed_complete', observedRemoteState: 'present', evidence: { confirmed: true } }),
     ]);
     const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    let itemReads = 0;
     const remote = {
       ...base.remote,
       async getInventoryItem(sku: string) {
+        itemReads += 1;
         if (sku === 'SKU-B') {
           const read = await base.remote.getInventoryItem(sku);
-          if (read.state === 'present') {
+          if (itemReads >= 4 && read.state === 'present') {
             const payload = structuredClone(read.value.payload) as unknown as Record<string, Json>;
             (payload.availability as Record<string, Json>).shipToLocationAvailability = { quantity: 0 };
             return { state: 'present' as const, value: { ...read.value, payload: payload as Json } };
@@ -708,7 +835,7 @@ describe('YP8.2 active revision preparation', () => {
       publishOffer: async () => { mutationCalls += 1; return { listingId: 'listing-1' }; },
       updateOffer: async () => { mutationCalls += 1; },
     };
-    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations))).rejects.toThrow('pre-state is not exact');
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations))).rejects.toThrow('changed before its mutation');
     expect(mutationCalls).toBe(0);
     expect(checkpoints.filter((row) => row.operation_key === 'child-item:variation-B').at(-1)).toMatchObject({ state: 'unknown', observed_remote_state: 'unknown' });
   });
@@ -752,7 +879,7 @@ describe('YP8.2 active revision preparation', () => {
 
   it('blocks an existing Inventory Item write when its paired frozen Offer changes after pre-state', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
-    const current = aggregate({ copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
+    const current = aggregate({ variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)], copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
     const base = remoteFor(previous);
     const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: base.remote, revisionId: 'revision-2' });
     let offerReads = 0;
@@ -827,7 +954,7 @@ describe('YP8.2 active revision preparation', () => {
 
   it('blocks an existing Inventory Item write when its own frozen pre-state changes after pre()', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
-    const current = aggregate({ copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
+    const current = aggregate({ variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)], copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
     const base = remoteFor(previous);
     const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: base.remote, revisionId: 'revision-2' });
     const changed = structuredClone(base.bundle.children.find((child) => child.sku === 'SKU-A')!.inventoryItem) as unknown as Record<string, Json>;
@@ -1025,7 +1152,7 @@ describe('YP8.2 active revision preparation', () => {
 
   it('captures once and resumes from the durable revision without recapturing', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
-    const current = aggregate({ copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
+    const current = aggregate({ variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)], copies: [copy('A'), copy('A2', 'variation-A'), copy('B')] });
     const base = remoteFor(previous);
     const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: base.remote, revisionId: 'revision-2' });
     const revisions = { current: null as VariationListingRevisionRow | null, captureCalls: [] as number[] };
@@ -1085,6 +1212,7 @@ describe('YP8.2 active revision executor acceptance', () => {
       const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
       const current = aggregate({
         group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+        variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)],
         copies: [copy('A'), copy('A2', 'variation-A'), copy('B')],
       });
       const base = remoteFor(previous);

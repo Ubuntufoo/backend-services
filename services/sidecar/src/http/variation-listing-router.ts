@@ -560,7 +560,7 @@ function summarizeJournal(
       (sequenceByKey.get(right.operationKey) ?? Number.MAX_SAFE_INTEGER)
     )[0];
   const reconciliationSupported =
-    revision.source.snapshot_version === 1 &&
+    (revision.source.snapshot_version === 1 || revision.source.snapshot_version === 3) &&
     revision.operationPlan.every(
       (operation) =>
         !operation.operation_kind.startsWith('cleanup_') &&

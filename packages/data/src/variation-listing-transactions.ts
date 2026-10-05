@@ -128,6 +128,13 @@ export interface UpdateVariationListingManualPriceInput {
   variationId: string;
 }
 
+export interface UpdateVariationListingQuantityAdjustmentInput {
+  delta: -1 | 1;
+  expectedDesiredRevision: number;
+  groupId: string;
+  variationId: string;
+}
+
 export interface UpdateVariationListingSelectorValueInput {
   expectedDesiredRevision: number;
   groupId: string;
@@ -267,6 +274,9 @@ export interface VariationListingTransactionGateway {
   ): Promise<VariationListingGroupRow>;
   updateVariationPrice(
     input: UpdateVariationListingManualPriceInput
+  ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+  updateVariationQuantityAdjustment(
+    input: UpdateVariationListingQuantityAdjustmentInput
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
   updateVariationSelectorValue(
     input: UpdateVariationListingSelectorValueInput

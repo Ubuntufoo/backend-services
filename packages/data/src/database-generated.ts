@@ -969,6 +969,7 @@ export type Database = {
           position: number;
           price_amount: number;
           price_currency: string;
+          quantity_adjustment_counter: number;
           representative_copy_id: string | null;
           selector_value: string;
           sku: string;
@@ -983,6 +984,7 @@ export type Database = {
           position: number;
           price_amount: number;
           price_currency?: string;
+          quantity_adjustment_counter?: number;
           representative_copy_id?: string | null;
           selector_value: string;
           sku: string;
@@ -997,6 +999,7 @@ export type Database = {
           position?: number;
           price_amount?: number;
           price_currency?: string;
+          quantity_adjustment_counter?: number;
           representative_copy_id?: string | null;
           selector_value?: string;
           sku?: string;
@@ -1124,6 +1127,10 @@ export type Database = {
       };
       update_variation_listing_manual_price: {
         Args: { p_group_id: string; p_variation_id: string; p_expected_desired_revision: number; p_price_amount: number };
+        Returns: { group_row: Json; variation_row: Json }[];
+      };
+      update_variation_listing_quantity_adjustment: {
+        Args: { p_group_id: string; p_variation_id: string; p_expected_desired_revision: number; p_delta: number };
         Returns: { group_row: Json; variation_row: Json }[];
       };
       apply_variation_listing_group_review_draft: {
