@@ -44,6 +44,19 @@ export interface PublishConfigResolutionResult {
   issues: string[];
 }
 
+export interface VariationListingCreationDefaults {
+  fulfillmentPolicyId: string;
+  merchantLocationKey: string;
+  marketplaceId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+}
+
+export interface VariationListingCreationDefaultsResolution {
+  config: VariationListingCreationDefaults | null;
+  issues: string[];
+}
+
 export type PublishConfigCandidate = Partial<ResolvedPublishConfig> | null;
 
 function hasText(value: string | null | undefined): value is string {
@@ -267,6 +280,111 @@ function getMissingFieldIssues(
   }
 
   return issues;
+}
+
+function getVariationListingCreationDefaultsIssues(
+  environment: EbayEnvironment,
+  fields: PublishConfigFields,
+  pathPrefix: string
+): string[] {
+  const issues: string[] = [];
+  const fulfillmentPolicyId =
+    normalizeText(fields.groundFulfillmentPolicyId) ?? normalizeText(fields.fulfillmentPolicyId);
+
+  if (!hasText(fulfillmentPolicyId) || isMockPlaceholder(fulfillmentPolicyId)) {
+    issues.push(
+      buildIssue(
+        'fulfillment_policy_id_missing_for_environment',
+        `${pathPrefix}.groundFulfillmentPolicyId is required for ${environment} Variation listing creation defaults.`
+      )
+    );
+  }
+
+  const requiredFields: {
+    field: keyof Pick<
+      PublishConfigFields,
+      'marketplaceId' | 'merchantLocationKey' | 'paymentPolicyId' | 'returnPolicyId'
+    >;
+    issueField: string;
+  }[] = [
+    { field: 'marketplaceId', issueField: 'marketplace_id' },
+    { field: 'paymentPolicyId', issueField: 'payment_policy_id' },
+    { field: 'returnPolicyId', issueField: 'return_policy_id' },
+    { field: 'merchantLocationKey', issueField: 'merchant_location_key' },
+  ];
+
+  for (const { field, issueField } of requiredFields) {
+    const value = fields[field];
+    if (!hasText(value) || isMockPlaceholder(value)) {
+      issues.push(
+        buildIssue(
+          `${issueField}_missing_for_environment` as PublishConfigIssueCode,
+          `${pathPrefix}.${field} is required for ${environment} Variation listing creation defaults.`
+        )
+      );
+    }
+  }
+
+  return issues;
+}
+
+export function resolveVariationListingCreationDefaults(
+  appSettings: AppSettingsRow,
+  options: PublishConfigResolutionOptions
+): VariationListingCreationDefaultsResolution {
+  const environmentFields = getEnvironmentConfigFields(appSettings, options.environment);
+  const runtimeMarketplaceId = normalizeText(options.runtimeMarketplaceId);
+  const issues: string[] = [];
+  let fields: PublishConfigFields | null = null;
+  let pathPrefix = `app_settings.ebay_publish_config.${options.environment}`;
+
+  if (options.environment === 'sandbox' && hasLegacyFlatPublishConfig(appSettings)) {
+    fields = getLegacyFlatFields(appSettings);
+    pathPrefix = 'app_settings (sandbox creation defaults)';
+  } else if (environmentFields) {
+    fields = environmentFields;
+  } else {
+    issues.push(
+      buildIssue(
+        'publish_config_missing_for_environment',
+        `${pathPrefix} is required when EBAY_ENVIRONMENT=${options.environment}.`
+      )
+    );
+    return { config: null, issues };
+  }
+
+  issues.push(
+    ...getVariationListingCreationDefaultsIssues(options.environment, fields, pathPrefix)
+  );
+
+  if (
+    runtimeMarketplaceId &&
+    hasText(fields.marketplaceId) &&
+    fields.marketplaceId !== runtimeMarketplaceId
+  ) {
+    issues.push(
+      buildIssue(
+        'publish_config_marketplace_mismatch',
+        `Resolved publish marketplace "${fields.marketplaceId}" does not match runtime marketplace "${runtimeMarketplaceId}".`
+      )
+    );
+  }
+
+  if (issues.length > 0) {
+    return { config: null, issues };
+  }
+
+  return {
+    config: {
+      fulfillmentPolicyId:
+        normalizeText(fields.groundFulfillmentPolicyId) ?? fields.fulfillmentPolicyId!,
+      merchantLocationKey: fields.merchantLocationKey!,
+      marketplaceId: fields.marketplaceId!,
+      paymentPolicyId: fields.paymentPolicyId!,
+      returnPolicyId: fields.returnPolicyId!,
+    },
+    issues: [],
+  };
 }
 
 export function resolvePublishConfig(

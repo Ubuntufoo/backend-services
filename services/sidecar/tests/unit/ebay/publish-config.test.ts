@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AppSettingsRow } from '@ebay-inventory/data';
-import { resolvePublishConfig } from '@/ebay/publish-config.js';
+import {
+  resolvePublishConfig,
+  resolveVariationListingCreationDefaults,
+} from '@/ebay/publish-config.js';
 
 function createAppSettings(overrides: Partial<AppSettingsRow> = {}): AppSettingsRow {
   return {
@@ -233,5 +236,99 @@ describe('resolvePublishConfig', () => {
     ).toContain(
       'ground_fulfillment_policy_id_missing_for_environment: app_settings.ebay_publish_config.production.groundFulfillmentPolicyId is required for production publish config.'
     );
+  });
+});
+
+describe('resolveVariationListingCreationDefaults', () => {
+  it('accepts the canonical ground fulfillment policy and the real default sandbox location', () => {
+    const result = resolveVariationListingCreationDefaults(
+      createAppSettings({
+        default_fulfillment_policy_id: null,
+        default_payment_policy_id: null,
+        default_return_policy_id: null,
+        ebay_marketplace_id: null,
+        merchant_location_key: null,
+        ebay_publish_config: {
+          sandbox: {
+            groundFulfillmentPolicyId: 'SANDBOX-GROUND',
+            marketplaceId: 'EBAY_US',
+            merchantLocationKey: 'default-main-location',
+            paymentPolicyId: 'SANDBOX-PAYMENT',
+            returnPolicyId: 'SANDBOX-RETURN',
+          },
+        },
+      }),
+      { environment: 'sandbox', runtimeMarketplaceId: 'EBAY_US' }
+    );
+
+    expect(result).toEqual({
+      config: {
+        fulfillmentPolicyId: 'SANDBOX-GROUND',
+        merchantLocationKey: 'default-main-location',
+        marketplaceId: 'EBAY_US',
+        paymentPolicyId: 'SANDBOX-PAYMENT',
+        returnPolicyId: 'SANDBOX-RETURN',
+      },
+      issues: [],
+    });
+  });
+
+  it('prefers bootstrap-managed flat sandbox defaults over stale nested sandbox config', () => {
+    const result = resolveVariationListingCreationDefaults(
+      createAppSettings({
+        default_fulfillment_policy_id: 'CURRENT-FULFILLMENT',
+        default_payment_policy_id: 'CURRENT-PAYMENT',
+        default_return_policy_id: 'CURRENT-RETURN',
+        ebay_marketplace_id: 'EBAY_US',
+        merchant_location_key: 'default-main-location',
+        ebay_publish_config: {
+          sandbox: {
+            groundFulfillmentPolicyId: 'STALE-GROUND',
+            marketplaceId: 'EBAY_US',
+            merchantLocationKey: 'default-main-location',
+            paymentPolicyId: 'STALE-PAYMENT',
+            returnPolicyId: 'STALE-RETURN',
+          },
+        },
+      }),
+      { environment: 'sandbox', runtimeMarketplaceId: 'EBAY_US' }
+    );
+
+    expect(result).toEqual({
+      config: {
+        fulfillmentPolicyId: 'CURRENT-FULFILLMENT',
+        merchantLocationKey: 'default-main-location',
+        marketplaceId: 'EBAY_US',
+        paymentPolicyId: 'CURRENT-PAYMENT',
+        returnPolicyId: 'CURRENT-RETURN',
+      },
+      issues: [],
+    });
+  });
+
+  it('prefers canonical flat defaults when nested sandbox config is incomplete', () => {
+    const result = resolveVariationListingCreationDefaults(
+      createAppSettings({
+        ebay_publish_config: {
+          sandbox: {
+            marketplaceId: 'EBAY_US',
+            paymentPolicyId: 'SANDBOX-PAYMENT',
+            returnPolicyId: 'SANDBOX-RETURN',
+          },
+        },
+      }),
+      { environment: 'sandbox', runtimeMarketplaceId: 'EBAY_US' }
+    );
+
+    expect(result).toEqual({
+      config: {
+        fulfillmentPolicyId: 'LEGACY-FULFILLMENT',
+        merchantLocationKey: 'legacy-warehouse',
+        marketplaceId: 'EBAY_US',
+        paymentPolicyId: 'LEGACY-PAYMENT',
+        returnPolicyId: 'LEGACY-RETURN',
+      },
+      issues: [],
+    });
   });
 });

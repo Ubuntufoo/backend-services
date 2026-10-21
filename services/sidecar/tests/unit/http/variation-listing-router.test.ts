@@ -801,6 +801,21 @@ describe('YP6.1 variation listing API router', () => {
     });
   });
 
+  it('returns server-resolved creation defaults in the canonical payload', async () => {
+    const response = await request(app(dataAccess())).get('/api/variation-listings/creation-defaults');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      creationDefaults: {
+        fulfillmentPolicyId: 'fulfillment',
+        marketplaceId: 'EBAY_US',
+        merchantLocationKey: 'main',
+        paymentPolicyId: 'payment',
+        returnPolicyId: 'returns',
+      },
+    });
+  });
+
   it('fails closed before persistence when environment publish defaults cannot resolve', async () => {
     const access = dataAccess();
     const response = await request(

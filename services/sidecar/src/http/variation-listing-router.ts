@@ -14,7 +14,11 @@ import type { ZodType } from 'zod';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
 import { getEbayConfig } from '@/config/environment.js';
-import { resolvePublishConfig } from '@/ebay/publish-config.js';
+import {
+  resolveVariationListingCreationDefaults as resolveVariationListingCreationDefaultsConfig,
+  type VariationListingCreationDefaults,
+} from '@/ebay/publish-config.js';
+export type { VariationListingCreationDefaults };
 import {
   createVariationListingActionService,
   VariationListingActionError,
@@ -94,15 +98,6 @@ export interface VariationListingApiRouterOptions {
   actions?: VariationListingApiActions;
   resolveCreationDefaults?: () => Promise<VariationListingCreationDefaults>;
 }
-
-export interface VariationListingCreationDefaults {
-  fulfillmentPolicyId: string;
-  merchantLocationKey: string;
-  marketplaceId: string;
-  paymentPolicyId: string;
-  returnPolicyId: string;
-}
-
 
 export interface VariationListingApiActions {
   publish(groupId: string, expectedDesiredRevision: number): Promise<unknown>;
@@ -1232,7 +1227,7 @@ async function resolveVariationListingCreationDefaults(
   }
 
   const runtimeConfig = getEbayConfig();
-  const resolved = resolvePublishConfig(appSettings, {
+  const resolved = resolveVariationListingCreationDefaultsConfig(appSettings, {
     environment: runtimeConfig.environment,
     runtimeMarketplaceId: runtimeConfig.marketplaceId,
   });
