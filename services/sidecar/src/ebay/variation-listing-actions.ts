@@ -34,6 +34,7 @@ import {
   applyVariationListingConfirmedRemoteQuantities,
   executeVariationListingActiveRevisionPublication,
   prepareVariationListingFrozenActiveRevision,
+  reconcilePublishedQuantityBaseline,
   reconstructConfirmedRemoteIdentity,
   reconstructVariationListingConfirmedRepresentativeImages,
   revisionSnapshotAggregate,
@@ -114,6 +115,21 @@ export interface VariationListingActionDataAccess {
   advanceCleanupLifecycle: import('@ebay-inventory/data').VariationListingTransactionGateway['advanceCleanupLifecycle'];
   abandonUntouchedGroup: import('@ebay-inventory/data').VariationListingTransactionGateway['abandonUntouchedGroup'];
   returnToReview: import('@ebay-inventory/data').VariationListingTransactionGateway['returnToReview'];
+}
+
+export interface VariationListingQuantityStatusVariation {
+  variationId: string;
+  sku: string;
+  ebayQuantity: number;
+  pendingAdjustment: number;
+  afterPublish: number;
+}
+
+export interface VariationListingQuantityStatus {
+  groupId: string;
+  desiredRevision: number;
+  lastConfirmedRevision: number;
+  variations: VariationListingQuantityStatusVariation[];
 }
 
 export interface VariationListingActionServiceOptions {
@@ -467,6 +483,11 @@ function operationPlan(row: VariationListingRevisionRow) {
 
 function hydrateInitial(row: VariationListingRevisionRow): VariationListingFrozenPublicationRevision {
   const snapshot = row.snapshot as unknown as VariationListingFrozenPublicationRevision['snapshot'];
+  if (snapshot.aggregate.variations.some((variation) =>
+    (variation as typeof variation & { pending_removal_at?: unknown }).pending_removal_at != null
+  )) {
+    throw new Error('permanent_removal_not_implemented: staged variation removal cannot be hydrated for remote publication.');
+  }
   return {
     snapshot,
     historicalPayload: true,
@@ -485,6 +506,11 @@ function hydrateInitial(row: VariationListingRevisionRow): VariationListingFroze
 function hydrateActive(row: VariationListingRevisionRow): VariationListingFrozenActiveRevision {
   revisionSnapshotAggregate(row);
   const snapshot = row.snapshot as unknown as VariationListingFrozenActiveRevision['snapshot'];
+  if (snapshot.aggregate.variations.some((variation) =>
+    (variation as typeof variation & { pending_removal_at?: unknown }).pending_removal_at != null
+  )) {
+    throw new Error('permanent_removal_not_implemented: staged variation removal cannot be hydrated for remote publication.');
+  }
   const historicalConfirmedBundle = buildVariationListingHistoricalInventoryPayloadBundle({
     aggregate: snapshot.confirmed.aggregate,
     representativeImages: snapshot.confirmed.representativeImages,
@@ -687,6 +713,27 @@ function validationError(action: VariationListingActionName, groupId: string, co
   });
 }
 
+function assertNoPendingPermanentRemoval(
+  action: VariationListingActionName,
+  groupId: string,
+  aggregate: VariationListingAggregateSnapshot,
+): void {
+  const pending = aggregate.variations.find((variation) => {
+    const marker = (variation as typeof variation & { pending_removal_at?: unknown }).pending_removal_at;
+    return marker !== undefined && marker !== null;
+  });
+  if (pending) {
+    throw validationError(
+      action,
+      groupId,
+      'permanent_removal_not_implemented',
+      'A variation is staged for permanent removal; this action is disabled until safe remote removal is implemented.',
+      ['refresh_group'],
+      { variationId: pending.variation_id, sku: pending.sku },
+    );
+  }
+}
+
 function activeRevisionReprepareError(action: VariationListingActionName, groupId: string, summary: string) {
   return new VariationListingActionError(409, {
     action,
@@ -703,6 +750,198 @@ function activeRevisionReprepareError(action: VariationListingActionName, groupI
     summary,
     userActionRequired: true,
   });
+}
+
+function quantityAdjustmentEligibilityError(
+  groupId: string,
+  variationId: string,
+  code: string,
+  summary: string,
+): VariationListingActionError {
+  return new VariationListingActionError(409, {
+    action: 'reconcile',
+    affected: { groupId, variationId },
+    category: 'state',
+    code,
+    issues: [],
+    recommendedActions: ['refresh_group', 'select_confirmed_variation'],
+    remoteState: 'known_unchanged',
+    requiresReconciliation: false,
+    retryStatus: 'not_applicable',
+    severity: 'error',
+    stage: 'quantity_adjustment',
+    summary,
+    userActionRequired: true,
+  });
+}
+
+export async function assertVariationListingQuantityAdjustmentEligible(
+  options: {
+    data: Pick<VariationListingActionDataAccess, 'loadAggregate' | 'listRevisionsByGroupId'>;
+  },
+  input: { groupId: string; variationId: string; expectedDesiredRevision: number },
+): Promise<void> {
+  const aggregate = await options.data.loadAggregate(input.groupId);
+  if (!aggregate) throw new Error(`Variation listing group ${input.groupId} was not found.`);
+  if (aggregate.group.desired_revision !== input.expectedDesiredRevision) {
+    throw new VariationListingTransactionConflictError(
+      'variation_listing_state_stale',
+      'Variation listing desired revision changed; refresh the group before staging a quantity adjustment.',
+    );
+  }
+  if (aggregate.group.lifecycle_state !== 'active' || aggregate.group.last_confirmed_revision === null) {
+    throw quantityAdjustmentEligibilityError(
+      input.groupId,
+      input.variationId,
+      'quantity_adjustment_requires_confirmed_active_group',
+      'Quantity adjustment is available only for a confirmed active variation listing.',
+    );
+  }
+
+  const revisions = (await options.data.listRevisionsByGroupId(input.groupId)).map((revision) => revision.source);
+  const confirmedRevision = revisions.find(
+    (revision) => revision.captured_desired_revision === aggregate.group.last_confirmed_revision,
+  );
+  if (!confirmedRevision) {
+    throw new Error(`Variation listing confirmed revision ${aggregate.group.last_confirmed_revision} was not found.`);
+  }
+  const confirmedAggregate = revisionSnapshotAggregate(confirmedRevision);
+  const currentVariation = aggregate.variations.find((variation) => variation.variation_id === input.variationId);
+  const confirmedVariation = confirmedAggregate.variations.find((variation) => variation.variation_id === input.variationId);
+  if (!currentVariation || !confirmedVariation || currentVariation.sku !== confirmedVariation.sku) {
+    throw quantityAdjustmentEligibilityError(
+      input.groupId,
+      input.variationId,
+      'quantity_adjustment_requires_confirmed_variation',
+      'Quantity adjustment is available only for variations already confirmed by eBay.',
+    );
+  }
+}
+
+export async function readVariationListingQuantityStatus(
+  options: {
+    data: Pick<VariationListingActionDataAccess, 'loadAggregate' | 'listRevisionsByGroupId' | 'listCheckpointsByRevisionId'>;
+    remoteFactory?: VariationListingActionServiceOptions['remoteFactory'];
+  },
+  groupId: string
+): Promise<VariationListingQuantityStatus> {
+  const aggregate = await options.data.loadAggregate(groupId);
+  if (!aggregate) throw new Error(`Variation listing group ${groupId} was not found.`);
+  if (aggregate.group.lifecycle_state !== 'active' || aggregate.group.last_confirmed_revision === null) {
+    throw new VariationListingActionError(409, {
+      action: 'reconcile',
+      affected: { groupId },
+      category: 'state',
+      code: 'quantity_adjustment_requires_confirmed_active_group',
+      issues: [],
+      recommendedActions: ['publish_or_select_active_group'],
+      remoteState: 'known_unchanged',
+      requiresReconciliation: false,
+      retryStatus: 'not_applicable',
+      severity: 'error',
+      stage: 'quantity_status',
+      summary: 'Quantity adjustment is available only for a confirmed active variation listing.',
+      userActionRequired: true,
+    });
+  }
+
+  const revisions = (await options.data.listRevisionsByGroupId(groupId)).map((revision) => revision.source);
+  const confirmedRevision = revisions.find(
+    (revision) => revision.captured_desired_revision === aggregate.group.last_confirmed_revision
+  );
+  if (!confirmedRevision) {
+    throw new Error(`Variation listing confirmed revision ${aggregate.group.last_confirmed_revision} was not found.`);
+  }
+  const checkpoints = (await options.data.listCheckpointsByRevisionId(confirmedRevision.revision_id))
+    .map((checkpoint) => checkpoint.source);
+  const confirmedAggregate = revisionSnapshotAggregate(confirmedRevision);
+  const representativeImages = reconstructVariationListingConfirmedRepresentativeImages({
+    revision: confirmedRevision,
+    checkpoints,
+  });
+  const confirmedBundle = buildVariationListingHistoricalInventoryPayloadBundle({
+    aggregate: confirmedAggregate,
+    representativeImages,
+  });
+  const durableRemoteIdentity = reconstructConfirmedRemoteIdentity(confirmedRevision, checkpoints);
+  const dependencies = await (options.remoteFactory ?? createProductionRemote)();
+  const observed = await reconcilePublishedQuantityBaseline(
+    dependencies.remote,
+    confirmedBundle,
+    durableRemoteIdentity
+  );
+
+  // A publication can confirm a new revision without advancing desired_revision.
+  // Re-read the local watermark after the remote reads so a response never
+  // combines a fresh eBay baseline with an older confirmed counter.
+  const refreshedAggregate = await options.data.loadAggregate(groupId);
+  if (
+    !refreshedAggregate ||
+    refreshedAggregate.group.group_id !== aggregate.group.group_id ||
+    refreshedAggregate.group.desired_revision !== aggregate.group.desired_revision ||
+    refreshedAggregate.group.last_confirmed_revision !== aggregate.group.last_confirmed_revision ||
+    refreshedAggregate.group.lifecycle_state !== aggregate.group.lifecycle_state
+  ) {
+    throw new VariationListingTransactionConflictError(
+      'variation_listing_state_stale',
+      'Variation listing quantity status changed while eBay quantities were being read; refresh the group and retry.',
+    );
+  }
+
+  const currentById = new Map(aggregate.variations.map((variation) => [variation.variation_id, variation]));
+  const variations: VariationListingQuantityStatusVariation[] = [];
+  for (const confirmedVariation of [...confirmedAggregate.variations].sort((a, b) => a.position - b.position)) {
+    const currentVariation = currentById.get(confirmedVariation.variation_id);
+    if (!currentVariation) {
+      throw new Error(`Variation listing confirmed variation ${confirmedVariation.variation_id} is missing from the current aggregate.`);
+    }
+    if (currentVariation.sku !== confirmedVariation.sku) {
+      throw new Error(`Variation listing confirmed variation ${confirmedVariation.variation_id} SKU identity changed.`);
+    }
+    const currentCounter = currentVariation.quantity_adjustment_counter;
+    const confirmedCounter = confirmedVariation.quantity_adjustment_counter;
+    if (
+      !Number.isInteger(currentCounter) ||
+      !Number.isInteger(confirmedCounter) ||
+      currentCounter < -2_147_483_648 ||
+      currentCounter > 2_147_483_647 ||
+      confirmedCounter < -2_147_483_648 ||
+      confirmedCounter > 2_147_483_647
+    ) {
+      throw new Error(`Variation listing quantity adjustment counter for ${currentVariation.sku} is invalid.`);
+    }
+    const pendingAdjustment = currentCounter - confirmedCounter;
+    if (!Number.isSafeInteger(pendingAdjustment)) {
+      throw new Error(`Variation listing pending quantity adjustment for ${currentVariation.sku} is invalid.`);
+    }
+    const remoteQuantity = observed.quantitiesBySku[currentVariation.sku]?.sellableQuantity;
+    if (
+      typeof remoteQuantity !== 'number' ||
+      !Number.isSafeInteger(remoteQuantity) ||
+      remoteQuantity < 0 ||
+      remoteQuantity > 2_147_483_647
+    ) {
+      throw new Error(`Variation listing eBay quantity for ${currentVariation.sku} is unavailable.`);
+    }
+    const afterPublish = remoteQuantity + pendingAdjustment;
+    if (!Number.isSafeInteger(afterPublish) || afterPublish > 2_147_483_647) {
+      throw new Error(`Variation listing projected quantity for ${currentVariation.sku} is invalid.`);
+    }
+    variations.push({
+      variationId: currentVariation.variation_id,
+      sku: currentVariation.sku,
+      ebayQuantity: remoteQuantity,
+      pendingAdjustment,
+      afterPublish,
+    });
+  }
+
+  return {
+    groupId,
+    desiredRevision: aggregate.group.desired_revision,
+    lastConfirmedRevision: aggregate.group.last_confirmed_revision,
+    variations,
+  };
 }
 
 export function createVariationListingActionService(options: VariationListingActionServiceOptions) {
@@ -1012,6 +1251,7 @@ export function createVariationListingActionService(options: VariationListingAct
   const publish = (groupId: string, expectedDesiredRevision: number) => run('publish', groupId, async (progress) => {
     assertPublicationMutationEnabled('publish', groupId);
     let aggregate = await requireAggregate(groupId, 'publish', expectedDesiredRevision);
+    assertNoPendingPermanentRemoval('publish', groupId, aggregate);
     if (aggregate.group.last_confirmed_revision !== null) throw validationError('publish', groupId, 'initial_publish_already_completed', 'This group is already published. Use Publish Changes for staged updates.', ['publish_changes']);
     if (aggregate.group.lifecycle_state === 'review') {
       try {
@@ -1066,6 +1306,8 @@ export function createVariationListingActionService(options: VariationListingAct
     const aggregate = await requireAggregate(groupId, 'publish_changes', expectedDesiredRevision);
     if (aggregate.group.lifecycle_state !== 'active' || aggregate.group.last_confirmed_revision === null) throw validationError('publish_changes', groupId, 'publish_changes_lifecycle_blocked', 'Publish Changes requires an active published variation listing.', ['refresh_group']);
     if (aggregate.group.desired_revision <= aggregate.group.last_confirmed_revision) throw validationError('publish_changes', groupId, 'no_pending_changes', 'There are no staged changes to publish.', ['edit_group_or_variations']);
+    // YP9.6c1 fail-closed gate: the active executor cannot yet remove a child.
+    assertNoPendingPermanentRemoval('publish_changes', groupId, aggregate);
     const revisions = await rows(groupId);
     const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'active');
     if (!existing) await assertNoOlderUnresolved('publish_changes', groupId, revisions, expectedDesiredRevision);
@@ -1103,6 +1345,7 @@ export function createVariationListingActionService(options: VariationListingAct
 
   const retry = (groupId: string) => run('retry', groupId, async (progress) => {
     const aggregate = await requireAggregate(groupId, 'retry');
+    assertNoPendingPermanentRemoval('retry', groupId, aggregate);
     const revisions = await rows(groupId);
     const pending = await unresolvedRevision(revisions);
     const revision = pending?.revision ?? newestFirst(revisions)[0];
@@ -1158,6 +1401,7 @@ export function createVariationListingActionService(options: VariationListingAct
 
   const reconcile = (groupId: string) => run('reconcile', groupId, async (progress) => {
     const aggregate = await requireAggregate(groupId, 'reconcile');
+    assertNoPendingPermanentRemoval('reconcile', groupId, aggregate);
     const pending = await unresolvedRevision(await rows(groupId));
     if (!pending) {
       throw validationError('reconcile', groupId, 'reconcile_not_required', 'No unresolved operation requires reconciliation.', ['refresh_group']);
@@ -1213,6 +1457,7 @@ export function createVariationListingActionService(options: VariationListingAct
   const withdraw = (groupId: string, expectedDesiredRevision: number) => run('withdraw', groupId, async (progress) => {
     const loadedAggregate = await options.data.loadAggregate(groupId);
     let aggregate: VariationListingAggregateSnapshot = loadedAggregate ?? await requireAggregate(groupId, 'withdraw', expectedDesiredRevision);
+    assertNoPendingPermanentRemoval('withdraw', groupId, aggregate);
     const revisions = await rows(groupId);
     let recoveringReservation = false;
     if (aggregate.group.desired_revision !== expectedDesiredRevision) {
@@ -1234,6 +1479,7 @@ export function createVariationListingActionService(options: VariationListingAct
         aggregate = await requireAggregate(groupId, 'withdraw', expectedDesiredRevision);
       }
     }
+    assertNoPendingPermanentRemoval('withdraw', groupId, aggregate);
     const existing = revisions.find((revision) =>
       revision.captured_desired_revision === aggregate.group.desired_revision &&
       revisionKind(revision) === 'cleanup' &&
@@ -1268,6 +1514,7 @@ export function createVariationListingActionService(options: VariationListingAct
           throw new Error('Variation listing withdrawal action revision reservation response was not an exact CAS result.');
         }
         aggregate = await requireAggregate(groupId, 'withdraw', reserved.desired_revision);
+        assertNoPendingPermanentRemoval('withdraw', groupId, aggregate);
         if (aggregate.group.lifecycle_state !== 'active' || aggregate.group.last_confirmed_revision !== reserved.last_confirmed_revision) {
           throw new Error('Variation listing withdrawal aggregate changed during action revision reservation.');
         }

@@ -966,6 +966,7 @@ export type Database = {
           created_at: string;
           group_id: string;
           inventory_serial: number;
+          pending_removal_at: string | null;
           position: number;
           price_amount: number;
           price_currency: string;
@@ -981,6 +982,7 @@ export type Database = {
           created_at?: string;
           group_id: string;
           inventory_serial: number;
+          pending_removal_at?: string | null;
           position: number;
           price_amount: number;
           price_currency?: string;
@@ -996,6 +998,7 @@ export type Database = {
           created_at?: string;
           group_id?: string;
           inventory_serial?: number;
+          pending_removal_at?: string | null;
           position?: number;
           price_amount?: number;
           price_currency?: string;
@@ -1131,6 +1134,10 @@ export type Database = {
       };
       update_variation_listing_quantity_adjustment: {
         Args: { p_group_id: string; p_variation_id: string; p_expected_desired_revision: number; p_delta: number };
+        Returns: { group_row: Json; variation_row: Json }[];
+      };
+      stage_variation_listing_permanent_removal: {
+        Args: { p_group_id: string; p_variation_id: string; p_expected_desired_revision: number; p_remove: boolean };
         Returns: { group_row: Json; variation_row: Json }[];
       };
       apply_variation_listing_group_review_draft: {

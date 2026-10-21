@@ -135,6 +135,13 @@ export interface UpdateVariationListingQuantityAdjustmentInput {
   variationId: string;
 }
 
+export interface StageVariationListingPermanentRemovalInput {
+  expectedDesiredRevision: number;
+  groupId: string;
+  remove: boolean;
+  variationId: string;
+}
+
 export interface UpdateVariationListingSelectorValueInput {
   expectedDesiredRevision: number;
   groupId: string;
@@ -277,6 +284,9 @@ export interface VariationListingTransactionGateway {
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
   updateVariationQuantityAdjustment(
     input: UpdateVariationListingQuantityAdjustmentInput
+  ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+  stagePermanentRemoval(
+    input: StageVariationListingPermanentRemovalInput
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
   updateVariationSelectorValue(
     input: UpdateVariationListingSelectorValueInput

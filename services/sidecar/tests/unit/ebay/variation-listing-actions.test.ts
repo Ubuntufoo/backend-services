@@ -428,6 +428,47 @@ describe('YP6.2 variation listing actions', () => {
     }
   });
 
+  it('fails closed before retry or reconcile can hydrate a group with staged permanent removal', async () => {
+    const harness = activeWithdrawalHarness({ pending: true });
+    const current = harness.aggregate();
+    (current.variations[0] as typeof current.variations[number] & { pending_removal_at?: string })
+      .pending_removal_at = '2026-10-21T00:00:00.000Z';
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: { code: 'permanent_removal_not_implemented', remoteState: 'known_unchanged' },
+    });
+    await expect(service.reconcile(groupId)).rejects.toMatchObject({
+      status: { code: 'permanent_removal_not_implemented', remoteState: 'known_unchanged' },
+    });
+    expect(harness.remoteFactory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before withdrawal ownership reads or mutations when removal is staged', async () => {
+    const harness = activeWithdrawalHarness();
+    const current = harness.aggregate();
+    (current.variations[0] as typeof current.variations[number] & { pending_removal_at?: string })
+      .pending_removal_at = '2026-10-21T00:00:00.000Z';
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+    });
+
+    await expect(service.withdraw(groupId, 3)).rejects.toMatchObject({
+      status: { code: 'permanent_removal_not_implemented', remoteState: 'known_unchanged' },
+    });
+    expect(harness.remoteFactory).not.toHaveBeenCalled();
+    expect(harness.access.value.listRevisionsByGroupId).not.toHaveBeenCalled();
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.advanceCleanupLifecycle).not.toHaveBeenCalled();
+  });
+
   it('dispatches v1 initial history and v3 active withdrawal through their dedicated action paths', async () => {
     const previous = process.env.EBAY_PUBLISH_ENABLED;
     process.env.EBAY_PUBLISH_ENABLED = 'false';

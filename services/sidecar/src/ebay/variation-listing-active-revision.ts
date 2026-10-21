@@ -509,7 +509,7 @@ function desiredActiveQuantities(
   return quantities;
 }
 
-async function reconcilePublishedQuantityBaseline(
+export async function reconcilePublishedQuantityBaseline(
   remote: VariationListingPublicationReadGateway,
   expected: VariationListingInventoryPayloadBundle,
   expectedRemoteIdentity?: Pick<VariationListingConfirmedRemoteIdentity, 'listingId' | 'offerIdsBySku'>
@@ -760,6 +760,13 @@ export async function prepareVariationListingFrozenActiveRevision(
   }
   if (current.group.desired_revision <= current.group.last_confirmed_revision) {
     throw new Error('Variation listing active revision requires staged desired changes.');
+  }
+  // YP9.6c1: a locally staged permanent removal must not be mistaken for a
+  // regular active revision until its remote-removal executor is implemented.
+  if (current.variations.some((variation) =>
+    (variation as typeof variation & { pending_removal_at?: unknown }).pending_removal_at != null
+  )) {
+    throw new Error('permanent_removal_not_implemented: staged variation removal cannot be published yet.');
   }
   if (
     input.previousRevision.group_id !== current.group.group_id ||

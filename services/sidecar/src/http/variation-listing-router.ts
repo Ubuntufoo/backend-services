@@ -21,8 +21,11 @@ import {
 export type { VariationListingCreationDefaults };
 import {
   createVariationListingActionService,
+  assertVariationListingQuantityAdjustmentEligible,
+  readVariationListingQuantityStatus,
   VariationListingActionError,
   type VariationListingActionDataAccess,
+  type VariationListingQuantityStatus,
 } from '@/ebay/variation-listing-actions.js';
 import {
   subscribeVariationListingActionEvents,
@@ -63,6 +66,8 @@ import {
   updateVariationListingIntakeStatusRequestSchema,
   generateVariationListingIntakeIdentityRequestSchema,
   updateVariationListingPriceRequestSchema,
+  updateVariationListingQuantityAdjustmentRequestSchema,
+  stageVariationListingPermanentRemovalRequestSchema,
   updateVariationListingSelectorValueRequestSchema,
   updateVariationListingRepresentativeCopyRequestSchema,
   updateVariationListingReviewDraftRequestSchema,
@@ -85,6 +90,8 @@ export type VariationListingApiDataAccess = Pick<
   | 'createGroup'
   | 'applyGroupReviewDraft'
   | 'updateVariationPrice'
+  | 'updateVariationQuantityAdjustment'
+  | 'stageVariationListingPermanentRemoval'
   | 'updateVariationSelectorValue'
   | 'updateRepresentativeCopy'
 >;
@@ -97,6 +104,7 @@ export interface VariationListingApiRouterOptions {
   generateGroupReview?: typeof generateVariationListingGroupReview;
   actions?: VariationListingApiActions;
   resolveCreationDefaults?: () => Promise<VariationListingCreationDefaults>;
+  readQuantityStatus?: (groupId: string) => Promise<VariationListingQuantityStatus>;
 }
 
 export interface VariationListingApiActions {
@@ -434,6 +442,10 @@ function serializeVariation(
   variation: VariationListingAggregateSnapshot['variations'][number],
   copies: VariationListingAggregateSnapshot['copies']
 ) {
+  const pendingRemovalAt = variation.pending_removal_at;
+  if (pendingRemovalAt !== null && pendingRemovalAt !== undefined && Number.isNaN(Date.parse(pendingRemovalAt))) {
+    throw new Error(`Variation listing variation ${variation.variation_id} has an invalid pending-removal timestamp.`);
+  }
   const variationCopies = copies
     .filter((copy) => copy.variation_id === variation.variation_id)
     .map((copy) => serializeCopy(copy, variation.representative_copy_id));
@@ -445,6 +457,8 @@ function serializeVariation(
     selectorValue: variation.selector_value,
     priceAmount: variation.price_amount,
     priceCurrency: variation.price_currency,
+    quantityAdjustmentCounter: variation.quantity_adjustment_counter,
+    pendingRemovalAt: pendingRemovalAt ?? null,
     representativeCopyId: variation.representative_copy_id,
     copyCount: variationCopies.length,
     variationMetadata: variation.variation_metadata,
@@ -748,6 +762,8 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   const resolveCreationDefaults =
     options.resolveCreationDefaults ??
     (async () => await resolveVariationListingCreationDefaults(getSidecarDataAccess()));
+  const readQuantityStatus = options.readQuantityStatus ?? (async (groupId: string) =>
+    await readVariationListingQuantityStatus({ data: options.dataAccess ?? getSidecarDataAccess().variationListings }, groupId));
   let cachedActions: VariationListingApiActions | undefined = options.actions;
   const getActions = (): VariationListingApiActions => {
     cachedActions ??= createVariationListingActionService({
@@ -1136,6 +1152,14 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     });
   });
 
+  router.get('/:groupId/quantity-status', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingGroupIdParamsSchema, req.params);
+    if (!params) return;
+    return await runRoute(res, async () => {
+      res.json(await readQuantityStatus(params.groupId));
+    });
+  });
+
   router.patch('/:groupId/variations/:variationId/selector-value', async (req: Request, res: Response) => {
     const params = parseOrSend(res, variationListingVariationIdParamsSchema, req.params);
     const body = parseOrSend(res, updateVariationListingSelectorValueRequestSchema, req.body);
@@ -1165,6 +1189,50 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         variationId: params.variationId,
         expectedDesiredRevision: body.expectedDesiredRevision,
         priceAmount: body.priceAmount,
+      });
+      const aggregate = await requireAggregate(res, dataAccess, params.groupId);
+      if (!aggregate) return;
+      res.json(await serializeAggregate(dataAccess, aggregate));
+    });
+  });
+
+  router.patch('/:groupId/variations/:variationId/quantity-adjustment', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingVariationIdParamsSchema, req.params);
+    const body = parseOrSend(res, updateVariationListingQuantityAdjustmentRequestSchema, req.body);
+    if (!params || !body) return;
+    return await runRoute(res, async () => {
+      const dataAccess = getDataAccess();
+      await assertVariationListingQuantityAdjustmentEligible(
+        { data: dataAccess },
+        {
+          groupId: params.groupId,
+          variationId: params.variationId,
+          expectedDesiredRevision: body.expectedDesiredRevision,
+        },
+      );
+      await dataAccess.updateVariationQuantityAdjustment({
+        groupId: params.groupId,
+        variationId: params.variationId,
+        expectedDesiredRevision: body.expectedDesiredRevision,
+        delta: body.delta,
+      });
+      const aggregate = await requireAggregate(res, dataAccess, params.groupId);
+      if (!aggregate) return;
+      res.json(await serializeAggregate(dataAccess, aggregate));
+    });
+  });
+
+  router.patch('/:groupId/variations/:variationId/permanent-removal', async (req: Request, res: Response) => {
+    const params = parseOrSend(res, variationListingVariationIdParamsSchema, req.params);
+    const body = parseOrSend(res, stageVariationListingPermanentRemovalRequestSchema, req.body);
+    if (!params || !body) return;
+    return await runRoute(res, async () => {
+      const dataAccess = getDataAccess();
+      await dataAccess.stageVariationListingPermanentRemoval({
+        groupId: params.groupId,
+        variationId: params.variationId,
+        expectedDesiredRevision: body.expectedDesiredRevision,
+        remove: body.remove,
       });
       const aggregate = await requireAggregate(res, dataAccess, params.groupId);
       if (!aggregate) return;

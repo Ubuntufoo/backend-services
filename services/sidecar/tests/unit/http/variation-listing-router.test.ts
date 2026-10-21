@@ -204,6 +204,10 @@ function dataAccess(overrides: Partial<VariationListingApiDataAccess> = {}): Var
     createGroup: vi.fn(async () => current.group),
     applyGroupReviewDraft: vi.fn(async () => current.group),
     updateVariationPrice: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
+    stageVariationListingPermanentRemoval: vi.fn(async () => ({
+      group: current.group,
+      variation: current.variations[0]!,
+    })),
     updateVariationSelectorValue: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     updateRepresentativeCopy: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
     getIntakeSession: vi.fn(async () => intakeSession()),
@@ -1055,6 +1059,61 @@ describe('YP6.1 variation listing API router', () => {
     const response = await request(app(access))
       .patch(`/api/variation-listings/${groupId}/variations/${variationA}/selector-value`)
       .send({ expectedDesiredRevision: 3, selectorValue: 'Card A updated' });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: 'variation_listing_state_stale',
+      message: 'stale desired revision',
+    });
+  });
+
+  it('stages and cancels only the requested permanent-removal marker with exact CAS input', async () => {
+    const current = aggregate();
+    current.group.desired_revision = 3;
+    current.group.last_confirmed_revision = 3;
+    const target = current.variations.find((variation) => variation.variation_id === variationA)! as typeof current.variations[number] & { pending_removal_at?: string | null };
+    const stageVariationListingPermanentRemoval = vi.fn(async (input: { expectedDesiredRevision: number; remove: boolean }) => {
+      expect(input.expectedDesiredRevision).toBe(current.group.desired_revision);
+      target.pending_removal_at = input.remove ? '2026-10-21T00:00:00.000Z' : null;
+      current.group.desired_revision += 1;
+      return { group: current.group, variation: target };
+    });
+    const access = dataAccess({ loadAggregate: vi.fn(async () => current), stageVariationListingPermanentRemoval });
+
+    const staged = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/permanent-removal`)
+      .send({ expectedDesiredRevision: 3, remove: true });
+    expect(staged.status).toBe(200);
+    expect(staged.body.variations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ variationId: variationA, pendingRemovalAt: '2026-10-21T00:00:00.000Z' }),
+      expect.objectContaining({ variationId: variationB, pendingRemovalAt: null }),
+    ]));
+    expect(stageVariationListingPermanentRemoval).toHaveBeenCalledWith({
+      groupId,
+      variationId: variationA,
+      expectedDesiredRevision: 3,
+      remove: true,
+    });
+
+    const cancelled = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/permanent-removal`)
+      .send({ expectedDesiredRevision: 4, remove: false });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.variations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ variationId: variationA, pendingRemovalAt: null }),
+      expect.objectContaining({ variationId: variationB, pendingRemovalAt: null }),
+    ]));
+  });
+
+  it('maps permanent-removal CAS conflicts to a stable stale-state response', async () => {
+    const access = dataAccess({
+      stageVariationListingPermanentRemoval: vi.fn(async () => {
+        throw new VariationListingTransactionConflictError('VR001', 'stale desired revision');
+      }),
+    });
+    const response = await request(app(access))
+      .patch(`/api/variation-listings/${groupId}/variations/${variationA}/permanent-removal`)
+      .send({ expectedDesiredRevision: 3, remove: true });
 
     expect(response.status).toBe(409);
     expect(response.body).toEqual({

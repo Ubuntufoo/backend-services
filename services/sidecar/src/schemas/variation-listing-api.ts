@@ -182,6 +182,20 @@ export const updateVariationListingPriceRequestSchema = z
   })
   .strict();
 
+export const updateVariationListingQuantityAdjustmentRequestSchema = z
+  .object({
+    expectedDesiredRevision: expectedDesiredRevisionSchema,
+    delta: z.union([z.literal(-1), z.literal(1)]),
+  })
+  .strict();
+
+export const stageVariationListingPermanentRemovalRequestSchema = z
+  .object({
+    expectedDesiredRevision: expectedDesiredRevisionSchema,
+    remove: z.boolean(),
+  })
+  .strict();
+
 export const updateVariationListingSelectorValueRequestSchema = z
   .object({
     expectedDesiredRevision: expectedDesiredRevisionSchema,

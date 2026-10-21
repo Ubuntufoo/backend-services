@@ -312,3 +312,27 @@ describe('YP6.2 action revision reservation RPC', () => {
     await expect(createSupabaseVariationListingTransactionGateway(c).reserveActionRevision({ groupId:'g', expectedDesiredRevision:4 })).resolves.toMatchObject({ group_id:'g', desired_revision:5, last_confirmed_revision:4 });
   });
 });
+
+describe('YP9.6c1 permanent-removal staging RPC', () => {
+  const group = {
+    group_id:'g', group_key:'VL-G', sku_category_code:'BSKBL', sku_bucket_token:'BucketA', category_id:'261328', marketplace_id:'EBAY_US', merchant_location_key:'loc', fulfillment_policy_id:'fulfill', payment_policy_id:'pay', return_policy_id:'return', condition_id:'1000', condition_token:'VERY_GOOD', desired_revision:8, last_confirmed_revision:7, lifecycle_state:'active', listing_format:'FIXED_PRICE', selector_name:'Card', next_inventory_serial:4, derived_common_ebay_aspects:{}, condition_descriptors:[], condition_description:null, description:'Description', title:'Title', created_at:'2026-10-21T18:00:00Z', updated_at:'2026-10-21T18:00:00Z',
+  };
+  const variation = {
+    variation_id:'v', group_id:'g', inventory_serial:1, position:0, sku:'BSKBL-BucketA-000001', selector_value:'Card A', price_amount:1.99, price_currency:'USD', quantity_adjustment_counter:0, representative_copy_id:'c', variation_metadata:{}, pending_removal_at:'2026-10-21T18:00:00Z', created_at:'2026-10-21T18:00:00Z', updated_at:'2026-10-21T18:00:00Z',
+  };
+
+  it('maps stage arguments and requires a non-null returned removal marker', async () => {
+    const c = clientFor('stage_variation_listing_permanent_removal', { group_row:group, variation_row:variation }, args => expect(args).toEqual({ p_group_id:'g', p_variation_id:'v', p_expected_desired_revision:7, p_remove:true }));
+    await expect(createSupabaseVariationListingTransactionGateway(c).stagePermanentRemoval({ groupId:'g', variationId:'v', expectedDesiredRevision:7, remove:true })).resolves.toMatchObject({ group:{ group_id:'g', desired_revision:8 }, variation:{ variation_id:'v', pending_removal_at:'2026-10-21T18:00:00Z' } });
+  });
+
+  it('maps cancel arguments and requires a null returned removal marker', async () => {
+    const c = clientFor('stage_variation_listing_permanent_removal', { group_row:{ ...group, desired_revision:9 }, variation_row:{ ...variation, pending_removal_at:null } }, args => expect(args).toEqual({ p_group_id:'g', p_variation_id:'v', p_expected_desired_revision:8, p_remove:false }));
+    await expect(createSupabaseVariationListingTransactionGateway(c).stagePermanentRemoval({ groupId:'g', variationId:'v', expectedDesiredRevision:8, remove:false })).resolves.toMatchObject({ group:{ group_id:'g', desired_revision:9 }, variation:{ variation_id:'v', pending_removal_at:null } });
+  });
+
+  it('rejects a malformed returned removal timestamp', async () => {
+    const c = clientFor('stage_variation_listing_permanent_removal', { group_row:group, variation_row:{ ...variation, pending_removal_at:'not-a-timestamp' } });
+    await expect(createSupabaseVariationListingTransactionGateway(c).stagePermanentRemoval({ groupId:'g', variationId:'v', expectedDesiredRevision:7, remove:true })).rejects.toThrow(/pending_removal_at.*timestamp/);
+  });
+});

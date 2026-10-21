@@ -229,6 +229,20 @@ describe('YP8.2 active revision preparation', () => {
     expect(prepared.captureInput.operationPlan.at(-1)?.operationKind).toBe('revision_reconcile');
   });
 
+  it('refuses to publish staged permanent removal before the YP9.6c2 remote executor exists', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1)] });
+    Object.assign(current.variations[0]!, { pending_removal_at: '2026-10-21T00:00:00Z' });
+    const { remote } = remoteFor(previous);
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote,
+      revisionId: 'revision-2',
+    })).rejects.toThrow('permanent_removal_not_implemented');
+  });
+
   it('reconciles a legacy empty-descriptor listing and stages the corrected Card Condition descriptor', async () => {
     const previous = aggregate({
       group: group({
