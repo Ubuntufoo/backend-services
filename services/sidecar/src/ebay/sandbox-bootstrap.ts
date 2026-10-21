@@ -2,6 +2,7 @@ import {
   DEFAULT_APP_SETTINGS_ID,
   type AppSettingsInsert,
   type AppSettingsRow,
+  type Json,
 } from '@ebay-inventory/data';
 import type { EbayApiClient } from '@/api/client.js';
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
@@ -160,6 +161,24 @@ function hasText(value: string | null | undefined): value is string {
 
 function normalizeText(value: string | null | undefined): string | null {
   return hasText(value) ? value.trim() : null;
+}
+
+function jsonObject(value: Json | null | undefined): { [key: string]: Json | undefined } {
+  return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+}
+
+function mergeSandboxPublishConfig(
+  base: Json | null | undefined,
+  updates: { [key: string]: Json | undefined }
+): Json {
+  const root = jsonObject(base);
+  return {
+    ...root,
+    sandbox: {
+      ...jsonObject(root.sandbox),
+      ...updates,
+    },
+  };
 }
 
 function isObviousPlaceholder(value: string | null | undefined): boolean {
@@ -835,40 +854,63 @@ export async function ensureDefaultInventoryLocation(
 async function persistPolicyBootstrapSettings(
   appSettings: AppSettingsAccess,
   appSettingsId: string,
+  currentPublishConfig: Json | null | undefined,
   marketplaceId: string,
   result: Pick<
     SandboxBootstrapResult,
     'fulfillmentPolicyId' | 'paymentPolicyId' | 'returnPolicyId'
   >
-): Promise<void> {
+): Promise<Json> {
+  const fulfillmentPolicyId = assertPersistableValue(
+    'default_fulfillment_policy_id',
+    result.fulfillmentPolicyId
+  );
+  const paymentPolicyId = assertPersistableValue(
+    'default_payment_policy_id',
+    result.paymentPolicyId
+  );
+  const returnPolicyId = assertPersistableValue(
+    'default_return_policy_id',
+    result.returnPolicyId
+  );
+  const normalizedMarketplaceId = assertPersistableMarketplaceId(marketplaceId);
+  const ebayPublishConfig = mergeSandboxPublishConfig(currentPublishConfig, {
+    fulfillmentPolicyId,
+    groundFulfillmentPolicyId: fulfillmentPolicyId,
+    marketplaceId: normalizedMarketplaceId,
+    paymentPolicyId,
+    returnPolicyId,
+  });
+
   await appSettings.update(
     {
-      default_fulfillment_policy_id: assertPersistableValue(
-        'default_fulfillment_policy_id',
-        result.fulfillmentPolicyId
-      ),
-      default_payment_policy_id: assertPersistableValue(
-        'default_payment_policy_id',
-        result.paymentPolicyId
-      ),
-      default_return_policy_id: assertPersistableValue(
-        'default_return_policy_id',
-        result.returnPolicyId
-      ),
-      ebay_marketplace_id: assertPersistableMarketplaceId(marketplaceId),
+      default_fulfillment_policy_id: fulfillmentPolicyId,
+      default_payment_policy_id: paymentPolicyId,
+      default_return_policy_id: returnPolicyId,
+      ebay_marketplace_id: normalizedMarketplaceId,
+      ebay_publish_config: ebayPublishConfig,
     },
     appSettingsId
   );
+  return ebayPublishConfig;
 }
 
 async function persistInventoryLocationBootstrapSettings(
   appSettings: AppSettingsAccess,
   appSettingsId: string,
+  currentPublishConfig: Json | null | undefined,
   merchantLocationKey: string
 ): Promise<void> {
+  const normalizedLocationKey = assertPersistableValue(
+    'merchant_location_key',
+    merchantLocationKey
+  );
   await appSettings.update(
     {
-      merchant_location_key: assertPersistableValue('merchant_location_key', merchantLocationKey),
+      ebay_publish_config: mergeSandboxPublishConfig(currentPublishConfig, {
+        merchantLocationKey: normalizedLocationKey,
+      }),
+      merchant_location_key: normalizedLocationKey,
     },
     appSettingsId
   );
@@ -914,9 +956,10 @@ export async function runSandboxBootstrap({
     resolvedMarketplaceId,
     logger
   );
-  await persistPolicyBootstrapSettings(
+  const synchronizedPublishConfig = await persistPolicyBootstrapSettings(
     dataAccess.appSettings,
     appSettingsId,
+    initialAppSettings.ebay_publish_config,
     resolvedMarketplaceId,
     {
       fulfillmentPolicyId: policyResult.fulfillmentPolicyId,
@@ -945,6 +988,7 @@ export async function runSandboxBootstrap({
   await persistInventoryLocationBootstrapSettings(
     dataAccess.appSettings,
     appSettingsId,
+    synchronizedPublishConfig,
     locationResult.merchantLocationKey
   );
 
