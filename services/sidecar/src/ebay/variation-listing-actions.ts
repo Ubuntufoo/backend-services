@@ -58,6 +58,12 @@ import {
   emitVariationListingActionEvent,
   type VariationListingActionName,
 } from '@/ebay/variation-listing-action-events.js';
+import {
+  buildVariationListingPermanentRemovalPlan,
+  executeVariationListingPermanentRemoval,
+  hydrateVariationListingPermanentRemovalPlan,
+  type VariationListingPermanentRemovalRemote,
+} from '@/ebay/variation-listing-permanent-removal.js';
 
 export type VariationListingRemoteStateCertainty = 'known_unchanged' | 'known_changed' | 'unknown';
 export type VariationListingRetryStatus =
@@ -110,8 +116,10 @@ export interface VariationListingActionDataAccess {
   markPublishReady(input: { groupId: string; expectedDesiredRevision: number }): Promise<unknown>;
   reserveActionRevision(input: import('@ebay-inventory/data').ReserveVariationListingActionRevisionInput): Promise<import('@ebay-inventory/data').VariationListingGroupRow>;
   captureRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['captureRevision'];
+  capturePermanentRemovalRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['capturePermanentRemovalRevision'];
   appendJournalCheckpoint: import('@ebay-inventory/data').VariationListingTransactionGateway['appendJournalCheckpoint'];
   confirmRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['confirmRevision'];
+  confirmPermanentRemoval: import('@ebay-inventory/data').VariationListingTransactionGateway['confirmPermanentRemoval'];
   advanceCleanupLifecycle: import('@ebay-inventory/data').VariationListingTransactionGateway['advanceCleanupLifecycle'];
   abandonUntouchedGroup: import('@ebay-inventory/data').VariationListingTransactionGateway['abandonUntouchedGroup'];
   returnToReview: import('@ebay-inventory/data').VariationListingTransactionGateway['returnToReview'];
@@ -123,6 +131,9 @@ export interface VariationListingQuantityStatusVariation {
   ebayQuantity: number;
   pendingAdjustment: number;
   afterPublish: number;
+  /** Internal opt-in: never infer a removal-safe zero from only the lower sellable quantity. */
+  inventoryItemQuantity?: number;
+  offerQuantity?: number;
 }
 
 export interface VariationListingQuantityStatus {
@@ -150,7 +161,7 @@ export interface VariationListingActionServiceOptions {
   createId?: () => string;
 }
 
-type RevisionKind = 'initial' | 'active' | 'cleanup';
+type RevisionKind = 'initial' | 'active' | 'permanent_removal' | 'cleanup';
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -553,6 +564,10 @@ function hydrateCleanup(row: VariationListingRevisionRow, expectedPreviousConfir
 
 function revisionKind(row: VariationListingRevisionRow): RevisionKind {
   const kinds = new Set(operationPlan(row).map((operation) => operation.operationKind));
+  if (kinds.has('permanent_removal_group_membership')) {
+    if (row.snapshot_version !== 3) throw new Error(`Unsupported variation listing permanent-removal snapshot version ${row.snapshot_version}.`);
+    return 'permanent_removal';
+  }
   const cleanup = [...kinds].some((kind) => kind.startsWith('cleanup_') || kind === 'withdrawal' || kind === 'final_absence_verification');
   if (cleanup) {
     if (row.snapshot_version !== 1) throw new Error(`Unsupported variation listing cleanup snapshot version ${row.snapshot_version}.`);
@@ -682,8 +697,12 @@ function unresolvedError(
     recommendedActions: exhausted
       ? ['inspect_remote_state', 'resolve_manually']
       : ['reconcile_remote_state', 'do_not_retry_blindly'],
-    remoteState: exhausted && operation.observed_remote_state === 'present' ? 'known_changed' : exhausted ? 'known_unchanged' : 'unknown',
-    requiresReconciliation: !exhausted,
+    remoteState: exhausted
+      ? operation.observed_remote_state === 'unknown'
+        ? 'unknown'
+        : operation.observed_remote_state === 'present' ? 'known_changed' : 'known_unchanged'
+      : 'unknown',
+    requiresReconciliation: exhausted ? operation.observed_remote_state === 'unknown' : true,
     retryStatus: exhausted ? 'retry_exhausted' : 'reconciliation_required',
     revisionId: revision.revision_id,
     severity: 'error',
@@ -708,6 +727,24 @@ function validationError(action: VariationListingActionName, groupId: string, co
     retryStatus: 'not_applicable',
     severity: 'error',
     stage: 'preflight',
+    summary,
+    userActionRequired: true,
+  });
+}
+
+function permanentRemovalEligibilityError(groupId: string, summary: string): VariationListingActionError {
+  return new VariationListingActionError(409, {
+    action: 'publish_changes',
+    affected: { groupId },
+    category: 'state',
+    code: 'permanent_removal_ineligible',
+    issues: [],
+    recommendedActions: ['refresh_group', 'review_confirmed_quantities'],
+    remoteState: 'known_unchanged',
+    requiresReconciliation: false,
+    retryStatus: 'not_applicable',
+    severity: 'error',
+    stage: 'permanent_removal_preflight',
     summary,
     userActionRequired: true,
   });
@@ -822,6 +859,8 @@ export async function readVariationListingQuantityStatus(
   options: {
     data: Pick<VariationListingActionDataAccess, 'loadAggregate' | 'listRevisionsByGroupId' | 'listCheckpointsByRevisionId'>;
     remoteFactory?: VariationListingActionServiceOptions['remoteFactory'];
+    /** For private eligibility checks only. Public quantity-status JSON stays unchanged. */
+    includeComponentQuantities?: boolean;
   },
   groupId: string
 ): Promise<VariationListingQuantityStatus> {
@@ -927,12 +966,16 @@ export async function readVariationListingQuantityStatus(
     if (!Number.isSafeInteger(afterPublish) || afterPublish > 2_147_483_647) {
       throw new Error(`Variation listing projected quantity for ${currentVariation.sku} is invalid.`);
     }
+    const exactQuantities = observed.quantitiesBySku[currentVariation.sku];
     variations.push({
       variationId: currentVariation.variation_id,
       sku: currentVariation.sku,
       ebayQuantity: remoteQuantity,
       pendingAdjustment,
       afterPublish,
+      ...(options.includeComponentQuantities
+        ? { inventoryItemQuantity: exactQuantities?.inventoryItemQuantity, offerQuantity: exactQuantities?.offerQuantity }
+        : {}),
     });
   }
 
@@ -944,11 +987,76 @@ export async function readVariationListingQuantityStatus(
   };
 }
 
+/**
+ * Read-only YP9.6c2 stage preflight: remove is permitted ONLY when both eBay
+ * quantity sources are already zero. Staging itself does not write to eBay.
+ * The later Publish Changes executor must independently repeat this check.
+ */
+export async function assertVariationListingSoldOutRemovalEligible(
+  options: {
+    data: Pick<VariationListingActionDataAccess, 'loadAggregate' | 'listRevisionsByGroupId' | 'listCheckpointsByRevisionId'>;
+    remoteFactory?: VariationListingActionServiceOptions['remoteFactory'];
+  },
+  input: { groupId: string; variationId: string; expectedDesiredRevision: number },
+): Promise<void> {
+  const aggregate = await options.data.loadAggregate(input.groupId);
+  if (!aggregate || aggregate.group.desired_revision !== input.expectedDesiredRevision) {
+    throw new VariationListingTransactionConflictError(
+      'variation_listing_state_stale',
+      'Variation listing changed; refresh before staging sold-out removal.',
+    );
+  }
+  if (
+    aggregate.group.lifecycle_state !== 'active' ||
+    aggregate.group.last_confirmed_revision === null ||
+    aggregate.group.desired_revision !== aggregate.group.last_confirmed_revision ||
+    aggregate.variations.length < 3
+  ) {
+    throw permanentRemovalEligibilityError(input.groupId, 'Sold-out removal requires a confirmed active group with at least two survivors and no pending changes.');
+  }
+  const target = aggregate.variations.find((variation) => variation.variation_id === input.variationId);
+  if (!target || target.group_id !== input.groupId || target.pending_removal_at != null) {
+    throw permanentRemovalEligibilityError(input.groupId, 'Sold-out removal requires exactly one confirmed, unstaged target variation.');
+  }
+  let status: VariationListingQuantityStatus;
+  try {
+    status = await readVariationListingQuantityStatus({
+      ...options,
+      includeComponentQuantities: true,
+    }, input.groupId);
+  } catch (error) {
+    if (error instanceof VariationListingTransactionConflictError) throw error;
+    if (error instanceof VariationListingActionError && error.status.code === 'quantity_adjustment_requires_confirmed_active_group') {
+      throw error;
+    }
+    throw permanentRemovalEligibilityError(input.groupId, 'Sold-out removal requires an unambiguous current eBay Item and Offer quantity read. Refresh and retry after remote state is available.');
+  }
+  if (
+    status.desiredRevision !== input.expectedDesiredRevision ||
+    status.lastConfirmedRevision !== aggregate.group.last_confirmed_revision
+  ) {
+    throw new VariationListingTransactionConflictError(
+      'variation_listing_state_stale',
+      'Variation listing changed during sold-out quantity verification.',
+    );
+  }
+  const rows = status.variations.filter((row) => row.variationId === input.variationId && row.sku === target.sku);
+  if (
+    rows.length !== 1 ||
+    rows[0]!.inventoryItemQuantity !== 0 ||
+    rows[0]!.offerQuantity !== 0 ||
+    rows[0]!.pendingAdjustment !== 0 ||
+    rows[0]!.afterPublish !== 0
+  ) {
+    throw permanentRemovalEligibilityError(input.groupId, 'Sold-out removal is allowed only for a confirmed SKU whose Inventory Item and Offer are both already at quantity zero, with no pending replenishment.');
+  }
+}
+
 export function createVariationListingActionService(options: VariationListingActionServiceOptions) {
   const ids = options.createId ?? randomUUID;
   const publicBaseUrl = () => options.publicImageBaseUrl ?? loadR2ImageStorageConfig().publicBaseUrl;
   const dependencies = options.remoteFactory ?? createProductionRemote;
-  const assertPublicationMutationEnabled = (action: 'publish' | 'publish_changes' | 'retry', groupId: string): void => {
+  const assertPublicationMutationEnabled = (action: 'publish' | 'publish_changes' | 'retry' | 'reconcile', groupId: string): void => {
     // Dependency-injected remotes are explicit test/harness boundaries. The
     // default gateway is the real configured eBay environment and must honor
     // the same authorized publish-window guard as Standard publishing.
@@ -970,8 +1078,10 @@ export function createVariationListingActionService(options: VariationListingAct
   const transaction = {
     loadAggregate: options.data.loadAggregate,
     captureRevision: options.data.captureRevision,
+    capturePermanentRemovalRevision: options.data.capturePermanentRemovalRevision,
     appendJournalCheckpoint: options.data.appendJournalCheckpoint,
     confirmRevision: options.data.confirmRevision,
+    confirmPermanentRemoval: options.data.confirmPermanentRemoval,
     advanceCleanupLifecycle: options.data.advanceCleanupLifecycle,
     abandonUntouchedGroup: options.data.abandonUntouchedGroup,
   };
@@ -1248,6 +1358,49 @@ export function createVariationListingActionService(options: VariationListingAct
     });
   };
 
+  const executePermanentRemoval = async (
+    aggregate: VariationListingAggregateSnapshot,
+    targetVariationId: string,
+    existing: VariationListingRevisionRow | undefined,
+    progress: (stage: string, status?: unknown) => void,
+  ) => {
+    const deps = await resolveDependencies();
+    const remote: VariationListingPermanentRemovalRemote = {
+      ...deps.remote,
+      replaceInventoryItemGroup: deps.mutations.createOrReplaceInventoryItemGroup,
+    };
+    let plan;
+    if (existing) {
+      plan = hydrateVariationListingPermanentRemovalPlan(existing);
+    } else {
+      const revisions = await rows(aggregate.group.group_id);
+      const previous = revisions.find((revision) =>
+        revision.captured_desired_revision === aggregate.group.last_confirmed_revision &&
+        revisionKind(revision) !== 'cleanup'
+      );
+      if (!previous || aggregate.group.last_confirmed_revision === null) {
+        throw validationError('publish_changes', aggregate.group.group_id, 'confirmed_revision_missing', 'The last confirmed publication revision is missing.', ['inspect_group_history']);
+      }
+      plan = await buildVariationListingPermanentRemovalPlan({
+        aggregate,
+        previousConfirmedRevision: aggregate.group.last_confirmed_revision,
+        previousRevisionId: previous.revision_id,
+        previousRevision: previous,
+        previousCheckpoints: await checkpoints(previous.revision_id),
+        remote,
+        revisionId: ids(),
+        targetVariationId,
+      });
+    }
+    progress(existing ? 'reconcile_existing_removal_revision' : 'execute_permanent_removal');
+    return await executeVariationListingPermanentRemoval({
+      plan,
+      journal: journalFor(existing),
+      remote,
+      transaction,
+    });
+  };
+
   const publish = (groupId: string, expectedDesiredRevision: number) => run('publish', groupId, async (progress) => {
     assertPublicationMutationEnabled('publish', groupId);
     let aggregate = await requireAggregate(groupId, 'publish', expectedDesiredRevision);
@@ -1306,9 +1459,17 @@ export function createVariationListingActionService(options: VariationListingAct
     const aggregate = await requireAggregate(groupId, 'publish_changes', expectedDesiredRevision);
     if (aggregate.group.lifecycle_state !== 'active' || aggregate.group.last_confirmed_revision === null) throw validationError('publish_changes', groupId, 'publish_changes_lifecycle_blocked', 'Publish Changes requires an active published variation listing.', ['refresh_group']);
     if (aggregate.group.desired_revision <= aggregate.group.last_confirmed_revision) throw validationError('publish_changes', groupId, 'no_pending_changes', 'There are no staged changes to publish.', ['edit_group_or_variations']);
-    // YP9.6c1 fail-closed gate: the active executor cannot yet remove a child.
-    assertNoPendingPermanentRemoval('publish_changes', groupId, aggregate);
     const revisions = await rows(groupId);
+    const pendingRemovals = aggregate.variations.filter((variation) => variation.pending_removal_at != null);
+    if (pendingRemovals.length > 1) {
+      throw validationError('publish_changes', groupId, 'permanent_removal_multiple_targets', 'Publish Changes supports exactly one staged permanent-removal target at a time.', ['review_pending_changes']);
+    }
+    if (pendingRemovals.length === 1) {
+      const target = pendingRemovals[0]!;
+      const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'permanent_removal');
+      if (!existing) await assertNoOlderUnresolved('publish_changes', groupId, revisions, expectedDesiredRevision);
+      return await executePermanentRemoval(aggregate, target.variation_id, existing, progress);
+    }
     const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'active');
     if (!existing) await assertNoOlderUnresolved('publish_changes', groupId, revisions, expectedDesiredRevision);
     const deps = await resolveDependencies();
@@ -1345,14 +1506,31 @@ export function createVariationListingActionService(options: VariationListingAct
 
   const retry = (groupId: string) => run('retry', groupId, async (progress) => {
     const aggregate = await requireAggregate(groupId, 'retry');
-    assertNoPendingPermanentRemoval('retry', groupId, aggregate);
     const revisions = await rows(groupId);
     const pending = await unresolvedRevision(revisions);
     const revision = pending?.revision ?? newestFirst(revisions)[0];
     if (!revision) throw validationError('retry', groupId, 'retry_revision_missing', 'There is no frozen action revision to reconcile or retry.', ['refresh_group']);
     const history = await checkpoints(revision.revision_id);
     const unresolved = latestUnresolvedOperation(history, operationPlan(revision));
-    if (!unresolved) throw validationError('retry', groupId, 'retry_not_required', 'The latest action revision has no unresolved operation.', ['refresh_group']);
+    if (!unresolved) {
+      // A remote removal can be complete while the local finalizer response is
+      // lost. The terminal journal is then durable, but the staged marker and
+      // confirmed watermark still require the idempotent finalization step.
+      const terminalRemoval = newestFirst(revisions).find((candidate) => revisionKind(candidate) === 'permanent_removal');
+      if (terminalRemoval &&
+        (aggregate.group.last_confirmed_revision ?? -1) < terminalRemoval.captured_desired_revision &&
+        aggregate.variations.some((variation) => variation.pending_removal_at != null)) {
+        const terminalHistory = await checkpoints(terminalRemoval.revision_id);
+        const latest = [...terminalHistory].sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number).at(-1);
+        if (latest && ['confirmed_complete', 'confirmed_no_op'].includes(latest.state)) {
+          assertPublicationMutationEnabled('retry', groupId);
+          const target = aggregate.variations.find((variation) => variation.pending_removal_at != null);
+          if (!target) throw validationError('retry', groupId, 'permanent_removal_target_missing', 'The staged permanent-removal target is unavailable for finalization recovery.', ['inspect_action_status']);
+          return await executePermanentRemoval(aggregate, target.variation_id, terminalRemoval, progress);
+        }
+      }
+      throw validationError('retry', groupId, 'retry_not_required', 'The latest action revision has no unresolved operation.', ['refresh_group']);
+    }
     if (unresolved.state === 'retry_exhausted') throw new VariationListingActionError(409, {
       action: 'retry',
       affected: { groupId },
@@ -1361,8 +1539,10 @@ export function createVariationListingActionService(options: VariationListingAct
       issues: [],
       operationKey: unresolved.operation_key,
       recommendedActions: ['inspect_remote_state', 'resolve_manually'],
-      remoteState: unresolved.observed_remote_state === 'present' ? 'known_changed' : 'known_unchanged',
-      requiresReconciliation: false,
+      remoteState: unresolved.observed_remote_state === 'unknown'
+        ? 'unknown'
+        : unresolved.observed_remote_state === 'present' ? 'known_changed' : 'known_unchanged',
+      requiresReconciliation: unresolved.observed_remote_state === 'unknown',
       retryStatus: 'retry_exhausted',
       revisionId: revision.revision_id,
       severity: 'error',
@@ -1370,11 +1550,26 @@ export function createVariationListingActionService(options: VariationListingAct
       summary: 'The one bounded replay is exhausted; another automatic retry is not permitted.',
       userActionRequired: true,
     });
+    if (revisionKind(revision) === 'permanent_removal') {
+      assertPublicationMutationEnabled('retry', groupId);
+      const target = aggregate.variations.find((variation) => variation.pending_removal_at != null);
+      if (!target) {
+        const frozen = record(revision.snapshot);
+        const confirmed = record(frozen.confirmed);
+        const confirmedAggregate = confirmed.aggregate as unknown as VariationListingAggregateSnapshot | undefined;
+        const currentIds = new Set(aggregate.variations.map((variation) => variation.variation_id));
+        const targetFromSnapshot = confirmedAggregate?.variations.find((variation) => !currentIds.has(variation.variation_id));
+        if (!targetFromSnapshot) throw validationError('retry', groupId, 'permanent_removal_target_missing', 'The frozen permanent-removal revision no longer identifies its target variation.', ['inspect_action_status']);
+        return await executePermanentRemoval(aggregate, targetFromSnapshot.variation_id, revision, progress);
+      }
+      return await executePermanentRemoval(aggregate, target.variation_id, revision, progress);
+    }
+    assertNoPendingPermanentRemoval('retry', groupId, aggregate);
     if (revisionKind(revision) === 'initial' || revisionKind(revision) === 'active') {
       assertPublicationMutationEnabled('retry', groupId);
     }
     if (unresolved.state !== 'retry_authorized') {
-      if (revisionKind(revision) === 'initial' || revisionKind(revision) === 'active') {
+    if (revisionKind(revision) === 'initial' || revisionKind(revision) === 'active') {
         throw unresolvedError('retry', groupId, revision, unresolved);
       }
     }
@@ -1400,6 +1595,7 @@ export function createVariationListingActionService(options: VariationListingAct
   });
 
   const reconcile = (groupId: string) => run('reconcile', groupId, async (progress) => {
+    assertPublicationMutationEnabled('reconcile', groupId);
     const aggregate = await requireAggregate(groupId, 'reconcile');
     assertNoPendingPermanentRemoval('reconcile', groupId, aggregate);
     const pending = await unresolvedRevision(await rows(groupId));

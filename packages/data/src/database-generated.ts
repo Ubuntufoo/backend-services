@@ -1140,6 +1140,18 @@ export type Database = {
         Args: { p_group_id: string; p_variation_id: string; p_expected_desired_revision: number; p_remove: boolean };
         Returns: { group_row: Json; variation_row: Json }[];
       };
+      capture_variation_listing_permanent_removal_revision: {
+        Args: { p_group_id: string; p_revision_id: string; p_captured_desired_revision: number; p_snapshot_digest: string; p_snapshot: Json; p_operation_plan: Json };
+        Returns: { revision: Json }[];
+      };
+      append_variation_listing_permanent_removal_checkpoint: {
+        Args: { p_revision_id: string; p_operation_key: string; p_checkpoint_id: string; p_attempt_number: number; p_checkpoint_number: number; p_state: string; p_observed_remote_state: string | null; p_evidence: Json };
+        Returns: { checkpoint: Json }[];
+      };
+      confirm_variation_listing_permanent_removal: {
+        Args: { p_group_id: string; p_revision_id: string; p_expected_previous_confirmed_revision: number; p_confirmed_revision: number; p_target_variation_id: string; p_target_sku: string };
+        Returns: { group_row: Json }[];
+      };
       apply_variation_listing_group_review_draft: {
         Args: { p_group_id: string; p_expected_desired_revision: number; p_title: string; p_description: string; p_derived_common_ebay_aspects: Json };
         Returns: { group_row: Json }[];

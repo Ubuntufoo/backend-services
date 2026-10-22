@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { VariationListingRevisionPlanOperation, VariationListingPublishingCheckpointRow } from '../src/index.js';
-import { assertVariationListingJournalCanContinue, inspectVariationListingJournal } from '../src/index.js';
+import { assertVariationListingJournalCanContinue, inspectVariationListingJournal, mapVariationListingPublishingCheckpointRow } from '../src/index.js';
 
 const op: VariationListingRevisionPlanOperation = { sequence_no:1, operation_key:'publish', operation_kind:'group_publish', target_ref:'g', intent_version:1, intent_digest:'a'.repeat(64), intent:{} };
 let id = 0;
@@ -10,7 +10,7 @@ describe('publishing checkpoints',()=>{
   it('requires reconciliation for started/unknown latest',()=>expect(inspectVariationListingJournal(op,[cp()]).requiresReconciliation).toBe(true));
 
   it('accepts exact after-state resolution after unknown as terminal complete',()=>{
-    const rows=[cp(),cp({checkpoint_number:2,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}}),cp({attempt_number:2,checkpoint_number:1,state:'confirmed_complete',observed_remote_state:'present',evidence:{readback:true}})];
+    const rows=[cp(),cp({checkpoint_number:2,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}}),cp({checkpoint_number:3,state:'confirmed_complete',observed_remote_state:'present',evidence:{readback:true}})];
     expect(inspectVariationListingJournal(op,rows)).toMatchObject({hasUnknownHistory:true,requiresReconciliation:false,retryAuthorized:false,retryExhausted:false});
     expect(()=>assertVariationListingJournalCanContinue(op,rows)).toThrow('terminal');
   });
@@ -27,18 +27,44 @@ describe('publishing checkpoints',()=>{
     expect(()=>inspectVariationListingJournal(op,[...rows,cp({attempt_number:3,checkpoint_number:1,state:'started'})])).toThrow('exactly one started replay');
   });
 
-  it('marks a second ambiguous replay reconciled to pre-state as exhausted and forbids a third mutation',()=>{
+  it('requires a replay ambiguity to end in retry_exhausted and forbids a third mutation',()=>{
     const rows=[
       cp(),
       cp({checkpoint_number:2,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}}),
       cp({attempt_number:2,checkpoint_number:1,state:'retry_authorized',observed_remote_state:'proven_absent',evidence:{prestate:true}}),
       cp({attempt_number:2,checkpoint_number:2,state:'started'}),
-      cp({attempt_number:2,checkpoint_number:3,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}}),
-      cp({attempt_number:3,checkpoint_number:1,state:'retry_exhausted',observed_remote_state:'proven_absent',evidence:{prestate:true}}),
+      cp({attempt_number:2,checkpoint_number:3,state:'retry_exhausted',observed_remote_state:'unknown',evidence:{timeout:true}}),
     ];
-    expect(inspectVariationListingJournal(op,rows)).toMatchObject({retryAuthorized:false,retryExhausted:true,requiresReconciliation:false});
+    expect(inspectVariationListingJournal(op,rows)).toMatchObject({retryAuthorized:false,retryExhausted:true,requiresReconciliation:true});
     expect(()=>assertVariationListingJournalCanContinue(op,rows)).toThrow('exhausted');
-    expect(()=>inspectVariationListingJournal(op,[...rows,cp({attempt_number:3,checkpoint_number:2,state:'started'})])).toThrow('terminal');
+    expect(()=>inspectVariationListingJournal(op,[...rows,cp({attempt_number:3,checkpoint_number:1,state:'started'})])).toThrow('terminal');
+  });
+
+  it.each(['present', 'proven_absent'] as const)('preserves legacy retry_exhausted %s evidence', (observed) => {
+    const rows=[
+      cp(),
+      cp({checkpoint_number:2,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}}),
+      cp({attempt_number:2,checkpoint_number:1,state:'retry_authorized',observed_remote_state:'proven_absent',evidence:{prestate:true}}),
+      cp({attempt_number:2,checkpoint_number:2,state:'started'}),
+      cp({attempt_number:2,checkpoint_number:3,state:'retry_exhausted',observed_remote_state:observed,evidence:{prestate:true}}),
+    ];
+    expect(inspectVariationListingJournal(op,rows)).toMatchObject({retryExhausted:true,requiresReconciliation:false,latestCheckpoint:{observed_remote_state:observed}});
+    expect(mapVariationListingPublishingCheckpointRow(cp({state:'retry_exhausted',observed_remote_state:observed,evidence:{prestate:true}}))).toMatchObject({state:'retry_exhausted',observedRemoteState:observed});
+  });
+
+  it('accepts c2 retry_exhausted unknown evidence at shared parser boundary', () => {
+    expect(mapVariationListingPublishingCheckpointRow(cp({state:'retry_exhausted',observed_remote_state:'unknown',evidence:{timeout:true}}))).toMatchObject({state:'retry_exhausted',observedRemoteState:'unknown'});
+  });
+
+  it('rejects an ambiguous replay ending in unknown and any third retry authorization',()=>{
+    const replay=[
+      cp(),
+      cp({checkpoint_number:2,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}}),
+      cp({attempt_number:2,checkpoint_number:1,state:'retry_authorized',observed_remote_state:'proven_absent',evidence:{prestate:true}}),
+      cp({attempt_number:2,checkpoint_number:2,state:'started'}),
+    ];
+    expect(()=>inspectVariationListingJournal(op,[...replay,cp({attempt_number:2,checkpoint_number:3,state:'unknown',observed_remote_state:'unknown',evidence:{timeout:true}})])).toThrow('must resolve on the same attempt');
+    expect(()=>inspectVariationListingJournal(op,[...replay,cp({attempt_number:2,checkpoint_number:3,state:'retry_exhausted',observed_remote_state:'unknown',evidence:{timeout:true}}),cp({attempt_number:3,checkpoint_number:1,state:'retry_authorized',observed_remote_state:'proven_absent',evidence:{prestate:true}})])).toThrow('terminal');
   });
 
   it('rejects resolved checkpoint without exact remote evidence',()=>expect(()=>inspectVariationListingJournal({...op,operation_kind:'final_absence_verification'},[cp({state:'retry_authorized',evidence:{prestate:true}})])).toThrow('exact remote evidence'));

@@ -175,6 +175,25 @@ function checkpointWithState(state: string, observedRemoteState: string | null =
   return {...checkpoint(), state, observedRemoteState};
 }
 
+function permanentRemovalRevision(): VariationListingRevision {
+  const base = latestRevision();
+  return {
+    ...base,
+    operationCount: 1,
+    operationPlan: [{
+      ...base.operationPlan[0]!,
+      operation_key: 'permanent-removal',
+      operation_kind: 'permanent_removal_group_membership',
+      target_ref: groupId,
+    }],
+    source: { ...base.source, snapshot_version: 3 },
+  } as unknown as VariationListingRevision;
+}
+
+function permanentRemovalCheckpoint(state: string, observedRemoteState: string | null = 'unknown'): VariationListingPublishingCheckpoint {
+  return { ...checkpointWithState(state, observedRemoteState), operationKey: 'permanent-removal' };
+}
+
 function intakeSession(
   overrides: Partial<VariationListingIntakeSession> = {}
 ): VariationListingIntakeSession {
@@ -227,11 +246,12 @@ const creationDefaults = async () => ({
 function app(
   access: VariationListingApiDataAccess,
   createId?: () => string,
-  resolveCreationDefaults = creationDefaults
+  resolveCreationDefaults = creationDefaults,
+  assertSoldOutRemovalEligible?: (input: { groupId: string; variationId: string; expectedDesiredRevision: number }) => Promise<void>,
 ) {
   const instance = express();
   instance.use(express.json());
-  instance.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess: access, createId, resolveCreationDefaults }));
+  instance.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess: access, createId, resolveCreationDefaults, assertSoldOutRemovalEligible }));
   return instance;
 }
 
@@ -668,6 +688,54 @@ describe('YP6.1 variation listing API router', () => {
     });
   });
 
+  it('does not advertise reconcile for an unresolved c2 revision and points to inspect-then-retry recovery', async () => {
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [permanentRemovalRevision()]),
+      listCheckpointsByRevisionId: vi.fn(async () => [permanentRemovalCheckpoint('unknown')]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      reconciliationSupported: false,
+      remoteState: 'unknown',
+      requiresReconciliation: true,
+      retryStatus: 'reconciliation_required',
+      recommendedActions: ['inspect_remote_state', 'retry_action', 'do_not_retry_blindly'],
+    });
+    expect(response.body.journal.latestRevision.recovery.recommendedActions).not.toContain('reconcile_remote_state');
+  });
+
+  it('serializes c2 retry exhaustion with unknown evidence as terminal but requiring reconciliation', async () => {
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [permanentRemovalRevision()]),
+      listCheckpointsByRevisionId: vi.fn(async () => [permanentRemovalCheckpoint('retry_exhausted')]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      remoteState: 'unknown',
+      requiresReconciliation: true,
+      retryStatus: 'retry_exhausted',
+      recommendedActions: ['inspect_remote_state', 'resolve_manually'],
+    });
+  });
+
+  it.each([
+    ['present', 'known_changed'],
+    ['proven_absent', 'known_unchanged'],
+  ])('preserves legacy retry exhaustion certainty for %s evidence', async (observedRemoteState, remoteState) => {
+    const response = await request(app(dataAccess({
+      listCheckpointsByRevisionId: vi.fn(async () => [checkpointWithState('retry_exhausted', observedRemoteState)]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      remoteState,
+      requiresReconciliation: false,
+      retryStatus: 'retry_exhausted',
+    });
+  });
+
   it('clears historical unknown outcome after a valid terminal checkpoint', async () => {
     const rows = [
       {
@@ -1080,7 +1148,8 @@ describe('YP6.1 variation listing API router', () => {
     });
     const access = dataAccess({ loadAggregate: vi.fn(async () => current), stageVariationListingPermanentRemoval });
 
-    const staged = await request(app(access))
+    const eligible = vi.fn(async () => undefined);
+    const staged = await request(app(access, undefined, creationDefaults, eligible))
       .patch(`/api/variation-listings/${groupId}/variations/${variationA}/permanent-removal`)
       .send({ expectedDesiredRevision: 3, remove: true });
     expect(staged.status).toBe(200);
@@ -1095,7 +1164,7 @@ describe('YP6.1 variation listing API router', () => {
       remove: true,
     });
 
-    const cancelled = await request(app(access))
+    const cancelled = await request(app(access, undefined, creationDefaults, eligible))
       .patch(`/api/variation-listings/${groupId}/variations/${variationA}/permanent-removal`)
       .send({ expectedDesiredRevision: 4, remove: false });
     expect(cancelled.status).toBe(200);
@@ -1111,7 +1180,7 @@ describe('YP6.1 variation listing API router', () => {
         throw new VariationListingTransactionConflictError('VR001', 'stale desired revision');
       }),
     });
-    const response = await request(app(access))
+    const response = await request(app(access, undefined, creationDefaults, async () => undefined))
       .patch(`/api/variation-listings/${groupId}/variations/${variationA}/permanent-removal`)
       .send({ expectedDesiredRevision: 3, remove: true });
 

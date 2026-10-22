@@ -264,6 +264,7 @@ export {
   type UpdateVariationListingManualPriceInput,
   type UpdateVariationListingQuantityAdjustmentInput,
   type StageVariationListingPermanentRemovalInput,
+  type ConfirmVariationListingPermanentRemovalInput,
   type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingCopyAvailabilityInput,
   type UpdateVariationListingRepresentativeCopyInput,

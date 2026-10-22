@@ -142,6 +142,15 @@ export interface StageVariationListingPermanentRemovalInput {
   variationId: string;
 }
 
+export interface ConfirmVariationListingPermanentRemovalInput {
+  confirmedRevision: number;
+  expectedPreviousConfirmedRevision: number;
+  groupId: string;
+  revisionId: string;
+  targetVariationId: string;
+  targetSku: string;
+}
+
 export interface UpdateVariationListingSelectorValueInput {
   expectedDesiredRevision: number;
   groupId: string;
@@ -288,6 +297,10 @@ export interface VariationListingTransactionGateway {
   stagePermanentRemoval(
     input: StageVariationListingPermanentRemovalInput
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
+  /** c2 uses dedicated capture/finalization validation while reusing the
+   * append-only journal checkpoint primitive. */
+  capturePermanentRemovalRevision(input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult>;
+  confirmPermanentRemoval(input: ConfirmVariationListingPermanentRemovalInput): Promise<VariationListingGroupRow>;
   updateVariationSelectorValue(
     input: UpdateVariationListingSelectorValueInput
   ): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
@@ -375,6 +388,7 @@ export function inspectVariationListingJournal(
       (TERMINAL_STATES.has(checkpoint.state) ||
         checkpoint.state === 'retry_authorized' ||
         checkpoint.state === 'retry_exhausted') &&
+      !(checkpoint.state === 'retry_exhausted' && checkpoint.observed_remote_state === 'unknown') &&
       !hasExactRemoteEvidence(checkpoint)
     ) {
       throw new Error('Variation listing resolved checkpoint requires exact remote evidence.');
@@ -420,7 +434,7 @@ export function inspectVariationListingJournal(
         .slice(0, index)
         .some((checkpoint) => checkpoint.state === 'retry_authorized');
       const allowedStartedResolution = isBoundedReplay
-        ? current.state === 'unknown' || current.state === 'confirmed_complete'
+        ? current.state === 'confirmed_complete' || current.state === 'confirmed_no_op' || current.state === 'retry_exhausted'
         : current.state === 'unknown' || TERMINAL_STATES.has(current.state);
       if (
         current.attempt_number !== previous.attempt_number ||
@@ -432,20 +446,25 @@ export function inspectVariationListingJournal(
       }
     } else if (
       previous.state === 'unknown' ||
-      previous.observed_remote_state === 'unknown'
+      (previous.observed_remote_state === 'unknown' && previous.state !== 'retry_exhausted')
     ) {
       const priorRetryAuthorized = ordered
         .slice(0, index)
         .some((checkpoint) => checkpoint.state === 'retry_authorized');
-      const allowedResolutionStates = priorRetryAuthorized
-        ? new Set(['confirmed_complete', 'retry_exhausted'])
-        : new Set(['confirmed_complete', 'confirmed_no_op', 'retry_authorized']);
-      if (
-        current.attempt_number !== previous.attempt_number + 1 ||
-        current.checkpoint_number !== 1 ||
-        !allowedResolutionStates.has(current.state) ||
-        !hasExactRemoteEvidence(current)
-      ) {
+      const sameAttemptTerminal = !priorRetryAuthorized && TERMINAL_STATES.has(current.state)
+        && current.attempt_number === previous.attempt_number
+        && current.checkpoint_number === previous.checkpoint_number + 1;
+      const nextAttemptResolution = !priorRetryAuthorized
+        && current.state === 'retry_authorized'
+        && current.attempt_number === previous.attempt_number + 1
+        && current.checkpoint_number === 1;
+      const boundedReplayTerminal = priorRetryAuthorized
+        && (current.state === 'confirmed_complete' || current.state === 'retry_exhausted')
+        && current.attempt_number === previous.attempt_number + 1
+        && current.checkpoint_number === 1;
+      if (!(sameAttemptTerminal || nextAttemptResolution || boundedReplayTerminal) ||
+        !(current.state === 'retry_exhausted' && current.observed_remote_state === 'unknown') &&
+        !hasExactRemoteEvidence(current)) {
         throw new Error(
           `Variation listing operation ${operation.operation_key} ambiguous outcome requires an exact bounded reconciliation checkpoint.`
         );
@@ -491,14 +510,14 @@ export function assertVariationListingJournalCanContinue(
   checkpoints: readonly VariationListingPublishingCheckpointRow[]
 ): void {
   const inspection = inspectVariationListingJournal(operation, checkpoints);
-  if (inspection.requiresReconciliation) {
-    throw new Error(
-      `Variation listing operation ${operation.operation_key} requires exact reconciliation before another remote mutation.`
-    );
-  }
   if (inspection.retryExhausted) {
     throw new Error(
       `Variation listing operation ${operation.operation_key} exhausted its one bounded replay.`
+    );
+  }
+  if (inspection.requiresReconciliation) {
+    throw new Error(
+      `Variation listing operation ${operation.operation_key} requires exact reconciliation before another remote mutation.`
     );
   }
   if (inspection.latestCheckpoint && TERMINAL_STATES.has(inspection.latestCheckpoint.state)) {

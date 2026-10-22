@@ -21,6 +21,7 @@ import {
 export type { VariationListingCreationDefaults };
 import {
   createVariationListingActionService,
+  assertVariationListingSoldOutRemovalEligible,
   assertVariationListingQuantityAdjustmentEligible,
   readVariationListingQuantityStatus,
   VariationListingActionError,
@@ -105,6 +106,7 @@ export interface VariationListingApiRouterOptions {
   actions?: VariationListingApiActions;
   resolveCreationDefaults?: () => Promise<VariationListingCreationDefaults>;
   readQuantityStatus?: (groupId: string) => Promise<VariationListingQuantityStatus>;
+  assertSoldOutRemovalEligible?: (input: { groupId: string; variationId: string; expectedDesiredRevision: number }) => Promise<void>;
 }
 
 export interface VariationListingApiActions {
@@ -572,10 +574,14 @@ function summarizeJournal(
     (revision.source.snapshot_version === 1 || revision.source.snapshot_version === 3) &&
     revision.operationPlan.every(
       (operation) =>
+        operation.operation_kind !== 'permanent_removal_group_membership' &&
         !operation.operation_kind.startsWith('cleanup_') &&
         operation.operation_kind !== 'withdrawal' &&
         operation.operation_kind !== 'final_absence_verification'
     );
+  const permanentRemovalRecovery = revision.operationPlan.some(
+    (operation) => operation.operation_kind === 'permanent_removal_group_membership'
+  );
   const recovery = unresolved
     ? unresolved.state === 'retry_authorized'
       ? {
@@ -590,8 +596,10 @@ function summarizeJournal(
         ? {
             operationKey: unresolved.operationKey,
             revisionId: revision.revisionId,
-            requiresReconciliation: false,
-            remoteState: unresolved.observedRemoteState === 'present' ? 'known_changed' : 'known_unchanged',
+            requiresReconciliation: unresolved.observedRemoteState === 'unknown',
+            remoteState: unresolved.observedRemoteState === 'unknown'
+              ? 'unknown'
+              : unresolved.observedRemoteState === 'present' ? 'known_changed' : 'known_unchanged',
             recommendedActions: ['inspect_remote_state', 'resolve_manually'],
             retryStatus: 'retry_exhausted',
           }
@@ -603,7 +611,9 @@ function summarizeJournal(
             remoteState: 'unknown',
             recommendedActions: reconciliationSupported
               ? ['reconcile_remote_state', 'do_not_retry_blindly']
-              : ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
+              : permanentRemovalRecovery
+                ? ['inspect_remote_state', 'retry_action', 'do_not_retry_blindly']
+                : ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
             retryStatus: 'reconciliation_required',
           }
     : {
@@ -1228,6 +1238,14 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     if (!params || !body) return;
     return await runRoute(res, async () => {
       const dataAccess = getDataAccess();
+      if (body.remove) {
+        await (options.assertSoldOutRemovalEligible ?? (async (input) =>
+          await assertVariationListingSoldOutRemovalEligible({ data: dataAccess }, input)))({
+          groupId: params.groupId,
+          variationId: params.variationId,
+          expectedDesiredRevision: body.expectedDesiredRevision,
+        });
+      }
       await dataAccess.stageVariationListingPermanentRemoval({
         groupId: params.groupId,
         variationId: params.variationId,

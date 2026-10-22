@@ -104,6 +104,7 @@ import {
   type UpdateVariationListingManualPriceInput,
   type UpdateVariationListingQuantityAdjustmentInput,
   type StageVariationListingPermanentRemovalInput,
+  type ConfirmVariationListingPermanentRemovalInput,
   type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingRepresentativeCopyInput,
   type VariationListingAggregateSnapshot,
@@ -207,6 +208,8 @@ export interface SidecarDataAccess {
     captureRevision(input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult>;
     appendJournalCheckpoint(input: AppendVariationListingJournalCheckpointInput): Promise<AppendVariationListingJournalCheckpointResult>;
     confirmRevision(input: ConfirmVariationListingRevisionInput): Promise<VariationListingGroupRow>;
+    capturePermanentRemovalRevision(input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult>;
+    confirmPermanentRemoval(input: ConfirmVariationListingPermanentRemovalInput): Promise<VariationListingGroupRow>;
     advanceCleanupLifecycle(input: AdvanceVariationListingCleanupLifecycleInput): Promise<VariationListingGroupRow>;
     abandonUntouchedGroup(input: AbandonUntouchedVariationListingGroupInput): Promise<VariationListingGroupRow>;
     updateVariationPrice(input: UpdateVariationListingManualPriceInput): Promise<{ group: VariationListingGroupRow; variation: VariationListingVariationRow }>;
@@ -311,6 +314,8 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       captureRevision: async (input) => await variationListingTransactions.captureRevision(input),
       appendJournalCheckpoint: async (input) => await variationListingTransactions.appendJournalCheckpoint(input),
       confirmRevision: async (input) => await variationListingTransactions.confirmRevision(input),
+      capturePermanentRemovalRevision: async (input) => await variationListingTransactions.capturePermanentRemovalRevision(input),
+      confirmPermanentRemoval: async (input) => await variationListingTransactions.confirmPermanentRemoval(input),
       advanceCleanupLifecycle: async (input) => await variationListingTransactions.advanceCleanupLifecycle(input),
       abandonUntouchedGroup: async (input) => await variationListingTransactions.abandonUntouchedGroup(input),
       updateVariationPrice: async (input) => await variationListingTransactions.updateVariationPrice(input),

@@ -428,7 +428,30 @@ describe('YP6.2 variation listing actions', () => {
     }
   });
 
-  it('fails closed before retry or reconcile can hydrate a group with staged permanent removal', async () => {
+  it('blocks reconcile through the default eBay gateway when the publish window is disabled', async () => {
+    const previous = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'false';
+    try {
+      const access = data();
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+      });
+      await expect(service.reconcile(groupId)).rejects.toMatchObject({
+        status: {
+          code: 'publish_disabled',
+          remoteState: 'known_unchanged',
+          stage: 'preflight',
+        },
+      });
+      expect(access.value.loadAggregate).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previous;
+    }
+  });
+
+  it('fails closed before retry or reconcile can hydrate a group with an unrecorded staged permanent removal', async () => {
     const harness = activeWithdrawalHarness({ pending: true });
     const current = harness.aggregate();
     (current.variations[0] as typeof current.variations[number] & { pending_removal_at?: string })
@@ -440,7 +463,7 @@ describe('YP6.2 variation listing actions', () => {
     });
 
     await expect(service.retry(groupId)).rejects.toMatchObject({
-      status: { code: 'permanent_removal_not_implemented', remoteState: 'known_unchanged' },
+      status: { code: 'retry_not_required', remoteState: 'known_unchanged' },
     });
     await expect(service.reconcile(groupId)).rejects.toMatchObject({
       status: { code: 'permanent_removal_not_implemented', remoteState: 'known_unchanged' },
@@ -553,10 +576,81 @@ describe('YP6.2 variation listing actions', () => {
     });
   });
 
-  it('reports bounded retry exhaustion as terminal', async () => {
+  it('reports bounded retry exhaustion with legacy proven-absent evidence as terminal and unchanged', async () => {
     const access = data({ revisions: [revision()], checkpoints: [checkpoint('retry_exhausted', 'proven_absent')] });
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test' });
-    await expect(service.retry(groupId)).rejects.toMatchObject({ status: { code: 'retry_exhausted', category: 'terminal', retryStatus: 'retry_exhausted' } });
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: {
+        code: 'retry_exhausted',
+        category: 'terminal',
+        remoteState: 'known_unchanged',
+        requiresReconciliation: false,
+        retryStatus: 'retry_exhausted',
+      },
+    });
+  });
+
+  it('reports bounded retry exhaustion with legacy present evidence as terminal and changed', async () => {
+    const access = data({ revisions: [revision()], checkpoints: [checkpoint('retry_exhausted', 'present')] });
+    const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test' });
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: {
+        code: 'retry_exhausted',
+        category: 'terminal',
+        remoteState: 'known_changed',
+        requiresReconciliation: false,
+        retryStatus: 'retry_exhausted',
+      },
+    });
+  });
+
+  it('reports c2 retry exhaustion with unknown evidence as terminal but requiring reconciliation', async () => {
+    const c2Revision = revision(3);
+    c2Revision.operation_plan = c2Revision.operation_plan.map((operation) => ({
+      ...operation,
+      operation_key: 'permanent-removal',
+      operation_kind: 'permanent_removal_group_membership',
+      target_ref: groupId,
+    }));
+    const c2Checkpoint = { ...checkpoint('retry_exhausted', 'unknown'), operation_key: 'permanent-removal' };
+    const access = data({ revisions: [c2Revision], checkpoints: [c2Checkpoint] });
+    const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test' });
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: {
+        code: 'retry_exhausted',
+        category: 'terminal',
+        remoteState: 'unknown',
+        requiresReconciliation: true,
+        retryStatus: 'retry_exhausted',
+      },
+    });
+  });
+
+  it('reports older c2 retry exhaustion with unknown evidence as terminal but requiring reconciliation', async () => {
+    const c2Revision = revision(3);
+    c2Revision.captured_desired_revision = 2;
+    c2Revision.operation_plan = c2Revision.operation_plan.map((operation) => ({
+      ...operation,
+      operation_key: 'permanent-removal',
+      operation_kind: 'permanent_removal_group_membership',
+      target_ref: groupId,
+    }));
+    const c2Checkpoint = { ...checkpoint('retry_exhausted', 'unknown'), operation_key: 'permanent-removal' };
+    const access = data({ revisions: [c2Revision], checkpoints: [c2Checkpoint] });
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: vi.fn(),
+    });
+    await expect(service.publish(groupId, 3)).rejects.toMatchObject({
+      status: {
+        code: 'retry_exhausted',
+        category: 'terminal',
+        remoteState: 'unknown',
+        requiresReconciliation: true,
+        retryStatus: 'retry_exhausted',
+      },
+    });
   });
 
   it('blocks destructive cleanup for ever-published groups; use Withdraw', async () => {
