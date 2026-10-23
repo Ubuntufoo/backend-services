@@ -131,6 +131,8 @@ export interface VariationListingQuantityStatusVariation {
   ebayQuantity: number;
   pendingAdjustment: number;
   afterPublish: number;
+  /** Public, fail-closed hint only; the staging RPC re-reads both remote sources. */
+  soldOutRemovalEligible: boolean;
   /** Internal opt-in: never infer a removal-safe zero from only the lower sellable quantity. */
   inventoryItemQuantity?: number;
   offerQuantity?: number;
@@ -973,6 +975,13 @@ export async function readVariationListingQuantityStatus(
       ebayQuantity: remoteQuantity,
       pendingAdjustment,
       afterPublish,
+      soldOutRemovalEligible:
+        aggregate.group.desired_revision === aggregate.group.last_confirmed_revision &&
+        aggregate.variations.length >= 3 &&
+        aggregate.variations.every((row) => row.pending_removal_at === null) &&
+        exactQuantities?.inventoryItemQuantity === 0 &&
+        exactQuantities?.offerQuantity === 0 &&
+        pendingAdjustment === 0 && afterPublish === 0,
       ...(options.includeComponentQuantities
         ? { inventoryItemQuantity: exactQuantities?.inventoryItemQuantity, offerQuantity: exactQuantities?.offerQuantity }
         : {}),

@@ -61,8 +61,10 @@ function quantityDataAccess(options: { desiredRevision?: number; confirmedId?: s
 function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity: number) {
   const sku = 'BSKBL-Test-000001';
   const skuB = 'BSKBL-Test-000002';
+  const skuC = 'BSKBL-Test-000003';
   const copyId = '44444444-4444-4444-8444-444444444444';
   const copyBId = '77777777-7777-4777-8777-777777777777';
+  const copyCId = '88888888-8888-4888-8888-888888888888';
   const now = '2026-09-02T00:00:00.000Z';
   const current = {
     group: {
@@ -87,7 +89,7 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
       lifecycle_state: 'active',
       listing_format: 'FIXED_PRICE',
       selector_name: 'Card',
-      next_inventory_serial: 2,
+      next_inventory_serial: 4,
       title: 'Cards',
       created_at: now,
       updated_at: now,
@@ -107,6 +109,7 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
         quantity_adjustment_counter: quantityAdjustmentCounter,
         created_at: now,
         updated_at: now,
+        pending_removal_at: null,
       },
       {
         variation_id: confirmedVariationId,
@@ -120,6 +123,23 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
         representative_copy_id: copyBId,
         variation_metadata: {},
         quantity_adjustment_counter: 0,
+        created_at: now,
+        updated_at: now,
+        pending_removal_at: null,
+      },
+      {
+        variation_id: '99999999-9999-4999-8999-999999999999',
+        group_id: groupId,
+        inventory_serial: 3,
+        position: 2,
+        sku: skuC,
+        selector_value: 'Card C',
+        price_amount: 1.49,
+        price_currency: 'USD',
+        representative_copy_id: copyCId,
+        variation_metadata: {},
+        quantity_adjustment_counter: 0,
+        pending_removal_at: null,
         created_at: now,
         updated_at: now,
       },
@@ -159,6 +179,23 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
         created_at: now,
         updated_at: now,
       },
+      {
+        copy_id: copyCId,
+        variation_id: '99999999-9999-4999-8999-999999999999',
+        availability_state: 'available',
+        condition_token: 'VERY_GOOD',
+        condition_notes: null,
+        front_r2_key: 'variation/front-c.jpg',
+        back_r2_key: 'variation/back-c.jpg',
+        capture_source_key: 'camera',
+        capture_pair_id: 'pair-c',
+        capture_front_source_ref: 'front-c',
+        capture_back_source_ref: 'back-c',
+        capture_started_at: now,
+        captured_at: now,
+        created_at: now,
+        updated_at: now,
+      },
     ],
   } as unknown as VariationListingAggregateSnapshot;
   const confirmed = structuredClone(current);
@@ -172,6 +209,10 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
     copyId: copyBId,
     frontEpsUrl: 'https://i.ebayimg.com/images/g/front-b/s-l1600.jpg',
     backEpsUrl: 'https://i.ebayimg.com/images/g/back-b/s-l1600.jpg',
+  }, {
+    copyId: copyCId,
+    frontEpsUrl: 'https://i.ebayimg.com/images/g/front-c/s-l1600.jpg',
+    backEpsUrl: 'https://i.ebayimg.com/images/g/back-c/s-l1600.jpg',
   }];
   const bundle = buildVariationListingHistoricalInventoryPayloadBundle({ aggregate: confirmed, representativeImages });
   for (const child of bundle.children) {
@@ -191,10 +232,11 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
         representativeImages,
         remote: {
           listingId: 'listing-1',
-          offerIdsBySku: { [sku]: 'offer-1', [skuB]: 'offer-2' },
+          offerIdsBySku: { [sku]: 'offer-1', [skuB]: 'offer-2', [skuC]: 'offer-3' },
           quantitiesBySku: {
             [sku]: { inventoryItemQuantity: remoteQuantity, offerQuantity: remoteQuantity, sellableQuantity: remoteQuantity },
             [skuB]: { inventoryItemQuantity: remoteQuantity, offerQuantity: remoteQuantity, sellableQuantity: remoteQuantity },
+            [skuC]: { inventoryItemQuantity: remoteQuantity, offerQuantity: remoteQuantity, sellableQuantity: remoteQuantity },
           },
         },
         revisionId: '55555555-5555-4555-8555-555555555555',
@@ -227,14 +269,14 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
     created_at: now,
   } as unknown as VariationListingPublishingCheckpointRow;
   const remote = {
-    getInventoryItemGroup: async () => ({ state: 'present' as const, value: { payload: bundle.group as never, variantSKUs: [sku, skuB] } }),
+    getInventoryItemGroup: async () => ({ state: 'present' as const, value: { payload: bundle.group as never, variantSKUs: [sku, skuB, skuC] } }),
     getInventoryItem: async (requestedSku: string) => {
       const child = bundle.children.find((entry) => entry.sku === requestedSku)!;
       return { state: 'present' as const, value: { sku: requestedSku, groupKeys: [bundle.groupKey], payload: child.inventoryItem } };
     },
     getOffers: async (requestedSku: string) => {
       const child = bundle.children.find((entry) => entry.sku === requestedSku)!;
-      return { state: 'present' as const, value: [{ sku: requestedSku, marketplaceId: 'EBAY_US', offerId: requestedSku === sku ? 'offer-1' : 'offer-2', listingId: 'listing-1', status: 'PUBLISHED' as const, lifecycleClass: 'active' as const, payload: child.offer }] };
+      return { state: 'present' as const, value: [{ sku: requestedSku, marketplaceId: 'EBAY_US', offerId: requestedSku === sku ? 'offer-1' : requestedSku === skuB ? 'offer-2' : 'offer-3', listingId: 'listing-1', status: 'PUBLISHED' as const, lifecycleClass: 'active' as const, payload: child.offer }] };
     },
   };
   return {
@@ -306,6 +348,42 @@ describe('YP9.6b2 quantity API', () => {
     )).rejects.toThrow('quantity');
   });
 
+  it.each([
+    ['both sources zero', 0, 0, 0, true],
+    ['Item zero but Offer stocked', 0, 1, 0, false],
+    ['Offer zero but Item stocked', 1, 0, 0, false],
+    ['both sources stocked', 1, 1, 0, false],
+    ['pending positive adjustment', 0, 0, 1, false],
+    ['staged removal', 0, 0, 0, false],
+  ] as const)('exposes removal eligibility only for %s', async (_label, itemQty, offerQty, counter, expected) => {
+    const harness = quantityStatusHarness(counter, 0);
+    const aggregate = await harness.data.loadAggregate(groupId);
+    const confirmed = (await harness.data.listRevisionsByGroupId(groupId))[0]!.source;
+    aggregate.group.desired_revision = counter === 0 ? 3 : 4;
+    if (_label === 'staged removal') aggregate.variations[0]!.pending_removal_at = '2026-10-22T00:00:00.000Z';
+    // Exercise both actual remote payload quantities while keeping the
+    // lower sellable quantity at zero in EVERY row.
+    const remote = (await harness.remoteFactory()).remote;
+    const originalItem = remote.getInventoryItem;
+    const originalOffers = remote.getOffers;
+    remote.getInventoryItem = async (sku: string) => {
+      const result = await originalItem(sku);
+      if (sku === 'BSKBL-Test-000001' && result.state === 'present') {
+        (result.value.payload.availability.shipToLocationAvailability as {quantity: number}).quantity = itemQty;
+      }
+      return result;
+    };
+    remote.getOffers = async (sku: string) => {
+      const result = await originalOffers(sku);
+      if (sku === 'BSKBL-Test-000001' && result.state === 'present') result.value[0]!.payload.availableQuantity = offerQty;
+      return result;
+    };
+    harness.remoteFactory = async () => ({remote, mutations: {} as never});
+    const status = await readVariationListingQuantityStatus(harness, groupId);
+    expect(status.variations.find((entry) => entry.variationId === variationId)?.soldOutRemovalEligible).toBe(expected);
+    expect(confirmed.captured_desired_revision).toBe(3);
+  });
+
   it('retains a negative projection for recovery with a later +1', async () => {
     const status = await readVariationListingQuantityStatus(quantityStatusHarness(-1, 0), groupId);
     expect(status.variations[0]?.afterPublish).toBe(-1);
@@ -340,6 +418,7 @@ describe('YP9.6b2 quantity API', () => {
         ebayQuantity: 1,
         pendingAdjustment: 1,
         afterPublish: 2,
+        soldOutRemovalEligible: false,
       }],
     }));
     const app = express();
@@ -360,6 +439,7 @@ describe('YP9.6b2 quantity API', () => {
         ebayQuantity: 1,
         pendingAdjustment: 1,
         afterPublish: 2,
+        soldOutRemovalEligible: false,
       }],
     });
   });
