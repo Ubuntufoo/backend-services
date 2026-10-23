@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { loadR2Env } from '@ebay-inventory/env';
 
 export interface R2ImageStorageConfig {
@@ -25,6 +25,19 @@ export interface UploadImageResult {
   publicUrl: string;
 }
 
+export type R2ObjectMetadataStatus = 'present' | 'absent' | 'inaccessible' | 'unknown';
+
+/** Safe, read-only metadata returned by an R2 HEAD request. No object body is read. */
+export interface R2ObjectMetadataInspection {
+  objectKey: string;
+  status: R2ObjectMetadataStatus;
+  contentLength?: number;
+  contentType?: string;
+  etag?: string;
+  lastModified?: string;
+  reason?: string;
+}
+
 interface UploadImageOptions {
   client?: Pick<S3Client, 'send'>;
   config?: R2ImageStorageConfig;
@@ -33,6 +46,12 @@ interface UploadImageOptions {
 }
 
 interface DeleteR2ObjectsOptions {
+  client?: Pick<S3Client, 'send'>;
+  config?: R2ImageStorageConfig;
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface InspectR2ObjectMetadataOptions {
   client?: Pick<S3Client, 'send'>;
   config?: R2ImageStorageConfig;
   env?: NodeJS.ProcessEnv;
@@ -165,6 +184,78 @@ export async function uploadImage(
     objectKey,
     publicUrl: buildPublicImageUrl(config.publicBaseUrl, objectKey),
   };
+}
+
+function getR2ErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const value = error as {
+    code?: unknown;
+    name?: unknown;
+    statusCode?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  if (typeof value.statusCode === 'number') return String(value.statusCode);
+  if (typeof value.$metadata?.httpStatusCode === 'number') {
+    return String(value.$metadata.httpStatusCode);
+  }
+  if (typeof value.code === 'string') return value.code;
+  if (typeof value.name === 'string') return value.name;
+  return undefined;
+}
+
+function classifyR2HeadFailure(error: unknown): Pick<R2ObjectMetadataInspection, 'status' | 'reason'> {
+  const code = getR2ErrorCode(error);
+  if (code === '404' || code === 'NotFound' || code === 'NoSuchKey') {
+    return { status: 'absent', reason: code };
+  }
+  if (code === '401' || code === '403' || code === 'AccessDenied') {
+    return { status: 'inaccessible', reason: code };
+  }
+  return { status: 'unknown', reason: code ?? 'head_failed' };
+}
+
+/**
+ * Read-only R2 metadata probe. It intentionally returns no object body and
+ * classifies failures without treating key shape or metadata as ownership.
+ */
+export async function inspectR2ObjectMetadata(
+  objectKey: string,
+  options: InspectR2ObjectMetadataOptions = {}
+): Promise<R2ObjectMetadataInspection> {
+  assertNonEmpty('objectKey', objectKey);
+
+  const config = options.config ?? loadR2ImageStorageConfig(options.env);
+  const client = options.client ?? createR2ImageStorageClientFromConfig(config);
+
+  try {
+    const result = (await client.send(
+      new HeadObjectCommand({
+        Bucket: config.bucketName,
+        Key: objectKey,
+      })
+    )) as {
+      ContentLength?: unknown;
+      ContentType?: unknown;
+      ETag?: unknown;
+      LastModified?: unknown;
+    };
+
+    return {
+      objectKey,
+      status: 'present',
+      ...(typeof result.ContentLength === 'number' && Number.isFinite(result.ContentLength)
+        ? { contentLength: result.ContentLength }
+        : {}),
+      ...(typeof result.ContentType === 'string' ? { contentType: result.ContentType } : {}),
+      ...(typeof result.ETag === 'string' ? { etag: result.ETag } : {}),
+      ...(result.LastModified instanceof Date ? { lastModified: result.LastModified.toISOString() } : {}),
+    };
+  } catch (error) {
+    return {
+      objectKey,
+      ...classifyR2HeadFailure(error),
+    };
+  }
 }
 
 export async function deleteR2Objects(
