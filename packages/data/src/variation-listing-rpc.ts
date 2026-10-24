@@ -342,7 +342,9 @@ async function capturePermanentRemovalRevision(client: SupabaseDataClient, input
   return { revision };
 }
 async function confirmPermanentRemoval(client: SupabaseDataClient, input: ConfirmVariationListingPermanentRemovalInput): Promise<VariationListingGroupRow> {
-  const row = await rpcSingle<{ group_row: Json }>(client, 'confirm_variation_listing_permanent_removal_after_remote_retirement', { p_group_id: input.groupId, p_revision_id: input.revisionId, p_expected_previous_confirmed_revision: input.expectedPreviousConfirmedRevision, p_confirmed_revision: input.confirmedRevision, p_target_variation_id: input.targetVariationId, p_target_sku: input.targetSku }, 'Variation listing permanent-removal confirmation returned no row.');
+  // PostgreSQL truncates identifiers to 63 bytes; the migration's wrapper is
+  // therefore exposed by PostgREST under this truncated RPC name.
+  const row = await rpcSingle<{ group_row: Json }>(client, 'confirm_variation_listing_permanent_removal_after_remote_retire', { p_group_id: input.groupId, p_revision_id: input.revisionId, p_expected_previous_confirmed_revision: input.expectedPreviousConfirmedRevision, p_confirmed_revision: input.confirmedRevision, p_target_variation_id: input.targetVariationId, p_target_sku: input.targetSku }, 'Variation listing permanent-removal confirmation returned no row.');
   const group = parseGroup(row.group_row);
   if (group.group_id !== input.groupId || group.last_confirmed_revision !== input.confirmedRevision) throw new Error('Variation listing RPC response parity mismatch.');
   return group;
