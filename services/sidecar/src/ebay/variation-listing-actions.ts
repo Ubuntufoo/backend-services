@@ -64,6 +64,11 @@ import {
   hydrateVariationListingPermanentRemovalPlan,
   type VariationListingPermanentRemovalRemote,
 } from '@/ebay/variation-listing-permanent-removal.js';
+import {
+  executeRemovedSkuRemoteRetirement,
+  type RemovedSkuRetirementRemote,
+  type RemovedSkuRetirementStore,
+} from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
 
 export type VariationListingRemoteStateCertainty = 'known_unchanged' | 'known_changed' | 'unknown';
 export type VariationListingRetryStatus =
@@ -110,6 +115,8 @@ export class VariationListingActionError extends Error {
 }
 
 export interface VariationListingActionDataAccess {
+  /** Durable c2b Item/Offer retirement state; absent only in read-only test harnesses. */
+  remoteRetirementStore?: RemovedSkuRetirementStore;
   loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;
   listRevisionsByGroupId(groupId: string): Promise<Array<{ source: VariationListingRevisionRow }>>;
   listCheckpointsByRevisionId(revisionId: string): Promise<Array<{ source: VariationListingPublishingCheckpointRow }>>;
@@ -155,6 +162,15 @@ export interface VariationListingActionServiceOptions {
       publishOffer(offerId: string): Promise<{ listingId: string }>;
       updateOffer(offerId: string, payload: Json): Promise<void>;
       withdrawInventoryItemGroup(groupKey: string, marketplaceId: string): Promise<void>;
+      /** Exhaustive, all-marketplace Offer read for removed-SKU ownership proof. */
+      getAllOffersForSku?(sku: string): Promise<Array<{
+        offerId: string;
+        sku: string;
+        marketplaceId: string;
+        status: 'PUBLISHED' | 'UNPUBLISHED';
+        listingId: string | null;
+        availableQuantity: number;
+      }>>;
     };
     remote: VariationListingPublicationRemoteGateway;
     assertMerchantLocation?: (merchantLocationKey: string) => Promise<void>;
@@ -300,6 +316,105 @@ function readString(row: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export interface RemovedSkuExhaustiveOffer {
+  offerId: string;
+  sku: string;
+  marketplaceId: string;
+  status: 'PUBLISHED' | 'UNPUBLISHED';
+  listingId: string | null;
+  availableQuantity: number;
+}
+
+/**
+ * Normalize the raw all-marketplace Offer response used by c2b ownership
+ * proof. A 404 means the Item/Offer collection is already absent; every other
+ * read failure remains unknown and must block a destructive retry. The OAS
+ * omits `listing` for UNPUBLISHED offers, so that field is a valid null
+ * identity, while malformed present containers fail closed.
+ */
+export async function readRemovedSkuExhaustiveOffers(
+  read: () => Promise<unknown>,
+): Promise<RemovedSkuExhaustiveOffer[]> {
+  let response: unknown;
+  try {
+    response = await withExpectedApiNotFound(read);
+  } catch (error) {
+    if (statusCode(error) === 404) return [];
+    throw error;
+  }
+  if (response === null || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('eBay exhaustive Offer response must be an object.');
+  }
+  const root = response as Record<string, unknown>;
+  const next = root.next;
+  if (next !== undefined && next !== null && typeof next !== 'string') {
+    throw new Error('eBay exhaustive Offer response contains an invalid pagination cursor.');
+  }
+  if (typeof next === 'string' && next.trim() !== '') {
+    throw new Error('eBay exhaustive Offer response is not complete; more pages remain.');
+  }
+  const total = root.total;
+  if (total !== undefined && (!Number.isSafeInteger(total) || (total as number) < 0)) {
+    throw new Error('eBay exhaustive Offer response contains an invalid total.');
+  }
+  const size = root.size;
+  if (size !== undefined && (!Number.isSafeInteger(size) || (size as number) < 0)) {
+    throw new Error('eBay exhaustive Offer response contains an invalid size.');
+  }
+  const rawOffers = root.offers;
+  if (rawOffers === undefined || rawOffers === null) {
+    if (total !== 0 || size !== undefined && size !== 0) {
+      throw new Error('eBay exhaustive Offer response is missing its complete offers collection.');
+    }
+    return [];
+  }
+  if (!Array.isArray(rawOffers)) throw new Error('eBay exhaustive Offer response contains invalid offers.');
+  if (size !== undefined && size !== rawOffers.length) {
+    throw new Error('eBay exhaustive Offer response size does not match its offers collection.');
+  }
+  if (total !== undefined && total !== rawOffers.length) {
+    throw new Error('eBay exhaustive Offer response total does not match its offers collection.');
+  }
+  return rawOffers.map((offer) => {
+    const row = record(offer);
+    const hasListingContainer = row.listing !== undefined;
+    if (hasListingContainer &&
+      (row.listing === null || typeof row.listing !== 'object' || Array.isArray(row.listing))) {
+      throw new Error('eBay exhaustive Offer response contains a malformed listing container.');
+    }
+    const listing = !hasListingContainer
+      ? null
+      : row.listing as Record<string, unknown>;
+    const status = readString(row, 'status').toUpperCase();
+    if (status !== 'PUBLISHED' && status !== 'UNPUBLISHED') throw new Error('eBay offer status is unsupported.');
+    const listingId = listing ? readString(listing, 'listingId') : null;
+    if (hasListingContainer && !listingId) {
+      throw new Error('eBay exhaustive Offer response contains a listing container without a listingId.');
+    }
+    if (status === 'UNPUBLISHED' && hasListingContainer) {
+      throw new Error('eBay unpublished Offer response must omit the listing container.');
+    }
+    if (status === 'PUBLISHED' && !listingId) {
+      throw new Error('eBay published Offer response is missing its listingId.');
+    }
+    const offerId = readString(row, 'offerId');
+    const offerSku = readString(row, 'sku');
+    const marketplaceId = readString(row, 'marketplaceId');
+    const availableQuantity = row.availableQuantity;
+    if (!offerId || !offerSku || !marketplaceId || !Number.isSafeInteger(availableQuantity) || (availableQuantity as number) < 0) {
+      throw new Error('eBay exhaustive Offer response is missing a required identity or quantity.');
+    }
+    return {
+      offerId,
+      sku: offerSku,
+      marketplaceId,
+      status,
+      listingId,
+      availableQuantity: availableQuantity as number,
+    };
+  });
+}
+
 function normalizeGroup(raw: unknown, groupKey: string) {
   const row = record(raw);
   const rawGroupKey = row.inventoryItemGroupKey ?? row.groupKey;
@@ -326,7 +441,7 @@ function normalizeGroup(raw: unknown, groupKey: string) {
   };
 }
 
-function normalizeItem(raw: unknown, sku: string) {
+export function normalizeItem(raw: unknown, sku: string) {
   const row = record(raw);
   const rawSku = row.sku;
   if (rawSku !== undefined && (typeof rawSku !== 'string' || rawSku.trim() !== sku)) {
@@ -344,7 +459,21 @@ function normalizeItem(raw: unknown, sku: string) {
   const semantic = projectInventoryItemSemanticSnapshot(semanticSource);
   const aliases = ['groupIds', 'inventoryItemGroupKeys']
     .filter((key) => key in row)
-    .map((key) => Array.isArray(row[key]) ? (row[key] as unknown[]).map(String).map((value) => value.trim()) : []);
+    .map((key) => {
+      if (!Array.isArray(row[key])) {
+        throw new Error(`eBay inventory item ${sku} has a malformed ${key} alias.`);
+      }
+      const values = (row[key] as unknown[]).map((value) => {
+        if (typeof value !== 'string' || value.trim() === '') {
+          throw new Error(`eBay inventory item ${sku} has a malformed ${key} alias.`);
+        }
+        return value.trim();
+      });
+      if (new Set(values).size !== values.length) {
+        throw new Error(`eBay inventory item ${sku} has duplicate ${key} aliases.`);
+      }
+      return values;
+    });
   const groupKeys = aliases.length === 0 ? null : aliases[0]!;
   if (aliases.some((values) => JSON.stringify([...values].sort()) !== JSON.stringify([...(groupKeys ?? [])].sort()))) {
     throw new Error(`eBay inventory item ${sku} group aliases conflict.`);
@@ -463,10 +592,87 @@ async function createProductionRemote() {
         deleteOffer: async (offerId) => await api.inventory.deleteOffer(offerId, headers),
         deleteInventoryItemGroup: async (groupKey) => await api.inventory.deleteInventoryItemGroup(groupKey, headers),
         deleteInventoryItem: async (sku) => await api.inventory.deleteInventoryItem(sku, headers),
+        getAllOffersForSku: async (sku) => await readRemovedSkuExhaustiveOffers(
+          () => api.inventory.getAllOffersForSku(sku),
+        ),
       },
     };
   })();
   return await productionRemotePromise;
+}
+
+type RemovedSkuActionDependencies = Awaited<ReturnType<NonNullable<VariationListingActionServiceOptions['remoteFactory']>>>;
+
+function quantityFromInventoryPayload(payload: Json): number {
+  const availability = record(payload).availability;
+  const shipTo = record(availability).shipToLocationAvailability;
+  const quantity = record(shipTo).quantity;
+  if (!Number.isSafeInteger(quantity) || (quantity as number) < 0) throw new Error('eBay inventory item quantity is unavailable.');
+  return quantity as number;
+}
+
+function quantityFromOfferPayload(payload: Json): number {
+  const quantity = record(payload).availableQuantity;
+  if (!Number.isSafeInteger(quantity) || (quantity as number) < 0) throw new Error('eBay Offer quantity is unavailable.');
+  return quantity as number;
+}
+
+function inventoryPayloadWithoutQuantity(payload: Json): Json {
+  const root = record(payload);
+  const availability = record(root.availability);
+  const shipTo = record(availability.shipToLocationAvailability);
+  return { ...root, availability: { ...availability, shipToLocationAvailability: { ...shipTo, quantity: undefined } } } as Json;
+}
+
+function offerPayloadWithoutQuantity(payload: Json): Json {
+  return { ...record(payload), availableQuantity: undefined } as Json;
+}
+
+function groupPayloadWithoutMembership(payload: Json): Json {
+  return { ...record(payload), variantSKUs: undefined } as Json;
+}
+
+function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirementRemote {
+  const allOffers = deps.mutations.getAllOffersForSku;
+  if (!allOffers) throw new Error('Exhaustive all-marketplace Offer read is unavailable for removed-SKU retirement.');
+  return {
+    readItem: async (sku) => {
+      const read = await deps.remote.getInventoryItem(sku, { expectedNotFound: true });
+      if (read.state === 'proven_absent') return { state: 'absent' };
+      if (read.state !== 'present') throw new Error(`eBay Inventory Item read is unknown: ${read.reason}`);
+      return {
+        state: 'present',
+        sku: read.value.sku,
+        groupKeys: read.value.groupKeys,
+        quantity: quantityFromInventoryPayload(read.value.payload),
+      };
+    },
+    readAllOffers: async (sku) => ({
+      complete: true,
+      offers: (await allOffers(sku)).map((offer) => ({
+        offerId: offer.offerId,
+        sku: offer.sku,
+        marketplaceId: offer.marketplaceId,
+        status: offer.status,
+        listingId: offer.listingId,
+        availableQuantity: offer.availableQuantity,
+      })),
+    }),
+    verifySurvivors: async (plan) => {
+      const group = await deps.remote.getInventoryItemGroup(plan.groupKey, { expectedNotFound: true });
+      if (group.state !== 'present' || canonicalJson([...group.value.variantSKUs].sort()) !== canonicalJson([...plan.survivorSkus].sort()) || canonicalJson(groupPayloadWithoutMembership(group.value.payload)) !== canonicalJson(groupPayloadWithoutMembership(plan.expectedGroupPayload))) return false;
+      for (const sku of plan.survivorSkus) {
+        const item = await deps.remote.getInventoryItem(sku, { expectedNotFound: true });
+        if (item.state !== 'present' || canonicalJson(item.value.groupKeys) !== canonicalJson([plan.groupKey]) || canonicalJson(inventoryPayloadWithoutQuantity(item.value.payload)) !== canonicalJson(plan.inventoryItemPayloadsBySku[sku]) || quantityFromInventoryPayload(item.value.payload) !== plan.quantitiesBySku[sku]?.inventoryItemQuantity) return false;
+        const offers = await deps.remote.getOffers(sku, plan.marketplaceId, { expectedNotFound: true });
+        if (offers.state !== 'present' || offers.value.length !== 1) return false;
+        const offer = offers.value[0]!;
+        if (offer.offerId !== plan.offerIdsBySku[sku] || offer.status !== 'PUBLISHED' || offer.lifecycleClass !== 'active' || offer.listingId !== plan.listingId || quantityFromOfferPayload(offer.payload) !== plan.quantitiesBySku[sku]?.offerQuantity || canonicalJson(offerPayloadWithoutQuantity(offer.payload)) !== canonicalJson(plan.offerPayloadsBySku[sku])) return false;
+      }
+      return true;
+    },
+    deleteInventoryItem: async (sku) => await deps.mutations.deleteInventoryItem(sku),
+  };
 }
 
 function operationPlan(row: VariationListingRevisionRow) {
@@ -907,7 +1113,7 @@ export async function readVariationListingQuantityStatus(
   const durableRemoteIdentity = reconstructConfirmedRemoteIdentity(confirmedRevision, checkpoints);
   const dependencies = await (options.remoteFactory ?? createProductionRemote)();
   const observed = await reconcilePublishedQuantityBaseline(
-    dependencies.remote,
+    dependencies!.remote,
     confirmedBundle,
     durableRemoteIdentity
   );
@@ -1372,6 +1578,7 @@ export function createVariationListingActionService(options: VariationListingAct
     targetVariationId: string,
     existing: VariationListingRevisionRow | undefined,
     progress: (stage: string, status?: unknown) => void,
+    finalizeLocal = true,
   ) => {
     const deps = await resolveDependencies();
     const remote: VariationListingPermanentRemovalRemote = {
@@ -1402,12 +1609,70 @@ export function createVariationListingActionService(options: VariationListingAct
       });
     }
     progress(existing ? 'reconcile_existing_removal_revision' : 'execute_permanent_removal');
-    return await executeVariationListingPermanentRemoval({
+    const priorHistory = await checkpoints(plan.captureInput.revisionId);
+    const latestMembershipCheckpoint = [...priorHistory]
+      .filter((checkpoint) => checkpoint.operation_key === 'remove-group-membership')
+      .sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number)
+      .at(-1);
+    // Once c2 membership is terminal, replaying its exact remote read is
+    // unsafe after c2b has already deleted the target Item. c2b owns the
+    // crash/history reconciliation from this point forward.
+    const membershipResult = latestMembershipCheckpoint &&
+      ['confirmed_complete', 'confirmed_no_op'].includes(latestMembershipCheckpoint.state)
+      ? { revisionId: plan.captureInput.revisionId, membershipConfirmed: true as const }
+      : await executeVariationListingPermanentRemoval({
+        plan,
+        journal: journalFor(existing),
+        remote,
+        transaction,
+      });
+    const retirementStore = options.data.remoteRetirementStore;
+    if (!retirementStore) throw new Error('Durable removed-SKU remote-retirement store is unavailable.');
+    progress('retire_removed_sku_remote_item');
+    const retirementResult = await executeRemovedSkuRemoteRetirement({
       plan,
-      journal: journalFor(existing),
-      remote,
-      transaction,
+      store: retirementStore,
+      remote: removedSkuRemote(deps),
     });
+    const targetStillPresent = aggregate.variations.some((variation) =>
+      variation.variation_id === plan.targetVariationId || variation.sku === plan.targetSku
+    );
+    const localWatermarkCoversRevision =
+      aggregate.group.desired_revision >= plan.captureInput.capturedDesiredRevision &&
+      aggregate.group.last_confirmed_revision !== null &&
+      aggregate.group.last_confirmed_revision >= plan.captureInput.capturedDesiredRevision;
+    if (!targetStillPresent && localWatermarkCoversRevision) {
+      // A historical c2 row may already have finalized locally (including a
+      // latest c2 retry after a later desired-revision advance). The durable
+      // remote retirement is safe to complete against that frozen identity,
+      // but local finalization must never regress a newer watermark.
+      return {
+        ...membershipResult,
+        remoteRetirement: retirementResult,
+        historicalRemoteRetirement: true,
+        imageCleanup: { pending: true, confirmation: 'Remote Item/Offer retirement is confirmed; local c2 finalization was already durable; image cleanup remains a separate operation.' },
+      };
+    }
+    if (!finalizeLocal) {
+      throw validationError('retry', plan.captureInput.groupId, 'historical_permanent_removal_finalizer_required', 'Historical remote retirement cannot proceed while its frozen target remains locally present or its confirmed watermark is behind the c2 revision.', ['inspect_group_history']);
+    }
+    // c2b proves Item/Offer absence before the existing c2 finalizer removes
+    // local Variation/Copy rows. Keep image/R2 cleanup separate and explicit.
+    const confirmed = await transaction.confirmPermanentRemoval({
+      groupId: plan.captureInput.groupId,
+      revisionId: plan.captureInput.revisionId,
+      expectedPreviousConfirmedRevision: plan.captureInput.capturedDesiredRevision - 1,
+      confirmedRevision: plan.captureInput.capturedDesiredRevision,
+      targetVariationId: plan.targetVariationId,
+      targetSku: plan.targetSku,
+    });
+    return {
+      ...membershipResult,
+      confirmedRevision: plan.captureInput.capturedDesiredRevision,
+      group: confirmed,
+      remoteRetirement: retirementResult,
+      imageCleanup: { pending: true, confirmation: 'Remote Item/Offer retirement is confirmed; image cleanup remains a separate operation.' },
+    };
   };
 
   const publish = (groupId: string, expectedDesiredRevision: number) => run('publish', groupId, async (progress) => {
@@ -1525,17 +1790,55 @@ export function createVariationListingActionService(options: VariationListingAct
       // A remote removal can be complete while the local finalizer response is
       // lost. The terminal journal is then durable, but the staged marker and
       // confirmed watermark still require the idempotent finalization step.
-      const terminalRemoval = newestFirst(revisions).find((candidate) => revisionKind(candidate) === 'permanent_removal');
-      if (terminalRemoval &&
-        (aggregate.group.last_confirmed_revision ?? -1) < terminalRemoval.captured_desired_revision &&
-        aggregate.variations.some((variation) => variation.pending_removal_at != null)) {
+      // Only the latest frozen revision may drive retry recovery; an older
+      // terminal removal must not hijack an unrelated later publication.
+      const terminalRemoval = revisionKind(revision) === 'permanent_removal' ? revision : undefined;
+      if (terminalRemoval) {
         const terminalHistory = await checkpoints(terminalRemoval.revision_id);
         const latest = [...terminalHistory].sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number).at(-1);
         if (latest && ['confirmed_complete', 'confirmed_no_op'].includes(latest.state)) {
           assertPublicationMutationEnabled('retry', groupId);
-          const target = aggregate.variations.find((variation) => variation.pending_removal_at != null);
-          if (!target) throw validationError('retry', groupId, 'permanent_removal_target_missing', 'The staged permanent-removal target is unavailable for finalization recovery.', ['inspect_action_status']);
-          return await executePermanentRemoval(aggregate, target.variation_id, terminalRemoval, progress);
+          // Historical c2 rows may already have advanced the local watermark
+          // and removed the target Variation. Hydrate the frozen c2 identity
+          // instead of requiring a live pending marker; c2b prepare/reconcile
+          // remains the durable gate before the idempotent local finalizer.
+          const frozenTargetVariationId = hydrateVariationListingPermanentRemovalPlan(terminalRemoval).targetVariationId;
+          return await executePermanentRemoval(aggregate, frozenTargetVariationId, terminalRemoval, progress);
+        }
+      }
+      // A pre-c2b terminal removal may be followed by later revisions in
+      // historical databases that predate the pending-retirement guard. Keep
+      // the latest revision/status identity intact, but queue the newest older
+      // terminal c2 revision whose durable c2b row is absent or nonterminal.
+      const retirementStore = options.data.remoteRetirementStore;
+      if (retirementStore) {
+        const historicalCandidates = newestFirst(revisions)
+          .filter((candidate) => candidate.revision_id !== revision.revision_id && revisionKind(candidate) === 'permanent_removal');
+        for (const candidate of historicalCandidates) {
+          const candidatePlan = operationPlan(candidate);
+          const membershipOperation = candidatePlan.find((operation) => operation.operationKind === 'permanent_removal_group_membership');
+          if (!membershipOperation) continue;
+          const candidateHistory = await checkpoints(candidate.revision_id);
+          const latestMembership = [...candidateHistory]
+            .filter((checkpoint) => checkpoint.operation_key === membershipOperation.operationKey)
+            .sort((left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number)
+            .at(-1);
+          if (!latestMembership || !['confirmed_complete', 'confirmed_no_op'].includes(latestMembership.state)) continue;
+          const durable = await retirementStore.load(candidate.revision_id);
+          if (durable?.state === 'confirmed_complete') continue;
+          const frozen = hydrateVariationListingPermanentRemovalPlan(candidate);
+          const targetStillPresent = aggregate.variations.some((variation) =>
+            variation.variation_id === frozen.targetVariationId || variation.sku === frozen.targetSku
+          );
+          const localWatermarkCoversRevision =
+            aggregate.group.desired_revision >= frozen.captureInput.capturedDesiredRevision &&
+            aggregate.group.last_confirmed_revision !== null &&
+            aggregate.group.last_confirmed_revision >= frozen.captureInput.capturedDesiredRevision;
+          if (targetStillPresent || !localWatermarkCoversRevision) {
+            throw validationError('retry', groupId, 'historical_permanent_removal_finalizer_required', 'Historical remote retirement is blocked because its local target or confirmed watermark is not already finalized.', ['inspect_group_history']);
+          }
+          assertPublicationMutationEnabled('retry', groupId);
+          return await executePermanentRemoval(aggregate, frozen.targetVariationId, candidate, progress, false);
         }
       }
       throw validationError('retry', groupId, 'retry_not_required', 'The latest action revision has no unresolved operation.', ['refresh_group']);

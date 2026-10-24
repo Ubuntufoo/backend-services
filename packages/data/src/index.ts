@@ -288,8 +288,13 @@ export {
 } from './variation-listing-transactions.js';
 export {
   VariationListingTransactionConflictError,
+  createSupabaseRemovedSkuRemoteRetirementStore,
   createSupabaseVariationListingTransactionGateway,
   variationListingJsonSemanticallyEqual,
+  type RemovedSkuRemoteRetirementPrepareInput,
+  type RemovedSkuRemoteRetirementRecord,
+  type RemovedSkuRemoteRetirementState,
+  type RemovedSkuRemoteRetirementStore,
 } from './variation-listing-rpc.js';
 export {
   ListingWorkflowStateError,

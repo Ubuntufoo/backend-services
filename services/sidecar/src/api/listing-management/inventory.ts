@@ -361,7 +361,8 @@ export class InventoryApi {
   async getOffers(
     sku?: string,
     marketplaceId?: string,
-    limit?: number
+    limit?: number,
+    offset?: number
   ): Promise<GetOffersResponse> {
     const params = buildOptionalStringParams({ sku });
     const marketplaceIdParam = optionalStringParam(marketplaceId, 'marketplaceId');
@@ -375,10 +376,90 @@ export class InventoryApi {
       }
       params.limit = limit;
     }
+    if (offset !== undefined) {
+      if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
+        throw new Error('offset must be a non-negative integer when provided');
+      }
+      params.offset = offset;
+    }
 
     return await this.request('Failed to get offers', () =>
       this.client.get<GetOffersResponse>(`${this.basePath}/offer`, params)
     );
+  }
+
+  /**
+   * Read every offer for a SKU without marketplace filtering. The Inventory
+   * API is paginated and may expose more than one offer (for example an
+   * auction and fixed-price offer concurrently); callers that need complete
+   * ownership evidence must use this method instead of getOffers(sku,market).
+   */
+  async getAllOffersForSku(sku: string, limit = 25): Promise<GetOffersResponse> {
+    requireString(sku, 'sku');
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error('limit must be a positive integer');
+    }
+    const offers: NonNullable<GetOffersResponse['offers']> = [];
+    let offset = 0;
+    let expectedTotal: number | undefined;
+    const seenOffsets = new Set<number>();
+    for (let page = 0; page < 1000; page += 1) {
+      if (seenOffsets.has(offset)) throw new Error('eBay Offer pagination repeated an offset');
+      seenOffsets.add(offset);
+      let response: GetOffersResponse;
+      try {
+        response = await this.getOffers(sku, undefined, limit, offset);
+      } catch (error) {
+        if (page === 0) throw error;
+        // A later-page failure (including 404) is incomplete pagination, not
+        // proof that the entire SKU's Offer collection is absent. Mask the
+        // provider status so the c2b adapter cannot collapse it to [] and
+        // continue a destructive flow on partial evidence.
+        const paginationError = new Error('eBay Offer pagination became incomplete after the first page.') as Error & {
+          statusCode?: number;
+          cause?: unknown;
+        };
+        paginationError.statusCode = 502;
+        paginationError.cause = error;
+        throw paginationError;
+      }
+      const rawOffers = response.offers;
+      const nextValue = response.next;
+      if (nextValue !== undefined && nextValue !== null && typeof nextValue !== 'string') {
+        throw new Error('eBay Offer response contains invalid pagination cursor');
+      }
+      const next = typeof nextValue === 'string' && nextValue.trim() !== '';
+      let pageOffers: NonNullable<GetOffersResponse['offers']>;
+      if (rawOffers === undefined || rawOffers === null) {
+        if (response.total !== 0 || response.size !== undefined && response.size !== 0 || next) {
+          throw new Error('eBay Offer response is missing its complete offers collection');
+        }
+        pageOffers = [];
+      } else {
+        if (!Array.isArray(rawOffers)) throw new Error('eBay Offer response contains invalid offers');
+        pageOffers = rawOffers;
+      }
+      if (response.size !== undefined &&
+        (!Number.isSafeInteger(response.size) || response.size < 0 || response.size !== pageOffers.length)) {
+        throw new Error('eBay Offer response contains an invalid page size');
+      }
+      if (response.total !== undefined) {
+        if (!Number.isSafeInteger(response.total) || response.total < 0) throw new Error('eBay Offer response contains invalid total');
+        if (expectedTotal !== undefined && expectedTotal !== response.total) throw new Error('eBay Offer response changed total while paging');
+        expectedTotal = response.total;
+      }
+      offers.push(...pageOffers);
+      if (!next) {
+        if (expectedTotal !== undefined && offers.length !== expectedTotal) throw new Error('eBay Offer pagination ended before the advertised total');
+        return { ...response, offers, size: offers.length, total: expectedTotal ?? offers.length, next: undefined };
+      }
+      const step = response.size ?? pageOffers.length;
+      if (step < 1) throw new Error('eBay Offer response contains invalid page size');
+      // Inventory API's offset is a page index (0, 1, 2...), not an item
+      // count. Advance one page even when a short page is returned.
+      offset += 1;
+    }
+    throw new Error('eBay Offer pagination exceeded the safety bound');
   }
 
   /**

@@ -9,6 +9,7 @@ import {
   type VariationListingApiDataAccess,
 } from '@/http/variation-listing-router.js';
 import { VariationListingActionError } from '@/ebay/variation-listing-actions.js';
+import type { RemovedSkuRetirementRecord, RemovedSkuRetirementStore } from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
 
 const groupId = '11111111-1111-4111-8111-111111111111';
 const variationId = '22222222-2222-4222-8222-222222222222';
@@ -31,6 +32,7 @@ function aggregate(): VariationListingAggregateSnapshot {
 function access(): VariationListingApiDataAccess {
   const current = aggregate();
   return {
+    remoteRetirementStore: { load: vi.fn(async () => null) } as unknown as RemovedSkuRetirementStore,
     listGroups: vi.fn(async () => []),
     loadAggregate: vi.fn(async () => current),
     listRevisionsByGroupId: vi.fn(async () => []),
@@ -63,6 +65,56 @@ function access(): VariationListingApiDataAccess {
       source: {} as never,
     })),
     updateVariationSelectorValue: vi.fn(async () => ({ group: current.group, variation: current.variations[0]! })),
+  };
+}
+
+function permanentRemovalRevision(): VariationListingRevision {
+  return {
+    capturedDesiredRevision: 4,
+    groupId,
+    operationCount: 1,
+    operationPlan: [{
+      sequence_no: 1,
+      operation_key: 'permanent-removal',
+      operation_kind: 'permanent_removal_group_membership',
+      target_ref: 'VL-G-11111111111141118111111111111111',
+      intent_version: 1,
+      intent_digest: 'a'.repeat(64),
+      intent: {},
+    }],
+    revisionId: '88888888-8888-4888-8888-888888888888',
+    snapshotDigest: 'c'.repeat(64),
+    source: { captured_at: '2026-09-02T00:00:00Z', snapshot_version: 3 },
+  } as unknown as VariationListingRevision;
+}
+
+function permanentRemovalCheckpoint(state: string, observedRemoteState: string | null = 'present'): VariationListingPublishingCheckpoint {
+  return {
+    attemptNumber: 1,
+    checkpointId: '99999999-9999-4999-8999-999999999999',
+    checkpointNumber: 1,
+    evidence: state === 'started' ? {} : { exact: true },
+    observedRemoteState,
+    operationKey: 'permanent-removal',
+    revisionId: '88888888-8888-4888-8888-888888888888',
+    source: {},
+    state,
+  } as unknown as VariationListingPublishingCheckpoint;
+}
+
+function remoteRetirement(state: 'ready' | 'started' | 'unknown' | 'confirmed_complete'): RemovedSkuRetirementRecord {
+  return {
+    revisionId: '88888888-8888-4888-8888-888888888888',
+    groupId,
+    targetVariationId: variationId,
+    targetSku: 'BSKBL-Cards-000001',
+    targetOfferId: 'offer-target',
+    marketplaceId: 'EBAY_US',
+    listingId: 'listing-1',
+    c2ConfirmedRevision: 4,
+    c2TerminalCheckpointId: '99999999-9999-4999-8999-999999999999',
+    state,
+    evidence: {},
   };
 }
 
@@ -192,5 +244,112 @@ describe('YP6.2 action routes', () => {
     const response = await request(app(dataAccess, actions())).get(`/api/variation-listings/${groupId}`);
     expect(response.status).toBe(200);
     expect(response.body.journal.latestRevision.recovery).toMatchObject({ operationKey: 'first-op', retryStatus: 'reconciliation_required' });
+  });
+
+  it.each([
+    ['absent', null, 'safe_to_retry'],
+    ['ready', remoteRetirement('ready'), 'safe_to_retry'],
+    ['started', remoteRetirement('started'), 'reconciliation_required'],
+    ['unknown', remoteRetirement('unknown'), 'reconciliation_required'],
+  ] as const)('projects c2b %s state into journal recovery', async (_label, row, retryStatus) => {
+    const dataAccess = access();
+    vi.mocked(dataAccess.listRevisionsByGroupId).mockResolvedValue([permanentRemovalRevision()]);
+    vi.mocked(dataAccess.listCheckpointsByRevisionId).mockResolvedValue([permanentRemovalCheckpoint('confirmed_complete')]);
+    vi.mocked(dataAccess.remoteRetirementStore!.load).mockResolvedValue(row);
+    const response = await request(app(dataAccess, actions())).get(`/api/variation-listings/${groupId}`);
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.remoteRetirement.state).toBe(row?.state ?? 'absent');
+    expect(response.body.journal.latestRevision.recovery.retryStatus).toBe(retryStatus);
+  });
+
+  it('keeps local finalizer recovery actionable after c2b confirmation', async () => {
+    const dataAccess = access();
+    vi.mocked(dataAccess.listRevisionsByGroupId).mockResolvedValue([permanentRemovalRevision()]);
+    vi.mocked(dataAccess.listCheckpointsByRevisionId).mockResolvedValue([permanentRemovalCheckpoint('confirmed_complete')]);
+    vi.mocked(dataAccess.remoteRetirementStore!.load).mockResolvedValue(remoteRetirement('confirmed_complete'));
+    const response = await request(app(dataAccess, actions())).get(`/api/variation-listings/${groupId}`);
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      operationKey: 'removed-sku-remote-retirement',
+      retryStatus: 'safe_to_retry',
+      requiresReconciliation: false,
+    });
+
+    const finalizedAccess = access();
+    const finalized = aggregate();
+    finalized.group.last_confirmed_revision = 4;
+    vi.mocked(finalizedAccess.loadAggregate).mockResolvedValue(finalized);
+    vi.mocked(finalizedAccess.listRevisionsByGroupId).mockResolvedValue([permanentRemovalRevision()]);
+    vi.mocked(finalizedAccess.listCheckpointsByRevisionId).mockResolvedValue([permanentRemovalCheckpoint('confirmed_complete')]);
+    vi.mocked(finalizedAccess.remoteRetirementStore!.load).mockResolvedValue(remoteRetirement('confirmed_complete'));
+    const done = await request(app(finalizedAccess, actions())).get(`/api/variation-listings/${groupId}`);
+    expect(done.body.journal.latestRevision.recovery.retryStatus).toBe('not_applicable');
+  });
+
+  it('surfaces a separate historical c2b gap without replacing latest revision identity', async () => {
+    const dataAccess = access();
+    const latest = permanentRemovalRevision();
+    const historical = {
+      ...latest,
+      revisionId: '77777777-7777-4777-8777-777777777777',
+      capturedDesiredRevision: 3,
+      source: { ...latest.source, captured_at: '2026-09-01T00:00:00Z' },
+    } as VariationListingRevision;
+    const latestCheckpoint = permanentRemovalCheckpoint('confirmed_complete');
+    const historicalCheckpoint = {
+      ...latestCheckpoint,
+      revisionId: historical.revisionId,
+      checkpointId: '66666666-6666-4666-8666-666666666666',
+    } as VariationListingPublishingCheckpoint;
+    vi.mocked(dataAccess.listRevisionsByGroupId).mockResolvedValue([latest, historical]);
+    vi.mocked(dataAccess.listCheckpointsByRevisionId).mockImplementation(async (revisionId) =>
+      revisionId === historical.revisionId ? [historicalCheckpoint] : [latestCheckpoint]
+    );
+    vi.mocked(dataAccess.remoteRetirementStore!.load).mockImplementation(async (revisionId) =>
+      revisionId === latest.revisionId ? remoteRetirement('ready') : null
+    );
+
+    const response = await request(app(dataAccess, actions())).get(`/api/variation-listings/${groupId}`);
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.revisionId).toBe(latest.revisionId);
+    expect(response.body.journal.pendingHistoricalRemoteRetirements).toEqual([{
+      revisionId: historical.revisionId,
+      capturedDesiredRevision: historical.capturedDesiredRevision,
+      state: 'absent',
+      targetSku: null,
+      targetOfferId: null,
+      retryStatus: 'safe_to_retry',
+    }]);
+  });
+
+  it('surfaces the newest c2 gap when a later non-removal revision is latest', async () => {
+    const dataAccess = access();
+    const historical = permanentRemovalRevision();
+    const laterRevision = {
+      ...historical,
+      revisionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      capturedDesiredRevision: 5,
+      operationPlan: [{ ...historical.operationPlan[0]!, operation_key: 'later-op', operation_kind: 'child_inventory_item_write' }],
+    } as VariationListingRevision;
+    const historicalCheckpoint = permanentRemovalCheckpoint('confirmed_complete');
+    const laterCheckpoint = {
+      ...historicalCheckpoint,
+      revisionId: laterRevision.revisionId,
+      operationKey: 'later-op',
+      checkpointId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    } as VariationListingPublishingCheckpoint;
+    vi.mocked(dataAccess.listRevisionsByGroupId).mockResolvedValue([laterRevision, historical]);
+    vi.mocked(dataAccess.listCheckpointsByRevisionId).mockImplementation(async (revisionId) =>
+      revisionId === historical.revisionId ? [historicalCheckpoint] : [laterCheckpoint]
+    );
+    vi.mocked(dataAccess.remoteRetirementStore!.load).mockResolvedValue(null);
+
+    const response = await request(app(dataAccess, actions())).get(`/api/variation-listings/${groupId}`);
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision.revisionId).toBe(laterRevision.revisionId);
+    expect(response.body.journal.pendingHistoricalRemoteRetirements[0]).toMatchObject({
+      revisionId: historical.revisionId,
+      state: 'absent',
+      retryStatus: 'safe_to_retry',
+    });
   });
 });

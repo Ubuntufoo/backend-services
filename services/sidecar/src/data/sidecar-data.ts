@@ -52,6 +52,7 @@ import {
   updateListing,
   updateListingWorkflowState,
   createSupabaseVariationListingTransactionGateway,
+  createSupabaseRemovedSkuRemoteRetirementStore,
   listVariationListingGroups,
   listVariationListingRevisionsByGroupId,
   listVariationListingPublishingCheckpointsByRevisionId,
@@ -117,6 +118,7 @@ import {
   type VariationListingVariationRow,
   type VariationListingCopyRow,
 } from '@ebay-inventory/data';
+import type { RemovedSkuRetirementStore } from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
 
 export interface SidecarDataAccess {
   aiModelRoutes: {
@@ -196,6 +198,7 @@ export interface SidecarDataAccess {
     ): Promise<ListingPriceResearchRow>;
   };
   variationListings: {
+    remoteRetirementStore: RemovedSkuRetirementStore;
     listGroups(): Promise<VariationListingGroup[]>;
     loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;
     listRevisionsByGroupId(groupId: string): Promise<VariationListingRevision[]>;
@@ -232,6 +235,7 @@ let cachedSidecarDataAccess: SidecarDataAccess | undefined;
 export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): SidecarDataAccess {
   const client = createSupabaseServiceClient(env);
   const variationListingTransactions = createSupabaseVariationListingTransactionGateway(client);
+  const removedSkuRemoteRetirementStore = createSupabaseRemovedSkuRemoteRetirementStore(client);
   const getVariationListingCaptureSourceKey = () =>
     requireVariationListingCaptureSourceKey(env);
 
@@ -302,6 +306,7 @@ export function createSidecarDataAccess(env: NodeJS.ProcessEnv = process.env): S
       update: async (jobId, changes) => await updateJob(client, jobId, changes),
     },
     variationListings: {
+      remoteRetirementStore: removedSkuRemoteRetirementStore,
       listGroups: async () => await listVariationListingGroups(client),
       loadAggregate: async (groupId) => await variationListingTransactions.loadAggregate(groupId),
       listRevisionsByGroupId: async (groupId) => await listVariationListingRevisionsByGroupId(client, groupId),

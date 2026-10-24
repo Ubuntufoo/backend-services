@@ -2,13 +2,15 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
 
-import { assertVariationListingMerchantLocation, createVariationListingActionService, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
+import { assertVariationListingMerchantLocation, createVariationListingActionService, normalizeItem, readRemovedSkuExhaustiveOffers, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
 import { subscribeVariationListingActionEvents } from '@/ebay/variation-listing-action-events.js';
+import type { RemovedSkuRetirementStore } from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
 import {
   buildVariationListingHistoricalInventoryPayloadBundle,
   buildVariationListingInventoryPayloadBundle,
 } from '@/ebay/variation-listing-payloads.js';
 import { VariationListingTransactionConflictError } from '@ebay-inventory/data';
+import { InventoryApi } from '@/api/listing-management/inventory.js';
 
 const groupId = '11111111-1111-4111-8111-111111111111';
 const variationId = '22222222-2222-4222-8222-222222222222';
@@ -17,6 +19,8 @@ const revisionId = '44444444-4444-4444-8444-444444444444';
 const variationBId = '66666666-6666-4666-8666-666666666666';
 const copyBId = '77777777-7777-4777-8777-777777777777';
 const withdrawalRevisionId = '88888888-8888-4888-8888-888888888888';
+const variationCId = '99999999-9999-4999-8999-999999999999';
+const copyCId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 const intentDigest = (intent: unknown) => createHash('sha256').update(JSON.stringify(intent)).digest('hex');
 
@@ -137,9 +141,10 @@ function checkpoint(state: VariationListingPublishingCheckpointRow['state'], obs
   };
 }
 
-function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?: VariationListingRevisionRow[]; checkpoints?: VariationListingPublishingCheckpointRow[] } = {}) {
+function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?: VariationListingRevisionRow[]; checkpoints?: VariationListingPublishingCheckpointRow[]; remoteRetirementStore?: RemovedSkuRetirementStore } = {}) {
   return {
     value: {
+      remoteRetirementStore: input.remoteRetirementStore,
       loadAggregate: vi.fn().mockResolvedValue(input.aggregate ?? aggregate()),
       listRevisionsByGroupId: vi.fn().mockResolvedValue((input.revisions ?? []).map((source) => ({ source }))),
       listCheckpointsByRevisionId: vi.fn().mockResolvedValue((input.checkpoints ?? []).map((source) => ({ source }))),
@@ -148,6 +153,7 @@ function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?
       captureRevision: vi.fn(),
       appendJournalCheckpoint: vi.fn(),
       confirmRevision: vi.fn(),
+      confirmPermanentRemoval: vi.fn(),
       advanceCleanupLifecycle: vi.fn(),
       abandonUntouchedGroup: vi.fn(),
       returnToReview: vi.fn(),
@@ -268,6 +274,143 @@ function replaceOfferHistory(
 }
 
 const failingRemote = (error: unknown) => async () => { throw error; };
+
+function canonicalUtf8(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalUtf8).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalUtf8(child)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function historicalRemovalFixture() {
+  const historicalRevisionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const newerRevisionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const frozen = aggregate({ desired_revision: 3, last_confirmed_revision: 3, next_inventory_serial: 4 });
+  const target = frozen.variations[0]!;
+  const survivorA = { ...target, variation_id: variationBId, inventory_serial: 2, position: 1, sku: 'BSKBL-McGrady-000002', selector_value: 'Card B', representative_copy_id: copyBId, pending_removal_at: null };
+  const survivorB = { ...target, variation_id: variationCId, inventory_serial: 3, position: 2, sku: 'BSKBL-McGrady-000003', selector_value: 'Card C', representative_copy_id: copyCId, pending_removal_at: null };
+  frozen.variations = [{ ...target, pending_removal_at: '2026-10-22T00:00:00Z' }, survivorA, survivorB];
+  frozen.copies = [
+    frozen.copies[0]!,
+    { ...frozen.copies[0]!, copy_id: copyBId, variation_id: variationBId, front_r2_key: 'variation/front-b.jpg', back_r2_key: 'variation/back-b.jpg' },
+    { ...frozen.copies[0]!, copy_id: copyCId, variation_id: variationCId, front_r2_key: 'variation/front-c.jpg', back_r2_key: 'variation/back-c.jpg' },
+  ];
+  const survivorSkus = [survivorA.sku, survivorB.sku];
+  const offerIdsBySku = {
+    [target.sku]: 'offer-target',
+    [survivorA.sku]: 'offer-survivor-a',
+    [survivorB.sku]: 'offer-survivor-b',
+  };
+  const quantitiesBySku = {
+    [target.sku]: { inventoryItemQuantity: 0, offerQuantity: 0, sellableQuantity: 0 },
+    [survivorA.sku]: { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+    [survivorB.sku]: { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+  };
+  const itemPayloadsBySku = Object.fromEntries(Object.keys(offerIdsBySku).map((sku) => [sku, { availability: { shipToLocationAvailability: {} } }]));
+  const offerPayloadsBySku = Object.fromEntries(Object.keys(offerIdsBySku).map((sku) => [sku, {}]));
+  const expectedGroupPayload = { inventoryItemGroupKey: frozen.group.group_key, variantSKUs: [target.sku, ...survivorSkus] };
+  const replacementGroupPayload = { inventoryItemGroupKey: frozen.group.group_key, variantSKUs: survivorSkus };
+  const intent = { groupKey: frozen.group.group_key, targetSku: target.sku, survivorSkus };
+  const operation = {
+    sequence_no: 1,
+    operation_key: 'remove-group-membership',
+    operation_kind: 'permanent_removal_group_membership',
+    target_ref: frozen.group.group_key,
+    intent_version: 1,
+    intent_digest: createHash('sha256').update(canonicalUtf8(intent)).digest('hex'),
+    intent,
+  };
+  const snapshot = {
+    aggregate: frozen,
+    confirmed: {
+      aggregate: frozen,
+      representativeImages: [],
+      remote: {
+        listingId: 'listing-1',
+        offerIdsBySku: { [survivorA.sku]: offerIdsBySku[survivorA.sku], [survivorB.sku]: offerIdsBySku[survivorB.sku] },
+        quantitiesBySku: { [survivorA.sku]: quantitiesBySku[survivorA.sku], [survivorB.sku]: quantitiesBySku[survivorB.sku] },
+      },
+      revisionId: 'prior-confirmed-revision',
+    },
+    mediaResources: [],
+    representativeImages: [],
+    permanentRemoval: {
+      version: 1,
+      groupKey: frozen.group.group_key,
+      targetVariationId: target.variation_id,
+      targetSku: target.sku,
+      marketplaceId: frozen.group.marketplace_id,
+      survivorSkus,
+      listingId: 'listing-1',
+      offerIdsBySku,
+      quantitiesBySku,
+      inventoryItemPayloadsBySku: itemPayloadsBySku,
+      offerPayloadsBySku: offerPayloadsBySku,
+      expectedGroupPayload,
+      replacementGroupPayload,
+    },
+  };
+  const digest = createHash('sha256').update(canonicalUtf8(snapshot)).digest('hex');
+  const oldRevision: VariationListingRevisionRow = {
+    revision_id: historicalRevisionId,
+    group_id: groupId,
+    captured_desired_revision: 3,
+    snapshot_version: 3,
+    snapshot_digest: digest,
+    snapshot: snapshot as never,
+    operation_plan: [operation],
+    operation_count: 1,
+    captured_at: '2026-10-22T00:00:00Z',
+  };
+  const newerRevision: VariationListingRevisionRow = {
+    revision_id: newerRevisionId,
+    group_id: groupId,
+    captured_desired_revision: 4,
+    snapshot_version: 3,
+    snapshot_digest: 'd'.repeat(64),
+    snapshot: {} as never,
+    operation_plan: [{ ...operation, operation_key: 'newer-terminal', operation_kind: 'child_inventory_item_write', target_ref: target.sku, intent: {}, intent_digest: 'e'.repeat(64) }],
+    operation_count: 1,
+    captured_at: '2026-10-22T00:01:00Z',
+  };
+  const finalized = structuredClone(frozen);
+  finalized.group.desired_revision = 5;
+  finalized.group.last_confirmed_revision = 4;
+  finalized.variations = finalized.variations.filter((variation) => variation.variation_id !== target.variation_id);
+  finalized.copies = finalized.copies.filter((copy) => copy.variation_id !== target.variation_id);
+  const store = {
+    load: vi.fn(async () => null),
+    prepare: vi.fn(async () => ({ revisionId: historicalRevisionId, groupId, targetVariationId: target.variation_id, targetSku: target.sku, targetOfferId: 'offer-target', state: 'ready' as const })),
+    start: vi.fn(async () => ({ revisionId: historicalRevisionId, groupId, targetVariationId: target.variation_id, targetSku: target.sku, targetOfferId: 'offer-target', state: 'started' as const })),
+    markUnknown: vi.fn(),
+    markComplete: vi.fn(async (_revisionId: string, evidence: unknown) => ({ revisionId: historicalRevisionId, groupId, targetVariationId: target.variation_id, targetSku: target.sku, targetOfferId: 'offer-target', state: 'confirmed_complete' as const, evidence })),
+  } satisfies RemovedSkuRetirementStore;
+  const remoteFactory = vi.fn(async () => ({
+    remote: {
+      getInventoryItemGroup: vi.fn(async () => ({ state: 'present' as const, value: { variantSKUs: survivorSkus, payload: expectedGroupPayload } })),
+      getInventoryItem: vi.fn(async (sku: string) => sku === target.sku
+        ? { state: 'proven_absent' as const }
+        : { state: 'present' as const, value: { sku, groupKeys: [frozen.group.group_key], payload: { availability: { shipToLocationAvailability: { quantity: 1 } } } } }),
+      getOffers: vi.fn(async (sku: string) => ({ state: 'present' as const, value: [{ sku, marketplaceId: frozen.group.marketplace_id, offerId: offerIdsBySku[sku as keyof typeof offerIdsBySku], listingId: 'listing-1', status: 'PUBLISHED' as const, lifecycleClass: 'active' as const, payload: { availableQuantity: 1 } }] })),
+      getMedia: vi.fn(async () => ({ state: 'proven_absent' as const })),
+    },
+    mutations: {
+      createOrReplaceInventoryItemGroup: vi.fn(),
+      getAllOffersForSku: vi.fn(async () => []),
+      deleteInventoryItem: vi.fn(),
+    },
+  }));
+  const checkpoints = [
+    { revision_id: historicalRevisionId, operation_key: 'remove-group-membership', attempt_number: 1, checkpoint_number: 1, checkpoint_id: 'old-cp', state: 'confirmed_complete' as const, observed_remote_state: 'present' as const, evidence: {}, created_at: '2026-10-22T00:00:00Z' },
+    { revision_id: newerRevisionId, operation_key: 'newer-terminal', attempt_number: 1, checkpoint_number: 1, checkpoint_id: 'new-cp', state: 'confirmed_complete' as const, observed_remote_state: 'present' as const, evidence: {}, created_at: '2026-10-22T00:00:00Z' },
+  ];
+  return { historicalRevisionId, newerRevisionId, oldRevision, newerRevision, finalized, store, remoteFactory, checkpoints };
+}
 
 describe('YP6.2 variation listing actions', () => {
   it('rejects a missing or mismatched frozen merchant location before publication can start', async () => {
@@ -561,6 +704,25 @@ describe('YP6.2 variation listing actions', () => {
     expect(JSON.stringify(status)).not.toContain('stack');
   });
 
+  it('reads exhaustive Offers with page-index offsets and rejects incomplete terminal metadata', async () => {
+    const api = new InventoryApi({} as never);
+    const getOffers = vi.spyOn(api, 'getOffers');
+    getOffers
+      .mockResolvedValueOnce({ offers: [{ offerId: 'offer-a' }], size: 1, total: 2, next: 'page-1' } as never)
+      .mockResolvedValueOnce({ offers: [{ offerId: 'offer-b' }], size: 1, total: 2, next: null } as never);
+    await expect(api.getAllOffersForSku('sku')).resolves.toMatchObject({ size: 2, total: 2, offers: [{ offerId: 'offer-a' }, { offerId: 'offer-b' }] });
+    expect(getOffers).toHaveBeenNthCalledWith(1, 'sku', undefined, 25, 0);
+    expect(getOffers).toHaveBeenNthCalledWith(2, 'sku', undefined, 25, 1);
+
+    getOffers.mockResolvedValueOnce({ offers: [{ offerId: 'offer-a' }], size: 1, total: 2, next: null } as never);
+    await expect(api.getAllOffersForSku('sku')).rejects.toThrow('ended before the advertised total');
+
+    getOffers
+      .mockResolvedValueOnce({ offers: [{ offerId: 'offer-a' }], size: 1, total: 2, next: 'page-1' } as never)
+      .mockRejectedValueOnce(Object.assign(new Error('not found'), { statusCode: 404 }));
+    await expect(api.getAllOffersForSku('sku')).rejects.toMatchObject({ statusCode: 502 });
+  });
+
   it('distinguishes an unknown remote outcome and forbids blind retry messaging', async () => {
     const access = data({ revisions: [revision()], checkpoints: [checkpoint('unknown', 'unknown')] });
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: failingRemote(new Error('network timeout')) });
@@ -651,6 +813,38 @@ describe('YP6.2 variation listing actions', () => {
         retryStatus: 'retry_exhausted',
       },
     });
+  });
+
+  it('reconciles a historical terminal c2 gap without regressing the local watermark', async () => {
+    const fixture = historicalRemovalFixture();
+    const access = data({
+      aggregate: fixture.finalized,
+      revisions: [fixture.newerRevision, fixture.oldRevision],
+      checkpoints: fixture.checkpoints,
+      remoteRetirementStore: fixture.store,
+    });
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: fixture.remoteFactory,
+    });
+
+    const result = await service.retry(groupId);
+    expect(result).toMatchObject({
+      revisionId: fixture.historicalRevisionId,
+      membershipConfirmed: true,
+      historicalRemoteRetirement: true,
+      remoteRetirement: { state: 'confirmed_complete' },
+      imageCleanup: { pending: true },
+    });
+    expect(access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+    expect(fixture.store.prepare).toHaveBeenCalledWith({
+      revisionId: fixture.historicalRevisionId,
+      groupId,
+      targetVariationId: variationId,
+      targetSku: 'BSKBL-McGrady-000001',
+    });
+    expect(fixture.remoteFactory).toHaveBeenCalledTimes(1);
   });
 
   it('blocks destructive cleanup for ever-published groups; use Withdraw', async () => {
@@ -1173,5 +1367,59 @@ describe('YP6.2 variation listing actions', () => {
     harness.access.value.reserveActionRevision.mockRejectedValue(new VariationListingTransactionConflictError('VR001', 'CAS mismatch'));
     const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory });
     await expect(service.withdraw(groupId, 3)).rejects.toMatchObject({ status: { code: 'variation_listing_state_stale', category: 'state', remoteState: 'known_unchanged' } });
+  });
+
+  it('normalizes an unpublished exhaustive offer with an omitted listing identity', async () => {
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({
+      offers: [{ offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'UNPUBLISHED', availableQuantity: 0 }],
+    }))).resolves.toEqual([{
+      offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'UNPUBLISHED', listingId: null, availableQuantity: 0,
+    }]);
+  });
+
+  it('retains a nonblank listing identity for a published exhaustive offer', async () => {
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({
+      offers: [{ offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'PUBLISHED', availableQuantity: 1, listing: { listingId: 'listing-1' } }],
+    }))).resolves.toMatchObject([{ offerId: 'offer-1', listingId: 'listing-1', status: 'PUBLISHED' }]);
+  });
+
+  it('treats only exhaustive-offer 404 as proven absence', async () => {
+    await expect(readRemovedSkuExhaustiveOffers(async () => { throw { response: { status: 404 } }; })).resolves.toEqual([]);
+    await expect(readRemovedSkuExhaustiveOffers(async () => { throw { response: { status: 503 } }; })).rejects.toMatchObject({ response: { status: 503 } });
+  });
+
+  it('rejects a malformed present listing container in an exhaustive offer', async () => {
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({
+      offers: [{ offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'UNPUBLISHED', availableQuantity: 0, listing: 'foreign' }],
+    }))).rejects.toThrow('malformed listing container');
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({
+      offers: [{ offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'UNPUBLISHED', availableQuantity: 0, listing: null }],
+    }))).rejects.toThrow('malformed listing container');
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({
+      offers: [{ offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'UNPUBLISHED', availableQuantity: 0, listing: {} }],
+    }))).rejects.toThrow('listingId');
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({
+      offers: [{ offerId: 'offer-1', sku: 'SKU-1', marketplaceId: 'EBAY_US', status: 'UNPUBLISHED', availableQuantity: 0, listing: { listingId: 'listing-1' } }],
+    }))).rejects.toThrow('must omit the listing container');
+  });
+
+  it('fails closed on incomplete exhaustive-offer pagination or counts', async () => {
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({ total: 1 }))).rejects.toThrow('missing its complete offers collection');
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({ offers: [], total: 1 }))).rejects.toThrow('total does not match');
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({ offers: [], next: 'https://example.test/next' }))).rejects.toThrow('not complete');
+    await expect(readRemovedSkuExhaustiveOffers(async () => ({ offers: null, total: 0 }))).resolves.toEqual([]);
+  });
+
+  it('rejects malformed or duplicate Inventory Item group aliases', () => {
+    const item = {
+      sku: 'SKU-1',
+      availability: { shipToLocationAvailability: { quantity: 0 } },
+      condition: 'USED',
+      conditionDescriptors: [],
+      product: { aspects: {} },
+    };
+    expect(() => normalizeItem({ ...item, groupIds: 'group-1' }, 'SKU-1')).toThrow('malformed groupIds');
+    expect(() => normalizeItem({ ...item, groupIds: ['group-1', 'group-1'] }, 'SKU-1')).toThrow('duplicate groupIds');
+    expect(() => normalizeItem({ ...item, groupIds: ['group-1'], inventoryItemGroupKeys: ['group-2'] }, 'SKU-1')).toThrow('aliases conflict');
   });
 });

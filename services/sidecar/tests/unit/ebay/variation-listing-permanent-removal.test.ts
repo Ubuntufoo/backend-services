@@ -381,10 +381,10 @@ describe('YP9.6c2 permanent removal executor', () => {
     const plan = await planFixture(remote);
     const harness = transactionHarness();
     const result = await executeVariationListingPermanentRemoval({ plan, remote, ...harness });
-    expect(result.confirmedRevision).toBe(4);
+    expect(result.membershipConfirmed).toBe(true);
     expect(getGroupSkus()).toEqual(survivorSkus);
     expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
-    expect(harness.transaction.confirmPermanentRemoval).toHaveBeenCalledTimes(1);
+    expect(harness.transaction.confirmPermanentRemoval).not.toHaveBeenCalled();
     expect(harness.checkpoints.at(-1).state).toBe('confirmed_complete');
   });
 
@@ -862,15 +862,15 @@ describe('YP9.6c2 permanent removal executor', () => {
     expect(harness.checkpoints.at(-1).state).toBe('unknown');
   });
 
-  it('replays finalization without replacing membership after a lost finalizer response', async () => {
+  it('reconciles terminal membership without invoking the c2 local finalizer', async () => {
     const { remote } = remoteHarness();
     const plan = await planFixture(remote);
     const harness = transactionHarness({ failConfirmOnce: true });
-    await expect(executeVariationListingPermanentRemoval({ plan, remote, ...harness })).rejects.toThrow('finalizer response lost');
+    await executeVariationListingPermanentRemoval({ plan, remote, ...harness });
     expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
 
     await executeVariationListingPermanentRemoval({ plan, remote, ...harness });
     expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
-    expect(harness.transaction.confirmPermanentRemoval).toHaveBeenCalledTimes(2);
+    expect(harness.transaction.confirmPermanentRemoval).not.toHaveBeenCalled();
   });
 });

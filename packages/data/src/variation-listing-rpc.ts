@@ -11,6 +11,39 @@ import { isVariationListingCopyConditionToken } from './variation-listing-condit
 const MAX_VARIATION_GROUP_TITLE_LENGTH = 80;
 const MAX_VARIATION_CARD_SELECTOR_LENGTH = 65;
 
+export type RemovedSkuRemoteRetirementState = 'ready' | 'started' | 'unknown' | 'confirmed_complete';
+export interface RemovedSkuRemoteRetirementRecord {
+  revisionId: string;
+  groupId: string;
+  targetVariationId: string;
+  targetSku: string;
+  targetOfferId: string;
+  marketplaceId: string;
+  listingId: string;
+  c2ConfirmedRevision: number;
+  c2TerminalCheckpointId: string;
+  state: RemovedSkuRemoteRetirementState;
+  observedRemoteState: 'present' | 'proven_absent' | 'unknown' | null;
+  evidence: Json;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+export interface RemovedSkuRemoteRetirementPrepareInput {
+  revisionId: string;
+  groupId: string;
+  targetVariationId: string;
+  targetSku: string;
+}
+export interface RemovedSkuRemoteRetirementStore {
+  load(revisionId: string): Promise<RemovedSkuRemoteRetirementRecord | null>;
+  prepare(input: RemovedSkuRemoteRetirementPrepareInput): Promise<RemovedSkuRemoteRetirementRecord>;
+  start(revisionId: string): Promise<RemovedSkuRemoteRetirementRecord>;
+  markUnknown(revisionId: string, evidence: Json): Promise<RemovedSkuRemoteRetirementRecord>;
+  markComplete(revisionId: string, evidence: Json): Promise<RemovedSkuRemoteRetirementRecord>;
+}
+
 export class VariationListingTransactionConflictError extends Error { readonly code: string; constructor(code: string, message: string) { super(message); this.name = 'VariationListingTransactionConflictError'; this.code = code; } }
 type RecordJson = Record<string, Json>;
 const record = (v: unknown, label: string): RecordJson => { if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`Variation listing RPC ${label} must be a JSON object.`); return v as RecordJson; };
@@ -49,6 +82,40 @@ const parseCheckpoint = (v: Json): VariationListingPublishingCheckpointRow => {
   const evidence = validateVariationListingCheckpointEvidence(r.evidence);
   if ((state === 'unknown' || state === 'retry_authorized' || state === 'retry_exhausted' || state === 'confirmed_complete' || state === 'confirmed_no_op') && Object.keys(evidence).length === 0) throw new Error('Variation listing RPC resolved checkpoint requires non-empty evidence.');
   return { checkpoint_id: str(r,'checkpoint_id'), revision_id: str(r,'revision_id'), operation_key: str(r,'operation_key'), attempt_number: positive(r,'attempt_number'), checkpoint_number: positive(r,'checkpoint_number'), state, observed_remote_state: observed, evidence, created_at: str(r,'created_at') } as VariationListingPublishingCheckpointRow;
+};
+const parseRemovedSkuRemoteRetirement = (v: Json): RemovedSkuRemoteRetirementRecord => {
+  const r = record(v, 'removed-SKU remote retirement');
+  const state = str(r, 'state');
+  if (!['ready', 'started', 'unknown', 'confirmed_complete'].includes(state)) throw new Error('Removed-SKU remote retirement state is invalid.');
+  const observed = nullableStr(r, 'observed_remote_state');
+  if (observed !== null && !['present', 'proven_absent', 'unknown'].includes(observed)) throw new Error('Removed-SKU remote retirement observed_remote_state is invalid.');
+  const evidence = jsonObj(r, 'evidence');
+  const createdAt = str(r, 'created_at');
+  const startedAt = nullableTimestamp(r, 'started_at');
+  const completedAt = nullableTimestamp(r, 'completed_at');
+  const updatedAt = str(r, 'updated_at');
+  if (state === 'ready' && (startedAt !== null || completedAt !== null || observed !== null)) throw new Error('Removed-SKU remote retirement ready row has lifecycle evidence.');
+  if (state === 'started' && (startedAt === null || completedAt !== null || observed !== null)) throw new Error('Removed-SKU remote retirement started row has invalid lifecycle evidence.');
+  if (state === 'unknown' && (startedAt === null || completedAt !== null || observed !== 'unknown')) throw new Error('Removed-SKU remote retirement unknown row has invalid lifecycle evidence.');
+  if (state === 'confirmed_complete' && (startedAt === null || completedAt === null || observed !== 'proven_absent')) throw new Error('Removed-SKU remote retirement complete row has invalid lifecycle evidence.');
+  return {
+    revisionId: str(r, 'revision_id'),
+    groupId: str(r, 'group_id'),
+    targetVariationId: str(r, 'target_variation_id'),
+    targetSku: str(r, 'target_sku'),
+    targetOfferId: str(r, 'target_offer_id'),
+    marketplaceId: str(r, 'marketplace_id'),
+    listingId: str(r, 'listing_id'),
+    c2ConfirmedRevision: positive(r, 'c2_confirmed_revision'),
+    c2TerminalCheckpointId: str(r, 'c2_terminal_checkpoint_id'),
+    state: state as RemovedSkuRemoteRetirementState,
+    observedRemoteState: observed as RemovedSkuRemoteRetirementRecord['observedRemoteState'],
+    evidence,
+    createdAt,
+    startedAt,
+    completedAt,
+    updatedAt,
+  };
 };
 const parseGroup = (v: Json): VariationListingGroupRow => {
   const r = record(v,'group');
@@ -95,6 +162,10 @@ const parseCopy = (v: Json): VariationListingCopyRow => {
   const r = record(v,'copy'); str(r,'copy_id'); str(r,'variation_id'); str(r,'condition_token'); str(r,'front_r2_key'); str(r,'back_r2_key'); str(r,'capture_source_key'); str(r,'capture_pair_id'); str(r,'capture_front_source_ref'); str(r,'capture_back_source_ref'); str(r,'capture_started_at'); str(r,'captured_at'); str(r,'created_at'); str(r,'updated_at'); if (!['available','unavailable'].includes(str(r,'availability_state'))) throw new Error('Variation listing RPC availability_state is invalid.'); if (r.condition_notes !== null) str(r,'condition_notes'); return r as unknown as VariationListingCopyRow;
 };
 const rpcSingle = async <T>(client: SupabaseDataClient, fn: string, args: Record<string, unknown>, missing: string): Promise<T> => unwrap((await client.rpc(fn as never, args as never).single()) as SingleResult<T>, missing);
+const remoteRetirementRow = async (client: SupabaseDataClient, fn: string, args: Record<string, unknown>): Promise<RemovedSkuRemoteRetirementRecord> => {
+  const row = await rpcSingle<{ retirement: Json }>(client, fn, args, `Variation listing ${fn} returned no retirement row.`);
+  return parseRemovedSkuRemoteRetirement(row.retirement);
+};
 const canonicalJson = (value: Json): Json => {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (value !== null && typeof value === 'object') {
@@ -271,7 +342,7 @@ async function capturePermanentRemovalRevision(client: SupabaseDataClient, input
   return { revision };
 }
 async function confirmPermanentRemoval(client: SupabaseDataClient, input: ConfirmVariationListingPermanentRemovalInput): Promise<VariationListingGroupRow> {
-  const row = await rpcSingle<{ group_row: Json }>(client, 'confirm_variation_listing_permanent_removal', { p_group_id: input.groupId, p_revision_id: input.revisionId, p_expected_previous_confirmed_revision: input.expectedPreviousConfirmedRevision, p_confirmed_revision: input.confirmedRevision, p_target_variation_id: input.targetVariationId, p_target_sku: input.targetSku }, 'Variation listing permanent-removal confirmation returned no row.');
+  const row = await rpcSingle<{ group_row: Json }>(client, 'confirm_variation_listing_permanent_removal_after_remote_retirement', { p_group_id: input.groupId, p_revision_id: input.revisionId, p_expected_previous_confirmed_revision: input.expectedPreviousConfirmedRevision, p_confirmed_revision: input.confirmedRevision, p_target_variation_id: input.targetVariationId, p_target_sku: input.targetSku }, 'Variation listing permanent-removal confirmation returned no row.');
   const group = parseGroup(row.group_row);
   if (group.group_id !== input.groupId || group.last_confirmed_revision !== input.confirmedRevision) throw new Error('Variation listing RPC response parity mismatch.');
   return group;
@@ -322,6 +393,55 @@ async function updateRepresentativeCopy(client: SupabaseDataClient, input: Updat
   if (group.group_id !== input.groupId || group.desired_revision !== input.expectedDesiredRevision + 1 || variation.group_id !== input.groupId || variation.variation_id !== input.variationId || variation.representative_copy_id !== input.copyId) throw new Error('Variation listing RPC response parity mismatch.');
   return { group, variation };
 }
+
+export function createSupabaseRemovedSkuRemoteRetirementStore(client: SupabaseDataClient): RemovedSkuRemoteRetirementStore {
+  return {
+    load: async revisionId => {
+      const row = await rpcSingle<{ retirement: Json | null }>(client, 'get_variation_listing_removed_sku_remote_retirement', { p_revision_id: revisionId }, 'Variation listing removed-SKU remote retirement status returned no row.');
+      if (row.retirement === null) return null;
+      const retirement = parseRemovedSkuRemoteRetirement(row.retirement);
+      if (retirement.revisionId !== revisionId) throw new Error('Removed-SKU remote retirement load response identity mismatch.');
+      return retirement;
+    },
+    prepare: async input => {
+      const row = await remoteRetirementRow(client, 'prepare_variation_listing_removed_sku_remote_retirement', {
+        p_revision_id: input.revisionId,
+        p_group_id: input.groupId,
+        p_target_variation_id: input.targetVariationId,
+        p_target_sku: input.targetSku,
+      });
+      if (row.revisionId !== input.revisionId || row.groupId !== input.groupId || row.targetVariationId !== input.targetVariationId || row.targetSku !== input.targetSku) {
+        throw new Error('Removed-SKU remote retirement prepare response identity mismatch.');
+      }
+      return row;
+    },
+    start: async revisionId => {
+      const row = await remoteRetirementRow(client, 'start_variation_listing_removed_sku_remote_retirement', { p_revision_id: revisionId });
+      if (row.revisionId !== revisionId) throw new Error('Removed-SKU remote retirement start response identity mismatch.');
+      return row;
+    },
+    markUnknown: async (revisionId, evidence) => {
+      const evidenceObject = record(evidence, 'markUnknown evidence');
+      const row = await remoteRetirementRow(client, 'mark_variation_listing_removed_sku_remote_retirement_unknown', { p_revision_id: revisionId, p_evidence: evidenceObject });
+      if (row.revisionId !== revisionId) throw new Error('Removed-SKU remote retirement unknown response identity mismatch.');
+      // Unknown transition is idempotent: a retry may carry a different local
+      // diagnostic while the durable first ambiguity evidence remains source
+      // of truth.
+      if (row.state !== 'unknown') same(row.evidence, evidenceObject, 'unknown evidence');
+      return row;
+    },
+    markComplete: async (revisionId, evidence) => {
+      const evidenceObject = record(evidence, 'markComplete evidence');
+      const row = await remoteRetirementRow(client, 'complete_variation_listing_removed_sku_remote_retirement', { p_revision_id: revisionId, p_evidence: evidenceObject });
+      if (row.revisionId !== revisionId) throw new Error('Removed-SKU remote retirement complete response identity mismatch.');
+      // Completion is also safe to reconcile repeatedly; once confirmed, the
+      // original exact absence proof remains durable authority.
+      if (row.state !== 'confirmed_complete') same(row.evidence, evidenceObject, 'complete evidence');
+      return row;
+    },
+  };
+}
+
 const mutation = async <T>(client: SupabaseDataClient, fn: string, args: Record<string, unknown>, key: string): Promise<T> => { const row = await rpcSingle<Record<string, Json>>(client, fn, args, `Variation listing ${fn} returned no row.`); return row[key] as unknown as T; };
 export function createSupabaseVariationListingTransactionGateway(client: SupabaseDataClient): VariationListingTransactionGateway { return {
   loadAggregate: id => loadAggregate(client,id), captureRevision: i => captureRevision(client,i), appendJournalCheckpoint: i => appendJournalCheckpoint(client,i), capturePermanentRemovalRevision: i => capturePermanentRemovalRevision(client,i), confirmPermanentRemoval: i => confirmPermanentRemoval(client,i), abandonUntouchedGroup: i => abandonUntouchedGroup(client,i), advanceCleanupLifecycle: i => advanceCleanupLifecycle(client,i), confirmRevision: i => confirmRevision(client,i), applyGroupReviewDraft: i => applyGroupReviewDraft(client,i), markPublishReady: i => markPublishReady(client,i), reserveActionRevision: i => reserveActionRevision(client,i), returnToReview: i => returnToReview(client,i), updateVariationPrice: i => updateVariationPrice(client,i), updateVariationQuantityAdjustment: i => updateVariationQuantityAdjustment(client,i), stagePermanentRemoval: i => stagePermanentRemoval(client,i), updateVariationSelectorValue: i => updateVariationSelectorValue(client,i), updateCopyAvailability: i => updateCopyAvailability(client,i), updateRepresentativeCopy: i => updateRepresentativeCopy(client,i),

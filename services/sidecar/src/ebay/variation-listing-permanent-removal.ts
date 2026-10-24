@@ -664,7 +664,7 @@ function exactPre(plan: VariationListingPermanentRemovalPlan, state: Awaited<Ret
   return state.targetPresent && itemsExact && exactSkuSet(state.groupSkus, [plan.targetSku, ...plan.survivorSkus]) && canonicalJson(state.quantitiesBySku[plan.targetSku]) === canonicalJson(plan.quantitiesBySku[plan.targetSku]) && state.offerIdsBySku[plan.targetSku] === plan.offerIdsBySku[plan.targetSku] && state.quantitiesBySku[plan.targetSku]?.sellableQuantity === 0 && plan.survivorSkus.every((sku) => canonicalJson(state.quantitiesBySku[sku]) === canonicalJson(plan.quantitiesBySku[sku]) && state.offerIdsBySku[sku] === plan.offerIdsBySku[sku]);
 }
 
-export async function executeVariationListingPermanentRemoval(input: ExecuteVariationListingPermanentRemovalInput): Promise<{ revisionId: string; confirmedRevision?: number }> {
+export async function executeVariationListingPermanentRemoval(input: ExecuteVariationListingPermanentRemovalInput): Promise<{ revisionId: string; membershipConfirmed: true }> {
   const existing = await input.journal.loadRevision(input.plan.captureInput.revisionId);
   const captured = existing ?? (await input.transaction.capturePermanentRemovalRevision(input.plan.captureInput)).revision;
   if (captured.revision_id !== input.plan.captureInput.revisionId || captured.group_id !== input.plan.captureInput.groupId || captured.captured_desired_revision !== input.plan.captureInput.capturedDesiredRevision || captured.snapshot_version !== 3 || captured.snapshot_digest !== input.plan.captureInput.snapshotDigest || canonicalJson(captured.operation_plan) !== canonicalJson(input.plan.captureInput.operationPlan.map((operation) => ({ operation_key: operation.operationKey, operation_kind: operation.operationKind, target_ref: operation.targetRef, sequence_no: operation.sequenceNo, intent_version: operation.intentVersion, intent_digest: operation.intentDigest, intent: operation.intent })))) throw new Error('Captured permanent-removal revision does not match frozen plan.');
@@ -682,8 +682,7 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
   if (terminal(current)) {
     const state = await exactRemoteState(input.plan, input.remote);
     if (!exactPost(input.plan, state)) throw new Error('Permanent-removal terminal journal no longer reconciles to exact post-state.');
-    await input.transaction.confirmPermanentRemoval({ groupId: input.plan.captureInput.groupId, revisionId: input.plan.captureInput.revisionId, expectedPreviousConfirmedRevision: input.plan.captureInput.capturedDesiredRevision - 1, confirmedRevision: input.plan.captureInput.capturedDesiredRevision, targetVariationId: input.plan.targetVariationId, targetSku: input.plan.targetSku });
-    return { revisionId: input.plan.captureInput.revisionId, confirmedRevision: input.plan.captureInput.capturedDesiredRevision };
+    return { revisionId: input.plan.captureInput.revisionId, membershipConfirmed: true };
   }
   let startedThisInvocation = false;
   if (!current) {
@@ -708,8 +707,7 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
       current = await append(input, 'started', current.attempt_number, current.checkpoint_number + 1, { reason: 'exact post-state observed during authorized replay reconciliation' }, null);
     }
     current = await append(input, 'confirmed_complete', current.attempt_number, current.checkpoint_number + 1, { listingId: state.listingId, survivorSkus: input.plan.survivorSkus, targetSku: input.plan.targetSku, state: 'removed' }, 'present');
-    await input.transaction.confirmPermanentRemoval({ groupId: input.plan.captureInput.groupId, revisionId: input.plan.captureInput.revisionId, expectedPreviousConfirmedRevision: input.plan.captureInput.capturedDesiredRevision - 1, confirmedRevision: input.plan.captureInput.capturedDesiredRevision, targetVariationId: input.plan.targetVariationId, targetSku: input.plan.targetSku });
-    return { revisionId: input.plan.captureInput.revisionId, confirmedRevision: input.plan.captureInput.capturedDesiredRevision };
+    return { revisionId: input.plan.captureInput.revisionId, membershipConfirmed: true };
   }
   if (!exactPre(input.plan, state)) {
     await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'remote state is neither exact pre-state nor exact post-state' }, 'unknown');
@@ -755,6 +753,5 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
     throw new Error('Permanent-removal replacement returned without exact post-state.');
   }
   await append(input, 'confirmed_complete', replayAuthorized ? current.attempt_number : current.attempt_number, replayAuthorized ? current.checkpoint_number + 1 : 2, { listingId: after.listingId, survivorSkus: input.plan.survivorSkus, targetSku: input.plan.targetSku, state: 'removed' }, 'present');
-  await input.transaction.confirmPermanentRemoval({ groupId: input.plan.captureInput.groupId, revisionId: input.plan.captureInput.revisionId, expectedPreviousConfirmedRevision: input.plan.captureInput.capturedDesiredRevision - 1, confirmedRevision: input.plan.captureInput.capturedDesiredRevision, targetVariationId: input.plan.targetVariationId, targetSku: input.plan.targetSku });
-  return { revisionId: input.plan.captureInput.revisionId, confirmedRevision: input.plan.captureInput.capturedDesiredRevision };
+  return { revisionId: input.plan.captureInput.revisionId, membershipConfirmed: true };
 }

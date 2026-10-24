@@ -13,6 +13,7 @@ import { Router, type Request, type Response } from 'express';
 import type { ZodType } from 'zod';
 
 import type { SidecarDataAccess } from '@/data/sidecar-data.js';
+import type { RemovedSkuRetirementRecord } from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
 import { getEbayConfig } from '@/config/environment.js';
 import {
   resolveVariationListingCreationDefaults as resolveVariationListingCreationDefaultsConfig,
@@ -33,6 +34,8 @@ import {
   type VariationListingActionName,
 } from '@/ebay/variation-listing-action-events.js';
 import { getSidecarDataAccess } from '@/data/sidecar-data.js';
+import { readRemovedSkuPurgePreview } from '@/ebay/variation-listing-removed-sku-purge-api.js';
+import type { RemovedSkuPurgeReadiness } from '@/ebay/variation-listing-removed-sku-purge-readiness.js';
 import {
   buildVariationListingGroupReviewInputFromAggregate,
   evaluateVariationListingGroupReadiness,
@@ -53,6 +56,7 @@ import {
 } from '@/ebay/variation-listing-profiles.js';
 import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
 import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
+import type { AuthenticatedRequest } from '@/auth/oauth-middleware.js';
 import {
   claimVariationListingIntakeRetry,
   clearVariationListingIntakeProcessingStatus,
@@ -79,7 +83,7 @@ import {
   type CreateVariationListingGroupRequest,
 } from '@/schemas/variation-listing-api.js';
 
-export type VariationListingApiDataAccess = Pick<
+type VariationListingApiDataAccessBase = Pick<
   SidecarDataAccess['variationListings'],
   | 'listGroups'
   | 'loadAggregate'
@@ -97,6 +101,11 @@ export type VariationListingApiDataAccess = Pick<
   | 'updateRepresentativeCopy'
 >;
 
+export type VariationListingApiDataAccess = VariationListingApiDataAccessBase & {
+  /** Optional for read-only/legacy harnesses; production supplies the durable c2b store. */
+  remoteRetirementStore?: SidecarDataAccess['variationListings']['remoteRetirementStore'];
+};
+
 export interface VariationListingApiRouterOptions {
   dataAccess?: VariationListingApiDataAccess;
   actionDataAccess?: VariationListingActionDataAccess;
@@ -107,6 +116,7 @@ export interface VariationListingApiRouterOptions {
   resolveCreationDefaults?: () => Promise<VariationListingCreationDefaults>;
   readQuantityStatus?: (groupId: string) => Promise<VariationListingQuantityStatus>;
   assertSoldOutRemovalEligible?: (input: { groupId: string; variationId: string; expectedDesiredRevision: number }) => Promise<void>;
+  readRemovedSkuPurgePreview?: (groupId: string, revisionId: string) => Promise<RemovedSkuPurgeReadiness | null>;
 }
 
 export interface VariationListingApiActions {
@@ -546,9 +556,19 @@ function buildValidation(aggregate: VariationListingAggregateSnapshot) {
 
 function summarizeJournal(
   revision: VariationListingRevision | null,
-  checkpoints: VariationListingPublishingCheckpoint[]
+  checkpoints: VariationListingPublishingCheckpoint[],
+  remoteRetirement: RemovedSkuRetirementRecord | null = null,
+  lastConfirmedRevision: number | null = null,
+  pendingHistoricalRemoteRetirements: readonly {
+    revisionId: string;
+    capturedDesiredRevision: number;
+    state: 'absent' | RemovedSkuRetirementRecord['state'];
+    targetSku: string | null;
+    targetOfferId: string | null;
+    retryStatus: 'safe_to_retry' | 'reconciliation_required';
+  }[] = [],
 ) {
-  if (!revision) return { latestRevision: null };
+  if (!revision) return { latestRevision: null, pendingHistoricalRemoteRetirements };
   const latestByKey = new Map<string, VariationListingPublishingCheckpoint>();
   for (const checkpoint of checkpoints) {
     const previous = latestByKey.get(checkpoint.operationKey);
@@ -582,7 +602,7 @@ function summarizeJournal(
   const permanentRemovalRecovery = revision.operationPlan.some(
     (operation) => operation.operation_kind === 'permanent_removal_group_membership'
   );
-  const recovery = unresolved
+  let recovery = unresolved
     ? unresolved.state === 'retry_authorized'
       ? {
           operationKey: unresolved.operationKey,
@@ -623,6 +643,49 @@ function summarizeJournal(
         recommendedActions: [],
         retryStatus: 'not_applicable',
       };
+  const c2Operation = revision.operationPlan.find(
+    (operation) => operation.operation_kind === 'permanent_removal_group_membership'
+  );
+  const c2Latest = c2Operation ? latestByKey.get(c2Operation.operation_key) : undefined;
+  const c2Terminal = Boolean(
+    c2Operation && c2Latest &&
+    ['confirmed_complete', 'confirmed_no_op'].includes(c2Latest.state)
+  );
+  const retirementState = permanentRemovalRecovery && c2Terminal
+    ? remoteRetirement?.state ?? 'absent'
+    : undefined;
+  if (retirementState !== undefined) {
+    const finalizerPending = retirementState === 'confirmed_complete' &&
+      remoteRetirement !== null &&
+      (lastConfirmedRevision ?? -1) < revision.capturedDesiredRevision;
+    if (retirementState === 'started' || retirementState === 'unknown') {
+      recovery = {
+        operationKey: 'removed-sku-remote-retirement',
+        revisionId: revision.revisionId,
+        requiresReconciliation: true,
+        remoteState: 'unknown',
+        recommendedActions: ['reconcile_remote_state', 'do_not_retry_blindly'],
+        retryStatus: 'reconciliation_required',
+      };
+    } else if (retirementState === 'ready' || retirementState === 'absent' || finalizerPending) {
+      recovery = {
+        operationKey: 'removed-sku-remote-retirement',
+        revisionId: revision.revisionId,
+        requiresReconciliation: false,
+        remoteState: 'known_unchanged',
+        recommendedActions: ['retry_action'],
+        retryStatus: 'safe_to_retry',
+      };
+    } else {
+      recovery = {
+        revisionId: revision.revisionId,
+        requiresReconciliation: false,
+        remoteState: 'known_unchanged',
+        recommendedActions: [],
+        retryStatus: 'not_applicable',
+      };
+    }
+  }
   return {
     latestRevision: {
       revisionId: revision.revisionId,
@@ -637,6 +700,14 @@ function summarizeJournal(
       ),
       retryExhausted: checkpoints.some((checkpoint) => checkpoint.state === 'retry_exhausted'),
       recovery,
+      remoteRetirement: retirementState === undefined
+        ? null
+        : {
+            state: retirementState,
+            revisionId: revision.revisionId,
+            targetSku: remoteRetirement?.targetSku ?? null,
+            targetOfferId: remoteRetirement?.targetOfferId ?? null,
+          },
       operations: revision.operationPlan.map((operation) => {
         const latest = latestByKey.get(operation.operation_key);
         return {
@@ -649,6 +720,7 @@ function summarizeJournal(
         };
       }),
     },
+    pendingHistoricalRemoteRetirements,
   };
 }
 
@@ -712,6 +784,68 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
       ? checkpoints
       : await dataAccess.listCheckpointsByRevisionId(confirmedRevision.revisionId);
   const listingId = confirmedListingId(confirmedRevision, confirmedCheckpoints);
+  const permanentRemovalRevision = [...revisions]
+    .filter((candidate) => candidate.operationPlan.some(
+      (operation) => operation.operation_kind === 'permanent_removal_group_membership'
+    ))
+    .sort((left, right) => right.capturedDesiredRevision - left.capturedDesiredRevision)[0] ?? null;
+  const remoteRetirement = permanentRemovalRevision && dataAccess.remoteRetirementStore
+    ? await dataAccess.remoteRetirementStore.load(permanentRemovalRevision.revisionId)
+    : null;
+  const pendingHistoricalRemoteRetirements: {
+    revisionId: string;
+    capturedDesiredRevision: number;
+    state: 'absent' | RemovedSkuRetirementRecord['state'];
+    targetSku: string | null;
+    targetOfferId: string | null;
+    retryStatus: 'safe_to_retry' | 'reconciliation_required';
+  }[] = [];
+  if (dataAccess.remoteRetirementStore && permanentRemovalRevision) {
+    const historicalRevisions = [...revisions]
+      .filter((candidate) =>
+        // Keep latestRevision's identity/state authoritative even when a later
+        // active/publication revision follows an older terminal c2 removal.
+        // Every other terminal c2 row is a separate historical retirement
+        // candidate, including the newest c2 row in that history.
+        candidate.revisionId !== latestRevision?.revisionId &&
+        candidate.operationPlan.some(
+          (operation) => operation.operation_kind === 'permanent_removal_group_membership'
+        )
+      )
+      .sort((left, right) => right.capturedDesiredRevision - left.capturedDesiredRevision);
+    for (const candidate of historicalRevisions) {
+      const membershipOperation = candidate.operationPlan.find(
+        (operation) => operation.operation_kind === 'permanent_removal_group_membership'
+      );
+      if (!membershipOperation) continue;
+      const candidateCheckpoints = candidate.revisionId === latestRevision?.revisionId
+        ? checkpoints
+        : await dataAccess.listCheckpointsByRevisionId(candidate.revisionId);
+      const latestMembershipCheckpoint = candidateCheckpoints
+        .filter((checkpoint) => checkpoint.operationKey === membershipOperation.operation_key)
+        .sort((left, right) =>
+          left.attemptNumber - right.attemptNumber || left.checkpointNumber - right.checkpointNumber
+        )
+        .at(-1);
+      if (!latestMembershipCheckpoint ||
+          !['confirmed_complete', 'confirmed_no_op'].includes(latestMembershipCheckpoint.state)) {
+        continue;
+      }
+      const durable = await dataAccess.remoteRetirementStore.load(candidate.revisionId);
+      if (durable?.state === 'confirmed_complete') continue;
+      const state = durable?.state ?? 'absent';
+      pendingHistoricalRemoteRetirements.push({
+        revisionId: candidate.revisionId,
+        capturedDesiredRevision: candidate.capturedDesiredRevision,
+        state,
+        targetSku: durable?.targetSku ?? null,
+        targetOfferId: durable?.targetOfferId ?? null,
+        retryStatus: state === 'started' || state === 'unknown'
+          ? 'reconciliation_required'
+          : 'safe_to_retry',
+      });
+    }
+  }
   const variations = [...aggregate.variations]
     .sort((left, right) => left.position - right.position)
     .map((variation) => serializeVariation(variation, aggregate.copies));
@@ -746,7 +880,13 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
     variationCount: variations.length,
     variations,
     validation: buildValidation(aggregate),
-    journal: summarizeJournal(latestRevision, checkpoints),
+    journal: summarizeJournal(
+      latestRevision,
+      checkpoints,
+      remoteRetirement,
+      aggregate.group.last_confirmed_revision,
+      pendingHistoricalRemoteRetirements,
+    ),
     createdAt: aggregate.group.created_at,
     updatedAt: aggregate.group.updated_at,
   };
@@ -1230,6 +1370,41 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
       if (!aggregate) return;
       res.json(await serializeAggregate(dataAccess, aggregate));
     });
+  });
+
+  // Diagnostic only. No cleanup mutation or deletion capability is exposed.
+  router.get('/:groupId/removed-sku-purge-preview/:revisionId', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const parsedParams = parseOrSend(res, variationListingGroupIdParamsSchema.extend({revisionId: variationListingGroupIdParamsSchema.shape.groupId}), req.params);
+    if (!parsedParams) return;
+    const params = {
+      groupId: parsedParams.groupId.toLowerCase(),
+      revisionId: parsedParams.revisionId.toLowerCase(),
+    };
+    const authenticated = Boolean((req as AuthenticatedRequest).auth);
+    try {
+      const result = await (options.readRemovedSkuPurgePreview ?? readRemovedSkuPurgePreview)(params.groupId, params.revisionId);
+      if (result === null) {
+        res.status(404).json({error: 'not_found', message: 'Removed-SKU cleanup preview is unavailable for this revision.'});
+        return;
+      }
+      if (result.deletionAuthorized !== false || result.groupId !== params.groupId || result.revisionId !== params.revisionId) {
+        throw new Error('Removed-SKU cleanup preview returned inconsistent identity or authorization.');
+      }
+      // OAuth middleware sets req.auth only when the transport is protected.
+      // Unauthenticated mode may still expose this shared router, so never
+      // disclose absolute local paths or R2 object keys in that mode.
+      res.json({
+        ...result,
+        r2ObjectKeys: authenticated ? [...result.r2ObjectKeys] : [],
+        localPaths: authenticated ? [...result.localPaths] : [],
+      });
+    } catch (error) {
+      // Keep filesystem paths, object keys and provider details out of both
+      // the response and this route's log line.
+      console.error('Removed-SKU purge preview route error:', error instanceof Error ? error.name : typeof error);
+      res.status(500).json({error: 'server_error', message: 'An unexpected server error occurred.'});
+    }
   });
 
   router.patch('/:groupId/variations/:variationId/permanent-removal', async (req: Request, res: Response) => {
