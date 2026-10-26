@@ -287,7 +287,11 @@ function canonicalUtf8(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
-function historicalRemovalFixture() {
+function historicalRemovalFixture(options: {
+  remoteGroupPayload?: Record<string, unknown>;
+  remoteSurvivorQuantity?: number;
+  remoteOfferOverridesBySku?: Record<string, Partial<{ offerId: string; listingId: string; marketplaceId: string }>>;
+} = {}) {
   const historicalRevisionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const newerRevisionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
   const frozen = aggregate({ desired_revision: 3, last_confirmed_revision: 3, next_inventory_serial: 4 });
@@ -313,8 +317,19 @@ function historicalRemovalFixture() {
   };
   const itemPayloadsBySku = Object.fromEntries(Object.keys(offerIdsBySku).map((sku) => [sku, { availability: { shipToLocationAvailability: {} } }]));
   const offerPayloadsBySku = Object.fromEntries(Object.keys(offerIdsBySku).map((sku) => [sku, {}]));
-  const expectedGroupPayload = { inventoryItemGroupKey: frozen.group.group_key, variantSKUs: [target.sku, ...survivorSkus] };
-  const replacementGroupPayload = { inventoryItemGroupKey: frozen.group.group_key, variantSKUs: survivorSkus };
+  const groupPayloadMetadata = {
+    inventoryItemGroupKey: frozen.group.group_key,
+    title: frozen.group.title,
+    description: frozen.group.description,
+    aspects: { Sport: ['Basketball'] },
+    variesBy: { aspectsImageVariesBy: ['Card'], specifications: [{ name: 'Card', values: ['Card A', 'Card B', 'Card C'] }] },
+  };
+  const expectedGroupPayload = { ...groupPayloadMetadata, variantSKUs: [target.sku, ...survivorSkus] };
+  const replacementGroupPayload = {
+    ...groupPayloadMetadata,
+    variantSKUs: survivorSkus,
+    variesBy: { aspectsImageVariesBy: ['Card'], specifications: [{ name: 'Card', values: ['Card B', 'Card C'] }] },
+  };
   const intent = { groupKey: frozen.group.group_key, targetSku: target.sku, survivorSkus };
   const operation = {
     sequence_no: 1,
@@ -383,6 +398,7 @@ function historicalRemovalFixture() {
   finalized.group.last_confirmed_revision = 4;
   finalized.variations = finalized.variations.filter((variation) => variation.variation_id !== target.variation_id);
   finalized.copies = finalized.copies.filter((copy) => copy.variation_id !== target.variation_id);
+  const deletes: string[] = [];
   const store = {
     load: vi.fn(async () => null),
     prepare: vi.fn(async () => ({ revisionId: historicalRevisionId, groupId, targetVariationId: target.variation_id, targetSku: target.sku, targetOfferId: 'offer-target', state: 'ready' as const })),
@@ -392,24 +408,24 @@ function historicalRemovalFixture() {
   } satisfies RemovedSkuRetirementStore;
   const remoteFactory = vi.fn(async () => ({
     remote: {
-      getInventoryItemGroup: vi.fn(async () => ({ state: 'present' as const, value: { variantSKUs: survivorSkus, payload: expectedGroupPayload } })),
+      getInventoryItemGroup: vi.fn(async () => ({ state: 'present' as const, value: { variantSKUs: survivorSkus, payload: options.remoteGroupPayload ?? { ...replacementGroupPayload, imageUrls: [] } } })),
       getInventoryItem: vi.fn(async (sku: string) => sku === target.sku
         ? { state: 'proven_absent' as const }
-        : { state: 'present' as const, value: { sku, groupKeys: [frozen.group.group_key], payload: { availability: { shipToLocationAvailability: { quantity: 1 } } } } }),
-      getOffers: vi.fn(async (sku: string) => ({ state: 'present' as const, value: [{ sku, marketplaceId: frozen.group.marketplace_id, offerId: offerIdsBySku[sku as keyof typeof offerIdsBySku], listingId: 'listing-1', status: 'PUBLISHED' as const, lifecycleClass: 'active' as const, payload: { availableQuantity: 1 } }] })),
+        : { state: 'present' as const, value: { sku, groupKeys: [frozen.group.group_key], payload: { availability: { shipToLocationAvailability: { quantity: options.remoteSurvivorQuantity ?? 1 } } } } }),
+      getOffers: vi.fn(async (sku: string) => ({ state: 'present' as const, value: [{ sku, marketplaceId: options.remoteOfferOverridesBySku?.[sku]?.marketplaceId ?? frozen.group.marketplace_id, offerId: options.remoteOfferOverridesBySku?.[sku]?.offerId ?? offerIdsBySku[sku as keyof typeof offerIdsBySku], listingId: options.remoteOfferOverridesBySku?.[sku]?.listingId ?? 'listing-1', status: 'PUBLISHED' as const, lifecycleClass: 'active' as const, payload: { availableQuantity: 1 } }] })),
       getMedia: vi.fn(async () => ({ state: 'proven_absent' as const })),
     },
     mutations: {
       createOrReplaceInventoryItemGroup: vi.fn(),
       getAllOffersForSku: vi.fn(async () => []),
-      deleteInventoryItem: vi.fn(),
+      deleteInventoryItem: vi.fn(async (sku: string) => { deletes.push(sku); }),
     },
   }));
   const checkpoints = [
     { revision_id: historicalRevisionId, operation_key: 'remove-group-membership', attempt_number: 1, checkpoint_number: 1, checkpoint_id: 'old-cp', state: 'confirmed_complete' as const, observed_remote_state: 'present' as const, evidence: {}, created_at: '2026-10-22T00:00:00Z' },
     { revision_id: newerRevisionId, operation_key: 'newer-terminal', attempt_number: 1, checkpoint_number: 1, checkpoint_id: 'new-cp', state: 'confirmed_complete' as const, observed_remote_state: 'present' as const, evidence: {}, created_at: '2026-10-22T00:00:00Z' },
   ];
-  return { historicalRevisionId, newerRevisionId, oldRevision, newerRevision, finalized, store, remoteFactory, checkpoints };
+  return { historicalRevisionId, newerRevisionId, oldRevision, newerRevision, finalized, store, remoteFactory, checkpoints, deletes, expectedGroupPayload, replacementGroupPayload, survivorSkus, offerIdsBySku, options };
 }
 
 describe('YP6.2 variation listing actions', () => {
@@ -845,6 +861,82 @@ describe('YP6.2 variation listing actions', () => {
       targetSku: 'BSKBL-McGrady-000001',
     });
     expect(fixture.remoteFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects retained target selector metadata before c2b delete or local finalization', async () => {
+    const fixture = historicalRemovalFixture();
+    fixture.options.remoteGroupPayload = fixture.expectedGroupPayload;
+    const access = data({
+      aggregate: fixture.finalized,
+      revisions: [fixture.newerRevision, fixture.oldRevision],
+      checkpoints: fixture.checkpoints,
+      remoteRetirementStore: fixture.store,
+    });
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: fixture.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: { code: 'variation_listing_action_failed', remoteState: 'unknown', requiresReconciliation: true },
+    });
+    expect(fixture.deletes).toEqual([]);
+    expect(fixture.store.markComplete).not.toHaveBeenCalled();
+    expect(access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['wrong survivor quantity', (_fixture: ReturnType<typeof historicalRemovalFixture>) => ({ remoteSurvivorQuantity: 2 })],
+    ['foreign survivor Offer', (fixture: ReturnType<typeof historicalRemovalFixture>) => ({ remoteOfferOverridesBySku: { [fixture.survivorSkus[0]!]: { offerId: 'foreign-offer' } } })],
+    ['nonempty group imageUrls', (fixture: ReturnType<typeof historicalRemovalFixture>) => ({ remoteGroupPayload: { ...fixture.replacementGroupPayload, imageUrls: ['https://images.example.test/group.jpg'] } })],
+    ['malformed group imageUrls', (fixture: ReturnType<typeof historicalRemovalFixture>) => ({ remoteGroupPayload: { ...fixture.replacementGroupPayload, imageUrls: 'malformed' } })],
+  ])('rejects %s before c2b delete or local finalization', async (_label, configure) => {
+    const fixture = historicalRemovalFixture();
+    Object.assign(fixture.options, configure(fixture));
+    const access = data({
+      aggregate: fixture.finalized,
+      revisions: [fixture.newerRevision, fixture.oldRevision],
+      checkpoints: fixture.checkpoints,
+      remoteRetirementStore: fixture.store,
+    });
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: fixture.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: { code: 'variation_listing_action_failed', remoteState: 'unknown', requiresReconciliation: true },
+    });
+    expect(fixture.deletes).toEqual([]);
+    expect(fixture.store.markComplete).not.toHaveBeenCalled();
+    expect(access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+  });
+
+  it('refuses malformed historical c2 selector projection before any mutation or local finalizer', async () => {
+    const fixture = historicalRemovalFixture();
+    const snapshot = structuredClone(fixture.oldRevision.snapshot) as Record<string, any>;
+    snapshot.permanentRemoval.replacementGroupPayload.variesBy.specifications[0].values = ['Card C', 'Card B'];
+    fixture.oldRevision.snapshot = snapshot as never;
+    fixture.oldRevision.snapshot_digest = createHash('sha256').update(canonicalUtf8(snapshot)).digest('hex');
+    const access = data({
+      aggregate: fixture.finalized,
+      revisions: [fixture.newerRevision, fixture.oldRevision],
+      checkpoints: fixture.checkpoints,
+      remoteRetirementStore: fixture.store,
+    });
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: fixture.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: { code: 'variation_listing_action_failed', remoteState: 'known_unchanged', requiresReconciliation: false },
+    });
+    expect(fixture.remoteFactory).not.toHaveBeenCalled();
+    expect(access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
   });
 
   it('blocks destructive cleanup for ever-published groups; use Withdraw', async () => {

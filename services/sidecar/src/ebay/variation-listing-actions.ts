@@ -629,7 +629,17 @@ function offerPayloadWithoutQuantity(payload: Json): Json {
 }
 
 function groupPayloadWithoutMembership(payload: Json): Json {
-  return { ...record(payload), variantSKUs: undefined } as Json;
+  const group = record(payload);
+  // eBay may return an explicit empty group image collection even though the
+  // publication contract omits group-level images. Treat that transport form
+  // as semantic absence while preserving nonempty/malformed values so the
+  // frozen replacement comparison remains fail-closed.
+  const imageUrls = group.imageUrls;
+  return {
+    ...group,
+    variantSKUs: undefined,
+    imageUrls: Array.isArray(imageUrls) && imageUrls.length === 0 ? undefined : imageUrls,
+  } as Json;
 }
 
 function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirementRemote {
@@ -660,7 +670,7 @@ function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirem
     }),
     verifySurvivors: async (plan) => {
       const group = await deps.remote.getInventoryItemGroup(plan.groupKey, { expectedNotFound: true });
-      if (group.state !== 'present' || canonicalJson([...group.value.variantSKUs].sort()) !== canonicalJson([...plan.survivorSkus].sort()) || canonicalJson(groupPayloadWithoutMembership(group.value.payload)) !== canonicalJson(groupPayloadWithoutMembership(plan.expectedGroupPayload))) return false;
+      if (group.state !== 'present' || canonicalJson([...group.value.variantSKUs].sort()) !== canonicalJson([...plan.survivorSkus].sort()) || canonicalJson(groupPayloadWithoutMembership(group.value.payload)) !== canonicalJson(groupPayloadWithoutMembership(plan.replacementGroupPayload))) return false;
       for (const sku of plan.survivorSkus) {
         const item = await deps.remote.getInventoryItem(sku, { expectedNotFound: true });
         if (item.state !== 'present' || canonicalJson(item.value.groupKeys) !== canonicalJson([plan.groupKey]) || canonicalJson(inventoryPayloadWithoutQuantity(item.value.payload)) !== canonicalJson(plan.inventoryItemPayloadsBySku[sku]) || quantityFromInventoryPayload(item.value.payload) !== plan.quantitiesBySku[sku]?.inventoryItemQuantity) return false;

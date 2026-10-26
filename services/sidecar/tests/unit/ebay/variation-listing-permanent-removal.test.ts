@@ -33,6 +33,26 @@ function digestUtf8(value: Json): string {
   return createHash('sha256').update(canonicalUtf8(value)).digest('hex');
 }
 
+const selectorBySku: Record<string, string> = {
+  [targetSku]: 'Card 1',
+  [survivorSkus[0]!]: 'Card 2',
+  [survivorSkus[1]!]: 'Card 3',
+};
+
+function groupPayload(variantSKUs: readonly string[], selectorValues: readonly string[] = variantSKUs.map((sku) => selectorBySku[sku]!)): Json {
+  return {
+    inventoryItemGroupKey: groupKey,
+    title: 'Basketball Cards',
+    description: 'Three basketball trading cards',
+    aspects: { Sport: ['Basketball'] },
+    variantSKUs: [...variantSKUs],
+    variesBy: {
+      aspectsImageVariesBy: ['Card'],
+      specifications: [{ name: 'Card', values: [...selectorValues] }],
+    },
+  };
+}
+
 function aggregate(): VariationListingAggregateSnapshot {
   const now = '2026-10-22T00:00:00.000Z';
   return {
@@ -83,9 +103,24 @@ function aggregate(): VariationListingAggregateSnapshot {
   };
 }
 
-function remoteHarness(options: { failReplace?: boolean; failReplaceCount?: number; ungroupTargetAfterReplace?: boolean; foreignTargetAfterReplace?: boolean; postReadLoss?: boolean; targetListingIdAfterReplace?: string | null; targetLifecycleClassAfterReplace?: VariationListingRemoteOffer['lifecycleClass']; publishedTargetAfterReplace?: boolean; groupReadLossAfterReplace?: boolean } = {}) {
+function remoteHarness(options: {
+  failReplace?: boolean;
+  failReplaceCount?: number;
+  ungroupTargetAfterReplace?: boolean;
+  foreignTargetAfterReplace?: boolean;
+  postReadLoss?: boolean;
+  targetListingIdAfterReplace?: string | null;
+  targetLifecycleClassAfterReplace?: VariationListingRemoteOffer['lifecycleClass'];
+  publishedTargetAfterReplace?: boolean;
+  groupReadLossAfterReplace?: boolean;
+  initialSelectorValues?: string[];
+  groupImageUrls?: string[];
+  postGroupMetadataMismatch?: boolean;
+  unknownGroupMetadata?: 'group' | 'variesBy';
+} = {}) {
   const quantities: Record<string, number> = { [targetSku]: 0, [survivorSkus[0]!]: 1, [survivorSkus[1]!]: 2 };
   let groupSkus = [targetSku, ...survivorSkus];
+  let groupValues = options.initialSelectorValues ? [...options.initialSelectorValues] : groupSkus.map((sku) => selectorBySku[sku]!);
   let failReplace = options.failReplace ?? false;
   let failReplaceCount = options.failReplaceCount ?? 0;
   let replaced = false;
@@ -100,7 +135,14 @@ function remoteHarness(options: { failReplace?: boolean; failReplaceCount?: numb
         groupReadLossAfterReplace = false;
         throw new Error('post-group-read unavailable');
       }
-      return read({ variantSKUs: groupSkus, payload: { inventoryItemGroupKey: groupKey, variantSKUs: groupSkus } });
+      const payload = groupPayload(groupSkus, groupValues) as Record<string, Json>;
+      if (options.groupImageUrls !== undefined) payload.imageUrls = [...options.groupImageUrls];
+      if (replaced && options.postGroupMetadataMismatch) payload.title = 'Unexpected metadata drift';
+      if (options.unknownGroupMetadata === 'group') payload.unexpectedMetadata = 'reject';
+      if (options.unknownGroupMetadata === 'variesBy') {
+        (payload.variesBy as Record<string, Json>).unexpectedMetadata = 'reject';
+      }
+      return read({ variantSKUs: [...groupSkus], payload });
     }),
     getInventoryItem: vi.fn(async (sku: string) => {
       if (replaced && postReadLoss) {
@@ -120,17 +162,38 @@ function remoteHarness(options: { failReplace?: boolean; failReplaceCount?: numb
         failReplaceCount = Math.max(0, failReplaceCount - 1);
         throw new Error('response lost');
       }
-      groupSkus = (payload as { variantSKUs: string[] }).variantSKUs;
+      const replacement = payload as { variantSKUs?: unknown; variesBy?: { specifications?: Array<{ values?: unknown }> } };
+      const replacementSkus = replacement.variantSKUs;
+      const replacementValues = replacement.variesBy?.specifications?.[0]?.values;
+      if (!Array.isArray(replacementSkus) || !Array.isArray(replacementValues) ||
+          replacementSkus.length !== replacementValues.length || replacementSkus.length < 2 ||
+          replacementSkus.some((sku) => typeof sku !== 'string') ||
+          replacementValues.some((value) => typeof value !== 'string') ||
+          replacementValues.some((value, index) => value !== selectorBySku[replacementSkus[index] as string])) {
+        throw new Error('malformed group replacement must update matching SKU and Card selector arrays');
+      }
+      groupSkus = [...replacementSkus] as string[];
+      groupValues = [...replacementValues] as string[];
       replaced = true;
     }),
   };
-  return { remote, getGroupSkus: () => groupSkus, setGroupSkus: (next: string[]) => { groupSkus = next; replaced = !next.includes(targetSku); } };
+  return {
+    remote,
+    getGroupSkus: () => groupSkus,
+    setGroupSkus: (next: string[]) => {
+      groupSkus = [...next];
+      const applicationOrder = [targetSku, ...survivorSkus];
+      groupValues = applicationOrder.filter((sku) => next.includes(sku)).map((sku) => selectorBySku[sku]!);
+      replaced = !next.includes(targetSku);
+    },
+  };
 }
 
-async function planFixture(remote: VariationListingPermanentRemovalRemote, options: { previousMedia?: boolean; targetCopy?: boolean; omitFrozenTargetCopy?: boolean } = {}) {
+async function planFixture(remote: VariationListingPermanentRemovalRemote, options: { previousMedia?: boolean; targetCopy?: boolean; omitFrozenTargetCopy?: boolean; tamperCurrent?: (current: VariationListingAggregateSnapshot) => void; tamperPrevious?: (previousRevision: VariationListingRevisionRow) => void } = {}) {
   const prior = aggregate();
   const current = aggregate();
   prior.group.desired_revision = 3;
+  options.tamperCurrent?.(current);
   if (options.targetCopy) {
     const targetCopy = {
       copy_id: '44444444-4444-4444-8444-444444444444',
@@ -170,39 +233,41 @@ async function planFixture(remote: VariationListingPermanentRemovalRemote, optio
     },
     created_at: '2026-10-22T00:00:00.000Z',
   })) : [];
+  const previousSnapshot = {
+    aggregate: prior,
+    confirmed: {
+      aggregate: prior,
+      representativeImages: [],
+      remote: {
+        listingId: 'listing-1',
+        offerIdsBySku: {
+          [targetSku]: `offer-${targetSku}`,
+          [survivorSkus[0]!]: `offer-${survivorSkus[0]}`,
+          [survivorSkus[1]!]: `offer-${survivorSkus[1]}`,
+        },
+        quantitiesBySku: {
+          [targetSku]: { inventoryItemQuantity: 3, offerQuantity: 3, sellableQuantity: 3 },
+          [survivorSkus[0]!]: { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+          [survivorSkus[1]!]: { inventoryItemQuantity: 2, offerQuantity: 2, sellableQuantity: 2 },
+        },
+      },
+      revisionId: '55555555-5555-4555-8555-555555555555',
+    },
+    mediaResources: previousMedia,
+    representativeImages: [],
+  };
   const previousRevision = {
     revision_id: '55555555-5555-4555-8555-555555555555',
     group_id: groupId,
     captured_desired_revision: 3,
     snapshot_version: 3,
-    snapshot_digest: '0'.repeat(64),
-    snapshot: {
-      aggregate: prior,
-      confirmed: {
-        aggregate: prior,
-        representativeImages: [],
-        remote: {
-          listingId: 'listing-1',
-          offerIdsBySku: {
-            [targetSku]: `offer-${targetSku}`,
-            [survivorSkus[0]!]: `offer-${survivorSkus[0]}`,
-            [survivorSkus[1]!]: `offer-${survivorSkus[1]}`,
-          },
-          quantitiesBySku: {
-            [targetSku]: { inventoryItemQuantity: 3, offerQuantity: 3, sellableQuantity: 3 },
-            [survivorSkus[0]!]: { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
-            [survivorSkus[1]!]: { inventoryItemQuantity: 2, offerQuantity: 2, sellableQuantity: 2 },
-          },
-        },
-        revisionId: '55555555-5555-4555-8555-555555555555',
-      },
-      mediaResources: previousMedia,
-      representativeImages: [],
-    },
+    snapshot_digest: digestUtf8(previousSnapshot as unknown as Json),
+    snapshot: previousSnapshot,
     operation_plan: previousOperationPlan,
     operation_count: previousOperationPlan.length,
     captured_at: '2026-10-22T00:00:00.000Z',
   } as unknown as VariationListingRevisionRow;
+  options.tamperPrevious?.(previousRevision);
   return await buildVariationListingPermanentRemovalPlan({
     aggregate: current,
     targetVariationId: targetId,
@@ -369,6 +434,47 @@ describe('YP9.6c2 permanent removal executor', () => {
     expect(plan.quantitiesBySku[targetSku]).toEqual({ inventoryItemQuantity: 0, offerQuantity: 0, sellableQuantity: 0 });
   });
 
+  it('rejects a tampered prior v3 snapshot digest before remote reads or capture', async () => {
+    const { remote } = remoteHarness();
+    await expect(planFixture(remote, {
+      tamperPrevious: (previousRevision) => {
+        const snapshot = previousRevision.snapshot as Record<string, Json>;
+        const aggregate = snapshot.aggregate as Record<string, Json>;
+        const group = aggregate.group as Record<string, Json>;
+        group.title = 'Tampered after durable capture';
+      },
+    })).rejects.toThrow('snapshot digest');
+    expect(remote.getInventoryItemGroup).not.toHaveBeenCalled();
+    expect(remote.getInventoryItem).not.toHaveBeenCalled();
+    expect(remote.getOffers).not.toHaveBeenCalled();
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('rejects a current selector mapping changed from the immutable confirmed aggregate before remote reads', async () => {
+    const { remote } = remoteHarness();
+    await expect(planFixture(remote, {
+      tamperCurrent: (current) => { current.variations[1]!.selector_value = 'Card tampered'; },
+    })).rejects.toThrow('immutable confirmed identity');
+    expect(remote.getInventoryItemGroup).not.toHaveBeenCalled();
+    expect(remote.getInventoryItem).not.toHaveBeenCalled();
+    expect(remote.getOffers).not.toHaveBeenCalled();
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('rejects a current position and SKU mapping changed from the immutable confirmed aggregate before remote reads', async () => {
+    const { remote } = remoteHarness();
+    await expect(planFixture(remote, {
+      tamperCurrent: (current) => {
+        current.variations[1]!.position = 2;
+        current.variations[1]!.sku = survivorSkus[1]!;
+      },
+    })).rejects.toThrow('immutable confirmed identity');
+    expect(remote.getInventoryItemGroup).not.toHaveBeenCalled();
+    expect(remote.getInventoryItem).not.toHaveBeenCalled();
+    expect(remote.getOffers).not.toHaveBeenCalled();
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
   it('does not carry prior confirmed Media intents into the c2 snapshot', async () => {
     const { remote } = remoteHarness();
     const plan = await planFixture(remote, { previousMedia: true });
@@ -384,8 +490,64 @@ describe('YP9.6c2 permanent removal executor', () => {
     expect(result.membershipConfirmed).toBe(true);
     expect(getGroupSkus()).toEqual(survivorSkus);
     expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
+    const replacement = remote.replaceInventoryItemGroup.mock.calls[0]?.[1] as {
+      variantSKUs: string[];
+      variesBy: { specifications: [{ values: string[] }] };
+    };
+    expect(replacement.variantSKUs).toEqual(survivorSkus);
+    expect(replacement.variesBy.specifications[0].values).toEqual(['Card 2', 'Card 3']);
+    expect(replacement.variantSKUs).not.toContain(targetSku);
     expect(harness.transaction.confirmPermanentRemoval).not.toHaveBeenCalled();
     expect(harness.checkpoints.at(-1).state).toBe('confirmed_complete');
+  });
+
+  it('rejects duplicate or conflicting Card selector metadata before replacement', async () => {
+    const duplicate = remoteHarness({ initialSelectorValues: ['Card 1', 'Card 2', 'Card 2'] });
+    await expect(planFixture(duplicate.remote)).rejects.toThrow('exact unique pair');
+    expect(duplicate.remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+
+    const conflicting = remoteHarness({ initialSelectorValues: ['Card 2', 'Card 1', 'Card 3'] });
+    await expect(planFixture(conflicting.remote)).rejects.toThrow('confirmed SKU-to-selector evidence');
+    expect(conflicting.remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('accepts a historical overlong Card selector while projecting the confirmed survivor values', async () => {
+    const historicalSelector = `Card ${'legacy-selector-'.repeat(6)}`;
+    const { remote } = remoteHarness({ initialSelectorValues: [historicalSelector, 'Card 2', 'Card 3'] });
+    const plan = await planFixture(remote, {
+      tamperCurrent: (current) => { current.variations[0]!.selector_value = historicalSelector; },
+      tamperPrevious: (previousRevision) => {
+        const snapshot = previousRevision.snapshot as Record<string, Json>;
+        const aggregate = snapshot.aggregate as unknown as VariationListingAggregateSnapshot;
+        aggregate.variations[0]!.selector_value = historicalSelector;
+        previousRevision.snapshot_digest = digestUtf8(snapshot);
+      },
+    });
+    const harness = transactionHarness();
+    await executeVariationListingPermanentRemoval({ plan, remote, ...harness });
+    const replacement = remote.replaceInventoryItemGroup.mock.calls[0]?.[1] as { variesBy: { specifications: [{ values: string[] }] } };
+    expect(replacement.variesBy.specifications[0].values).toEqual(['Card 2', 'Card 3']);
+  });
+
+  it('rejects unknown group and variesBy metadata before membership replacement', async () => {
+    for (const unknownGroupMetadata of ['group', 'variesBy'] as const) {
+      const { remote } = remoteHarness({ unknownGroupMetadata });
+      await expect(planFixture(remote)).rejects.toThrow();
+      expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+    }
+  });
+
+  it('rejects unproven group-level image mappings before replacement', async () => {
+    const { remote } = remoteHarness({ groupImageUrls: ['https://i.ebayimg.com/images/g/group/s-l1600.jpg'] });
+    await expect(planFixture(remote)).rejects.toThrow('Group-level images');
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('normalizes an omitted or explicitly empty group image collection', async () => {
+    const { remote } = remoteHarness({ groupImageUrls: [] });
+    const plan = await planFixture(remote);
+    const harness = transactionHarness();
+    await expect(executeVariationListingPermanentRemoval({ plan, remote, ...harness })).resolves.toMatchObject({ membershipConfirmed: true });
   });
 
   it('accepts an unpublished target retaining the original listing ID', async () => {
@@ -719,6 +881,15 @@ describe('YP9.6c2 permanent removal executor', () => {
     expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed when post-replacement group metadata changes', async () => {
+    const { remote } = remoteHarness({ postGroupMetadataMismatch: true });
+    const plan = await planFixture(remote);
+    const harness = transactionHarness();
+    await expect(executeVariationListingPermanentRemoval({ plan, remote, ...harness })).rejects.toThrow('group differs');
+    expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
+    expect(harness.checkpoints.at(-1).state).toBe('unknown');
+  });
+
   it('confirms removal when the target Offer becomes UNPUBLISHED while survivors remain PUBLISHED', async () => {
     const { remote } = remoteHarness();
     const plan = await planFixture(remote);
@@ -872,5 +1043,25 @@ describe('YP9.6c2 permanent removal executor', () => {
     await executeVariationListingPermanentRemoval({ plan, remote, ...harness });
     expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
     expect(harness.transaction.confirmPermanentRemoval).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed frozen replacement without remote reads or mutation', async () => {
+    const { remote } = remoteHarness();
+    const plan = await planFixture(remote);
+    const malformed = structuredClone(plan) as typeof plan;
+    const snapshot = malformed.captureInput.snapshot as Record<string, Json>;
+    const metadata = snapshot.permanentRemoval as Record<string, Json>;
+    const replacement = metadata.replacementGroupPayload as Record<string, Json>;
+    const variesBy = replacement.variesBy as Record<string, Json>;
+    const specifications = variesBy.specifications as Array<Record<string, Json>>;
+    const specification = specifications[0]!;
+    specification.values = ['Card 3', 'Card 2'];
+    malformed.captureInput.snapshotDigest = digestUtf8(snapshot);
+    const harness = transactionHarness();
+    remote.getInventoryItemGroup.mockClear();
+    remote.replaceInventoryItemGroup.mockClear();
+    await expect(executeVariationListingPermanentRemoval({ plan: malformed, remote, ...harness })).rejects.toThrow('malformed or conflicts');
+    expect(remote.getInventoryItemGroup).not.toHaveBeenCalled();
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
   });
 });

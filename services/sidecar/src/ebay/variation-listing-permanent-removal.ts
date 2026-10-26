@@ -19,6 +19,10 @@ import {
   revisionSnapshotAggregate,
 } from '@/ebay/variation-listing-active-revision.js';
 
+import {
+  variationListingInventoryItemGroupPayloadSchema,
+} from '@/ebay/variation-listing-payloads.js';
+
 import type {
   VariationListingPublicationReadGateway,
   VariationListingRemoteOffer,
@@ -170,11 +174,146 @@ function exactPresent<T>(read: VariationListingRemoteRead<T>, label: string): T 
   return read.value;
 }
 
-function exactGroupPayload(payload: Json, survivorSkus: readonly string[]): Json {
+function groupParts(payload: Json): {
+  group: Record<string, Json>;
+  skus: string[];
+  values: string[];
+  specification: Record<string, Json>;
+} {
+  const group = object(payload, 'remote inventory item group payload');
+  const skus = group.variantSKUs;
+  const variesBy = object(group.variesBy, 'group variesBy');
+  const specs = variesBy.specifications;
+  if (!Array.isArray(skus) || !Array.isArray(specs) || specs.length !== 1) {
+    throw new Error('Inventory group must have exact SKU and Card-selector collections.');
+  }
+  const specification = object(specs[0], 'group Card specification');
+  const values = specification.values;
+  if (specification.name !== 'Card' || !Array.isArray(values) ||
+      skus.length < 2 || skus.length !== values.length ||
+      skus.some((sku) => typeof sku !== 'string' || sku.trim() !== sku || !sku) ||
+      values.some((value) => typeof value !== 'string' || value.trim() !== value || !value) ||
+      new Set(skus).size !== skus.length || new Set(values).size !== values.length) {
+    throw new Error('Inventory group SKU and Card selector values are not an exact unique pair of collections.');
+  }
+  // The application stores images per child Item, not in the group. An
+  // unfamiliar group-level image map may refer to a removed selector and
+  // cannot be projected safely without independently proven ownership.
+  if (group.imageUrls !== undefined &&
+      (!Array.isArray(group.imageUrls) || group.imageUrls.length !== 0)) {
+    throw new Error('Group-level images require separately verified selector-to-image ownership before permanent removal.');
+  }
+  // eBay may return an explicit empty image collection even though the
+  // publication contract omits group-level images. Treat that transport form
+  // as the same semantic absence while rejecting any nonempty mapping above.
+  if (group.imageUrls !== undefined) delete group.imageUrls;
+  const core = group;
+  if (!variationListingInventoryItemGroupPayloadSchema.safeParse(core).success) {
+    // Frozen historical groups may contain Card selectors longer than the
+    // current 65-character publication limit. Validate every other field with
+    // the strict current schema, replacing only Card values with unique short
+    // sentinels so unknown metadata and malformed structure still fail closed.
+    const legacy = structuredClone(core);
+    const legacyVariesBy = object(legacy.variesBy, 'legacy group variesBy');
+    const legacySpecs = legacyVariesBy.specifications;
+    if (!Array.isArray(legacySpecs) || legacySpecs.length !== 1) {
+      throw new Error('Inventory group historical Card specification is malformed.');
+    }
+    const legacySpec = object(legacySpecs[0], 'legacy group Card specification');
+    legacySpec.values = values.map((_, index) => `legacy-card-${index + 1}`);
+    variationListingInventoryItemGroupPayloadSchema.parse(legacy);
+  }
+  return { group, skus: skus as string[], values: values as string[], specification };
+}
+
+function expectedSelectorBySku(aggregate: VariationListingAggregateSnapshot): Map<string, string> {
+  const bySku = new Map<string, string>();
+  const seenValues = new Set<string>();
+  for (const variation of [...aggregate.variations].sort((left, right) => left.position - right.position)) {
+    if (!variation.sku || variation.sku.trim() !== variation.sku ||
+        !variation.selector_value || variation.selector_value.trim() !== variation.selector_value ||
+        bySku.has(variation.sku) || seenValues.has(variation.selector_value)) {
+      throw new Error('Frozen variation SKU/selector pairing is missing or ambiguous.');
+    }
+    bySku.set(variation.sku, variation.selector_value);
+    seenValues.add(variation.selector_value);
+  }
+  return bySku;
+}
+
+function assertCurrentVariationIdentity(
+  previous: VariationListingAggregateSnapshot,
+  current: VariationListingAggregateSnapshot,
+): void {
+  if (previous.variations.length !== current.variations.length) {
+    throw new Error('Variation listing current aggregate does not preserve the immutable confirmed variation membership.');
+  }
+  const previousById = new Map(previous.variations.map((variation) => [variation.variation_id, variation]));
+  const currentById = new Map(current.variations.map((variation) => [variation.variation_id, variation]));
+  if (previousById.size !== previous.variations.length || currentById.size !== current.variations.length || previousById.size !== currentById.size) {
+    throw new Error('Variation listing current aggregate does not preserve the immutable confirmed variation membership.');
+  }
+  for (const prior of previous.variations) {
+    const next = currentById.get(prior.variation_id);
+    if (!next || next.group_id !== prior.group_id || next.inventory_serial !== prior.inventory_serial ||
+        next.sku !== prior.sku || next.position !== prior.position || next.selector_value !== prior.selector_value) {
+      throw new Error(`Variation listing current aggregate changed immutable confirmed identity for ${prior.variation_id}.`);
+    }
+  }
+}
+
+function exactGroupPayload(
+  payload: Json,
+  survivorSkus: readonly string[],
+  selectorBySku: ReadonlyMap<string, string>,
+): Json {
   const clone = structuredClone(payload);
-  const group = object(clone, 'remote inventory item group payload');
+  const { group, skus, values, specification } = groupParts(clone);
+  const confirmedValues = [...selectorBySku.values()];
+  if (selectorBySku.size !== skus.length ||
+      !exactSkuSet(skus, [...selectorBySku.keys()]) ||
+      values.length !== selectorBySku.size ||
+      values.some((value, index) => value !== confirmedValues[index])) {
+    throw new Error('Remote group selectors do not match the confirmed SKU-to-selector evidence.');
+  }
+  const survivorValues = survivorSkus.map((sku) => selectorBySku.get(sku));
+  if (survivorValues.some((value) => !value) ||
+      !exactSkuSet(survivorSkus, survivorSkus) ||
+      new Set(survivorValues).size !== survivorSkus.length) {
+    throw new Error('Removal survivor SKU/selector projection is ambiguous.');
+  }
   group.variantSKUs = [...survivorSkus];
+  specification.values = survivorValues as string[];
+  groupParts(clone); // Validate the complete revised group, not just variantSKUs.
   return clone;
+}
+
+function groupSignature(payload: Json): string {
+  const clone = structuredClone(payload);
+  const { group, skus, values, specification } = groupParts(clone);
+  group.variantSKUs = [...skus].sort();
+  // Application selector order is authoritative. Only eBay's variantSKUs
+  // response order is non-authoritative membership metadata.
+  specification.values = values;
+  return canonicalJson(group);
+}
+
+function assertFrozenReplacement(plan: VariationListingPermanentRemovalPlan): void {
+  const snapshot = object(plan.captureInput.snapshot, 'frozen permanent removal snapshot');
+  const confirmed = object(snapshot.confirmed, 'frozen confirmed parent');
+  const prior = object(confirmed.aggregate, 'frozen confirmed aggregate') as unknown as VariationListingAggregateSnapshot;
+  const selectorBySku = expectedSelectorBySku(prior);
+  const expectedSurvivorSkus = [...prior.variations]
+    .sort((left, right) => left.position - right.position)
+    .filter((variation) => variation.variation_id !== plan.targetVariationId)
+    .map((variation) => variation.sku);
+  if (canonicalJson(plan.survivorSkus) !== canonicalJson(expectedSurvivorSkus)) {
+    throw new Error('Frozen permanent-removal survivor order conflicts with the confirmed aggregate; do not replay.');
+  }
+  const projected = exactGroupPayload(plan.expectedGroupPayload, plan.survivorSkus, selectorBySku);
+  if (groupSignature(projected) !== groupSignature(plan.replacementGroupPayload)) {
+    throw new Error('Frozen permanent-removal replacement is malformed or conflicts with confirmed survivor selector evidence; do not replay.');
+  }
 }
 
 function exactSkuSet(actual: readonly string[], expected: readonly string[]): boolean {
@@ -453,6 +592,11 @@ export function hydrateVariationListingPermanentRemovalPlan(revision: VariationL
     canonicalJson(operation.intent) !== canonicalJson(expectedIntent) ||
     operation.intentDigest !== digest(expectedIntent)
   ) throw new Error('Permanent-removal durable plan must contain exactly one matching group-membership operation.');
+  // Validate frozen pre/post group projection at hydration time as well as at
+  // execution. Historical terminal c2 rows still flow through action-level
+  // retirement reconciliation; malformed selector evidence must be refused
+  // before that seam can perform any remote mutation or local finalization.
+  assertFrozenReplacement(plan);
   return plan;
 }
 
@@ -461,12 +605,18 @@ async function exactRemoteState(
   remote: VariationListingPermanentRemovalRemote,
 ): Promise<{ groupPayload: Json; groupSkus: string[]; targetPresent: boolean; listingId: string; offerIdsBySku: Record<string, string>; quantitiesBySku: Record<string, { inventoryItemQuantity: number; offerQuantity: number; sellableQuantity: number }>; groupKeysBySku: Record<string, string[] | null>; inventoryItemPayloadsBySku: Record<string, Json>; offerPayloadsBySku: Record<string, Json> }> {
   const group = exactPresent(await remote.getInventoryItemGroup(plan.groupKey), `Variation listing group ${plan.groupKey}`);
-  const expected = object(plan.expectedGroupPayload, 'frozen group payload');
   const actual = object(group.payload, 'remote group payload');
-  const actualWithoutMembership = { ...actual, variantSKUs: undefined };
-  const expectedWithoutMembership = { ...expected, variantSKUs: undefined };
-  if (canonicalJson(actualWithoutMembership) !== canonicalJson(expectedWithoutMembership)) throw new Error('Variation listing group payload changed outside membership.');
   const groupSkus = [...group.variantSKUs];
+  const actualParts = groupParts(actual as Json);
+  if (!exactSkuSet(groupSkus, actualParts.skus)) {
+    throw new Error('Remote group membership metadata does not match its payload.');
+  }
+  const expectedPayload = groupSkus.includes(plan.targetSku)
+    ? plan.expectedGroupPayload
+    : plan.replacementGroupPayload;
+  if (groupSignature(actual as Json) !== groupSignature(expectedPayload)) {
+    throw new Error('Variation listing group differs from the exact frozen pre/post membership and selector payload.');
+  }
   const survivorSet = new Set(plan.survivorSkus);
   const targetPresent = groupSkus.includes(plan.targetSku);
   if (groupSkus.some((sku) => !survivorSet.has(sku) && sku !== plan.targetSku) || new Set(groupSkus).size !== groupSkus.length) {
@@ -536,12 +686,22 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
     }
     throw new Error('Existing permanent-removal revision is missing frozen metadata; rebuild is forbidden.');
   }
+  if (digest(input.previousRevision.snapshot) !== input.previousRevision.snapshot_digest) {
+    throw new Error('Variation listing previous confirmed revision snapshot digest does not match its durable snapshot.');
+  }
+  const previousAggregate = revisionSnapshotAggregate(input.previousRevision);
+  assertCurrentVariationIdentity(previousAggregate, input.aggregate);
+  const selectorBySku = expectedSelectorBySku(previousAggregate);
+  const previousById = new Map(previousAggregate.variations.map((variation) => [variation.variation_id, variation]));
+  const previousTarget = previousById.get(input.targetVariationId);
+  if (!previousTarget) throw new Error('Variation listing removal target is not in the immutable confirmed aggregate.');
+  const orderedPreviousVariations = [...previousAggregate.variations].sort((left, right) => left.position - right.position);
+  const previousSurvivors = orderedPreviousVariations.filter((variation) => variation.variation_id !== input.targetVariationId);
+  if (previousSurvivors.length < 2) throw new Error('Variation listing removal requires at least two immutable confirmed survivors.');
   const target = input.aggregate.variations.find((variation) => variation.variation_id === input.targetVariationId);
   if (!target) throw new Error('Variation listing removal target is not in the aggregate.');
-  const survivors = input.aggregate.variations.filter((variation) => variation.variation_id !== input.targetVariationId);
-  if (survivors.length < 2) throw new Error('Variation listing removal requires at least two survivors.');
   const group = exactPresent(await input.remote.getInventoryItemGroup(input.aggregate.group.group_key), 'Variation listing group');
-  const expectedCurrentSkus = [target.sku, ...survivors.sort((a, b) => a.position - b.position).map((variation) => variation.sku)];
+  const expectedCurrentSkus = [previousTarget.sku, ...previousSurvivors.map((variation) => variation.sku)];
   if (!exactSkuSet(group.variantSKUs, expectedCurrentSkus)) throw new Error('Variation listing group membership does not exactly match the frozen aggregate.');
   const listingIds = new Set<string>();
   const offerIdsBySku: Record<string, string> = {};
@@ -569,8 +729,8 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
   if (listingIds.size !== 1) throw new Error('Variation listing offers do not resolve to one listing.');
   const targetQuantity = quantitiesBySku[target.sku]!;
   if (targetQuantity.inventoryItemQuantity !== 0 || targetQuantity.offerQuantity !== 0 || targetQuantity.sellableQuantity !== 0) throw new Error('Variation listing removal target must already be zero in Item and Offer.');
-  const survivorSkus = survivors.sort((a, b) => a.position - b.position).map((variation) => variation.sku);
-  const replacementGroupPayload = exactGroupPayload(group.payload, survivorSkus);
+  const survivorSkus = previousSurvivors.map((variation) => variation.sku);
+  const replacementGroupPayload = exactGroupPayload(group.payload, survivorSkus, selectorBySku);
   const previousIdentity = reconstructConfirmedRemoteIdentity(input.previousRevision, input.previousCheckpoints);
   if (previousIdentity.listingId !== [...listingIds][0]) throw new Error('Variation listing previous confirmed listing identity changed.');
   for (const variation of input.aggregate.variations) {
@@ -672,6 +832,9 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
   // source. Rehydrate it after capture instead of continuing with a mutable
   // in-memory plan assembled from the pre-capture aggregate.
   input = { ...input, plan: hydrateVariationListingPermanentRemovalPlan(captured) };
+  // A prior frozen malformed payload (including the 2026-10-24 incident) may
+  // NEVER be silently rewritten or replayed under this updated executor.
+  assertFrozenReplacement(input.plan);
   const history = validateHistory(
     await input.journal.listCheckpoints(input.plan.captureInput.revisionId),
     input.plan.captureInput.revisionId
