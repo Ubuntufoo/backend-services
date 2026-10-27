@@ -291,6 +291,7 @@ function historicalRemovalFixture(options: {
   remoteGroupPayload?: Record<string, unknown>;
   remoteSurvivorQuantity?: number;
   remoteOfferOverridesBySku?: Record<string, Partial<{ offerId: string; listingId: string; marketplaceId: string }>>;
+  foreignSurvivorOffer?: boolean;
 } = {}) {
   const historicalRevisionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const newerRevisionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -417,7 +418,20 @@ function historicalRemovalFixture(options: {
     },
     mutations: {
       createOrReplaceInventoryItemGroup: vi.fn(),
-      getAllOffersForSku: vi.fn(async () => []),
+      getAllOffersForSku: vi.fn(async (sku: string) => {
+        if (sku === target.sku) return [];
+        const own = {
+          offerId: offerIdsBySku[sku as keyof typeof offerIdsBySku]!,
+          sku,
+          marketplaceId: frozen.group.marketplace_id,
+          status: 'PUBLISHED' as const,
+          listingId: 'listing-1',
+          availableQuantity: 1,
+        };
+        return options.foreignSurvivorOffer && sku === survivorSkus[0]
+          ? [own, { ...own, offerId: 'foreign-marketplace-offer', marketplaceId: 'EBAY_GB' }]
+          : [own];
+      }),
       deleteInventoryItem: vi.fn(async (sku: string) => { deletes.push(sku); }),
     },
   }));
@@ -894,6 +908,28 @@ describe('YP6.2 variation listing actions', () => {
   ])('rejects %s before c2b delete or local finalization', async (_label, configure) => {
     const fixture = historicalRemovalFixture();
     Object.assign(fixture.options, configure(fixture));
+    const access = data({
+      aggregate: fixture.finalized,
+      revisions: [fixture.newerRevision, fixture.oldRevision],
+      checkpoints: fixture.checkpoints,
+      remoteRetirementStore: fixture.store,
+    });
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: fixture.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: { code: 'variation_listing_action_failed', remoteState: 'unknown', requiresReconciliation: true },
+    });
+    expect(fixture.deletes).toEqual([]);
+    expect(fixture.store.markComplete).not.toHaveBeenCalled();
+    expect(access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+  });
+
+  it('blocks c2b when exhaustive survivor Offers reveal a hidden foreign marketplace Offer', async () => {
+    const fixture = historicalRemovalFixture({ foreignSurvivorOffer: true });
     const access = data({
       aggregate: fixture.finalized,
       revisions: [fixture.newerRevision, fixture.oldRevision],

@@ -961,6 +961,111 @@ export type Database = {
           },
         ];
       };
+      variation_listing_c2b_removal01_incident_repairs: {
+        Row: {
+          captured_desired_revision: number;
+          corrected_group_payload: Json;
+          corrected_payload_digest: string;
+          created_at: string;
+          evidence: Json;
+          expected_previous_confirmed_revision: number;
+          group_id: string;
+          group_key: string;
+          incident_key: string;
+          listing_id: string;
+          marketplace_id: string;
+          post_at: string | null;
+          repair_id: string;
+          revision_id: string;
+          seller_user_id: string;
+          snapshot_digest: string;
+          started_at: string | null;
+          state: string;
+          survivor_offer_ids: string[];
+          survivor_quantities: number[];
+          survivor_skus: string[];
+          target_offer_id: string;
+          target_quantity: number;
+          target_sku: string;
+          target_variation_id: string;
+          unknown_at: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          captured_desired_revision: number;
+          corrected_group_payload: Json;
+          corrected_payload_digest: string;
+          created_at?: string;
+          evidence?: Json;
+          expected_previous_confirmed_revision: number;
+          group_id: string;
+          group_key: string;
+          incident_key?: string;
+          listing_id: string;
+          marketplace_id: string;
+          post_at?: string | null;
+          repair_id: string;
+          revision_id: string;
+          seller_user_id: string;
+          snapshot_digest: string;
+          started_at?: string | null;
+          state?: string;
+          survivor_offer_ids: string[];
+          survivor_quantities: number[];
+          survivor_skus: string[];
+          target_offer_id: string;
+          target_quantity: number;
+          target_sku: string;
+          target_variation_id: string;
+          unknown_at?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          captured_desired_revision?: number;
+          corrected_group_payload?: Json;
+          corrected_payload_digest?: string;
+          created_at?: string;
+          evidence?: Json;
+          expected_previous_confirmed_revision?: number;
+          group_id?: string;
+          group_key?: string;
+          incident_key?: string;
+          listing_id?: string;
+          marketplace_id?: string;
+          post_at?: string | null;
+          repair_id?: string;
+          revision_id?: string;
+          seller_user_id?: string;
+          snapshot_digest?: string;
+          started_at?: string | null;
+          state?: string;
+          survivor_offer_ids?: string[];
+          survivor_quantities?: number[];
+          survivor_skus?: string[];
+          target_offer_id?: string;
+          target_quantity?: number;
+          target_sku?: string;
+          target_variation_id?: string;
+          unknown_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'variation_listing_c2b_removal01_incident_repairs_group_fkey';
+            columns: ['group_id'];
+            isOneToOne: false;
+            referencedRelation: 'variation_listing_groups';
+            referencedColumns: ['group_id'];
+          },
+          {
+            foreignKeyName: 'variation_listing_c2b_removal01_incident_repairs_revision_fkey';
+            columns: ['revision_id'];
+            isOneToOne: true;
+            referencedRelation: 'variation_listing_revisions';
+            referencedColumns: ['revision_id'];
+          },
+        ];
+      };
       variation_listing_variations: {
         Row: {
           created_at: string;

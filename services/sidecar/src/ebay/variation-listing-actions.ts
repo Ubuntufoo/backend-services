@@ -674,6 +674,15 @@ function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirem
       for (const sku of plan.survivorSkus) {
         const item = await deps.remote.getInventoryItem(sku, { expectedNotFound: true });
         if (item.state !== 'present' || canonicalJson(item.value.groupKeys) !== canonicalJson([plan.groupKey]) || canonicalJson(inventoryPayloadWithoutQuantity(item.value.payload)) !== canonicalJson(plan.inventoryItemPayloadsBySku[sku]) || quantityFromInventoryPayload(item.value.payload) !== plan.quantitiesBySku[sku]?.inventoryItemQuantity) return false;
+        // The marketplace-scoped read below is retained for the frozen full
+        // offer payload and lifecycle comparison. First prove that the
+        // complete unfiltered Offer collection contains exactly the one
+        // frozen survivor Offer; otherwise a foreign marketplace Offer could
+        // be hidden by the scoped read and target deletion could proceed.
+        const exhaustiveOffers = await allOffers(sku);
+        if (!Array.isArray(exhaustiveOffers) || exhaustiveOffers.length !== 1) return false;
+        const exhaustiveOffer = exhaustiveOffers[0]!;
+        if (exhaustiveOffer.sku !== sku || exhaustiveOffer.offerId !== plan.offerIdsBySku[sku] || exhaustiveOffer.marketplaceId !== plan.marketplaceId || exhaustiveOffer.status !== 'PUBLISHED' || exhaustiveOffer.listingId !== plan.listingId || exhaustiveOffer.availableQuantity !== plan.quantitiesBySku[sku]?.offerQuantity) return false;
         const offers = await deps.remote.getOffers(sku, plan.marketplaceId, { expectedNotFound: true });
         if (offers.state !== 'present' || offers.value.length !== 1) return false;
         const offer = offers.value[0]!;
