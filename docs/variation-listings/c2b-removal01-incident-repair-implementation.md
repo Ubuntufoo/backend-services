@@ -1,9 +1,9 @@
-# C2BRemoval01 incident repair: Stage 1 implementation
+# C2BRemoval01 incident repair: offline implementation
 
-Date: 2026-10-26  
-Status: provider ordering correction and read-only exact-pre proof verified; mutation gates remain closed
+Date: 2026-10-27
+Status: provider ordering correction and disabled offline authorization gateway implemented; hosted migration and Sandbox mutation gates remain closed
 
-Stage 1 adds an incident-bound repair ledger, typed RPC client, exact-state classifier, and injected recovery state machine for the held Sandbox revision. The migration file has not been applied to any database. This verification used seller-verified Sandbox GETs, the read-equivalent Trading GetUser protocol call, and bounded canonical Supabase SELECTs only. No eBay mutation, hosted Supabase mutation, journal change, service restart, Item/Offer deletion, local finalization, or image cleanup was performed.
+The offline implementation adds an incident-bound repair ledger, typed RPC client, exact-state classifier, strictly read-only inspection path, and an injected recovery state machine for the held Sandbox revision. Its incident gateway is disabled by default, has no live Supabase/eBay binding, and never constructs a mutating client or credentials. The migration file has not been applied to any database. Verification used seller-verified Sandbox GETs, the read-equivalent Trading GetUser protocol call, bounded canonical Supabase SELECTs, and offline injected stores/remotes only. No eBay mutation, hosted Supabase mutation, journal change, service restart, Item/Offer deletion, local finalization, or image cleanup was performed.
 
 ## Frozen identity
 
@@ -17,10 +17,11 @@ The exact read-only verification observed Group membership `000002,000003,000001
 
 The additive ledger states are `planned`, `started`, `unknown`, `confirmed_post`, and `reconciled_post`. Identity and corrected payload are immutable; application roles receive no direct table privileges. Service-role RPCs serialize intake sessions, group, revision, then ledger and enforce the exact incident CAS.
 
-- `planned + EXACT_PRE`: Stage 1 returns without writing by default. A future separately authorized executor may atomically persist `started`, then issue the sole corrected group PUT.
-- `planned + EXACT_CORRECTED_POST`: persist `reconciled_post`; issue no PUT.
+- Inspection/classification is read-only for every ledger state and remote state, including a missing row and `EXACT_CORRECTED_POST`; it calls only `ledger.load` plus seller/group/Item/exhaustive Offer reads. A missing row remains absent/unprepared and is never implicitly changed to `planned`.
+- `planned + EXACT_PRE`: the disabled gateway can write only in a separately authorized `prepare`/`one-put` phase. It must persist `planned` and then `started` before the sole corrected group PUT; an omitted, invalid, expired, foreign, replayed, or out-of-scope authority performs no write.
+- `planned + EXACT_CORRECTED_POST`: the read-only path reports the exact post-state without resolving it. A separately authorized `resolve-post` phase may persist `reconciled_post`; it must never issue a PUT.
 - `started` or `unknown`: GET-only reconciliation. Never return to `planned` and never issue another PUT.
-- exact corrected post after a started write: persist `confirmed_post`, then use the guarded bridge to append the legal attempt-1 checkpoint-3 c2 terminal event.
+- exact corrected post after a started write: only separately authorized `resolve-post` may persist `confirmed_post`, then use the guarded bridge to append the legal attempt-1 checkpoint-3 c2 terminal event.
 - `MIXED` or `UNKNOWN`: stop. No terminal c2 event, c2b preparation, delete, or local finalization.
 
 A crash after durable `started` but before the process can prove whether the outbound request began is intentionally stranded. Database locking cannot create a distributed transaction with eBay. Preserving `started` and permitting only reconciliation is the at-most-one guarantee; recovery may require a new operator decision, never an automatic retry.
@@ -31,18 +32,18 @@ The classifier requires the exact Sandbox seller, exact group/common payload, al
 
 The c2b survivor verifier now performs an exhaustive all-marketplace identity/status/listing/quantity read for both survivors before retaining its marketplace-scoped full-payload/lifecycle comparison. A hidden second-marketplace Offer blocks target deletion and local finalization.
 
-## Required operator sequence after Stage 1
+## Required operator sequence after offline implementation
 
 1. Review and commit the local implementation if desired; this run does neither.
-2. Separately authorize and apply the additive migration to the canonical project. Verify project identity, migration history, ACLs, schema, and function fingerprints afterward.
+2. Gate A: separately authorize the exact incident migration only through a reviewed single-migration mechanism. Never use broad `supabase db push`; verify project identity, migration history, SQL hash, ACLs, schema, and function fingerprints afterward.
 3. Refresh seller-verified, fully paginated read-only evidence. Require `EXACT_PRE` and exact local CAS `6/5`.
-4. Separately authorize one incident-specific Sandbox group PUT with an exact run-bound attestation. Persist `started` before the outbound call. A lost response is `unknown`; do not retry.
-5. Re-read seller, group, Items, and all-marketplace Offers. Only exact corrected post may durably resolve c2 through the guarded bridge.
-6. Obtain separate authorization for c2b remote Item retirement and local finalization. The repair does not authorize either.
-7. Obtain separate authorization for local/R2 image cleanup. No cleanup is coupled to repair or c2b.
+4. Gate B: separately authorize one incident-specific Sandbox group PUT with an exact run-bound attestation naming seller, environment, marketplace, listing, group, revision, payload digest, and allowed `one-put` phase. Persist `started` before the outbound call. A lost response is `unknown`; do not retry.
+5. Gate B resolve-post: after fresh exact post evidence, separately authorize `resolve-post`; only that phase may persist post state and append checkpoint 3 through the guarded bridge.
+6. Gate C: obtain separate authorization for c2b remote Item/Offer retirement and local finalization. The repair does not authorize either.
+7. Gate D: obtain separate authorization for exclusive local/R2 image cleanup. No cleanup is coupled to repair or c2b.
 
-No general Retry, Publish Changes, router, UI, or background worker is wired to this incident path. The recovery service exposes injected read/mutate/ledger seams for offline tests; its approval gate defaults false and there is no production gateway construction in Stage 1.
+No general Retry, Publish Changes, router, UI, or background worker is wired to this incident path. The gateway is incident-specific, injected, disabled by default, and offline-only; no live binding or operator authority has been issued. Inspection is strictly no-write, and future mutating calls require phase-specific incident-bound authorization rather than a raw boolean approval. The in-memory single-use authority is a test seam, not tamper-proof or cross-process security; enabling a live adapter requires a trusted signed/replay-protected operator mechanism and another review.
 
-The disposable PostgreSQL 17 validators apply the full local migration chain and verify schema, RLS, service-role-only RPC ACLs, direct-write denial, null-safe evidence-field rejection, and lock/bridge guards. The private SQL evidence helper now independently validates the historical three-SKU/three-Card collections, exact Item payload-map keys, and each frozen Item `product.aspects.Card` ownership against immutable confirmed SKU rows; it returns only the B,C selector projection used by `prepare`. A synthetic B,C,A SKU / A,B,C Card snapshot passes, while wrong Item Card and missing/foreign/duplicate Group SKU/Card cases fail closed. A bounded canonical read-only export supplied the exact incident group, three variations, three copies, immutable revision, and two checkpoints to a mode-0600 temporary fixture. Local-only RPC execution verified the canonical snapshot digest, duplicate prepare, stale CAS denial, concurrent start with one winner, started→unknown, exact-post marking, concurrent/idempotent terminal bridge with one checkpoint 3, preservation of checkpoints 1 and 2, role denial, and forged/missing/null evidence rejection. This SQL proof and the live read-only ordering proof authorize no hosted migration or eBay mutation.
+The disposable PostgreSQL 17 validators previously verified the local migration chain, schema/RLS/ACL guards, evidence denials, and historical transition/concurrency behavior. The exact mode-0600 historical snapshot fixture is unavailable for this run, so that transition/concurrency proof is not current-run evidence. The private SQL evidence helper independently validates the historical three-SKU/three-Card collections, exact Item payload-map keys, and each frozen Item `product.aspects.Card` ownership against immutable confirmed SKU rows; a synthetic B,C,A SKU / A,B,C Card snapshot passes while wrong Item Card and missing/foreign/duplicate Group SKU/Card cases fail closed. These offline results and the live read-only ordering proof authorize no hosted migration or eBay mutation.
 
-The additive migration remains unapplied. The helper is revoked from public, anon, authenticated, and service_role; incident-bound RPCs remain service-role-only. No hosted apply, repair-ledger preparation, eBay write, journal mutation, c2b action, cleanup, commit, or push is authorized by this offline proof.
+The additive migration remains unapplied. Its private helper is revoked from public, anon, authenticated, and service_role; incident-bound RPCs remain service-role-only. The exact historical transition/concurrency fixture was unavailable, so this run does not claim fresh SQL terminal-bridge proof; any hosted migration and live resolution still require separate review and authorization. No hosted apply, repair-ledger preparation, eBay write, journal mutation, c2b action, cleanup, commit, or push is authorized by this offline proof.

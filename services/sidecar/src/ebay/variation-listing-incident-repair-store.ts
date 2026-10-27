@@ -4,6 +4,7 @@ import type {
   Json,
   VariationListingRevisionRow,
 } from '@ebay-inventory/data';
+import { VariationListingTransactionConflictError } from '@ebay-inventory/data';
 
 import type {
   IncidentFrozenEvidence,
@@ -16,6 +17,7 @@ import {
   buildC2BRemoval01Plan,
   C2B_REMOVAL01_MANIFEST,
   incidentJsonDigest,
+  IncidentRepairCasConflictError,
 } from '@/ebay/variation-listing-incident-repair.js';
 
 type JsonRecord = Record<string, Json>;
@@ -290,7 +292,17 @@ export function createC2bRemoval01IncidentRepairLedger(
       correctedGroupPayload: plan.correctedGroupPayload,
       correctedPayloadDigest: plan.correctedPayloadDigest,
     })),
-    start: async (repairId) => record(await store.start(repairId)),
+    start: async (repairId) => {
+      try {
+        return record(await store.start(repairId));
+      } catch (error) {
+        if (error instanceof VariationListingTransactionConflictError
+          || (error instanceof Error && /^VR00[1-4]$/.test((error as Error & { code?: unknown }).code as string ?? ''))) {
+          throw new IncidentRepairCasConflictError(error instanceof Error ? error.message : String(error));
+        }
+        throw error;
+      }
+    },
     markUnknown: async (repairId, evidence) => record(await store.markUnknown(repairId, evidence)),
     markPost: async (repairId, state, evidence) => record(await store.markPost(repairId, { state, evidence })),
     appendTerminalC2: async (repairId, evidence) => {

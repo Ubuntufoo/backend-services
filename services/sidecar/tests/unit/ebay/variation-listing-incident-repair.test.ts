@@ -7,6 +7,7 @@ import {
   C2B_REMOVAL01_MANIFEST,
   executeC2BRemoval01Repair,
   incidentJsonDigest,
+  inspectC2BRemoval01,
   type IncidentFrozenEvidence,
   type IncidentOfferRead,
   type IncidentRemoteGateway,
@@ -14,6 +15,8 @@ import {
   type IncidentRepairPlan,
   type IncidentRepairRecord,
 } from '@/ebay/variation-listing-incident-repair.js';
+import { IncidentRepairCasConflictError, createC2BRemoval01IncidentRepairGateway } from '@/ebay/variation-listing-incident-repair-gateway.js';
+import { InMemoryIncidentRepairAuthorizationAuthority, incidentRepairAuthorizationBinding, issueOfflineIncidentRepairAuthorization } from '@/ebay/variation-listing-incident-repair-authorization.js';
 import { buildC2BRemoval01PlanFromRevision } from '@/ebay/variation-listing-incident-repair-store.js';
 
 const manifestSkus = [C2B_REMOVAL01_MANIFEST.target.sku, ...C2B_REMOVAL01_MANIFEST.survivors.map((s) => s.sku)];
@@ -120,25 +123,37 @@ class RemoteFixture implements IncidentRemoteGateway {
 
 function ledgerFixture(options: { startConflict?: boolean } = {}): { ledger: IncidentRepairLedger; record: () => IncidentRepairRecord | null; terminalCalls: number[] } {
   let current: IncidentRepairRecord | null = null;
-  let terminalCalls = 0;
+  const terminalCalls = [0];
   return {
-    terminalCalls: [terminalCalls],
+    terminalCalls,
     record: () => current,
     ledger: {
       load: async () => current,
       prepare: async (plan) => current = { repairId: plan.repairId, revisionId: plan.repairId, state: 'planned', correctedPayloadDigest: plan.correctedPayloadDigest },
       start: async (id) => {
-        if (options.startConflict || current?.state !== 'planned') throw new Error('CAS conflict');
+        if (options.startConflict) {
+          current = { ...current!, repairId: id, revisionId: id, state: 'started' };
+          throw new IncidentRepairCasConflictError();
+        }
+        if (current?.state !== 'planned') throw new IncidentRepairCasConflictError();
         return current = { ...current!, repairId: id, revisionId: id, state: 'started' };
       },
       markPost: async (_id, state, evidence) => current = { ...current!, state, evidence },
       markUnknown: async (_id, evidence) => current = { ...current!, state: 'unknown', evidence },
-      appendTerminalC2: async () => { terminalCalls += 1; },
+      appendTerminalC2: async () => { terminalCalls[0] += 1; },
     },
   };
 }
 
 function plan(evidence = frozen()): IncidentRepairPlan { return buildC2BRemoval01Plan(evidence); }
+
+function offlineAuthorization(p: IncidentRepairPlan, phase: 'prepare' | 'one-put' | 'resolve-post', authority: InMemoryIncidentRepairAuthorizationAuthority) {
+  return issueOfflineIncidentRepairAuthorization({
+    ...incidentRepairAuthorizationBinding(p, 'run-c2b-removal01-test', phase, 'fmiliwxthjonjwywuqta'),
+    issuedAt: 1_000,
+    expiresAt: 2_000,
+  });
+}
 
 function incidentSnapshotWithRealMetadata(): Json {
   const target = C2B_REMOVAL01_MANIFEST.target.sku;
@@ -317,21 +332,18 @@ describe('C2BRemoval01 offline incident repair', () => {
     expect((await classifyC2BRemoval01(remote, plan())).state).toBe('EXACT_CORRECTED_POST');
   });
 
-  it('keeps Stage 1 disabled by default, then permits one PUT only after explicit approval and bridges c2', async () => {
+  it('keeps the compatibility executor strictly read-only and leaves an absent row absent', async () => {
     const remote = new RemoteFixture(); const fixture = ledgerFixture(); const p = plan();
-    await expect(executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger })).resolves.toMatchObject({ remoteState: 'EXACT_PRE', putCount: 0, repairState: 'planned' });
-    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true });
-    expect(result).toMatchObject({ remoteState: 'EXACT_CORRECTED_POST', repairState: 'confirmed_post', putCount: 1, c2TerminalAppended: true });
-    expect(remote.putCalls).toBe(1);
+    await expect(executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger })).resolves.toMatchObject({ remoteState: 'EXACT_PRE', putCount: 0, repairState: 'absent' });
+    expect(fixture.record()).toBeNull();
+    expect(remote.putCalls).toBe(0);
   });
 
-  it('marks an ambiguous write unknown and restart never retries', async () => {
-    const remote = new RemoteFixture(); remote.failPut = true; const fixture = ledgerFixture(); const p = plan();
-    const first = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true });
-    expect(first).toMatchObject({ remoteState: 'UNKNOWN', repairState: 'unknown', putCount: 1 });
-    remote.failPut = false;
-    const second = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true });
-    expect(second.putCount).toBe(0); expect(remote.putCalls).toBe(1);
+  it('keeps ambiguous recovery GET-only until an explicitly authorized gateway call', async () => {
+    const remote = new RemoteFixture(); const fixture = ledgerFixture(); const p = plan();
+    const first = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger });
+    expect(first).toMatchObject({ remoteState: 'EXACT_PRE', repairState: 'absent', putCount: 0 });
+    expect(remote.putCalls).toBe(0);
   });
 
   it('fails closed for seller, quantity, offer coverage, and post drift', async () => {
@@ -354,34 +366,141 @@ describe('C2BRemoval01 offline incident repair', () => {
     expect((await classifyC2BRemoval01(remote, p)).state).toBe('UNKNOWN');
     remote.offersComplete = true;
     remote.driftAfterPut = true; const fixture = ledgerFixture();
-    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true });
-    expect(result.repairState).toBe('unknown'); expect(remote.putCalls).toBe(1);
+    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger });
+    expect(result.repairState).toBe('absent'); expect(remote.putCalls).toBe(0);
   });
 
   it('does not issue a second PUT after a concurrent start winner or repeated call', async () => {
     const remote = new RemoteFixture(); const p = plan(); const fixture = ledgerFixture({ startConflict: true });
-    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true });
-    expect(result.putCount).toBe(0); expect(remote.putCalls).toBe(0);
-    const normal = ledgerFixture(); const normalRemote = new RemoteFixture(); const normalResult = await executeC2BRemoval01Repair({ plan: p, remote: normalRemote, ledger: normal.ledger, operatorApproval: true });
-    expect(normalResult.putCount).toBe(1);
-    const repeated = await executeC2BRemoval01Repair({ plan: p, remote: normalRemote, ledger: normal.ledger, operatorApproval: true });
-    expect(repeated.putCount).toBe(0); expect(normalRemote.putCalls).toBe(1);
+    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger });
+    expect(result.putCount).toBe(0); expect(remote.putCalls).toBe(0); expect(fixture.record()).toBeNull();
   });
 
   it('treats a restart after durable start but before the outbound call as GET-only', async () => {
     const remote = new RemoteFixture(); const p = plan(); const fixture = ledgerFixture();
     await fixture.ledger.prepare(p);
     await fixture.ledger.start(p.manifest.revisionId);
-    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true });
+    const result = await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger });
     expect(result).toMatchObject({ remoteState: 'EXACT_PRE', repairState: 'started', putCount: 0 });
     expect(remote.putCalls).toBe(0);
   });
 
   it('returns UNKNOWN on failed evidence reads and never exposes mutation/deletion seams', async () => {
     const p = plan(); const remote = new RemoteFixture(); remote.readSeller = vi.fn(async () => { throw new Error('network'); }); const fixture = ledgerFixture();
-    expect(await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger, operatorApproval: true })).toMatchObject({ remoteState: 'UNKNOWN', repairState: 'planned' });
+    expect(await executeC2BRemoval01Repair({ plan: p, remote, ledger: fixture.ledger })).toMatchObject({ remoteState: 'UNKNOWN', repairState: 'absent' });
     expect(remote.putCalls).toBe(0);
     expect(incidentJsonDigest(p.correctedGroupPayload)).toBe(p.correctedPayloadDigest);
+  });
+
+  it('requires separate prepare, one-put, and resolve-post attestations', async () => {
+    const p = plan(); const remote = new RemoteFixture(); const fixture = ledgerFixture();
+    const order: string[] = [];
+    const originalStart = fixture.ledger.start;
+    fixture.ledger.start = async (revisionId) => { order.push('start'); return originalStart(revisionId); };
+    const originalReplace = remote.replaceGroup.bind(remote);
+    remote.replaceGroup = async (groupKey, payload) => { order.push('put'); return originalReplace(groupKey, payload); };
+    const authority = new InMemoryIncidentRepairAuthorizationAuthority();
+    const gateway = createC2BRemoval01IncidentRepairGateway({
+      enabled: true, runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p,
+      authority, remote, ledger: fixture.ledger, now: () => 1_001,
+    });
+    await expect(gateway.inspect()).resolves.toMatchObject({ repairState: 'absent', putCount: 0 });
+    await expect(gateway.prepare(offlineAuthorization(p, 'prepare', authority))).resolves.toMatchObject({ state: 'planned' });
+    const put = await gateway.executeOnePut(offlineAuthorization(p, 'one-put', authority));
+    expect(put).toMatchObject({ remoteState: 'EXACT_CORRECTED_POST', repairState: 'started', putCount: 1, c2TerminalAppended: false });
+    expect(remote.putCalls).toBe(1);
+    expect(order).toEqual(['start', 'put']);
+    const resolved = await gateway.resolvePost(offlineAuthorization(p, 'resolve-post', authority));
+    expect(resolved).toMatchObject({ remoteState: 'EXACT_CORRECTED_POST', repairState: 'confirmed_post', putCount: 0, c2TerminalAppended: true });
+    expect(fixture.terminalCalls[0]).toBe(1);
+  });
+
+  it('marks a lost PUT unknown and never retries it, even with a fresh one-put attestation', async () => {
+    const p = plan(); const remote = new RemoteFixture(); remote.failPut = true; const fixture = ledgerFixture();
+    const authority = new InMemoryIncidentRepairAuthorizationAuthority();
+    const gateway = createC2BRemoval01IncidentRepairGateway({
+      enabled: true, runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p,
+      authority, remote, ledger: fixture.ledger, now: () => 1_001,
+    });
+    await gateway.prepare(offlineAuthorization(p, 'prepare', authority));
+    await expect(gateway.executeOnePut(offlineAuthorization(p, 'one-put', authority))).resolves.toMatchObject({ remoteState: 'UNKNOWN', repairState: 'unknown', putCount: 1 });
+    remote.failPut = false;
+    await expect(gateway.executeOnePut(offlineAuthorization(p, 'one-put', authority))).resolves.toMatchObject({ putCount: 0, repairState: 'unknown' });
+    expect(remote.putCalls).toBe(1);
+  });
+
+  it('reloads after a typed start CAS loss and propagates non-CAS start failures', async () => {
+    const p = plan(); const authority = new InMemoryIncidentRepairAuthorizationAuthority();
+    const casRemote = new RemoteFixture(); const casFixture = ledgerFixture({ startConflict: true });
+    const casGateway = createC2BRemoval01IncidentRepairGateway({ enabled: true, runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p, authority, remote: casRemote, ledger: casFixture.ledger, now: () => 1_001 });
+    await casGateway.prepare(offlineAuthorization(p, 'prepare', authority));
+    await expect(casGateway.executeOnePut(offlineAuthorization(p, 'one-put', authority))).resolves.toMatchObject({ putCount: 0, repairState: 'started' });
+    expect(casRemote.putCalls).toBe(0);
+
+    const failingRemote = new RemoteFixture(); const prepared = ledgerFixture();
+    await prepared.ledger.prepare(p);
+    const failingLedger: IncidentRepairLedger = { ...prepared.ledger, start: async () => { throw new Error('database unavailable'); } };
+    const failingGateway = createC2BRemoval01IncidentRepairGateway({ enabled: true, runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p, authority: new InMemoryIncidentRepairAuthorizationAuthority(), remote: failingRemote, ledger: failingLedger, now: () => 1_001 });
+    await expect(failingGateway.executeOnePut(offlineAuthorization(p, 'one-put', authority))).rejects.toThrow(/database unavailable/i);
+    expect(failingRemote.putCalls).toBe(0);
+  });
+
+  it('rejects disabled, expired, foreign, and replayed attestations before any mutation', async () => {
+    const p = plan(); const remote = new RemoteFixture(); const fixture = ledgerFixture();
+    const authority = new InMemoryIncidentRepairAuthorizationAuthority();
+    const gateway = createC2BRemoval01IncidentRepairGateway({
+      runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p, authority, remote, ledger: fixture.ledger, now: () => 1_001,
+    });
+    await expect(gateway.prepare(offlineAuthorization(p, 'prepare', authority))).rejects.toThrow(/disabled/i);
+    const expired = issueOfflineIncidentRepairAuthorization({ ...incidentRepairAuthorizationBinding(p, 'run-c2b-removal01-test', 'prepare', 'fmiliwxthjonjwywuqta'), issuedAt: 1_000, expiresAt: 1_001 });
+    const enabled = createC2BRemoval01IncidentRepairGateway({
+      enabled: true, runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p, authority, remote, ledger: fixture.ledger, now: () => 1_001,
+    });
+    await expect(enabled.prepare(expired)).rejects.toThrow(/expired/i);
+    const foreign = issueOfflineIncidentRepairAuthorization({ ...incidentRepairAuthorizationBinding(p, 'other-run', 'prepare', 'fmiliwxthjonjwywuqta'), issuedAt: 1_000, expiresAt: 2_000 });
+    await expect(enabled.prepare(foreign)).rejects.toThrow(/binding/i);
+    const valid = offlineAuthorization(p, 'prepare', authority);
+    await enabled.prepare(valid);
+    await expect(enabled.prepare(valid)).rejects.toThrow(/already been consumed/i);
+    expect(remote.putCalls).toBe(0);
+  });
+
+  it('keeps gateway inspection read-only across every persisted/missing ledger and remote state', async () => {
+    const remoteStates = ['EXACT_PRE', 'EXACT_CORRECTED_POST', 'MIXED', 'UNKNOWN'] as const;
+    const ledgerStates = [null, 'planned', 'started', 'unknown', 'confirmed_post', 'reconciled_post'] as const;
+    for (const remoteState of remoteStates) {
+      for (const ledgerState of ledgerStates) {
+        const p = plan(); const remote = new RemoteFixture();
+        if (remoteState === 'EXACT_CORRECTED_POST') {
+          await remote.replaceGroup(C2B_REMOVAL01_MANIFEST.groupKey, p.correctedGroupPayload);
+          remote.putCalls = 0;
+        } else if (remoteState === 'MIXED') {
+          remote.groupValues = ['Card A', 'Card B', 'foreign'];
+        } else if (remoteState === 'UNKNOWN') {
+          remote.offersComplete = false;
+        }
+        const record = ledgerState === null ? null : { repairId: p.repairId, revisionId: p.repairId, state: ledgerState, correctedPayloadDigest: p.correctedPayloadDigest };
+        const load = vi.fn(async () => record);
+        const prepare = vi.fn(async () => { throw new Error('inspection attempted prepare'); });
+        const start = vi.fn(async () => { throw new Error('inspection attempted start'); });
+        const markUnknown = vi.fn(async () => { throw new Error('inspection attempted markUnknown'); });
+        const markPost = vi.fn(async () => { throw new Error('inspection attempted markPost'); });
+        const appendTerminalC2 = vi.fn(async () => { throw new Error('inspection attempted append'); });
+        const readSeller = vi.spyOn(remote, 'readSeller');
+        const replaceGroup = vi.spyOn(remote, 'replaceGroup');
+        const gateway = createC2BRemoval01IncidentRepairGateway({
+          runId: 'run-c2b-removal01-test', projectRef: 'fmiliwxthjonjwywuqta', plan: p,
+          authority: new InMemoryIncidentRepairAuthorizationAuthority(), remote,
+          ledger: { load, prepare, start, markUnknown, markPost, appendTerminalC2 },
+        });
+        await gateway.inspect();
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(readSeller).toHaveBeenCalled();
+        expect(prepare).not.toHaveBeenCalled(); expect(start).not.toHaveBeenCalled();
+        expect(markUnknown).not.toHaveBeenCalled(); expect(markPost).not.toHaveBeenCalled();
+        expect(appendTerminalC2).not.toHaveBeenCalled(); expect(replaceGroup).not.toHaveBeenCalled();
+      }
+    }
   });
 });
 

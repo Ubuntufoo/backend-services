@@ -33,6 +33,7 @@ export type IncidentRepairState =
   | 'reconciled_post'
   | 'confirmed_post'
   | 'unknown';
+export type IncidentLedgerState = IncidentRepairState | 'absent';
 export type IncidentRemoteState = 'EXACT_PRE' | 'EXACT_CORRECTED_POST' | 'MIXED' | 'UNKNOWN';
 
 export interface IncidentGroupRead { payload: Json; variantSKUs: string[] }
@@ -59,6 +60,9 @@ export interface IncidentRemoteGateway {
   readAllOffers(sku: string): Promise<{ complete: boolean; offers: IncidentOfferRead[] }>;
   replaceGroup(groupKey: string, payload: Json): Promise<void>;
 }
+
+/** Read-only remote capability. Inspection/classification cannot obtain a PUT method. */
+export type IncidentReadOnlyRemoteGateway = Omit<IncidentRemoteGateway, 'replaceGroup'>;
 
 export interface IncidentFrozenEvidence {
   /**
@@ -106,12 +110,34 @@ export interface IncidentRepairLedger {
   appendTerminalC2(revisionId: string, evidence: Json): Promise<void>;
 }
 
+export class IncidentRepairCasConflictError extends Error {
+  readonly code = 'INCIDENT_REPAIR_CAS_CONFLICT';
+
+  constructor(message = 'incident repair CAS lost') {
+    super(message);
+    this.name = 'IncidentRepairCasConflictError';
+  }
+}
+
+export function isIncidentRepairCasConflict(error: unknown): error is IncidentRepairCasConflictError {
+  return error instanceof IncidentRepairCasConflictError
+    || (error instanceof Error && (error as Error & { code?: unknown }).code === 'INCIDENT_REPAIR_CAS_CONFLICT');
+}
+
+/** Read-only ledger capability. This is the only ledger type accepted by inspection. */
+export type IncidentReadOnlyLedger = Pick<IncidentRepairLedger, 'load'>;
+
 export interface IncidentRepairResult {
   revisionId: string;
   remoteState: IncidentRemoteState;
   repairState: IncidentRepairState;
   putCount: number;
   c2TerminalAppended: boolean;
+}
+
+export interface IncidentInspectionResult extends Omit<IncidentRepairResult, 'repairState'> {
+  /** True absence is distinct from an unpersisted/planned row. */
+  repairState: IncidentLedgerState;
 }
 
 const MAX_QUANTITY = 2_147_483_647;
@@ -281,7 +307,7 @@ export interface IncidentObservedEvidence {
   offers: Record<string, { complete: boolean; offers: IncidentOfferRead[] }>;
 }
 
-async function readObserved(remote: IncidentRemoteGateway, plan: IncidentRepairPlan): Promise<IncidentObservedEvidence> {
+async function readObserved(remote: IncidentReadOnlyRemoteGateway, plan: IncidentRepairPlan): Promise<IncidentObservedEvidence> {
   const seller = await remote.readSeller();
   if (!seller || typeof seller.userId !== 'string' || !seller.userId.trim()) throw new Error('seller identity is unavailable.');
   const group = await remote.readGroup(plan.manifest.groupKey);
@@ -338,13 +364,39 @@ function compareState(plan: IncidentRepairPlan, evidence: IncidentObservedEviden
   return post ? 'EXACT_CORRECTED_POST' : 'EXACT_PRE';
 }
 
-export async function classifyC2BRemoval01(remote: IncidentRemoteGateway, plan: IncidentRepairPlan): Promise<{ state: IncidentRemoteState; evidence?: IncidentObservedEvidence; reason?: string }> {
+export async function classifyC2BRemoval01(remote: IncidentReadOnlyRemoteGateway, plan: IncidentRepairPlan): Promise<{ state: IncidentRemoteState; evidence?: IncidentObservedEvidence; reason?: string }> {
   try {
     const evidence = await readObserved(remote, plan);
     return { state: compareState(plan, evidence), evidence };
   } catch (error) {
     return { state: 'UNKNOWN', reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Read-only incident inspection. In particular, a missing row stays absent;
+ * inspection never prepares, starts, marks, appends, or replaces anything.
+ */
+export async function inspectC2BRemoval01(input: {
+  plan: IncidentRepairPlan;
+  remote: IncidentReadOnlyRemoteGateway;
+  ledger: IncidentReadOnlyLedger;
+}): Promise<IncidentInspectionResult> {
+  const { plan, remote, ledger } = input;
+  const record = await ledger.load(plan.repairId);
+  if (record && ((record.repairId !== undefined && record.repairId !== plan.repairId)
+    || record.revisionId !== plan.repairId
+    || record.correctedPayloadDigest !== plan.correctedPayloadDigest)) {
+    throw new Error('incident repair ledger identity/digest mismatch.');
+  }
+  const classified = await classifyC2BRemoval01(remote, plan);
+  return {
+    revisionId: plan.repairId,
+    remoteState: classified.state,
+    repairState: record?.state ?? 'absent',
+    putCount: 0,
+    c2TerminalAppended: false,
+  };
 }
 
 function evidenceJson(state: IncidentRemoteState, observed: IncidentObservedEvidence | undefined, reason: string | undefined, plan: IncidentRepairPlan): Json {
@@ -372,56 +424,12 @@ function evidenceJson(state: IncidentRemoteState, observed: IncidentObservedEvid
  */
 export async function executeC2BRemoval01Repair(input: {
   plan: IncidentRepairPlan;
-  remote: IncidentRemoteGateway;
-  ledger: IncidentRepairLedger;
-  operatorApproval?: boolean;
-}): Promise<IncidentRepairResult> {
-  const { plan, remote, ledger } = input;
-  let record = await ledger.load(plan.repairId);
-  if (!record) record = await ledger.prepare(plan);
-  if ((record.repairId !== undefined && record.repairId !== plan.repairId) || record.revisionId !== plan.repairId || record.correctedPayloadDigest !== plan.correctedPayloadDigest) throw new Error('incident repair ledger identity/digest mismatch.');
-  let putCount = 0;
-  let c2TerminalAppended = false;
-  const reconcile = async (): Promise<IncidentRepairResult> => {
-    const classified = await classifyC2BRemoval01(remote, plan);
-    if (classified.state === 'EXACT_CORRECTED_POST') {
-      if (record!.state === 'planned') record = await ledger.markPost(plan.repairId, 'reconciled_post', evidenceJson(classified.state, classified.evidence, undefined, plan));
-      else if (record!.state === 'started' || record!.state === 'unknown') record = await ledger.markPost(plan.repairId, 'confirmed_post', evidenceJson(classified.state, classified.evidence, undefined, plan));
-      if (record!.state === 'reconciled_post' || record!.state === 'confirmed_post') { await ledger.appendTerminalC2(plan.repairId, evidenceJson(classified.state, classified.evidence, undefined, plan)); c2TerminalAppended = true; }
-    } else if (record!.state === 'started' && classified.state !== 'EXACT_PRE') {
-      record = await ledger.markUnknown(plan.repairId, evidenceJson(classified.state, classified.evidence, classified.reason, plan));
-    }
-    return { revisionId: plan.repairId, remoteState: classified.state, repairState: record!.state, putCount, c2TerminalAppended };
-  };
-  if (record.state === 'started' || record.state === 'unknown' || record.state === 'reconciled_post' || record.state === 'confirmed_post') return await reconcile();
-  const classified = await classifyC2BRemoval01(remote, plan);
-  if (classified.state === 'EXACT_CORRECTED_POST') {
-    record = await ledger.markPost(plan.repairId, 'reconciled_post', evidenceJson(classified.state, classified.evidence, undefined, plan));
-    await ledger.appendTerminalC2(plan.repairId, evidenceJson(classified.state, classified.evidence, undefined, plan));
-    return { revisionId: plan.repairId, remoteState: classified.state, repairState: record.state, putCount, c2TerminalAppended: true };
-  }
-  if (classified.state !== 'EXACT_PRE') {
-    // Before durable start there is no outbound mutation whose outcome could
-    // be ambiguous. Keep the row planned; SQL unknown transition is valid only
-    // for a started row and no recovery invocation may manufacture one.
-    return { revisionId: plan.repairId, remoteState: classified.state, repairState: record.state, putCount, c2TerminalAppended };
-  }
-  if (input.operatorApproval !== true) return { revisionId: plan.repairId, remoteState: 'EXACT_PRE', repairState: record.state, putCount, c2TerminalAppended };
-  try {
-    record = await ledger.start(plan.repairId);
-  } catch {
-    // Another process won the durable start CAS. Reconcile only; never race a
-    // second PUT from a stale planned read.
-    return await reconcile();
-  }
-  if (record.state !== 'started') return await reconcile();
-  putCount = 1;
-  try {
-    await remote.replaceGroup(plan.manifest.groupKey, clone(plan.correctedGroupPayload));
-  } catch (error) {
-    record = await ledger.markUnknown(plan.repairId, evidenceJson('UNKNOWN', undefined, error instanceof Error ? error.message : String(error), plan));
-    return { revisionId: plan.repairId, remoteState: 'UNKNOWN', repairState: record.state, putCount, c2TerminalAppended };
-  }
-  return await reconcile();
+  remote: IncidentReadOnlyRemoteGateway;
+  ledger: IncidentReadOnlyLedger;
+}): Promise<IncidentInspectionResult> {
+  // Kept as a source-compatible name for callers being migrated to the
+  // incident gateway. This function is read-only and can never prepare,
+  // start, mark, append, or PUT.
+  return inspectC2BRemoval01(input);
 }
 
