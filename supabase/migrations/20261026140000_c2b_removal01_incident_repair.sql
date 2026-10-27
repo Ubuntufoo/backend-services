@@ -204,6 +204,161 @@ begin
 end;
 $$;
 
+-- Validate the historical provider collections as independent sets and bind
+-- each frozen Item Card aspect to the immutable confirmed SKU mapping.  This
+-- helper returns only the survivor selector projection needed by prepare;
+-- callers cannot use it as a general-purpose snapshot parser.
+create function public.c2b_removal01_incident_expected_survivor_selector_values(
+  p_snapshot jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  incident_skus text[] := ARRAY[
+    'BSKBL-C2BRemoval01-000001',
+    'BSKBL-C2BRemoval01-000002',
+    'BSKBL-C2BRemoval01-000003'
+  ]::text[];
+  survivor_skus text[] := ARRAY[
+    'BSKBL-C2BRemoval01-000002',
+    'BSKBL-C2BRemoval01-000003'
+  ]::text[];
+  expected_group jsonb;
+  confirmed_variations jsonb;
+  item_payloads jsonb;
+  row jsonb;
+  item_payload jsonb;
+  sku text;
+  selector text;
+  key text;
+  confirmed_skus jsonb := '[]'::jsonb;
+  confirmed_selectors jsonb := '[]'::jsonb;
+  expected_group_skus jsonb := '[]'::jsonb;
+  expected_group_selectors jsonb := '[]'::jsonb;
+begin
+  if jsonb_typeof(p_snapshot) is distinct from 'object' then
+    raise exception 'C2BRemoval01 historical snapshot is not an object' using errcode = 'VR002';
+  end if;
+  expected_group := p_snapshot->'permanentRemoval'->'expectedGroupPayload';
+  confirmed_variations := p_snapshot->'confirmed'->'aggregate'->'variations';
+  item_payloads := p_snapshot->'permanentRemoval'->'inventoryItemPayloadsBySku';
+  if jsonb_typeof(expected_group) is distinct from 'object'
+     or jsonb_typeof(confirmed_variations) is distinct from 'array'
+     or jsonb_array_length(confirmed_variations) is distinct from 3
+     or jsonb_typeof(item_payloads) is distinct from 'object' then
+    raise exception 'C2BRemoval01 historical evidence shape is incomplete' using errcode = 'VR002';
+  end if;
+
+  -- Confirmed aggregate is the immutable SKU -> selector authority.
+  for row in select value from jsonb_array_elements(confirmed_variations) loop
+    if jsonb_typeof(row) is distinct from 'object'
+       or jsonb_typeof(row->'sku') is distinct from 'string'
+       or jsonb_typeof(row->'selector_value') is distinct from 'string' then
+      raise exception 'C2BRemoval01 confirmed variation SKU/selector shape is invalid' using errcode = 'VR002';
+    end if;
+    sku := row->>'sku';
+    selector := row->>'selector_value';
+    if sku = '' or selector = '' or not (sku = any(incident_skus)) then
+      raise exception 'C2BRemoval01 confirmed variation SKU/selector is foreign or empty' using errcode = 'VR002';
+    end if;
+    if confirmed_skus ? sku or confirmed_selectors ? selector then
+      raise exception 'C2BRemoval01 confirmed SKU/selector membership is duplicated' using errcode = 'VR002';
+    end if;
+    confirmed_skus := confirmed_skus || jsonb_build_array(sku);
+    confirmed_selectors := confirmed_selectors || jsonb_build_array(selector);
+  end loop;
+  if jsonb_array_length(confirmed_skus) is distinct from 3 then
+    raise exception 'C2BRemoval01 confirmed SKU membership is not exact' using errcode = 'VR002';
+  end if;
+  foreach key in array incident_skus loop
+    if not (confirmed_skus ? key) then
+      raise exception 'C2BRemoval01 confirmed SKU membership is missing or foreign' using errcode = 'VR002';
+    end if;
+  end loop;
+
+  -- Historical Group variantSKUs and Card values are independent sets.
+  if jsonb_typeof(expected_group->'variantSKUs') is distinct from 'array'
+     or jsonb_array_length(expected_group->'variantSKUs') is distinct from 3
+     or jsonb_typeof(expected_group->'variesBy') is distinct from 'object'
+     or jsonb_typeof(expected_group->'variesBy'->'specifications') is distinct from 'array'
+     or jsonb_array_length(expected_group->'variesBy'->'specifications') is distinct from 1
+     or jsonb_typeof(expected_group->'variesBy'->'specifications'->0) is distinct from 'object'
+     or expected_group->'variesBy'->'specifications'->0->>'name' is distinct from 'Card'
+     or jsonb_typeof(expected_group->'variesBy'->'specifications'->0->'values') is distinct from 'array'
+     or jsonb_array_length(expected_group->'variesBy'->'specifications'->0->'values') is distinct from 3 then
+    raise exception 'C2BRemoval01 historical Group SKU/Card collections are malformed' using errcode = 'VR002';
+  end if;
+  for row in select value from jsonb_array_elements(expected_group->'variantSKUs') loop
+    if jsonb_typeof(row) is distinct from 'string' then
+      raise exception 'C2BRemoval01 historical Group SKU collection contains a non-string' using errcode = 'VR002';
+    end if;
+    sku := row #>> '{}';
+    if sku = '' or not (sku = any(incident_skus)) or expected_group_skus ? sku then
+      raise exception 'C2BRemoval01 historical Group SKU collection is missing, foreign, or duplicated' using errcode = 'VR002';
+    end if;
+    expected_group_skus := expected_group_skus || jsonb_build_array(sku);
+  end loop;
+  foreach key in array incident_skus loop
+    if not (expected_group_skus ? key) then
+      raise exception 'C2BRemoval01 historical Group SKU collection is not the exact incident set' using errcode = 'VR002';
+    end if;
+  end loop;
+  for row in select value from jsonb_array_elements(expected_group->'variesBy'->'specifications'->0->'values') loop
+    if jsonb_typeof(row) is distinct from 'string' then
+      raise exception 'C2BRemoval01 historical Group Card collection contains a non-string' using errcode = 'VR002';
+    end if;
+    selector := row #>> '{}';
+    if selector = '' or expected_group_selectors ? selector then
+      raise exception 'C2BRemoval01 historical Group Card collection is missing, foreign, or duplicated' using errcode = 'VR002';
+    end if;
+    expected_group_selectors := expected_group_selectors || jsonb_build_array(selector);
+  end loop;
+  if jsonb_array_length(expected_group_selectors) is distinct from jsonb_array_length(confirmed_selectors) then
+    raise exception 'C2BRemoval01 historical Group Card collection cardinality is not exact' using errcode = 'VR002';
+  end if;
+  for row in select value from jsonb_array_elements(confirmed_selectors) loop
+    if not (expected_group_selectors ? (row #>> '{}')) then
+      raise exception 'C2BRemoval01 historical Group Card collection is foreign or incomplete' using errcode = 'VR002';
+    end if;
+  end loop;
+
+  -- Item payload map must have exactly the three immutable incident keys.
+  if (select count(*) from jsonb_object_keys(item_payloads)) is distinct from 3 then
+    raise exception 'C2BRemoval01 inventory Item payload map key count is not exact' using errcode = 'VR002';
+  end if;
+  for key in select jsonb_object_keys(item_payloads) loop
+    if not (key = any(incident_skus)) then
+      raise exception 'C2BRemoval01 inventory Item payload map has a foreign SKU' using errcode = 'VR002';
+    end if;
+  end loop;
+  foreach key in array incident_skus loop
+    if not (item_payloads ? key) then
+      raise exception 'C2BRemoval01 inventory Item payload map is missing an incident SKU' using errcode = 'VR002';
+    end if;
+    item_payload := item_payloads->key;
+    if jsonb_typeof(item_payload) is distinct from 'object'
+       or jsonb_typeof(item_payload->'product') is distinct from 'object'
+       or jsonb_typeof(item_payload->'product'->'aspects') is distinct from 'object'
+       or jsonb_typeof(item_payload->'product'->'aspects'->'Card') is distinct from 'array'
+       or jsonb_array_length(item_payload->'product'->'aspects'->'Card') is distinct from 1
+       or jsonb_typeof(item_payload->'product'->'aspects'->'Card'->0) is distinct from 'string'
+       or item_payload->'product'->'aspects'->'Card'->>0 is distinct from (
+         (select confirmed_row->>'selector_value' from jsonb_array_elements(confirmed_variations) as confirmed_row where confirmed_row->>'sku' = key)
+       ) then
+      raise exception 'C2BRemoval01 inventory Item Card ownership is not exact' using errcode = 'VR002';
+    end if;
+  end loop;
+
+  return jsonb_build_array(
+    (select confirmed_row->>'selector_value' from jsonb_array_elements(confirmed_variations) as confirmed_row where confirmed_row->>'sku' = survivor_skus[1]),
+    (select confirmed_row->>'selector_value' from jsonb_array_elements(confirmed_variations) as confirmed_row where confirmed_row->>'sku' = survivor_skus[2])
+  );
+end;
+$$;
+
 create function public.prepare_c2b_removal01_incident_repair(
   p_repair_id uuid,
   p_group_id uuid,
@@ -281,6 +436,7 @@ begin
      or r.snapshot->'permanentRemoval'->>'listingId' is distinct from p_listing_id then
     raise exception 'C2BRemoval01 repair frozen revision is not exact' using errcode = 'VR002';
   end if;
+  expected_selector_values := public.c2b_removal01_incident_expected_survivor_selector_values(r.snapshot);
   if jsonb_typeof(r.snapshot->'permanentRemoval'->'expectedGroupPayload') is distinct from 'object'
      or jsonb_typeof(r.snapshot->'permanentRemoval'->'expectedGroupPayload'->'variesBy') is distinct from 'object'
      or jsonb_typeof(r.snapshot->'permanentRemoval'->'expectedGroupPayload'->'variesBy'->'specifications') is distinct from 'array'
@@ -297,10 +453,6 @@ begin
      or (select count(distinct x->>'selector_value') from jsonb_array_elements(r.snapshot->'confirmed'->'aggregate'->'variations') x) is distinct from 3 then
     raise exception 'C2BRemoval01 repair frozen selector projection is not exact' using errcode = 'VR002';
   end if;
-  select jsonb_agg(x->>'selector_value' order by array_position(expected_survivor_skus, x->>'sku'))
-    into expected_selector_values
-    from jsonb_array_elements(r.snapshot->'confirmed'->'aggregate'->'variations') x
-   where x->>'sku' = any(expected_survivor_skus);
   expected_corrected_payload := jsonb_set(
     jsonb_set(r.snapshot->'permanentRemoval'->'expectedGroupPayload', '{variantSKUs}', to_jsonb(expected_survivor_skus), true),
     '{variesBy,specifications,0,values}', expected_selector_values, true
@@ -506,6 +658,7 @@ revoke all privileges on table public.variation_listing_c2b_removal01_incident_r
 revoke all on function public.prevent_variation_listing_c2b_removal01_incident_identity_mutation() from public, anon, authenticated, service_role;
 revoke all on function public.c2b_removal01_incident_require_post_evidence(jsonb,public.variation_listing_c2b_removal01_incident_repairs) from public, anon, authenticated, service_role;
 revoke all on function public.c2b_removal01_incident_assert_locked_identity(public.variation_listing_c2b_removal01_incident_repairs) from public, anon, authenticated, service_role;
+revoke all on function public.c2b_removal01_incident_expected_survivor_selector_values(jsonb) from public, anon, authenticated, service_role;
 revoke all on function public.prepare_c2b_removal01_incident_repair(uuid,uuid,uuid,uuid,text,text,text,text,jsonb,text) from public, anon, authenticated, service_role;
 revoke all on function public.load_c2b_removal01_incident_repair(uuid) from public, anon, authenticated, service_role;
 revoke all on function public.start_c2b_removal01_incident_repair(uuid) from public, anon, authenticated, service_role;

@@ -35,6 +35,7 @@ assert(migration.includes("group_id = '586051b7-970a-45bd-a53a-1d1a10285b42'"), 
 assert(migration.includes("revision_id = '0f8a4786-12a3-45d9-b293-63e2a6318260'"), 'incident revision binding');
 assert(migration.includes("snapshot_digest = '602f38a42f0beb0f940a6f222c105ffa0914bbe0b0d3eff03a2830a0a6737727'"), 'original digest binding');
 assert(migration.includes('expected_corrected_payload'), 'immutable corrected payload projection');
+assert(migration.includes('c2b_removal01_incident_expected_survivor_selector_values'), 'historical evidence helper');
 assert(/order by s\.capture_source_key for update/.test(migration), 'deterministic intake lock');
 assert(/variation_listing_revisions where revision_id[\s\S]*for update/.test(migration), 'revision lock');
 assert(migration.includes('append_variation_listing_permanent_removal_checkpoint'), 'terminal bridge uses existing c2 checkpoint append');
@@ -91,6 +92,48 @@ try {
   for (const file of migrationNames) await psql(await readFile(migrationPath(file), 'utf8'));
   const acl = await psql("select to_regclass('public.variation_listing_c2b_removal01_incident_repairs') is not null as table_exists, (select relrowsecurity from pg_class where oid='public.variation_listing_c2b_removal01_incident_repairs'::regclass) as rls, has_table_privilege('service_role','public.variation_listing_c2b_removal01_incident_repairs','insert') as service_insert, has_function_privilege('service_role','public.prepare_c2b_removal01_incident_repair(uuid,uuid,uuid,uuid,text,text,text,text,jsonb,text)','execute') as prepare_service, has_function_privilege('public','public.prepare_c2b_removal01_incident_repair(uuid,uuid,uuid,uuid,text,text,text,text,jsonb,text)','execute') as prepare_public, (select prosecdef from pg_proc where oid=to_regprocedure('public.append_terminal_c2b_removal01_incident_repair(uuid,uuid,jsonb)')) as bridge_definer;");
   assert(/t\s*\|\s*t\s*\|\s*f\s*\|\s*t\s*\|\s*f\s*\|\s*t/.test(acl), 'ledger RLS/ACL/SECURITY DEFINER contract');
+  const helperAcl = await psql("select has_function_privilege('service_role','public.c2b_removal01_incident_expected_survivor_selector_values(jsonb)','execute') as service_execute, has_function_privilege('anon','public.c2b_removal01_incident_expected_survivor_selector_values(jsonb)','execute') as anon_execute, has_function_privilege('authenticated','public.c2b_removal01_incident_expected_survivor_selector_values(jsonb)','execute') as authenticated_execute, has_function_privilege('public','public.c2b_removal01_incident_expected_survivor_selector_values(jsonb)','execute') as public_execute;");
+  assert(/f\s*\|\s*f\s*\|\s*f\s*\|\s*f/.test(helperAcl), 'historical evidence helper is private');
+
+  const incidentSnapshot = {
+    confirmed: { aggregate: { variations: [
+      { sku: 'BSKBL-C2BRemoval01-000002', selector_value: 'Card B' },
+      { sku: 'BSKBL-C2BRemoval01-000003', selector_value: 'Card C' },
+      { sku: 'BSKBL-C2BRemoval01-000001', selector_value: 'Card A' },
+    ] } },
+    permanentRemoval: {
+      expectedGroupPayload: {
+        variantSKUs: ['BSKBL-C2BRemoval01-000002', 'BSKBL-C2BRemoval01-000003', 'BSKBL-C2BRemoval01-000001'],
+        variesBy: { specifications: [{ name: 'Card', values: ['Card A', 'Card B', 'Card C'] }] },
+      },
+      inventoryItemPayloadsBySku: {
+        'BSKBL-C2BRemoval01-000001': { product: { aspects: { Card: ['Card A'] } } },
+        'BSKBL-C2BRemoval01-000002': { product: { aspects: { Card: ['Card B'] } } },
+        'BSKBL-C2BRemoval01-000003': { product: { aspects: { Card: ['Card C'] } } },
+      },
+    },
+  };
+  const snapshotSql = value => `'${JSON.stringify(value).replaceAll("'", "''")}'::jsonb`;
+  const expectedSelectorsOutput = (await psql(`select public.c2b_removal01_incident_expected_survivor_selector_values(${snapshotSql(incidentSnapshot)});`)).trim().split(/\r?\n/).find(line => line.trim().startsWith('['));
+  const expectedSelectors = JSON.parse(expectedSelectorsOutput);
+  assert(JSON.stringify(expectedSelectors) === JSON.stringify(['Card B', 'Card C']), 'B,C,A/A,B,C historical evidence projection');
+  const helperDenials = [
+    ['wrong Item Card', (value) => { value.permanentRemoval.inventoryItemPayloadsBySku['BSKBL-C2BRemoval01-000001'].product.aspects.Card = ['Card X']; }],
+    ['Item payload map missing', (value) => { delete value.permanentRemoval.inventoryItemPayloadsBySku['BSKBL-C2BRemoval01-000002']; }],
+    ['Item payload map foreign', (value) => { delete value.permanentRemoval.inventoryItemPayloadsBySku['BSKBL-C2BRemoval01-000002']; value.permanentRemoval.inventoryItemPayloadsBySku['BSKBL-C2BRemoval01-999999'] = { product: { aspects: { Card: ['Card B'] } } }; }],
+    ['Group Card missing', (value) => { value.permanentRemoval.expectedGroupPayload.variesBy.specifications[0].values = ['Card A', 'Card B']; }],
+    ['Group Card foreign', (value) => { value.permanentRemoval.expectedGroupPayload.variesBy.specifications[0].values = ['Card A', 'Card B', 'Card X']; }],
+    ['Group Card duplicate', (value) => { value.permanentRemoval.expectedGroupPayload.variesBy.specifications[0].values = ['Card A', 'Card B', 'Card B']; }],
+    ['Group SKU missing', (value) => { value.permanentRemoval.expectedGroupPayload.variantSKUs = ['BSKBL-C2BRemoval01-000002', 'BSKBL-C2BRemoval01-000003']; }],
+    ['Group SKU foreign', (value) => { value.permanentRemoval.expectedGroupPayload.variantSKUs = ['BSKBL-C2BRemoval01-000002', 'BSKBL-C2BRemoval01-000003', 'BSKBL-C2BRemoval01-999999']; }],
+    ['Group SKU duplicate', (value) => { value.permanentRemoval.expectedGroupPayload.variantSKUs = ['BSKBL-C2BRemoval01-000002', 'BSKBL-C2BRemoval01-000003', 'BSKBL-C2BRemoval01-000003']; }],
+  ];
+  for (const [label, mutate] of helperDenials) {
+    const bad = structuredClone(incidentSnapshot);
+    mutate(bad);
+    await expectPsqlFailure(`select public.c2b_removal01_incident_expected_survivor_selector_values(${snapshotSql(bad)});`, label);
+  }
+  console.log(`c2b-removal01 historical evidence helper validation: 1 positive + ${helperDenials.length} denial cases passed`);
   try { await psql("set role service_role; insert into public.variation_listing_c2b_removal01_incident_repairs(repair_id,group_id,revision_id,group_key,seller_user_id,marketplace_id,listing_id,snapshot_digest,captured_desired_revision,expected_previous_confirmed_revision,target_variation_id,target_sku,target_offer_id,target_quantity,survivor_skus,survivor_offer_ids,survivor_quantities,corrected_group_payload,corrected_payload_digest) values (gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'x','x','x','x',repeat('0',64),6,5,gen_random_uuid(),'x','x',0,array['x','y'],array['1','2'],array[1,1],'{}',repeat('0',64));"); throw new Error('direct service_role ledger write unexpectedly succeeded'); } catch (error) { if (error.message.includes('unexpectedly succeeded')) throw error; }
   const repairRecord = "jsonb_populate_record(null::public.variation_listing_c2b_removal01_incident_repairs, '{\"revision_id\":\"0f8a4786-12a3-45d9-b293-63e2a6318260\",\"group_id\":\"586051b7-970a-45bd-a53a-1d1a10285b42\",\"seller_user_id\":\"testuser_variationbuyer\",\"marketplace_id\":\"EBAY_US\",\"listing_id\":\"110591443545\",\"snapshot_digest\":\"602f38a42f0beb0f940a6f222c105ffa0914bbe0b0d3eff03a2830a0a6737727\",\"corrected_payload_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"target_sku\":\"BSKBL-C2BRemoval01-000001\",\"target_offer_id\":\"11951367010\",\"survivor_skus\":[\"BSKBL-C2BRemoval01-000002\",\"BSKBL-C2BRemoval01-000003\"],\"survivor_offer_ids\":[\"11951368010\",\"11951369010\"]}'::jsonb)";
   const validEvidence = {
