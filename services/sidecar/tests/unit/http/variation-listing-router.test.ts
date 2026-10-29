@@ -248,10 +248,21 @@ function app(
   createId?: () => string,
   resolveCreationDefaults = creationDefaults,
   assertSoldOutRemovalEligible?: (input: { groupId: string; variationId: string; expectedDesiredRevision: number }) => Promise<void>,
+  workspace: {
+    readCaptureWorkspace?: () => Promise<'standard' | 'variation'>;
+    writeCaptureWorkspace?: (workspace: 'standard' | 'variation') => Promise<void>;
+  } = {},
 ) {
   const instance = express();
   instance.use(express.json());
-  instance.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess: access, createId, resolveCreationDefaults, assertSoldOutRemovalEligible }));
+  instance.use('/api/variation-listings', createVariationListingApiRouter({
+    dataAccess: access,
+    createId,
+    resolveCreationDefaults,
+    assertSoldOutRemovalEligible,
+    readCaptureWorkspace: workspace.readCaptureWorkspace ?? (async () => 'standard'),
+    writeCaptureWorkspace: workspace.writeCaptureWorkspace ?? (async () => undefined),
+  }));
   return instance;
 }
 
@@ -320,6 +331,7 @@ describe('YP6.1 variation listing API router', () => {
         createdAt: now,
         updatedAt: now,
       },
+      captureWorkspace: 'standard',
     });
   });
 
@@ -327,7 +339,122 @@ describe('YP6.1 variation listing API router', () => {
     const access = dataAccess({ getIntakeSession: vi.fn(async () => null) });
     const response = await request(app(access)).get('/api/variation-listings/intake-session');
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ session: null });
+    expect(response.body).toEqual({ session: null, captureWorkspace: 'standard' });
+  });
+
+  it('exposes and mutates capture workspace through injected marker seams', async () => {
+    const writes: Array<'standard' | 'variation'> = [];
+    const access = dataAccess({
+      getIntakeSession: vi.fn(async () => intakeSession({mode: 'new_variation', targetGroupId: groupId, stickyPriceAmount: 7.25})),
+      configureIntake: vi.fn(async () => intakeSession({mode: 'idle', stickyPriceAmount: 7.25})),
+    });
+    const instance = app(access, undefined, creationDefaults, undefined, {
+      readCaptureWorkspace: vi.fn(async () => 'variation'),
+      writeCaptureWorkspace: vi.fn(async (workspace) => { writes.push(workspace); }),
+    });
+
+    const get = await request(instance).get('/api/variation-listings/intake-session');
+    expect(get.body.captureWorkspace).toBe('variation');
+
+    const standard = await request(instance)
+      .patch('/api/variation-listings/intake-session')
+      .send({captureWorkspace: 'standard'});
+    expect(standard.status).toBe(200);
+    expect(writes).toEqual(['standard']);
+    expect(access.configureIntake).toHaveBeenCalledWith({
+      mode: 'idle',
+      targetGroupId: null,
+      targetVariationId: null,
+      copyConditionToken: null,
+      stickyPriceAmount: 7.25,
+    });
+  });
+
+  it('writes Variation workspace before an idle workspace-only claim without configuring a target', async () => {
+    const writeCaptureWorkspace = vi.fn(async () => undefined);
+    const configureIntake = vi.fn(async () => intakeSession());
+    const access = dataAccess({configureIntake});
+    const instance = app(access, undefined, creationDefaults, undefined, {
+      writeCaptureWorkspace,
+    });
+    const response = await request(instance)
+      .patch('/api/variation-listings/intake-session')
+      .send({captureWorkspace: 'variation'});
+
+    expect(response.status).toBe(200);
+    expect(writeCaptureWorkspace).toHaveBeenCalledWith('variation');
+    expect(configureIntake).not.toHaveBeenCalled();
+  });
+
+  it('does not write the workspace when a workspace-only Variation claim conflicts with a pending pair', async () => {
+    const writeCaptureWorkspace = vi.fn(async () => undefined);
+    const access = dataAccess({
+      getIntakeSession: vi.fn(async () => intakeSession({
+        mode: 'new_variation',
+        targetGroupId: groupId,
+        pendingPair: {
+          pair_id: '66666666-6666-4666-8666-666666666666',
+        } as unknown as VariationListingIntakeSession['pendingPair'],
+      })),
+    });
+    const response = await request(app(access, undefined, creationDefaults, undefined, {writeCaptureWorkspace}))
+      .patch('/api/variation-listings/intake-session')
+      .send({captureWorkspace: 'variation'});
+
+    expect(response.status).toBe(409);
+    expect(writeCaptureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('does not write the workspace when full Variation configuration conflicts with a pending pair', async () => {
+    const writeCaptureWorkspace = vi.fn(async () => undefined);
+    const configureIntake = vi.fn(async () => intakeSession());
+    const access = dataAccess({
+      configureIntake,
+      getIntakeSession: vi.fn(async () => intakeSession({
+        mode: 'new_variation',
+        targetGroupId: groupId,
+        pendingPair: {
+          pair_id: '66666666-6666-4666-8666-666666666666',
+        } as unknown as VariationListingIntakeSession['pendingPair'],
+      })),
+    });
+    const response = await request(app(access, undefined, creationDefaults, undefined, {writeCaptureWorkspace}))
+      .patch('/api/variation-listings/intake-session')
+      .send({
+        captureWorkspace: 'variation',
+        mode: 'new_variation',
+        targetGroupId: groupId,
+        targetVariationId: null,
+        copyConditionToken: null,
+        stickyPriceAmount: 1.49,
+      });
+
+    expect(response.status).toBe(409);
+    expect(configureIntake).not.toHaveBeenCalled();
+    expect(writeCaptureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('writes Variation ownership before a DB configure failure leaves the watcher safely paused', async () => {
+    const events: string[] = [];
+    const writeCaptureWorkspace = vi.fn(async () => { events.push('write'); });
+    const configureIntake = vi.fn(async () => {
+      events.push('configure');
+      throw new Error('configure unavailable');
+    });
+    const access = dataAccess({configureIntake});
+    const response = await request(app(access, undefined, creationDefaults, undefined, {writeCaptureWorkspace}))
+      .patch('/api/variation-listings/intake-session')
+      .send({
+        captureWorkspace: 'variation',
+        mode: 'new_variation',
+        targetGroupId: groupId,
+        targetVariationId: null,
+        copyConditionToken: null,
+        stickyPriceAmount: 1.49,
+      });
+
+    expect(response.status).toBe(500);
+    expect(events).toEqual(['write', 'configure']);
   });
 
   it('sets, reads, and clears process-local intake status', () => {
@@ -492,7 +619,7 @@ describe('YP6.1 variation listing API router', () => {
     });
     const response = await request(app(access)).get('/api/variation-listings/intake-session');
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ session: null });
+    expect(response.body).toEqual({ session: null, captureWorkspace: 'standard' });
   });
 
   it.each([
@@ -500,7 +627,7 @@ describe('YP6.1 variation listing API router', () => {
     ['new_variation', { mode: 'new_variation' as const, targetGroupId: groupId, targetVariationId: null, copyConditionToken: null, stickyPriceAmount: 4.99 as const }],
   ])('configures %s through the existing intake RPC seam', async (_label, body) => {
     const access = dataAccess({ configureIntake: vi.fn(async () => intakeSession({ mode: body.mode, targetGroupId: body.targetGroupId, stickyPriceAmount: body.stickyPriceAmount })) });
-    const response = await request(app(access)).patch('/api/variation-listings/intake-session').send(body);
+    const response = await request(app(access)).patch('/api/variation-listings/intake-session').send({ ...body, captureWorkspace: 'variation' });
     expect(response.status).toBe(200);
     expect(access.configureIntake).toHaveBeenCalledWith(body);
     expect(response.body.session).toMatchObject({
@@ -516,11 +643,13 @@ describe('YP6.1 variation listing API router', () => {
     const access = dataAccess({ configureIntake });
     const duplicate = await request(app(access)).patch('/api/variation-listings/intake-session').send({
       mode: 'duplicate_copy',
+      captureWorkspace: 'variation',
       targetGroupId: groupId,
       stickyPriceAmount: 1.49,
     });
     const idleTarget = await request(app(access)).patch('/api/variation-listings/intake-session').send({
       mode: 'idle',
+      captureWorkspace: 'variation',
       targetGroupId: groupId,
       stickyPriceAmount: 1.49,
     });
@@ -537,6 +666,7 @@ describe('YP6.1 variation listing API router', () => {
     });
     const response = await request(app(access)).patch('/api/variation-listings/intake-session').send({
       mode: 'idle',
+      captureWorkspace: 'variation',
       targetGroupId: null,
       stickyPriceAmount: 1.49,
     });

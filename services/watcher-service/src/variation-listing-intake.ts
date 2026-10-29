@@ -52,7 +52,7 @@ export type VariationListingWatcherEventRoute =
   | {
       kind: 'ignored';
       image: WatcherImageDescriptor;
-      reason: 'unsupported_image';
+      reason: 'unsupported_image' | 'variation_disarmed';
     }
   | {
       kind: 'start_pair';
@@ -142,6 +142,8 @@ export interface RouteVariationListingWatcherEventDependencies {
   createPairId?: () => string;
   now?: () => Date;
   sessionReader?: VariationListingIntakeSessionReader;
+  /** Optional authoritative pause check. Absence preserves legacy Standard routing. */
+  isVariationCapturePaused?: (captureSourceKey: string) => Promise<boolean>;
 }
 
 export interface StoreVariationListingCompletionDependencies {
@@ -382,10 +384,14 @@ export async function routeVariationListingWatcherEvent(
 
   const sessionReader =
     dependencies.sessionReader ?? createVariationListingIntakeSessionReader();
+  const workspaceReaderConfigured = dependencies.isVariationCapturePaused !== undefined;
+  const workspaceIsVariation = await dependencies.isVariationCapturePaused?.(captureSourceKey) ?? false;
   const session = await sessionReader.getBySourceKey(captureSourceKey);
 
   if (session === null) {
-    return { image: { path: sourceRef }, kind: 'legacy' };
+    return workspaceIsVariation
+      ? { image: { path: sourceRef }, kind: 'ignored', reason: 'variation_disarmed' }
+      : { image: { path: sourceRef }, kind: 'legacy' };
   }
   if (session.captureSourceKey !== captureSourceKey) {
     return fail('loaded session captureSourceKey does not match the requested source key.');
@@ -395,7 +401,14 @@ export async function routeVariationListingWatcherEvent(
 
   if (session.pendingPair === null) {
     if (session.mode === 'idle') {
+      if (workspaceIsVariation) {
+        return { image: { path: sourceRef }, kind: 'ignored', reason: 'variation_disarmed' };
+      }
       return { image: { path: sourceRef }, kind: 'legacy' };
+    }
+
+    if (workspaceReaderConfigured && !workspaceIsVariation) {
+      return fail('armed Variation intake requires the Variation capture workspace.');
     }
 
     const targetGroupId = requireUuid(session.targetGroupId, 'targetGroupId');
@@ -429,6 +442,9 @@ export async function routeVariationListingWatcherEvent(
 
   if (session.mode === 'idle') {
     return fail('idle session cannot retain a pending pair.');
+  }
+  if (workspaceReaderConfigured && !workspaceIsVariation) {
+    return fail('armed Variation intake requires the Variation capture workspace.');
   }
 
   const pendingPair = parsePendingPair(session.pendingPair);

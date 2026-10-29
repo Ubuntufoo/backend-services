@@ -55,7 +55,12 @@ import {
   requireVariationListingCreationProfile,
 } from '@/ebay/variation-listing-profiles.js';
 import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
-import { hasPendingStandardCapture } from '@/http/standard-capture-state.js';
+import {
+  hasPendingStandardCapture,
+  readCaptureWorkspace,
+  type CaptureWorkspace,
+  persistCaptureWorkspace,
+} from '@/http/standard-capture-state.js';
 import type { AuthenticatedRequest } from '@/auth/oauth-middleware.js';
 import {
   claimVariationListingIntakeRetry,
@@ -117,6 +122,8 @@ export interface VariationListingApiRouterOptions {
   readQuantityStatus?: (groupId: string) => Promise<VariationListingQuantityStatus>;
   assertSoldOutRemovalEligible?: (input: { groupId: string; variationId: string; expectedDesiredRevision: number }) => Promise<void>;
   readRemovedSkuPurgePreview?: (groupId: string, revisionId: string) => Promise<RemovedSkuPurgeReadiness | null>;
+  readCaptureWorkspace?: () => Promise<CaptureWorkspace>;
+  writeCaptureWorkspace?: (workspace: CaptureWorkspace) => Promise<void>;
 }
 
 export interface VariationListingApiActions {
@@ -914,6 +921,8 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     (async () => await resolveVariationListingCreationDefaults(getSidecarDataAccess()));
   const readQuantityStatus = options.readQuantityStatus ?? (async (groupId: string) =>
     await readVariationListingQuantityStatus({ data: options.dataAccess ?? getSidecarDataAccess().variationListings }, groupId));
+  const readWorkspace = options.readCaptureWorkspace ?? (async () => await readCaptureWorkspace());
+  const writeWorkspace = options.writeCaptureWorkspace ?? (async (workspace) => await persistCaptureWorkspace(workspace));
   let cachedActions: VariationListingApiActions | undefined = options.actions;
   const getActions = (): VariationListingApiActions => {
     cachedActions ??= createVariationListingActionService({
@@ -925,7 +934,10 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   router.get('/intake-session', async (_req: Request, res: Response) =>
     await runRoute(res, async () => {
       const session = await readIntakeSessionOrNull(getDataAccess());
-      res.json({ session: session ? serializeIntakeSession(session) : null });
+      res.json({
+        session: session ? serializeIntakeSession(session) : null,
+        captureWorkspace: await readWorkspace(),
+      });
     })
   );
 
@@ -934,7 +946,63 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
     if (!body) return;
     return await runRoute(res, async () => {
       const dataAccess = getDataAccess();
+      if (!('mode' in body)) {
+        if (body.captureWorkspace === 'standard') {
+          const current = await readIntakeSessionOrNull(dataAccess);
+          if (current?.pendingPair !== null && current?.pendingPair !== undefined) {
+            throw new VariationListingIntakeConflictError(
+              'variation_listing_intake_pending',
+              'A pending Variation Listing front/back pair must be finished or discarded before selecting Standard capture.'
+            );
+          }
+          if (current && current.mode !== 'idle') {
+            await dataAccess.configureIntake({
+              mode: 'idle',
+              targetGroupId: null,
+              targetVariationId: null,
+              copyConditionToken: null,
+              stickyPriceAmount: current.stickyPriceAmount,
+            });
+          }
+          await writeWorkspace('standard');
+          const session = await readIntakeSessionOrNull(dataAccess);
+          if (session) clearVariationListingIntakeProcessingStatus(session.captureSourceKey);
+          res.json({session: session ? serializeIntakeSession(session) : null, captureWorkspace: 'standard'});
+          return;
+        }
+        if (await hasPendingStandardCapture()) {
+          throw new VariationListingIntakeConflictError(
+            'standard_capture_pair_pending',
+            'Standard capture has an unfinished image group. Finish that Standard card/lot before selecting Variation capture.'
+          );
+        }
+        const session = await readIntakeSessionOrNull(dataAccess);
+        if (session?.pendingPair !== null && session?.pendingPair !== undefined) {
+          throw new VariationListingIntakeConflictError(
+            'variation_listing_intake_pending',
+            'A pending Variation Listing front/back pair must be finished or discarded before changing capture configuration.'
+          );
+        }
+        await writeWorkspace('variation');
+        res.json({session: session ? serializeIntakeSession(session) : null, captureWorkspace: 'variation'});
+        return;
+      }
+
+      if (body.mode === 'idle' && await hasPendingStandardCapture()) {
+        throw new VariationListingIntakeConflictError(
+          'standard_capture_pair_pending',
+          'Standard capture has an unfinished image group. Finish that Standard card/lot before disarming Variation capture.'
+        );
+      }
       await assertIntakeTargetEligible(dataAccess, body);
+      const current = await readIntakeSessionOrNull(dataAccess);
+      if (current?.pendingPair !== null && current?.pendingPair !== undefined) {
+        throw new VariationListingIntakeConflictError(
+          'variation_listing_intake_pending',
+          'A pending Variation Listing front/back pair must be finished or discarded before changing capture configuration.'
+        );
+      }
+      await writeWorkspace('variation');
       const session = await dataAccess.configureIntake({
         mode: body.mode,
         targetGroupId: body.targetGroupId,
@@ -943,7 +1011,7 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         stickyPriceAmount: body.stickyPriceAmount,
       });
       clearVariationListingIntakeProcessingStatus(session.captureSourceKey);
-      res.json({ session: serializeIntakeSession(session) });
+      res.json({ session: serializeIntakeSession(session), captureWorkspace: 'variation' });
     });
   });
 

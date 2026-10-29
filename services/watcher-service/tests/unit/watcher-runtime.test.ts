@@ -525,6 +525,52 @@ describe('watcher runtime', () => {
     );
   });
 
+  it('does not steal a Variation arrival when a Standard group is pending at drain time', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const pendingStandard = {pending: [{path: '/watcher/incoming/standard-front.jpg'}]};
+    const ownership: VariationListingRuntimeOwnership = {
+      kind: 'variation',
+      mode: 'new_variation',
+      targetGroupId: '11111111-1111-4111-8111-111111111111',
+      targetVariationId: null,
+      conditionToken: null,
+      priceAmount: 1.49,
+      priceCurrency: 'USD',
+    };
+    const processIncomingImageBatch = vi.fn();
+    const variationListingRuntimeProcessor = {
+      snapshot: vi.fn(async () => ownership),
+      process: vi.fn(async (_path: string, captured?: VariationListingRuntimeOwnership) => {
+        expect(captured).toEqual(ownership);
+        return {kind: 'started' as const, groupId: ownership.targetGroupId, pairId: RETRY_PAIR_ID};
+      }),
+    };
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      initialGroupingState: pendingStandard,
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd('/watcher/incoming/variation-front.jpg');
+    await flushMicrotasks();
+    await runtime.close();
+
+    expect(variationListingRuntimeProcessor.process).toHaveBeenCalledWith(
+      '/watcher/incoming/variation-front.jpg',
+      ownership,
+    );
+    expect(processIncomingImageBatch).not.toHaveBeenCalled();
+  });
+
   it('persists every Standard source before processing a batch', async () => {
     const fakeWatcher = new FakeWatcher();
     const logger = createLogger();

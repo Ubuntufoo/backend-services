@@ -37,8 +37,11 @@ const variationListingIntakeProcessingPhaseSchema = z.enum([
 ]);
 
 
-export const configureVariationListingIntakeRequestSchema = z
+const captureWorkspaceSchema = z.enum(['standard', 'variation']);
+
+const variationListingIntakeConfigurationSchema = z
   .object({
+    captureWorkspace: z.literal('variation'),
     mode: variationListingIntakeModeSchema,
     targetGroupId: z.string().uuid().nullable(),
     targetVariationId: z.string().uuid().nullable().default(null),
@@ -109,6 +112,11 @@ export const configureVariationListingIntakeRequestSchema = z
       });
     }
   });
+
+export const configureVariationListingIntakeRequestSchema = z.union([
+  z.object({captureWorkspace: captureWorkspaceSchema}).strict(),
+  variationListingIntakeConfigurationSchema,
+]);
 
 const exactSourceRefSchema = z
   .string()

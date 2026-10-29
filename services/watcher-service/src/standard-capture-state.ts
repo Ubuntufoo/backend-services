@@ -4,6 +4,14 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {createEmptyWatcherGroupingState, type WatcherGroupingState} from './image-grouping.js';
 
 export const STANDARD_CAPTURE_STATE_FILE = '.standard-capture-pending.json';
+export const CAPTURE_WORKSPACE_STATE_FILE = '.capture-workspace.json';
+
+export type CaptureWorkspace = 'standard' | 'variation';
+
+type PersistedCaptureWorkspaceState = {
+  version: 1;
+  workspace: CaptureWorkspace;
+};
 
 type PersistedStandardCaptureState = {
   version: 1;
@@ -16,6 +24,10 @@ function isMissingPathError(error: unknown): boolean {
 
 function statePath(incomingDirectory: string): string {
   return join(resolve(incomingDirectory), STANDARD_CAPTURE_STATE_FILE);
+}
+
+function workspaceStatePath(incomingDirectory: string): string {
+  return join(resolve(incomingDirectory), CAPTURE_WORKSPACE_STATE_FILE);
 }
 
 function assertPendingPathInsideIncoming(pathValue: string, incomingDirectory: string): string {
@@ -94,5 +106,52 @@ export async function persistStandardCaptureGroupingState(
   const temporary = `${destination}.tmp`;
   const body: PersistedStandardCaptureState = {version: 1, pending};
   await writeFile(temporary, `${JSON.stringify(body)}\n`, {encoding: 'utf8', flag: 'w'});
+  await rename(temporary, destination);
+}
+
+export async function readCaptureWorkspace(
+  incomingDirectory: string,
+): Promise<CaptureWorkspace> {
+  let text: string;
+  try {
+    text = await readFile(workspaceStatePath(incomingDirectory), 'utf8');
+  } catch (error) {
+    if (isMissingPathError(error)) return 'standard';
+    throw error;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Capture workspace state is not valid JSON.');
+  }
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    (parsed as {version?: unknown}).version !== 1 ||
+    ((parsed as {workspace?: unknown}).workspace !== 'standard' &&
+      (parsed as {workspace?: unknown}).workspace !== 'variation')
+  ) {
+    throw new Error('Capture workspace state has an unsupported shape.');
+  }
+  return (parsed as PersistedCaptureWorkspaceState).workspace;
+}
+
+export async function persistCaptureWorkspace(
+  incomingDirectory: string,
+  workspace: CaptureWorkspace,
+): Promise<void> {
+  if (workspace !== 'standard' && workspace !== 'variation') {
+    throw new Error('Capture workspace must be standard or variation.');
+  }
+  const destination = workspaceStatePath(incomingDirectory);
+  await mkdir(resolve(incomingDirectory), {recursive: true});
+  const temporary = `${destination}.tmp`;
+  await writeFile(
+    temporary,
+    `${JSON.stringify({version: 1, workspace} satisfies PersistedCaptureWorkspaceState)}\n`,
+    {encoding: 'utf8', flag: 'w'},
+  );
   await rename(temporary, destination);
 }

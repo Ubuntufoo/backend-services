@@ -89,12 +89,18 @@ function actions(): VariationListingApiActions {
   };
 }
 
-function app(dataAccess: VariationListingApiDataAccess, actionService: VariationListingApiActions = actions()) {
+function app(
+  dataAccess: VariationListingApiDataAccess,
+  actionService: VariationListingApiActions = actions(),
+  writeCaptureWorkspace: (workspace: 'standard' | 'variation') => Promise<void> = async () => undefined,
+) {
   const instance = express();
   instance.use(express.json());
   instance.use('/api/variation-listings', createVariationListingApiRouter({
     dataAccess,
     actions: actionService,
+    readCaptureWorkspace: async () => 'standard',
+    writeCaptureWorkspace,
   }));
   return instance;
 }
@@ -109,7 +115,7 @@ describe('variation listing intake lifecycle hardening', () => {
     const response = await request(app(dataAccess)).get('/api/variation-listings/intake-session');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({session: null});
+    expect(response.body).toEqual({session: null, captureWorkspace: 'standard'});
   });
 
   it('rejects Variation arming while a Standard image group is pending', async () => {
@@ -120,11 +126,13 @@ describe('variation listing intake lifecycle hardening', () => {
       JSON.stringify({version: 1, pending: [front]}),
     );
     const {configureIntake, dataAccess} = access();
+    const writeCaptureWorkspace = vi.fn(async () => undefined);
 
-    const response = await request(app(dataAccess))
+    const response = await request(app(dataAccess, actions(), writeCaptureWorkspace))
       .patch('/api/variation-listings/intake-session')
       .send({
         mode: 'new_variation',
+        captureWorkspace: 'variation',
         targetGroupId: groupId,
         targetVariationId: null,
         copyConditionToken: null,
@@ -134,6 +142,26 @@ describe('variation listing intake lifecycle hardening', () => {
     expect(response.status).toBe(409);
     expect(response.body.error).toBe('standard_capture_pair_pending');
     expect(configureIntake).not.toHaveBeenCalled();
+    expect(writeCaptureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('rejects workspace-only Variation selection while a Standard image group is pending', async () => {
+    const front = path.join(tempIncoming!, 'standard-front.jpg');
+    writeFileSync(front, 'front');
+    writeFileSync(
+      path.join(tempIncoming!, '.standard-capture-pending.json'),
+      JSON.stringify({version: 1, pending: [front]}),
+    );
+    const {dataAccess} = access();
+    const writeCaptureWorkspace = vi.fn(async () => undefined);
+
+    const response = await request(app(dataAccess, actions(), writeCaptureWorkspace))
+      .patch('/api/variation-listings/intake-session')
+      .send({captureWorkspace: 'variation'});
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('standard_capture_pair_pending');
+    expect(writeCaptureWorkspace).not.toHaveBeenCalled();
   });
 
   it('rejects arming a withdrawn group before intake persistence', async () => {
@@ -143,6 +171,7 @@ describe('variation listing intake lifecycle hardening', () => {
       .patch('/api/variation-listings/intake-session')
       .send({
         mode: 'new_variation',
+        captureWorkspace: 'variation',
         targetGroupId: groupId,
         targetVariationId: null,
         copyConditionToken: null,

@@ -1,14 +1,22 @@
-import {access, readFile} from 'node:fs/promises';
+import {access, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 
 const STANDARD_CAPTURE_STATE_FILE = '.standard-capture-pending.json';
+const CAPTURE_WORKSPACE_STATE_FILE = '.capture-workspace.json';
 const BACKEND_REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const WATCHER_PACKAGE_DIR = join(BACKEND_REPO_ROOT, 'services', 'watcher-service');
 
 type PersistedStandardCaptureState = {
   version: 1;
   pending: string[];
+};
+
+export type CaptureWorkspace = 'standard' | 'variation';
+
+type PersistedCaptureWorkspaceState = {
+  version: 1;
+  workspace: CaptureWorkspace;
 };
 
 function isMissingPathError(error: unknown): boolean {
@@ -21,6 +29,57 @@ export function resolveWatcherIncomingDirectory(
   if (env.WATCHER_INCOMING_DIR) return resolve(WATCHER_PACKAGE_DIR, env.WATCHER_INCOMING_DIR);
   const base = resolve(WATCHER_PACKAGE_DIR, env.WATCHER_BASE_DIR || 'watcher');
   return resolve(base, 'incoming');
+}
+
+function workspaceStatePath(incomingDirectory: string): string {
+  return join(resolve(incomingDirectory), CAPTURE_WORKSPACE_STATE_FILE);
+}
+
+export async function readCaptureWorkspace(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CaptureWorkspace> {
+  let text: string;
+  try {
+    text = await readFile(workspaceStatePath(resolveWatcherIncomingDirectory(env)), 'utf8');
+  } catch (error) {
+    if (isMissingPathError(error)) return 'standard';
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Capture workspace state is not valid JSON.');
+  }
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    (parsed as {version?: unknown}).version !== 1 ||
+    ((parsed as {workspace?: unknown}).workspace !== 'standard' &&
+      (parsed as {workspace?: unknown}).workspace !== 'variation')
+  ) {
+    throw new Error('Capture workspace state has an unsupported shape.');
+  }
+  return (parsed as PersistedCaptureWorkspaceState).workspace;
+}
+
+export async function persistCaptureWorkspace(
+  workspace: CaptureWorkspace,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  if (workspace !== 'standard' && workspace !== 'variation') {
+    throw new Error('Capture workspace must be standard or variation.');
+  }
+  const incomingDirectory = resolveWatcherIncomingDirectory(env);
+  const destination = workspaceStatePath(incomingDirectory);
+  await mkdir(incomingDirectory, {recursive: true});
+  const temporary = `${destination}.tmp`;
+  await writeFile(
+    temporary,
+    `${JSON.stringify({version: 1, workspace} satisfies PersistedCaptureWorkspaceState)}\n`,
+    {encoding: 'utf8', flag: 'w'},
+  );
+  await rename(temporary, destination);
 }
 
 function assertInsideIncoming(pathValue: string, incomingDirectory: string): string {

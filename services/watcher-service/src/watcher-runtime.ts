@@ -222,6 +222,7 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
       ? input.variationListingRuntimeProcessor ??
         createVariationListingRuntimeProcessor({
           captureSourceKey,
+          incomingDirectory: config.incomingDirectory,
           // Keep process credentials/configuration while allowing the explicit
           // config input to override watcher-local values in tests/embedders.
           env: {
@@ -409,14 +410,35 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                 variationRouteSnapshots.delete(sourcePath);
                 continue;
               }
-              if (!standardGroupingPersistenceHealthy) {
+              // Arrival ownership is captured synchronously at enqueue time.
+              // It must win over later Standard-group state (including a
+              // pending group or a failed persistence gate), otherwise a
+              // Variation source can be stolen during the drain race.
+              const capturedRoute = variationRouteSnapshots.get(sourcePath);
+              let capturedVariationOwnership = false;
+              if (capturedRoute) {
+                try {
+                  const ownership = await capturedRoute;
+                  capturedVariationOwnership = ownership !== 'legacy';
+                } catch (error) {
+                  variationRetryInputs = [...legacyInputs, ...snapshot.slice(sourceIndex)];
+                  variationRetrySource = sourcePath;
+                  if (error instanceof VariationListingCaptureRetryableError) {
+                    variationRetryable = true;
+                    variationRetryPairId = error.pairId;
+                    variationRetryOwnedSourcePaths = error.ownedSourcePaths;
+                  }
+                  throw error;
+                }
+              }
+              if (!capturedVariationOwnership && !standardGroupingPersistenceHealthy) {
                 variationRouteSnapshots.delete(sourcePath);
                 legacyInputs.push(sourcePath);
                 legacyPathHints.add(sourcePath);
                 logger.info('legacy_owned_fail_closed', {sourcePath});
                 continue;
               }
-              if (legacyGroupWasPending) {
+              if (!capturedVariationOwnership && legacyGroupWasPending) {
                 variationRouteSnapshots.delete(sourcePath);
                 legacyInputs.push(sourcePath);
                 legacyPathHints.add(sourcePath);
@@ -437,7 +459,6 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                 continue;
               }
               try {
-                const capturedRoute = variationRouteSnapshots.get(sourcePath);
                 const outcome = capturedRoute
                   ? await variationRuntime.process(sourcePath, await capturedRoute)
                   : await variationRuntime.process(sourcePath);
@@ -457,6 +478,13 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                   blockedVariationOwnedSourcePaths.clear();
                 }
                 logger.info(`variation_${outcome.kind}`, outcome);
+                if (outcome.kind === 'ignored' && outcome.reason === 'variation_disarmed') {
+                  logger.info('variation_disarmed_ignored', {
+                    sourcePath,
+                    reason: outcome.reason,
+                    sourceUntouched: true,
+                  });
+                }
               } catch (error) {
                 variationRetryInputs = [...legacyInputs, ...snapshot.slice(sourceIndex)];
                 variationRetrySource = sourcePath;

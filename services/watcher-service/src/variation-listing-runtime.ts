@@ -23,6 +23,7 @@ import {
   type VariationListingPreparedCompletionMedia,
   type VariationListingWatcherEventRoute,
 } from './variation-listing-intake.js';
+import { readCaptureWorkspace } from './standard-capture-state.js';
 import {
   persistVariationListingCompletion,
   startVariationListingIntakePersistence,
@@ -37,7 +38,7 @@ import {
 
 export type VariationListingRuntimeOutcome =
   | { kind: 'legacy' }
-  | { kind: 'ignored'; reason: 'unsupported_image' }
+  | { kind: 'ignored'; reason: 'unsupported_image' | 'variation_disarmed' }
   | { kind: 'started'; groupId: string; pairId: string }
   | { kind: 'duplicate_front'; pairId: string }
   | {
@@ -74,6 +75,7 @@ export interface VariationListingRuntimeProcessor {
 export type VariationListingRuntimeOwnership =
   | 'legacy'
   | 'ignored'
+  | { kind: 'ignored'; reason: 'unsupported_image' | 'variation_disarmed' }
   | {
       kind: 'variation';
       pairId?: string;
@@ -87,6 +89,7 @@ export type VariationListingRuntimeOwnership =
 
 export interface CreateVariationListingRuntimeProcessorInput {
   captureSourceKey: string;
+  incomingDirectory?: string;
   env?: NodeJS.ProcessEnv & VariationListingSidecarEnvironment;
 }
 
@@ -218,7 +221,9 @@ function assertStartedPairMatchesRoute(
 
 function routeOwnership(route: VariationListingWatcherEventRoute): VariationListingRuntimeOwnership {
   if (route.kind === 'legacy') return 'legacy';
-  if (route.kind === 'ignored') return 'ignored';
+  if (route.kind === 'ignored') {
+    return route.reason === 'unsupported_image' ? 'ignored' : {kind: 'ignored', reason: route.reason};
+  }
   if (route.kind === 'start_pair') {
     return {
       kind: 'variation',
@@ -248,6 +253,9 @@ function sameOwnership(
   right: VariationListingRuntimeOwnership,
 ): boolean {
   if (typeof left === 'string' || typeof right === 'string') return left === right;
+  if (left.kind === 'ignored' || right.kind === 'ignored') {
+    return left.kind === 'ignored' && right.kind === 'ignored' && left.reason === right.reason;
+  }
   return (
     left.kind === right.kind &&
     (left.pairId ?? null) === (right.pairId ?? null) &&
@@ -302,6 +310,9 @@ export function createVariationListingRuntimeProcessor(
   const routeEvent = dependencies.routeEvent ?? (async (event) =>
     await routeVariationListingWatcherEvent(event, {
       sessionReader: createVariationListingIntakeSessionReader(getClient()),
+      isVariationCapturePaused: input.incomingDirectory
+        ? async () => (await readCaptureWorkspace(input.incomingDirectory!)) === 'variation'
+        : undefined,
     }));
   const startPersistence = dependencies.startPersistence ?? (async (route) =>
     await startVariationListingIntakePersistence(route, { client: getClient() }));
@@ -385,7 +396,9 @@ export function createVariationListingRuntimeProcessor(
       const cachedPairMatchesOwnership =
         cachedCommand !== undefined &&
         (capturedOwnership === undefined ||
-          (typeof capturedOwnership === 'object' && capturedOwnership.pairId === cachedCommand.capturePairId));
+          (typeof capturedOwnership === 'object' &&
+            capturedOwnership.kind === 'variation' &&
+            capturedOwnership.pairId === cachedCommand.capturePairId));
       if (cachedCommand && cachedPairMatchesOwnership) {
         await safeReportIntakeStatus({
           captureSourceKey: cachedCommand.captureSourceKey,
@@ -447,6 +460,9 @@ export function createVariationListingRuntimeProcessor(
       }
       if (capturedOwnership === 'ignored') {
         return { kind: 'ignored', reason: 'unsupported_image' };
+      }
+      if (typeof capturedOwnership === 'object' && capturedOwnership.kind === 'ignored') {
+        return {kind: 'ignored', reason: capturedOwnership.reason};
       }
       const route = await routeEvent({
         captureSourceKey: input.captureSourceKey,

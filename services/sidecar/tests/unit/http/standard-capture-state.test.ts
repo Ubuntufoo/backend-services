@@ -6,6 +6,8 @@ import {afterEach, describe, expect, it} from 'vitest';
 
 import {
   hasPendingStandardCapture,
+  persistCaptureWorkspace,
+  readCaptureWorkspace,
   resolveWatcherIncomingDirectory,
 } from '@/http/standard-capture-state.js';
 
@@ -31,6 +33,21 @@ describe('Sidecar Standard capture state reader', () => {
     );
 
     await expect(hasPendingStandardCapture({WATCHER_INCOMING_DIR: tempDir})).resolves.toBe(true);
+  });
+
+  it('defaults a missing workspace marker to Standard and round-trips an atomic Variation marker', async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), 'sidecar-standard-state-'));
+
+    await expect(readCaptureWorkspace({WATCHER_INCOMING_DIR: tempDir})).resolves.toBe('standard');
+    await persistCaptureWorkspace('variation', {WATCHER_INCOMING_DIR: tempDir});
+    await expect(readCaptureWorkspace({WATCHER_INCOMING_DIR: tempDir})).resolves.toBe('variation');
+  });
+
+  it('fails closed on malformed workspace state', async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), 'sidecar-standard-state-'));
+    writeFileSync(path.join(tempDir, '.capture-workspace.json'), '{bad');
+
+    await expect(readCaptureWorkspace({WATCHER_INCOMING_DIR: tempDir})).rejects.toThrow(/not valid JSON/);
   });
 
   it('ignores a marker whose pending source no longer exists', async () => {

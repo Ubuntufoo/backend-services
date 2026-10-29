@@ -128,6 +128,76 @@ describe('variation listing watcher routing', () => {
     });
   });
 
+  it('keeps a Variation workspace paused when no durable session exists', async () => {
+    const result = await routeVariationListingWatcherEvent(
+      {
+        captureSourceKey: 'camera-1',
+        image: { path: '/incoming/front.jpg' },
+      },
+      {
+        isVariationCapturePaused: vi.fn(async () => true),
+        sessionReader: sessionReader(null),
+      }
+    );
+
+    expect(result).toEqual({
+      image: { path: '/incoming/front.jpg' },
+      kind: 'ignored',
+      reason: 'variation_disarmed',
+    });
+  });
+
+  it('keeps an idle Variation session paused without moving the source into Standard', async () => {
+    const result = await routeVariationListingWatcherEvent(
+      {
+        captureSourceKey: 'camera-1',
+        image: { path: '/incoming/front.jpg' },
+      },
+      {
+        isVariationCapturePaused: vi.fn(async () => true),
+        sessionReader: sessionReader(createSession({
+          mode: 'idle',
+          targetGroupId: null,
+          targetVariationId: null,
+        })),
+      }
+    );
+
+    expect(result).toMatchObject({ kind: 'ignored', reason: 'variation_disarmed' });
+  });
+
+  it('fails closed when an armed session is observed in the Standard workspace', async () => {
+    await expect(
+      routeVariationListingWatcherEvent(
+        {
+          captureSourceKey: 'camera-1',
+          image: { path: '/incoming/front.jpg' },
+        },
+        {
+          isVariationCapturePaused: vi.fn(async () => false),
+          sessionReader: sessionReader(createSession()),
+        }
+      )
+    ).rejects.toThrow(/requires the Variation capture workspace/);
+  });
+
+  it('propagates workspace read failures so the queued source is retained', async () => {
+    await expect(
+      routeVariationListingWatcherEvent(
+        {
+          captureSourceKey: 'camera-1',
+          image: { path: '/incoming/front.jpg' },
+        },
+        {
+          isVariationCapturePaused: vi.fn(async () => {
+            throw new Error('workspace marker unreadable');
+          }),
+          sessionReader: sessionReader(null),
+        }
+      )
+    ).rejects.toThrow('workspace marker unreadable');
+  });
+
   it('emits a start-pair instruction without mutating persistence for the first armed image', async () => {
     const result = await routeVariationListingWatcherEvent(
       {
