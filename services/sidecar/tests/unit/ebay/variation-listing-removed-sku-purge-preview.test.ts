@@ -173,12 +173,23 @@ function revision(
     [survivorSkus[1]!]: `offer-${survivorSkus[1]}`,
   };
   const inventoryItemPayloadsBySku = Object.fromEntries(
-    [targetSku, ...survivorSkus].map((sku) => [sku, { sku, condition: 'VERY_GOOD' }])
+    [targetSku, ...survivorSkus].map((sku, index) => [sku, {
+      sku,
+      condition: 'VERY_GOOD',
+      product: { aspects: { Card: [`Card ${index + 1}`] } },
+    }])
   );
   const offerPayloadsBySku = Object.fromEntries(
     [targetSku, ...survivorSkus].map((sku) => [sku, { sku, listingPolicies: { fulfillmentPolicyId: 'fulfillment' } }])
   );
-  const expectedGroupPayload = { inventoryItemGroupKey: groupKey, variantSKUs: [targetSku, ...survivorSkus] };
+  const expectedGroupPayload = {
+    inventoryItemGroupKey: groupKey,
+    title: 'Purge test',
+    description: 'Purge test',
+    aspects: { Sport: ['Basketball'] },
+    variantSKUs: [targetSku, ...survivorSkus],
+    variesBy: { aspectsImageVariesBy: ['Card'], specifications: [{ name: 'Card', values: ['Card 1', 'Card 2', 'Card 3'] }] },
+  };
   const snapshot: Json = {
     aggregate: currentAggregate(),
     confirmed: {
@@ -215,7 +226,11 @@ function revision(
       inventoryItemPayloadsBySku,
       offerPayloadsBySku,
       expectedGroupPayload,
-      replacementGroupPayload: { ...expectedGroupPayload, variantSKUs: survivorSkus },
+      replacementGroupPayload: {
+        ...expectedGroupPayload,
+        variantSKUs: survivorSkus,
+        variesBy: { aspectsImageVariesBy: ['Card'], specifications: [{ name: 'Card', values: ['Card 2', 'Card 3'] }] },
+      },
     },
   };
   const intent = { groupKey, targetSku, survivorSkus };
@@ -388,7 +403,7 @@ describe('buildRemovedSkuPurgeCandidateManifest', () => {
       variation(survivorVariationIds[0]!, survivorSkus[0]!, 1),
       variation(survivorVariationIds[1]!, survivorSkus[1]!, 2),
     ];
-    expect(() => preview({ revisionOptions: { frozenVariations: missingTargetVariation } })).toThrow(/target variation identity/);
+    expect(() => preview({ revisionOptions: { frozenVariations: missingTargetVariation } })).toThrow(/selector|target variation identity/);
   });
 
   it.each([

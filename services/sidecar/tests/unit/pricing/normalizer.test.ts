@@ -529,7 +529,7 @@ describe('normalizeSoldComps', () => {
     ]);
   });
 
-  it('uses title fallback for target year/card number when item specifics omit them', () => {
+  it('uses explicit title card-number fallback but not unverified title-year fallback', () => {
     const normalized = normalizeSoldComps(
       [buildRawComp({ title: '1996 Fleer Darryl Strawberry #198' })],
       {
@@ -542,7 +542,7 @@ describe('normalizeSoldComps', () => {
     );
 
     expect(normalized.rejected).toEqual([
-      { index: 0, reason: 'exact_year_mismatch', title: '1996 Fleer Darryl Strawberry #198' },
+      { index: 0, reason: 'exact_card_number_mismatch', title: '1996 Fleer Darryl Strawberry #198' },
     ]);
   });
 

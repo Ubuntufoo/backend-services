@@ -36,6 +36,18 @@ const OPERATION_KIND = 'permanent_removal_group_membership';
 export interface VariationListingPermanentRemovalRemote extends VariationListingPublicationReadGateway {
   /** Existing Inventory API group replacement endpoint. It must not write an Item or Offer. */
   replaceInventoryItemGroup(groupKey: string, payload: Json): Promise<void>;
+  /** Exhaustive, unfiltered Offer collection used to prove there is exactly
+   * one frozen marketplace Offer and no foreign Offer before a Group PUT. */
+  getAllOffersForSku?(sku: string): Promise<readonly VariationListingExhaustiveOffer[]>;
+}
+
+export interface VariationListingExhaustiveOffer {
+  offerId: string;
+  sku: string;
+  marketplaceId: string;
+  status: 'PUBLISHED' | 'UNPUBLISHED';
+  listingId: string | null;
+  availableQuantity: number;
 }
 
 export interface VariationListingPermanentRemovalJournal {
@@ -194,7 +206,7 @@ function groupParts(payload: Json): {
       skus.some((sku) => typeof sku !== 'string' || sku.trim() !== sku || !sku) ||
       values.some((value) => typeof value !== 'string' || value.trim() !== value || !value) ||
       new Set(skus).size !== skus.length || new Set(values).size !== values.length) {
-    throw new Error('Inventory group SKU and Card selector values are not an exact unique pair of collections.');
+    throw new Error('Inventory group SKU and Card selector values are not an exact unique pair of collections; arrays are independent, not positional pairs.');
   }
   // The application stores images per child Item, not in the group. An
   // unfamiliar group-level image map may refer to a removed selector and
@@ -241,6 +253,24 @@ function expectedSelectorBySku(aggregate: VariationListingAggregateSnapshot): Ma
   return bySku;
 }
 
+function itemCardSelector(payload: Json, sku: string): string {
+  const item = object(payload, `remote inventory item ${sku}`);
+  const product = object(item.product, `remote inventory item ${sku} product`);
+  const aspects = object(product.aspects, `remote inventory item ${sku} product aspects`);
+  const card = aspects.Card;
+  if (!Array.isArray(card) || card.length !== 1 || typeof card[0] !== 'string' || card[0].trim() !== card[0] || card[0] === '') {
+    throw new Error(`Remote inventory item ${sku} must contain exactly one Card aspect value.`);
+  }
+  return card[0];
+}
+
+function assertItemSelector(payload: Json, sku: string, selectorBySku: ReadonlyMap<string, string>): void {
+  const actual = itemCardSelector(payload, sku);
+  if (actual !== selectorBySku.get(sku)) {
+    throw new Error(`Remote inventory item ${sku} Card aspect does not match immutable selector ownership.`);
+  }
+}
+
 function assertCurrentVariationIdentity(
   previous: VariationListingAggregateSnapshot,
   current: VariationListingAggregateSnapshot,
@@ -273,7 +303,7 @@ function exactGroupPayload(
   if (selectorBySku.size !== skus.length ||
       !exactSkuSet(skus, [...selectorBySku.keys()]) ||
       values.length !== selectorBySku.size ||
-      values.some((value, index) => value !== confirmedValues[index])) {
+      !exactSkuSet(values, confirmedValues)) {
     throw new Error('Remote group selectors do not match the confirmed SKU-to-selector evidence.');
   }
   const survivorValues = survivorSkus.map((sku) => selectorBySku.get(sku));
@@ -292,9 +322,9 @@ function groupSignature(payload: Json): string {
   const clone = structuredClone(payload);
   const { group, skus, values, specification } = groupParts(clone);
   group.variantSKUs = [...skus].sort();
-  // Application selector order is authoritative. Only eBay's variantSKUs
-  // response order is non-authoritative membership metadata.
-  specification.values = values;
+  // Both provider arrays are independent collections. Provider response
+  // ordering is non-authoritative for SKU membership and Card values.
+  specification.values = [...values].sort();
   return canonicalJson(group);
 }
 
@@ -600,6 +630,33 @@ export function hydrateVariationListingPermanentRemovalPlan(revision: VariationL
   return plan;
 }
 
+async function exhaustiveOffer(
+  remote: VariationListingPermanentRemovalRemote,
+  expected: VariationListingExhaustiveOffer,
+): Promise<void> {
+  const { sku } = expected;
+  if (!remote.getAllOffersForSku) {
+    throw new Error(`Exhaustive all-marketplace Offer read is unavailable for ${sku}.`);
+  }
+  const offers = await remote.getAllOffersForSku(sku);
+  if (!Array.isArray(offers) || offers.length !== 1) {
+    throw new Error(`Variation listing SKU ${sku} must have exactly one exhaustive Offer.`);
+  }
+  const offer = offers[0];
+  if (!offer || offer.sku !== sku || offer.offerId !== expected.offerId ||
+      offer.marketplaceId !== expected.marketplaceId || offer.status !== expected.status ||
+      offer.listingId !== expected.listingId || offer.availableQuantity !== expected.availableQuantity) {
+    throw new Error(`Variation listing SKU ${sku} has a foreign or changed exhaustive Offer.`);
+  }
+}
+
+function frozenSelectorBySku(plan: VariationListingPermanentRemovalPlan): Map<string, string> {
+  const root = object(plan.captureInput.snapshot, 'permanent-removal snapshot');
+  const confirmed = object(root.confirmed, 'permanent-removal confirmed parent');
+  const aggregate = object(confirmed.aggregate, 'permanent-removal confirmed aggregate') as unknown as VariationListingAggregateSnapshot;
+  return expectedSelectorBySku(aggregate);
+}
+
 async function exactRemoteState(
   plan: VariationListingPermanentRemovalPlan,
   remote: VariationListingPermanentRemovalRemote,
@@ -629,6 +686,7 @@ async function exactRemoteState(
   const inventoryItemPayloadsBySku: Record<string, Json> = {};
   const offerPayloadsBySku: Record<string, Json> = {};
   const seenOfferIds = new Set<string>();
+  const selectorBySku = frozenSelectorBySku(plan);
   for (const sku of [plan.targetSku, ...plan.survivorSkus]) {
     const item = exactPresent(await remote.getInventoryItem(sku), `Variation listing item ${sku}`);
     if (item.sku !== sku) throw new Error(`Variation listing item ${sku} identity changed.`);
@@ -642,6 +700,16 @@ async function exactRemoteState(
     }
     if (seenOfferIds.has(offer.offerId)) throw new Error(`Variation listing offer ${sku} reuses another SKU's Offer ID.`);
     seenOfferIds.add(offer.offerId);
+    const offerQuantity = readOfferQuantity(offer.payload, sku);
+    await exhaustiveOffer(remote, {
+      offerId: plan.offerIdsBySku[sku]!,
+      sku,
+      marketplaceId: plan.marketplaceId,
+      status: offer.status,
+      listingId: offer.listingId,
+      availableQuantity: offerQuantity,
+    });
+    assertItemSelector(item.payload, sku, selectorBySku);
     if (sku === plan.targetSku && !targetPresent) {
       // eBay's Inventory API retains the removed SKU's Offer but changes its
       // status PUBLISHED -> UNPUBLISHED after group membership replacement.
@@ -658,7 +726,6 @@ async function exactRemoteState(
     offerIdsBySku[sku] = offer.offerId;
     offerPayloadsBySku[sku] = payloadWithoutQuantity(offer.payload, 'offer');
     const itemQuantity = remoteQuantity(item.payload, sku);
-    const offerQuantity = readOfferQuantity(offer.payload, sku);
     quantitiesBySku[sku] = { inventoryItemQuantity: itemQuantity.inventoryItemQuantity, offerQuantity, sellableQuantity: Math.min(itemQuantity.inventoryItemQuantity, offerQuantity) };
   }
   return { groupPayload: group.payload, groupSkus, targetPresent, listingId, offerIdsBySku, quantitiesBySku, groupKeysBySku, inventoryItemPayloadsBySku, offerPayloadsBySku };
@@ -718,12 +785,21 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
     if (offer.sku !== variation.sku || offer.marketplaceId !== input.aggregate.group.marketplace_id || offer.status !== 'PUBLISHED' || offer.lifecycleClass !== 'active' || !offer.listingId) throw new Error(`Variation listing offer ${variation.sku} is not one active published offer.`);
     if (seenOfferIds.has(offer.offerId)) throw new Error(`Variation listing offer ${variation.sku} reuses another SKU's Offer ID.`);
     seenOfferIds.add(offer.offerId);
+    const offerQuantity = readOfferQuantity(offer.payload, variation.sku);
+    await exhaustiveOffer(input.remote, {
+      offerId: offer.offerId,
+      sku: variation.sku,
+      marketplaceId: input.aggregate.group.marketplace_id,
+      status: offer.status,
+      listingId: offer.listingId,
+      availableQuantity: offerQuantity,
+    });
+    assertItemSelector(item.payload, variation.sku, selectorBySku);
     listingIds.add(offer.listingId);
     offerIdsBySku[variation.sku] = offer.offerId;
     inventoryItemPayloadsBySku[variation.sku] = payloadWithoutQuantity(item.payload, 'item');
     offerPayloadsBySku[variation.sku] = payloadWithoutQuantity(offer.payload, 'offer');
     const itemQuantity = remoteQuantity(item.payload, variation.sku);
-    const offerQuantity = readOfferQuantity(offer.payload, variation.sku);
     quantitiesBySku[variation.sku] = { inventoryItemQuantity: itemQuantity.inventoryItemQuantity, offerQuantity, sellableQuantity: Math.min(itemQuantity.inventoryItemQuantity, offerQuantity) };
   }
   if (listingIds.size !== 1) throw new Error('Variation listing offers do not resolve to one listing.');
@@ -841,16 +917,15 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
   );
   let current = history.at(-1) ?? null;
   if (current && current.operation_key !== OPERATION_KEY) throw new Error('Permanent-removal journal contains an unexpected operation.');
-  if (current?.state === 'retry_exhausted') throw new Error('Permanent-removal bounded replay is exhausted; reconcile manually.');
+  if (current?.state === 'retry_exhausted') throw new Error('Permanent-removal replay is exhausted; reconcile manually.');
   if (terminal(current)) {
     const state = await exactRemoteState(input.plan, input.remote);
     if (!exactPost(input.plan, state)) throw new Error('Permanent-removal terminal journal no longer reconciles to exact post-state.');
     return { revisionId: input.plan.captureInput.revisionId, membershipConfirmed: true };
   }
-  let startedThisInvocation = false;
+  const startedThisInvocation = !current;
   if (!current) {
     current = await append(input, 'started', 1, 1, {}, null);
-    startedThisInvocation = true;
   }
   let state: Awaited<ReturnType<typeof exactRemoteState>>;
   try {
@@ -866,41 +941,31 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
     throw error;
   }
   if (exactPost(input.plan, state)) {
+    // Historical retry_authorized rows may be closed after read-only exact
+    // post reconciliation. The legal transition requires a started marker,
+    // but that marker is journal-only and never authorizes another PUT.
     if (current.state === 'retry_authorized') {
-      current = await append(input, 'started', current.attempt_number, current.checkpoint_number + 1, { reason: 'exact post-state observed during authorized replay reconciliation' }, null);
+      current = await append(input, 'started', current.attempt_number, current.checkpoint_number + 1, { reason: 'exact post-state observed during read-only replay reconciliation' }, null);
     }
     current = await append(input, 'confirmed_complete', current.attempt_number, current.checkpoint_number + 1, { listingId: state.listingId, survivorSkus: input.plan.survivorSkus, targetSku: input.plan.targetSku, state: 'removed' }, 'present');
     return { revisionId: input.plan.captureInput.revisionId, membershipConfirmed: true };
   }
   if (!exactPre(input.plan, state)) {
-    await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'remote state is neither exact pre-state nor exact post-state' }, 'unknown');
+    if (current.state === 'started') {
+      await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'remote state is neither exact pre-state nor exact post-state' }, 'unknown');
+    }
     throw new Error('Permanent-removal remote state is unknown; reconcile before retry.');
   }
-  if (current.state === 'started' && current.attempt_number > 1) {
-    throw new Error('Permanent-removal replay is already in progress; reconcile before another mutation.');
-  }
-  let replayAuthorized = current.state === 'unknown' || current.state === 'retry_authorized';
-  if (current.state === 'started' && !startedThisInvocation) {
-    current = await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'prior execution may have started a mutation; bounded replay requires reconciliation checkpoint' }, 'unknown');
-    current = await append(input, 'retry_authorized', current.attempt_number + 1, 1, { reason: 'exact pre-state permits one bounded replay after crash recovery' }, 'present');
-    replayAuthorized = true;
-  }
-  if (replayAuthorized) {
-    if (current.state === 'unknown') current = await append(input, 'retry_authorized', current.attempt_number + 1, 1, { reason: 'exact pre-state permits one bounded replay' }, 'present');
-    current = await append(input, 'started', current.attempt_number, current.checkpoint_number + 1, {}, null);
+  if (!startedThisInvocation || current.state !== 'started' || current.attempt_number !== 1 || current.checkpoint_number !== 1) {
+    // Any prior started/unknown/retry_authorized history is an uncertain
+    // mutation history. Exact pre-state is not permission to replay it.
+    throw new Error('Permanent-removal has prior mutation history with exact pre-state; manual reconciliation required.');
   }
   try {
     await input.remote.replaceInventoryItemGroup(input.plan.groupKey, input.plan.replacementGroupPayload);
   } catch (error) {
     const afterError = error instanceof Error ? error.message : String(error);
-    if (replayAuthorized) {
-      // A second ambiguous write is terminal for this frozen revision. The
-      // durable journal migration/parser must permit retry_exhausted with
-      // unknown evidence; never claim an exact remote state from an exception.
-      await append(input, 'retry_exhausted', current.attempt_number, current.checkpoint_number + 1, { error: afterError, reason: 'bounded replay returned an unknown outcome' }, 'unknown');
-    } else {
-      await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { error: afterError }, 'unknown');
-    }
+    await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { error: afterError }, 'unknown');
     throw error;
   }
   let after: Awaited<ReturnType<typeof exactRemoteState>>;
@@ -908,13 +973,13 @@ export async function executeVariationListingPermanentRemoval(input: ExecuteVari
     after = await exactRemoteState(input.plan, input.remote);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    await append(input, replayAuthorized ? 'retry_exhausted' : 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'post-mutation reconciliation read failed', error: reason }, 'unknown');
+    await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'post-mutation reconciliation read failed', error: reason }, 'unknown');
     throw error;
   }
   if (!exactPost(input.plan, after)) {
-    await append(input, replayAuthorized ? 'retry_exhausted' : 'unknown', replayAuthorized ? current.attempt_number : current.attempt_number, replayAuthorized ? current.checkpoint_number + 1 : current.checkpoint_number + 1, { reason: 'replacement returned without exact post-state' }, replayAuthorized ? 'unknown' : 'unknown');
+    await append(input, 'unknown', current.attempt_number, current.checkpoint_number + 1, { reason: 'replacement returned without exact post-state' }, 'unknown');
     throw new Error('Permanent-removal replacement returned without exact post-state.');
   }
-  await append(input, 'confirmed_complete', replayAuthorized ? current.attempt_number : current.attempt_number, replayAuthorized ? current.checkpoint_number + 1 : 2, { listingId: after.listingId, survivorSkus: input.plan.survivorSkus, targetSku: input.plan.targetSku, state: 'removed' }, 'present');
+  await append(input, 'confirmed_complete', current.attempt_number, current.checkpoint_number + 1, { listingId: after.listingId, survivorSkus: input.plan.survivorSkus, targetSku: input.plan.targetSku, state: 'removed' }, 'present');
   return { revisionId: input.plan.captureInput.revisionId, membershipConfirmed: true };
 }

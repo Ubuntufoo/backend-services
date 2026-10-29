@@ -79,6 +79,7 @@ const variationUpdatePriceMock = vi.fn();
 const variationUpdateCopyAvailabilityMock = vi.fn();
 const variationUpdateRepresentativeCopyMock = vi.fn();
 const variationConfigureIntakeMock = vi.fn();
+const createSupabaseRemovedSkuRemoteRetirementStoreMock = vi.fn(() => ({}));
 
 vi.mock('@ebay-inventory/data', () => ({
   DEFAULT_APP_SETTINGS_ID: 'default',
@@ -92,6 +93,7 @@ vi.mock('@ebay-inventory/data', () => ({
   createListing: createListingMock,
   createListingPriceResearch: createListingPriceResearchMock,
   createSupabaseVariationListingTransactionGateway: createSupabaseVariationListingTransactionGatewayMock,
+  createSupabaseRemovedSkuRemoteRetirementStore: createSupabaseRemovedSkuRemoteRetirementStoreMock,
   getVariationListingIntakeSessionBySourceKey: getVariationListingIntakeSessionBySourceKeyMock,
   mapVariationListingIntakeSessionRow: mapVariationListingIntakeSessionRowMock,
   requireVariationListingCaptureSourceKey: requireVariationListingCaptureSourceKeyMock,

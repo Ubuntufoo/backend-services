@@ -421,12 +421,11 @@ function normalizeGroup(raw: unknown, groupKey: string) {
   if (rawGroupKey !== undefined && (typeof rawGroupKey !== 'string' || rawGroupKey.trim() !== groupKey)) {
     throw new Error(`eBay inventory item group identity mismatch for ${groupKey}.`);
   }
-  const variantSKUs = Array.isArray(row.variantSKUs)
-    ? row.variantSKUs.map((value) => String(value).trim())
-    : [];
-  if (variantSKUs.some((value) => !value) || new Set(variantSKUs).size !== variantSKUs.length) {
+  const rawVariantSKUs = Array.isArray(row.variantSKUs) ? row.variantSKUs : [];
+  if (rawVariantSKUs.some((value) => typeof value !== 'string' || value.trim() !== value || value === '') || new Set(rawVariantSKUs).size !== rawVariantSKUs.length) {
     throw new Error('eBay group response contains malformed variant SKUs.');
   }
+  const variantSKUs = rawVariantSKUs as string[];
   return {
     variantSKUs,
     payload: {
@@ -1603,6 +1602,12 @@ export function createVariationListingActionService(options: VariationListingAct
     const remote: VariationListingPermanentRemovalRemote = {
       ...deps.remote,
       replaceInventoryItemGroup: deps.mutations.createOrReplaceInventoryItemGroup,
+      getAllOffersForSku: async (sku) => {
+        if (!deps.mutations.getAllOffersForSku) {
+          throw new Error('Exhaustive all-marketplace Offer read is unavailable for permanent removal.');
+        }
+        return await deps.mutations.getAllOffersForSku(sku);
+      },
     };
     let plan;
     if (existing) {

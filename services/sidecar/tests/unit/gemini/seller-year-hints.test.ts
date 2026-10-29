@@ -16,6 +16,7 @@ describe('parseAuthorizedSellerYears', () => {
 
   it('deduplicates identical directives and preserves conflicts for fail-closed handling', () => {
     expect(parseAuthorizedSellerYears('year:1969\nYear is 1969')).toEqual(['1969']);
-    expect(parseAuthorizedSellerYears('Year is 1969\nyear:1970')).toEqual(['1969', '1970']);
+    // Explicit year directives are collected before natural-language directives.
+    expect(parseAuthorizedSellerYears('Year is 1969\nyear:1970')).toEqual(['1970', '1969']);
   });
 });

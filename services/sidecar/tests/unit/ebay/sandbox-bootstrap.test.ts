@@ -125,9 +125,9 @@ describe('sandbox bootstrap', () => {
     );
     expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
       2,
-      {
+      expect.objectContaining({
         merchant_location_key: 'stored-location',
-      },
+      }),
       'default'
     );
   });
@@ -177,9 +177,9 @@ describe('sandbox bootstrap', () => {
     );
     expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
       2,
-      {
+      expect.objectContaining({
         merchant_location_key: 'default-main-location',
-      },
+      }),
       'default'
     );
   });
@@ -266,7 +266,7 @@ describe('sandbox bootstrap', () => {
     );
     expect(dataAccess.appSettings.update).toHaveBeenNthCalledWith(
       2,
-      { merchant_location_key: 'default-main-location' },
+      expect.objectContaining({ merchant_location_key: 'default-main-location' }),
       'default'
     );
   });

@@ -288,7 +288,6 @@ export {
 } from './variation-listing-transactions.js';
 export {
   VariationListingTransactionConflictError,
-  createSupabaseC2bRemoval01IncidentRepairStore,
   createSupabaseRemovedSkuRemoteRetirementStore,
   createSupabaseVariationListingTransactionGateway,
   variationListingJsonSemanticallyEqual,
@@ -296,12 +295,6 @@ export {
   type RemovedSkuRemoteRetirementRecord,
   type RemovedSkuRemoteRetirementState,
   type RemovedSkuRemoteRetirementStore,
-  type C2bRemoval01IncidentRepairPostInput,
-  type C2bRemoval01IncidentRepairPrepareInput,
-  type C2bRemoval01IncidentRepairRecord,
-  type C2bRemoval01IncidentRepairState,
-  type C2bRemoval01IncidentRepairStore,
-  type C2bRemoval01IncidentRepairTerminalResult,
 } from './variation-listing-rpc.js';
 export {
   ListingWorkflowStateError,

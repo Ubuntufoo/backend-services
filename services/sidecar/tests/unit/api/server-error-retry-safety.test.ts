@@ -93,6 +93,48 @@ describe('eBay shared-client server-error retry safety', () => {
     });
   });
 
+  it.each(['POST', 'PUT', 'DELETE'] as const)('does not replay a non-GET %s after HTTP 401', async (method) => {
+    const scope = nock(origin);
+    if (method === 'POST') scope.post(path).reply(401, { errors: [{ message: 'Invalid access token' }] });
+    if (method === 'PUT') scope.put(path).reply(401, { errors: [{ message: 'Invalid access token' }] });
+    if (method === 'DELETE') scope.delete(path).reply(401, { errors: [{ message: 'Invalid access token' }] });
+
+    const request = method === 'POST'
+      ? client.post(path, { sku: 'unit-test' })
+      : method === 'PUT'
+        ? client.put(path, { sku: 'unit-test' })
+        : client.delete(path);
+    await expect(request).rejects.toMatchObject({ response: { status: 401 } });
+    expect(scope.isDone()).toBe(true);
+    expect(mockAuth.getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay a full URL POST after HTTP 401', async () => {
+    const payload = { imageUrl: 'https://example.com/image.jpg' };
+    const scope = nock(origin)
+      .post(path, payload)
+      .reply(401, { errors: [{ message: 'Invalid access token' }] });
+
+    await expect(client.postWithFullUrlResponse(`${origin}${path}`, payload)).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(scope.isDone()).toBe(true);
+    expect(mockAuth.getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains automatic token refresh and replay for ordinary GET 401 responses', async () => {
+    mockAuth.getAccessToken.mockResolvedValueOnce('expired-token').mockResolvedValue('fresh-token');
+    const scope = nock(origin)
+      .get(path)
+      .reply(401, { errors: [{ message: 'Invalid access token' }] })
+      .get(path)
+      .reply(200, { sku: 'recovered-read' });
+
+    await expect(client.get(path)).resolves.toEqual({ sku: 'recovered-read' });
+    expect(scope.isDone()).toBe(true);
+    expect(mockAuth.getAccessToken).toHaveBeenCalledTimes(3);
+  });
+
   it.each(['POST', 'PUT', 'DELETE'] as const)(
     'never automatically replays %s after an ambiguous 500',
     async (method) => {

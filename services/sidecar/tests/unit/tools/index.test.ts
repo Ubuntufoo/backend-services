@@ -486,6 +486,7 @@ describe('Tools Layer', () => {
 
     it('should display credentials when tokens are not set', async () => {
       // Clear environment
+      delete process.env.EBAY_REFRESH_TOKEN;
       delete process.env.EBAY_USER_REFRESH_TOKEN;
 
       // Mock the OAuth client with no tokens

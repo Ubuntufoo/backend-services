@@ -216,8 +216,18 @@ export class EbayApiClient {
           apiLogger.error('Request setup error', { error: axiosError.message });
         }
 
-        // Handle authentication errors (401 Unauthorized)
+        // Only idempotent GET reads may refresh and replay after 401. A
+        // non-GET response can represent a completed mutation, so it must
+        // fail after its first attempt regardless of the error class.
         if (axiosError.response?.status === 401) {
+          const method = config?.method?.toUpperCase();
+          if (method !== 'GET') {
+            apiLogger.warn('Authentication error (401). Automatic refresh/replay suppressed for non-GET request.', {
+              method: method ?? 'UNKNOWN',
+            });
+            throw axiosError;
+          }
+
           const retryCount = config?.authRetryCount ?? 0;
 
           // Only retry once to avoid infinite loops
@@ -675,7 +685,7 @@ export class EbayApiClient {
       );
     }
 
-    let token = await this.authClient.getAccessToken();
+    const token = await this.authClient.getAccessToken();
     this.rateLimitTracker.recordRequest();
 
     const request = async (): Promise<AxiosResponse<T>> =>
@@ -692,31 +702,8 @@ export class EbayApiClient {
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 401) {
         apiLogger.warn(
-          'Authentication error (401) on full URL POST request. Attempting to refresh user token...'
+          'Authentication error (401) on full URL POST request. Automatic refresh/replay suppressed.'
         );
-
-        try {
-          await this.authClient.refreshUserToken();
-          token = await this.authClient.getAccessToken();
-          apiLogger.info('Token refreshed successfully. Retrying request...');
-          return await request();
-        } catch (refreshError) {
-          apiLogger.error('Failed to refresh token', {
-            error: refreshError instanceof Error ? refreshError.message : 'Unknown error',
-          });
-
-          const ebayError = error.response?.data as EbayApiError;
-          const originalError =
-            ebayError.errors?.[0]?.longMessage ??
-            ebayError.errors?.[0]?.message ??
-            'Invalid access token';
-
-          throw new Error(
-            `${originalError}. ` +
-              `Token refresh failed: ${refreshError instanceof Error ? refreshError.message : 'Unknown error'}. ` +
-              'Please use the ebay_set_user_tokens_with_expiry tool to provide valid tokens.'
-          );
-        }
       }
 
       throw error;
