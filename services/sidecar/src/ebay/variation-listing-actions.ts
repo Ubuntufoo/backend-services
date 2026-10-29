@@ -160,6 +160,7 @@ export interface VariationListingActionServiceOptions {
       deleteInventoryItemGroup(groupKey: string): Promise<void>;
       deleteOffer(offerId: string): Promise<void>;
       publishOffer(offerId: string): Promise<{ listingId: string }>;
+      bulkUpdatePriceQuantity?(payload: Json): Promise<Json | void>;
       updateOffer(offerId: string, payload: Json): Promise<void>;
       withdrawInventoryItemGroup(groupKey: string, marketplaceId: string): Promise<void>;
       /** Exhaustive, all-marketplace Offer read for removed-SKU ownership proof. */
@@ -516,6 +517,48 @@ function normalizeOffers(raw: unknown) {
   });
 }
 
+/** Validate the documented 200 JSON body before treating a bulk mutation as
+ * accepted. A combined SKU/item+offer request returns one result per target. */
+export function assertBulkPriceQuantitySuccess(raw: unknown, sku: string, offerId: string, expectsInventoryItem: boolean): void {
+  const body = record(raw);
+  if (Object.prototype.hasOwnProperty.call(body, 'statusCode')) {
+    throw new Error(`eBay bulk price/quantity response for ${sku} has an unsupported top-level status.`);
+  }
+  const responses = body.responses;
+  const expectedResponseCount = expectsInventoryItem ? 2 : 1;
+  if (!Array.isArray(responses) || responses.length !== expectedResponseCount) {
+    throw new Error(`eBay bulk price/quantity response for ${sku} is missing its expected ${expectedResponseCount} result${expectedResponseCount === 1 ? '' : 's'}.`);
+  }
+  let offerResult = false;
+  let inventoryResult = false;
+  for (const rawResult of responses) {
+    const result = record(rawResult);
+    if (readString(result, 'sku') !== sku) {
+      throw new Error(`eBay bulk price/quantity response identity does not match SKU ${sku}.`);
+    }
+    const hasOfferId = Object.prototype.hasOwnProperty.call(result, 'offerId');
+    const resultOfferId = readString(result, 'offerId');
+    if (hasOfferId) {
+      if (!resultOfferId || offerResult || resultOfferId !== offerId) {
+        throw new Error(`eBay bulk price/quantity response identity does not match ${sku}/${offerId}.`);
+      }
+      offerResult = true;
+    } else {
+      if (inventoryResult) throw new Error(`eBay bulk price/quantity response contains duplicate inventory result for ${sku}.`);
+      inventoryResult = true;
+    }
+    if (result.statusCode !== 200) {
+      throw new Error(`eBay bulk price/quantity update for ${sku} was not accepted (status ${String(result.statusCode)}).`);
+    }
+    if ('errors' in result && (!Array.isArray(result.errors) || result.errors.length > 0)) {
+      throw new Error(`eBay bulk price/quantity update for ${sku} returned errors.`);
+    }
+  }
+  if (!offerResult || (expectsInventoryItem && !inventoryResult) || (!expectsInventoryItem && inventoryResult)) {
+    throw new Error(`eBay bulk price/quantity response for ${sku} does not cover the requested offer/item identity.`);
+  }
+}
+
 let productionRemotePromise: ReturnType<NonNullable<VariationListingActionServiceOptions['remoteFactory']>> | undefined;
 
 export async function assertVariationListingMerchantLocation(
@@ -549,6 +592,7 @@ async function createProductionRemote() {
         );
         return read.state === 'proven_absent' ? { state: 'present', value: [] } : read;
       },
+      getListing: async (listingId) => await api.trading.getListing(listingId),
       getMedia: async (location) => await remoteRead(async () => await api.media.getImage(location)),
     };
     return {
@@ -585,6 +629,19 @@ async function createProductionRemote() {
             throw new Error('eBay publishOffer response is missing listingId.');
           }
           return { listingId };
+        },
+        bulkUpdatePriceQuantity: async (payload) => {
+          const request = record(payload);
+          const requests = Array.isArray(request.requests) ? request.requests : [];
+          if (requests.length !== 1) throw new Error('eBay bulk price/quantity update requires one request.');
+          const row = record(requests[0]);
+          const sku = readString(row, 'sku');
+          const offers = Array.isArray(row.offers) ? row.offers : [];
+          const offerId = offers.length === 1 ? readString(record(offers[0]), 'offerId') : '';
+          if (!sku || !offerId) throw new Error('eBay bulk price/quantity update request lacks exact SKU/offer identity.');
+          const raw = await api.inventory.bulkUpdatePriceQuantity(payload as Record<string, unknown>, headers);
+          assertBulkPriceQuantitySuccess(raw, sku, offerId, Object.prototype.hasOwnProperty.call(row, 'shipToLocationAvailability'));
+          return raw as Json;
         },
         updateOffer: async (offerId, payload) => { await api.inventory.updateOffer(offerId, payload as Record<string, unknown>); },
         withdrawInventoryItemGroup: async (groupKey, marketplaceId) => { await api.inventory.withdrawOfferByInventoryItemGroup({ inventoryItemGroupKey: groupKey, marketplaceId }, headers); },
@@ -1931,17 +1988,28 @@ export function createVariationListingActionService(options: VariationListingAct
   });
 
   const reconcile = (groupId: string) => run('reconcile', groupId, async (progress) => {
-    assertPublicationMutationEnabled('reconcile', groupId);
     const aggregate = await requireAggregate(groupId, 'reconcile');
     assertNoPendingPermanentRemoval('reconcile', groupId, aggregate);
     const pending = await unresolvedRevision(await rows(groupId));
     if (!pending) {
       throw validationError('reconcile', groupId, 'reconcile_not_required', 'No unresolved operation requires reconciliation.', ['refresh_group']);
     }
-    if (revisionKind(pending.revision) !== 'initial') {
-      throw validationError('reconcile', groupId, 'reconcile_revision_unsupported', 'This recovery revision requires an explicit safe Retry or manual resolution; Reconcile will not start a mutation-capable executor.', ['retry_action', 'inspect_remote_state']);
-    }
     progress('reconcile_remote_state', { operationKey: pending.operation.operation_key, revisionId: pending.revision.revision_id });
+    if (revisionKind(pending.revision) === 'active') {
+      const deps = await resolveDependencies();
+      const frozen = hydrateActive(pending.revision);
+      return await executeVariationListingActiveRevisionPublication({
+        frozen,
+        journal: journalFor(pending.revision),
+        mutations: deps.mutations,
+        remote: deps.remote,
+        transaction,
+        readOnlyReconcile: true,
+      });
+    }
+    if (revisionKind(pending.revision) !== 'initial') {
+      throw validationError('reconcile', groupId, 'reconcile_revision_unsupported', 'This recovery revision is not supported by read-only reconciliation.', ['inspect_remote_state']);
+    }
     return await executeInitial(aggregate, pending.revision, undefined, true);
   });
 

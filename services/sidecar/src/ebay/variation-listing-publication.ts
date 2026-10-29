@@ -459,6 +459,10 @@ export async function reconcileVariationListingExactPublished(
 export interface VariationListingPublicationRemoteGateway
   extends VariationListingPublicationReadGateway {
   getMedia(location: string): Promise<VariationListingRemoteRead<VariationListingRemoteMedia>>;
+  /** Optional listing-facing Trading GetItem read. Active price revisions use
+   * it as authoritative evidence; initial publication has no existing listing
+   * to inspect. */
+  getListing?(listingId: string): Promise<unknown>;
 }
 
 export interface VariationListingPublicationMutationGateway {
@@ -501,6 +505,15 @@ export interface VariationListingPublicationExecutionResult {
   reconciledOperationKey?: string;
   revisionId: string;
 }
+
+/** Read-only recovery must not retain a provider mutation capability. */
+const readOnlyPublicationMutationGateway: VariationListingPublicationMutationGateway = {
+  createMedia: async () => { throw new Error('Variation listing read-only reconciliation attempted Media mutation.'); },
+  createOrReplaceInventoryItem: async () => { throw new Error('Variation listing read-only reconciliation attempted Inventory Item mutation.'); },
+  createOffer: async () => { throw new Error('Variation listing read-only reconciliation attempted Offer mutation.'); },
+  createOrReplaceInventoryItemGroup: async () => { throw new Error('Variation listing read-only reconciliation attempted Inventory Item Group mutation.'); },
+  publishInventoryItemGroup: async () => { throw new Error('Variation listing read-only reconciliation attempted publish mutation.'); },
+};
 
 type OperationHistory = Map<string, VariationListingPublishingCheckpointRow[]>;
 
@@ -747,6 +760,9 @@ async function executeMutationOperation(
   const operation = planOperation(input.frozen, operationKey);
   const checkpoints = history.get(operationKey)!;
   const current = latest(checkpoints);
+  if (!current && input.reconcileOnly) {
+    throw new Error(`Variation listing read-only reconciliation cannot adopt unstarted operation ${operationKey}.`);
+  }
   if (current) {
     const reconciledNoOp = await finishExistingUnknown(input, history, operationKey, after, pre);
     return Boolean(input.reconcileOnly && (!isTerminal(current) || reconciledNoOp));
@@ -876,6 +892,9 @@ export async function executeVariationListingPublication(
     target_ref: operation.targetRef,
   }));
   const existing = await input.journal.loadRevision(input.frozen.captureInput.revisionId);
+  if (input.reconcileOnly && !existing) {
+    throw new Error('Variation listing read-only reconciliation requires an existing frozen revision; capture is forbidden.');
+  }
   const captured = existing
     ? { revision: existing }
     : await input.transaction.captureRevision(input.frozen.captureInput);
@@ -891,6 +910,7 @@ export async function executeVariationListingPublication(
     throw new Error('Captured variation listing revision does not exactly match the frozen publication plan.');
   }
   const history = makeHistory(input.frozen, await input.journal.listCheckpoints(input.frozen.captureInput.revisionId));
+  const mutationGateway = input.reconcileOnly ? readOnlyPublicationMutationGateway : input.mutations;
   const resolvedMediaImages = new Map<string, string>();
 
   for (const media of input.frozen.snapshot.mediaResources) {
@@ -937,6 +957,10 @@ export async function executeVariationListingPublication(
       throw new Error(`Variation listing Media operation ${operationKey} has started without a durably captured Media identity; replay is forbidden.`);
     }
 
+    if (input.reconcileOnly) {
+      throw new Error(`Variation listing read-only reconciliation cannot adopt unstarted Media operation ${operationKey}.`);
+    }
+
     await appendCheckpoint(input, history, operationKey, {
       attemptNumber: 1,
       checkpointNumber: 1,
@@ -945,7 +969,7 @@ export async function executeVariationListingPublication(
     });
     let created: VariationListingRemoteMedia;
     try {
-      created = await input.mutations.createMedia(media.sourceUrl);
+      created = await mutationGateway.createMedia(media.sourceUrl);
     } catch (error) {
       await appendCheckpoint(input, history, operationKey, {
         attemptNumber: 1,
@@ -1014,7 +1038,7 @@ export async function executeVariationListingPublication(
         if (read.state === 'unknown') throw new Error(`Variation listing child item ${child.sku} pre-state is unknown: ${read.reason}`);
         return read.state === 'proven_absent' ? { sku: child.sku } : null;
       },
-      () => input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem)),
+      () => mutationGateway.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem)),
       { sku: child.sku }
     );
     if (reconciled) return { reconciledOperationKey: `child-item:${child.variationId}`, revisionId: input.frozen.captureInput.revisionId };
@@ -1048,7 +1072,7 @@ export async function executeVariationListingPublication(
         return read.state === 'proven_absent' || read.value.length === 0 ? { sku: child.sku } : null;
       },
       async () => {
-        returnedOfferId = (await input.mutations.createOffer(asJson(child.offer))).offerId;
+        returnedOfferId = (await mutationGateway.createOffer(asJson(child.offer))).offerId;
       },
       { sku: child.sku }
     );
@@ -1077,7 +1101,7 @@ export async function executeVariationListingPublication(
       if (read.state === 'unknown') throw new Error(`Variation listing group ${bundle.groupKey} pre-state is unknown: ${read.reason}`);
       return read.state === 'proven_absent' ? { groupKey: bundle.groupKey } : null;
     },
-    () => input.mutations.createOrReplaceInventoryItemGroup(bundle.groupKey, asJson(bundle.group)),
+    () => mutationGateway.createOrReplaceInventoryItemGroup(bundle.groupKey, asJson(bundle.group)),
     { groupKey: bundle.groupKey }
   );
   if (reconciledGroup) return { reconciledOperationKey: 'complete-group', revisionId: input.frozen.captureInput.revisionId };
@@ -1108,7 +1132,7 @@ export async function executeVariationListingPublication(
     },
     async () => {
       await reconcileVariationListingExactUnpublished(input.remote, input.frozen, bundle);
-      returnedListingId = (await input.mutations.publishInventoryItemGroup(asJson(bundle.publishRequest))).listingId;
+      returnedListingId = (await mutationGateway.publishInventoryItemGroup(asJson(bundle.publishRequest))).listingId;
     }
   );
   if (reconciledPublish) return { reconciledOperationKey: 'group-publish', revisionId: input.frozen.captureInput.revisionId };

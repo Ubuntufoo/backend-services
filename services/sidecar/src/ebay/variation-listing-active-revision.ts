@@ -675,8 +675,16 @@ export function reconstructConfirmedRemoteIdentity(
     const variationId = operation.key.startsWith('child-offer:') ? operation.key.slice('child-offer:'.length) : '';
     if (!expectedVariationIds.has(variationId)) throw new Error(`Variation listing previous revision has an unknown child-offer operation ${operation.key}.`);
     const evidence = requiredEvidenceObject(durableCheckpoint(checkpointsByOperation, operation.key), operation.key);
-    const offerId = activeString(evidence.offerId, `previous revision ${operation.key} offerId`);
-    const sku = activeString(evidence.sku, `previous revision ${operation.key} sku`);
+    // Active price revisions record Offer identity beside Trading price proof;
+    // older checkpoints record the Offer identity directly.
+    const offerEvidence = Object.prototype.hasOwnProperty.call(evidence, 'offer')
+      ? object(evidence.offer, `previous revision ${operation.key} offer evidence`)
+      : evidence;
+    if (offerEvidence !== evidence && ('offerId' in evidence || 'sku' in evidence || 'listingId' in evidence)) {
+      throw new Error(`Variation listing previous revision ${operation.key} contains ambiguous Offer identity evidence.`);
+    }
+    const offerId = activeString(offerEvidence.offerId, `previous revision ${operation.key} offerId`);
+    const sku = activeString(offerEvidence.sku, `previous revision ${operation.key} sku`);
     const variation = aggregate.variations.find((candidate) => candidate.variation_id === variationId)!;
     if (sku !== variation.sku || operation.targetRef !== variation.sku || !expectedSkus.has(sku)) throw new Error(`Variation listing previous revision ${operation.key} SKU coverage is invalid.`);
     const inheritedOfferId = offerIdsBySku[sku];
@@ -688,7 +696,7 @@ export function reconstructConfirmedRemoteIdentity(
     }
     offerIdsBySku[sku] = offerId;
     terminalOfferIds.set(variationId, offerId);
-    const listingId = optionalEvidenceString(evidence.listingId, `previous revision ${operation.key} listingId`);
+    const listingId = optionalEvidenceString(offerEvidence.listingId, `previous revision ${operation.key} listingId`);
     if (listingId) listingIds.add(listingId);
   }
 
@@ -959,16 +967,20 @@ export async function prepareVariationListingFrozenActiveRevision(
   };
 }
 
-/** Mutation seam used only by an already-active revision.  The initial
- * publish executor remains in variation-listing-publication.ts; active
- * revisions deliberately use updateOffer/publishOffer and never call a fresh
- * group publish for an existing offer. */
+/** Mutation seam used only by an already-active revision. The initial publish
+ * executor remains in variation-listing-publication.ts; active revisions use
+ * targeted offer/bulk price mutations and never call a fresh group publish for
+ * an existing offer. */
 export interface VariationListingActiveMutationGateway {
   createMedia?: (sourceUrl: string) => Promise<VariationListingRemoteMedia>;
   createOffer: (payload: Json) => Promise<{ offerId: string }>;
   createOrReplaceInventoryItem: (sku: string, payload: Json) => Promise<void>;
   createOrReplaceInventoryItemGroup: (groupKey: string, payload: Json) => Promise<void>;
   publishOffer: (offerId: string) => Promise<{ listingId: string }>;
+  /** Update a published offer's price/quantity through the Inventory API's
+   * listing-facing bulk endpoint. `updateOffer` remains the fallback for
+   * offer fields that are not covered by this endpoint. */
+  bulkUpdatePriceQuantity?: (payload: Json) => Promise<Json | void>;
   updateOffer: (offerId: string, payload: Json) => Promise<void>;
 }
 
@@ -983,6 +995,9 @@ export interface VariationListingActiveRevisionExecutionInput {
   };
   mutations: VariationListingActiveMutationGateway;
   remote: VariationListingPublicationReadGateway & {
+    /** Trading GetItem listing-facing read. Inventory Offer reads are not
+     * sufficient evidence that a published multi-variation price changed. */
+    getListing?: (listingId: string) => Promise<unknown>;
     getMedia?: (location: string) => Promise<
       | { state: 'present'; value: VariationListingRemoteMedia }
       | { state: 'proven_absent' }
@@ -993,6 +1008,8 @@ export interface VariationListingActiveRevisionExecutionInput {
     VariationListingTransactionGateway,
     'appendJournalCheckpoint' | 'captureRevision' | 'confirmRevision' | 'loadAggregate'
   >;
+  /** Reconcile an existing frozen revision using remote reads only. Never invoke an eBay mutation. */
+  readOnlyReconcile?: boolean;
   checkpointId?: () => string;
 }
 
@@ -1001,6 +1018,22 @@ export interface VariationListingActiveRevisionExecutionResult {
   listingId: string;
   revisionId: string;
 }
+
+/**
+ * Read-only reconciliation deliberately has no provider mutation capability.
+ * Keep this boundary inside the executor (rather than trusting callers to
+ * pass a harmless gateway) so an accidental mutation path fails before it can
+ * reach an eBay client.
+ */
+const readOnlyActiveMutationGateway: VariationListingActiveMutationGateway = {
+  createMedia: async () => { throw new Error('Variation listing read-only reconciliation attempted Media mutation.'); },
+  createOffer: async () => { throw new Error('Variation listing read-only reconciliation attempted Offer mutation.'); },
+  createOrReplaceInventoryItem: async () => { throw new Error('Variation listing read-only reconciliation attempted Inventory Item mutation.'); },
+  createOrReplaceInventoryItemGroup: async () => { throw new Error('Variation listing read-only reconciliation attempted Inventory Item Group mutation.'); },
+  publishOffer: async () => { throw new Error('Variation listing read-only reconciliation attempted publish mutation.'); },
+  bulkUpdatePriceQuantity: async () => { throw new Error('Variation listing read-only reconciliation attempted bulk price/quantity mutation.'); },
+  updateOffer: async () => { throw new Error('Variation listing read-only reconciliation attempted Offer update mutation.'); },
+};
 
 type ActiveHistory = Map<string, VariationListingPublishingCheckpointRow[]>;
 type ActiveState = 'started' | 'unknown' | 'retry_authorized' | 'retry_exhausted' | 'confirmed_complete' | 'confirmed_no_op';
@@ -1199,6 +1232,59 @@ function validateFrozenActiveOperationPlanCompleteness(
   }
 }
 
+function validateReadOnlyFrozenIdentity(
+  frozen: VariationListingFrozenActiveRevision,
+  history: ActiveHistory,
+): void {
+  const snapshot = frozen.snapshot;
+  const orderedOperations = [...frozen.captureInput.operationPlan].sort((left, right) => left.sequenceNo - right.sequenceNo);
+  if (orderedOperations.length === 0 || orderedOperations.some((operation, index) => operation.sequenceNo !== index + 1) || new Set(orderedOperations.map((operation) => operation.operationKey)).size !== orderedOperations.length) {
+    throw new Error('Variation listing read-only reconciliation frozen operation identity is incomplete.');
+  }
+  const currentSkus = snapshot.aggregate.variations.map((variation) => variation.sku);
+  const confirmedSkus = snapshot.confirmed.aggregate.variations.map((variation) => variation.sku);
+  const unique = (values: readonly string[], label: string): Set<string> => {
+    if (values.some((value) => typeof value !== 'string' || value.trim() === '') || new Set(values).size !== values.length) {
+      throw new Error(`Variation listing read-only reconciliation ${label} identity is incomplete.`);
+    }
+    return new Set(values);
+  };
+  const currentSet = unique(currentSkus, 'current SKU');
+  const confirmedSet = unique(confirmedSkus, 'confirmed SKU');
+  if (![...confirmedSet].every((sku) => currentSet.has(sku))) {
+    throw new Error('Variation listing read-only reconciliation frozen siblings do not cover every confirmed SKU.');
+  }
+  const listingId = snapshot.confirmed.remote.listingId;
+  if (typeof listingId !== 'string' || listingId.trim() === '') {
+    throw new Error('Variation listing read-only reconciliation is missing its frozen listing identity.');
+  }
+  const offerIds = snapshot.confirmed.remote.offerIdsBySku;
+  const quantities = snapshot.confirmed.remote.quantitiesBySku;
+  if (offerIds === null || typeof offerIds !== 'object' || Array.isArray(offerIds) || quantities === null || typeof quantities !== 'object' || Array.isArray(quantities)) {
+    throw new Error('Variation listing read-only reconciliation is missing complete frozen remote identity.');
+  }
+  const offerIdKeys = Object.keys(offerIds);
+  const quantityKeys = Object.keys(quantities);
+  if (offerIdKeys.length !== confirmedSet.size || offerIdKeys.some((sku) => !confirmedSet.has(sku)) || new Set(Object.values(offerIds)).size !== offerIdKeys.length || quantityKeys.length !== confirmedSet.size || quantityKeys.some((sku) => !confirmedSet.has(sku))) {
+    throw new Error('Variation listing read-only reconciliation frozen remote identity does not cover every confirmed sibling.');
+  }
+  for (const sku of confirmedSet) {
+    const offerId = offerIds[sku];
+    if (typeof offerId !== 'string' || offerId.trim() === '') throw new Error(`Variation listing read-only reconciliation is missing frozen offer identity for ${sku}.`);
+    const quantity = quantities[sku];
+    if (!quantity || !Number.isSafeInteger(quantity.inventoryItemQuantity) || quantity.inventoryItemQuantity < 0 || !Number.isSafeInteger(quantity.offerQuantity) || quantity.offerQuantity < 0 || !Number.isSafeInteger(quantity.sellableQuantity) || quantity.sellableQuantity < 0 || quantity.sellableQuantity !== Math.min(quantity.inventoryItemQuantity, quantity.offerQuantity)) {
+      throw new Error(`Variation listing read-only reconciliation frozen quantity evidence for ${sku} is incomplete.`);
+    }
+  }
+  const revisionReconcile = frozen.captureInput.operationPlan.filter((operation) => operation.operationKey === 'revision-reconcile' && operation.operationKind === 'revision_reconcile');
+  if (revisionReconcile.length !== 1) throw new Error('Variation listing read-only reconciliation requires one frozen revision-reconcile operation.');
+  for (const operation of frozen.captureInput.operationPlan.filter((candidate) => candidate.operationKey !== 'revision-reconcile')) {
+    if ((history.get(operation.operationKey)?.length ?? 0) === 0) {
+      throw new Error(`Variation listing read-only reconciliation operation ${operation.operationKey} history is incomplete.`);
+    }
+  }
+}
+
 function activeObjectEvidence(value: Json, label: string): Record<string, Json> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} evidence must be an object.`);
   return value as Record<string, Json>;
@@ -1248,6 +1334,34 @@ async function executeActiveOperation(
   const rows = history.get(operationKey)!;
   const current = activeLatest(rows);
   const retryAuthorizedPreviously = rows.some((row) => row.state === 'retry_authorized');
+  if (input.readOnlyReconcile) {
+    if (!current) throw new Error(`Variation listing read-only reconciliation cannot adopt unstarted operation ${operationKey}.`);
+    if (current.state === 'retry_exhausted') throw new Error(`Variation listing read-only reconciliation cannot recover exhausted operation ${operationKey}.`);
+    const evidence = await after();
+    if (evidence === null) throw new Error(`Variation listing read-only reconciliation cannot prove exact after-state for ${operationKey}; no eBay mutation attempted.`);
+    if (current.state === 'confirmed_complete' || current.state === 'confirmed_no_op') return;
+    if (current.state === 'started') {
+      // A started operation resolves on the same attempt.  This preserves the
+      // append-only journal grammar and proves that no replay was authorized.
+      await activeAppend(input, history, operationKey, 'confirmed_complete', current.attempt_number, current.checkpoint_number + 1, evidence, 'present');
+      return;
+    }
+    if (current.state === 'retry_authorized') {
+      // A retry authorization is a write permission, not a read-only terminal
+      // state.  Record the required replay start, then resolve it from the
+      // exact after-state without invoking its mutation closure.
+      await activeAppend(input, history, operationKey, 'started', current.attempt_number, current.checkpoint_number + 1, {});
+      await activeAppend(input, history, operationKey, 'confirmed_complete', current.attempt_number, current.checkpoint_number + 2, evidence, 'present');
+      return;
+    }
+    // Unknown outcomes reconcile on the next attempt.  Any other state is
+    // malformed and must remain unresolved.
+    if (current.state !== 'unknown' && current.observed_remote_state !== 'unknown') {
+      throw new Error(`Variation listing read-only reconciliation cannot resolve invalid operation state ${current.state} for ${operationKey}.`);
+    }
+    await activeAppend(input, history, operationKey, 'confirmed_complete', current.attempt_number + 1, 1, evidence, 'present');
+    return;
+  }
   if (current?.state === 'retry_exhausted') throw new Error(`Variation listing operation ${operationKey} exhausted its one bounded replay.`);
   if (current?.state === 'confirmed_complete') {
     if ((await after()) === null) throw new Error(`Variation listing operation ${operationKey} terminal after-state no longer reconciles exactly.`);
@@ -1273,7 +1387,13 @@ async function executeActiveOperation(
       await activeAppend(input, history, operationKey, 'unknown', current.attempt_number, current.checkpoint_number + 2, activeErrorEvidence(error), 'unknown');
       throw error;
     }
-    const replayAfter = await after();
+    let replayAfter: Json | null;
+    try {
+      replayAfter = await after();
+    } catch (error) {
+      await activeAppend(input, history, operationKey, 'unknown', current.attempt_number, current.checkpoint_number + 2, activeErrorEvidence(error), 'unknown');
+      throw error;
+    }
     if (replayAfter === null) {
       await activeAppend(input, history, operationKey, 'unknown', current.attempt_number, current.checkpoint_number + 2, { reason: 'Replay returned without exact after-state.' }, 'unknown');
       throw new Error(`Variation listing operation ${operationKey} replay outcome is unknown.`);
@@ -1359,7 +1479,13 @@ async function executeActiveOperation(
     await activeAppend(input, history, operationKey, 'unknown', 1, 2, activeErrorEvidence(error), 'unknown');
     throw error;
   }
-  const mutationAfter = await after();
+  let mutationAfter: Json | null;
+  try {
+    mutationAfter = await after();
+  } catch (error) {
+    await activeAppend(input, history, operationKey, 'unknown', 1, 2, activeErrorEvidence(error), 'unknown');
+    throw error;
+  }
   if (mutationAfter === null) {
     await activeAppend(input, history, operationKey, 'unknown', 1, 2, { reason: 'Mutation returned without exact after-state.' }, 'unknown');
     throw new Error(`Variation listing operation ${operationKey} returned without an exact after-state.`);
@@ -1416,6 +1542,174 @@ function activeOfferIgnoringQuantity(
   offerQuantity(offer.payload, expected.sku);
   if (canonicalJson(offerPayloadWithoutQuantity(offer.payload, expected.sku)) !== canonicalJson(offerPayloadWithoutQuantity(asJson(expected), expected.sku))) return null;
   return asJson({ offerId: offer.offerId, listingId: offer.listingId, payload: offer.payload, sku: offer.sku });
+}
+
+type ListingVariationPrice = { currency: string; value: string };
+
+function unknownRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Variation listing ${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function listingPrice(value: unknown, label: string): ListingVariationPrice {
+  let currency: unknown;
+  let rawValue: unknown = value;
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const row = value as Record<string, unknown>;
+    rawValue = row['#text'] ?? row.value ?? row.Value;
+    currency = row['@_currencyID'] ?? row.currencyID ?? row.CurrencyID ?? row.currency;
+  }
+  if (
+    rawValue === null ||
+    rawValue === undefined ||
+    (typeof rawValue !== 'number' && typeof rawValue !== 'string') ||
+    (typeof rawValue === 'string' && rawValue.trim() === '')
+  ) {
+    throw new Error(`Variation listing ${label} price is missing or malformed.`);
+  }
+  const numeric = typeof rawValue === 'number' ? rawValue : Number(rawValue);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    throw new Error(`Variation listing ${label} price is malformed.`);
+  }
+  const normalizedCurrency = typeof currency === 'string' ? currency.trim().toUpperCase() : '';
+  if (!normalizedCurrency) throw new Error(`Variation listing ${label} price currency is missing.`);
+  return { currency: normalizedCurrency, value: numeric.toFixed(2) };
+}
+
+function listingVariationPrices(value: unknown, listingId: string): Map<string, ListingVariationPrice> {
+  const root = unknownRecord(value, 'Trading GetItem response');
+  const itemCandidate = root.Item ?? root;
+  const item = unknownRecord(itemCandidate, 'Trading GetItem item');
+  const observedListingId = item.ItemID;
+  if (observedListingId === undefined || String(observedListingId).trim() !== listingId) {
+    throw new Error(`Variation listing Trading GetItem returned listing ${String(observedListingId)} instead of ${listingId}.`);
+  }
+  const variationsContainer = unknownRecord(item.Variations, 'Trading GetItem variations');
+  const rawVariations = variationsContainer.Variation;
+  const rows = Array.isArray(rawVariations) ? rawVariations : [rawVariations];
+  const prices = new Map<string, ListingVariationPrice>();
+  for (const rawVariation of rows) {
+    const variation = unknownRecord(rawVariation, 'Trading GetItem variation');
+    const sku = String(variation.SKU ?? '').trim();
+    if (!sku) throw new Error('Variation listing Trading GetItem variation is missing SKU.');
+    if (prices.has(sku)) throw new Error(`Variation listing Trading GetItem returned duplicate SKU ${sku}.`);
+    prices.set(sku, listingPrice(variation.StartPrice, `Trading GetItem variation ${sku}`));
+  }
+  if (prices.size === 0) throw new Error('Variation listing Trading GetItem response has no variations.');
+  return prices;
+}
+
+function listingVariationSellableQuantities(value: unknown, listingId: string): Map<string, number> {
+  const root = unknownRecord(value, 'Trading GetItem response');
+  const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
+  if (item.ItemID === undefined || String(item.ItemID).trim() !== listingId) {
+    throw new Error(`Variation listing Trading GetItem returned listing ${String(item.ItemID)} instead of ${listingId}.`);
+  }
+  const container = unknownRecord(item.Variations, 'Trading GetItem variations');
+  const rawVariations = container.Variation;
+  const rows = Array.isArray(rawVariations) ? rawVariations : [rawVariations];
+  const quantities = new Map<string, number>();
+  for (const rawVariation of rows) {
+    const variation = unknownRecord(rawVariation, 'Trading GetItem variation');
+    const sku = String(variation.SKU ?? '').trim();
+    if (!sku || quantities.has(sku)) throw new Error('Variation listing Trading GetItem variation identity is malformed or duplicated.');
+    const totalRaw = variation.Quantity;
+    const status = unknownRecord(variation.SellingStatus, `Trading GetItem variation ${sku} SellingStatus`);
+    const soldRaw = status.QuantitySold;
+    const total = Number(totalRaw);
+    const sold = Number(soldRaw);
+    if ((typeof totalRaw !== 'number' && typeof totalRaw !== 'string') || (typeof soldRaw !== 'number' && typeof soldRaw !== 'string') || !Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(sold) || sold < 0 || sold > total) {
+      throw new Error(`Variation listing Trading GetItem variation ${sku} quantity is malformed.`);
+    }
+    quantities.set(sku, total - sold);
+  }
+  if (quantities.size === 0) throw new Error('Variation listing Trading GetItem response has no variations.');
+  return quantities;
+}
+
+function assertListingPriceSet(
+  value: unknown,
+  listingId: string,
+  expectedChildren: readonly VariationListingInventoryPayloadBundle['children'][number][],
+  label: string,
+  checkQuantities = false,
+): void {
+  const prices = listingVariationPrices(value, listingId);
+  const expected = expectedChildren.filter((child) => child.quantity > 0);
+  const expectedSkus = new Set(expected.map((child) => child.sku));
+  if (prices.size !== expectedSkus.size || [...prices.keys()].some((sku) => !expectedSkus.has(sku))) {
+    throw new Error(`Variation listing ${label} SKU set does not match the frozen listing-facing siblings.`);
+  }
+  for (const child of expected) {
+    const observed = prices.get(child.sku);
+    const wanted = expectedOfferPrice(child);
+    if (!observed || observed.currency !== wanted.currency || observed.value !== wanted.value) {
+      throw new Error(`Variation listing ${label} sibling ${child.sku} price changed outside the frozen transition.`);
+    }
+  }
+  if (checkQuantities) {
+    const quantities = listingVariationSellableQuantities(value, listingId);
+    for (const child of expected) {
+      if (quantities.get(child.sku) !== child.quantity) {
+        throw new Error(`Variation listing ${label} sibling ${child.sku} quantity changed outside the frozen transition.`);
+      }
+    }
+  }
+}
+
+/** Trading GetItem is the listing-facing authority for restoring a sold-out child.
+ * An Inventory Item/Offer quantity of 1 is insufficient: eBay may still omit
+ * the variation from the published listing. Do not infer quantities from the
+ * group selector values, which retain out-of-stock children. */
+function listingRestockEvidence(
+  value: unknown,
+  listingId: string,
+  child: VariationListingInventoryPayloadBundle['children'][number]
+): Json | null {
+  const prices = listingVariationPrices(value, listingId);
+  const price = prices.get(child.sku);
+  const expectedPrice = expectedOfferPrice(child);
+  if (!price || price.currency !== expectedPrice.currency || price.value !== expectedPrice.value) return null;
+  const root = unknownRecord(value, 'Trading GetItem response');
+  const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
+  const rowsContainer = unknownRecord(item.Variations, 'Trading GetItem variations');
+  const rawRows = rowsContainer.Variation;
+  const rows = Array.isArray(rawRows) ? rawRows : [rawRows];
+  const raw = rows.find((row) => row && typeof row === 'object' && !Array.isArray(row) && String((row as Record<string, unknown>).SKU ?? '').trim() === child.sku);
+  if (!raw) return null;
+  const variation = unknownRecord(raw, 'Trading GetItem restocked variation');
+  const readQuantity = (rawQuantity: unknown, label: string): number => {
+    if (typeof rawQuantity !== 'number' && (typeof rawQuantity !== 'string' || rawQuantity.trim() === '')) throw new Error(`Variation listing ${label} is missing.`);
+    const quantity = Number(rawQuantity);
+    if (!Number.isSafeInteger(quantity) || quantity < 0) throw new Error(`Variation listing ${label} is invalid.`);
+    return quantity;
+  };
+  const total = readQuantity(variation.Quantity, `Trading GetItem ${child.sku} Quantity`);
+  const status = unknownRecord(variation.SellingStatus, `Trading GetItem ${child.sku} SellingStatus`);
+  const sold = readQuantity(status.QuantitySold, `Trading GetItem ${child.sku} QuantitySold`);
+  if (sold > total || total - sold !== child.quantity || child.quantity < 1) return null;
+  return asJson({ listingId, sku: child.sku, price, sellableQuantity: total - sold });
+}
+
+function expectedOfferPrice(child: VariationListingInventoryPayloadBundle['children'][number]): ListingVariationPrice {
+  return {
+    currency: child.offer.pricingSummary.price.currency.toUpperCase(),
+    value: child.offer.pricingSummary.price.value,
+  };
+}
+
+function listingPriceEvidence(
+  value: unknown,
+  listingId: string,
+  child: VariationListingInventoryPayloadBundle['children'][number]
+): Json | null {
+  const prices = listingVariationPrices(value, listingId);
+  const expected = expectedOfferPrice(child);
+  const observed = prices.get(child.sku);
+  if (!observed || observed.currency !== expected.currency || observed.value !== expected.value) return null;
+  return asJson({ listingId, price: observed, sku: child.sku });
 }
 
 function activeItem(
@@ -1524,6 +1818,9 @@ export async function executeVariationListingActiveRevision(
     throw new Error('Variation listing active revision requires a durable revision lookup.');
   }
   const existingRevision = await input.journal.loadRevision(captureInput.revisionId);
+  if (input.readOnlyReconcile && !existingRevision) {
+    throw new Error('Variation listing read-only reconciliation requires an existing frozen revision; capture is forbidden.');
+  }
   // A clean captured revision has no operation checkpoints yet, so its frozen
   // remote quantities are still the complete authority for the first write.
   // Re-read that whole baseline immediately before capture/mutation. If the
@@ -1575,6 +1872,8 @@ export async function executeVariationListingActiveRevision(
     throw new Error('Captured variation listing active revision operation plan does not exactly match the frozen plan.');
   }
   const history = makeActiveHistory(input.frozen, existingCheckpoints);
+  if (input.readOnlyReconcile) validateReadOnlyFrozenIdentity(input.frozen, history);
+  const mutationGateway = input.readOnlyReconcile ? readOnlyActiveMutationGateway : input.mutations;
   const previousBundle = input.frozen.confirmedBundle;
   const desiredImages = new Map(input.frozen.snapshot.representativeImages.map((image) => [image.copyId, structuredClone(image)]));
   const resolvedMedia = new Map<string, VariationListingRemoteMedia>();
@@ -1600,7 +1899,10 @@ export async function executeVariationListingActiveRevision(
       resolvedMedia.set(operationKey, expected);
       continue;
     }
-    const createMedia = requireActiveMethod(input.mutations, 'createMedia');
+    if (input.readOnlyReconcile) {
+      throw new Error(`Variation listing read-only reconciliation cannot create missing Media ${operationKey}.`);
+    }
+    const createMedia = requireActiveMethod(mutationGateway, 'createMedia');
     await activeAppend(input, history, operationKey, 'started', 1, 1, {});
     let created: VariationListingRemoteMedia;
     try {
@@ -1646,12 +1948,43 @@ export async function executeVariationListingActiveRevision(
   const priorOfferIds = input.frozen.snapshot.confirmed.remote.offerIdsBySku;
   const frozenListingId = input.frozen.snapshot.confirmed.remote.listingId;
   const newOfferIdsByVariation = new Map<string, string>();
+  // Read-only reconciliation confirms the whole published variation set, so
+  // Trading GetItem evidence is mandatory even when the staged delta is
+  // quantity-only. Normal publication keeps the narrower price-change gate.
+  let listingPriceVerificationRequired = Boolean(input.readOnlyReconcile);
 
   for (const child of desiredBundle.children) {
     const priorVariation = previousByVariation.get(child.variationId);
     const priorChild = previousBundle.children.find((candidate) => candidate.variationId === child.variationId);
     const existed = Boolean(priorVariation);
     const priorOfferId = priorOfferIds[child.sku];
+    const priceChanged = Boolean(
+      existed &&
+      priorChild &&
+      canonicalJson(asJson(priorChild.offer.pricingSummary.price)) !== canonicalJson(asJson(child.offer.pricingSummary.price))
+    );
+    if (!existed || priceChanged) listingPriceVerificationRequired = true;
+    // A 0 -> positive restock is not proven by Inventory/Offer quantities alone:
+    // the Trading listing can continue to exclude the sold-out child.
+    const frozenSellableQuantity = remoteQuantities?.[child.sku]
+      ? parseConfirmedRemoteQuantity(remoteQuantities[child.sku], child.sku).sellableQuantity
+      : priorChild?.quantity;
+    const restoringSoldOut = Boolean(existed && frozenSellableQuantity === 0 && child.quantity > 0);
+    if (restoringSoldOut) listingPriceVerificationRequired = true;
+    const assertRestockPreListing = async (): Promise<void> => {
+      const getListing = input.remote.getListing;
+      if (!getListing) throw new Error(`Variation listing restock ${child.sku} requires a listing-facing Trading GetItem read before mutation.`);
+      const listing = await getListing(frozenListingId);
+      assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true);
+      if (listingVariationPrices(listing, frozenListingId).has(child.sku)) {
+        throw new Error(`Variation listing restock ${child.sku} already appears in Trading before its frozen 0-to-positive update.`);
+      }
+    };
+    const assertRestockPreGroup = async (): Promise<void> => {
+      if (activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), previousBundle.group) === null) {
+        throw new Error(`Variation listing restock ${child.sku} has a missing or changed variation-specifics group before mutation.`);
+      }
+    };
     const itemOperationKey = `child-item:${child.variationId}`;
     const itemRows = history.get(itemOperationKey);
     if (itemRows) {
@@ -1674,6 +2007,10 @@ export async function executeVariationListingActiveRevision(
         if (read.state === 'proven_absent') return { absent: true, sku: child.sku };
         throw new Error(`Variation listing new item ${child.sku} must be proven absent before create.`);
       }
+      if (restoringSoldOut) {
+        await assertRestockPreGroup();
+        await assertRestockPreListing();
+      }
       return activeItem(await input.remote.getInventoryItem(child.sku), priorChild, desiredBundle.groupKey, true);
     };
     const itemMutate = async (): Promise<void> => {
@@ -1687,6 +2024,10 @@ export async function executeVariationListingActiveRevision(
       } else if (ownItemRead.state !== 'proven_absent') {
         if (ownItemRead.state === 'unknown') throw new Error(`Variation listing new item ${child.sku} pre-state is unknown: ${ownItemRead.reason}`);
         throw new Error(`Variation listing new item ${child.sku} appeared before create.`);
+      }
+      if (restoringSoldOut) {
+        await assertRestockPreGroup();
+        await assertRestockPreListing();
       }
       if (existed) {
         if (!priorChild || !priorOfferId) {
@@ -1709,7 +2050,7 @@ export async function executeVariationListingActiveRevision(
       // A provider-side change after this final read and before the request is
       // an unavoidable API TOCTOU; the exact after-state read below records it
       // as unknown rather than permitting a blind retry.
-      await input.mutations.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem));
+      await mutationGateway.createOrReplaceInventoryItem(child.sku, asJson(child.inventoryItem));
     };
     await executeActiveOperation(input, history, itemOperationKey, guardedItemAfter, itemPre, itemMutate);
     } else if (!existed) {
@@ -1784,9 +2125,18 @@ export async function executeVariationListingActiveRevision(
         return asJson({ offerId: offer.offerId, listingId: offer.listingId, payload: offer.payload, sku: offer.sku });
       }
       if (!priorOfferId) throw new Error(`Variation listing existing offer ${child.sku} has no frozen offer ID.`);
-      return activeTerminal(activeLatest(offerRows))
+      const evidence = activeTerminal(activeLatest(offerRows))
         ? activeOfferIgnoringQuantity(read, child.offer, offerIdentity, 'PUBLISHED', true)
         : activeOffer(read, child.offer, offerIdentity, 'PUBLISHED', true);
+      if (!evidence || (!priceChanged && !restoringSoldOut)) return evidence;
+      const getListing = input.remote.getListing;
+      if (!getListing) throw new Error(`Variation listing ${child.sku} publication requires a listing-facing Trading GetItem read.`);
+      const listing = await getListing(frozenListingId);
+      const listingEvidence = restoringSoldOut
+        ? listingRestockEvidence(listing, frozenListingId, child)
+        : listingPriceEvidence(listing, frozenListingId, child);
+      if (!listingEvidence) return null;
+      return asJson({ offer: evidence, listing: listingEvidence });
     };
     const offerPre = async (): Promise<Json | null> => {
       const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
@@ -1796,7 +2146,31 @@ export async function executeVariationListingActiveRevision(
         throw new Error(`Variation listing new offer ${child.sku} must be absent before create.`);
       }
       if (!priorOfferId) throw new Error(`Variation listing existing offer ${child.sku} has no frozen offer ID.`);
-      return activeOffer(read, priorChild ? previousBundle.children.find((candidate) => candidate.variationId === child.variationId)!.offer : child.offer, offerIdentity, 'PUBLISHED', true);
+      const expectedPriorChild = priorChild ?? previousBundle.children.find((candidate) => candidate.variationId === child.variationId);
+      if (!expectedPriorChild) throw new Error(`Variation listing existing offer ${child.sku} lacks a frozen prior payload.`);
+      // Updating the Inventory Item to 1 can cause eBay to report Offer
+      // availableQuantity=1 before the Trading variation is relisted.
+      // Accept that narrow quantity drift as a restock PRE-state only.
+      const evidence = restoringSoldOut
+        ? activeOfferIgnoringQuantity(read, expectedPriorChild.offer, offerIdentity, 'PUBLISHED', true)
+        : activeOffer(read, expectedPriorChild.offer, offerIdentity, 'PUBLISHED', true);
+      if (restoringSoldOut && evidence) {
+        const amount = offerQuantity(object(evidence, `restock offer ${child.sku} evidence`).payload, child.sku);
+        if (amount !== expectedPriorChild.offer.availableQuantity && amount !== child.offer.availableQuantity) return null;
+      }
+      if (!evidence || (!priceChanged && !restoringSoldOut)) return evidence;
+      const getListing = input.remote.getListing;
+      if (!getListing) throw new Error(`Variation listing ${child.sku} pre-state requires a listing-facing Trading GetItem read.`);
+      const listing = await getListing(frozenListingId);
+      if (restoringSoldOut) {
+        await assertRestockPreListing();
+      }
+      if (priceChanged) {
+        const listingEvidence = listingPriceEvidence(listing, frozenListingId, expectedPriorChild);
+        if (!listingEvidence) throw new Error(`Variation listing pre-state price ${child.sku} does not match the frozen active listing.`);
+        return asJson({ offer: evidence, listing: listingEvidence });
+      }
+      return evidence;
     };
     const offerMutate = async (): Promise<void> => {
       // Re-read the target Offer itself immediately before writing. This
@@ -1804,8 +2178,18 @@ export async function executeVariationListingActiveRevision(
       // guard below.
       const ownOfferRead = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (existed) {
-        if (!priorChild || activeOffer(ownOfferRead, priorChild.offer, offerIdentity, 'PUBLISHED', true) === null) {
+        const observedPriorOffer = priorChild && (restoringSoldOut
+          ? activeOfferIgnoringQuantity(ownOfferRead, priorChild.offer, offerIdentity, 'PUBLISHED', true)
+          : activeOffer(ownOfferRead, priorChild.offer, offerIdentity, 'PUBLISHED', true));
+        if (!priorChild || observedPriorOffer === null) {
           throw new Error(`Variation listing Offer ${child.sku} changed before its mutation.`);
+        }
+        if (restoringSoldOut) {
+          const observedOfferEvidence = object(observedPriorOffer as Json, `restock offer ${child.sku} evidence`);
+          const amount = offerQuantity(observedOfferEvidence.payload as Json, child.sku);
+          if (amount !== priorChild.offer.availableQuantity && amount !== child.offer.availableQuantity) {
+            throw new Error(`Variation listing restock ${child.sku} Offer quantity changed outside the frozen 0-to-positive transition.`);
+          }
         }
         // The Item operation may have completed while a concurrent eBay write
         // changed it again. Re-read the desired Item state immediately before
@@ -1820,15 +2204,50 @@ export async function executeVariationListingActiveRevision(
         if (pairedItem === null) {
           throw new Error(`Variation listing paired Inventory Item ${child.sku} changed before the Offer mutation.`);
         }
+        if (priceChanged || restoringSoldOut) {
+          const getListing = input.remote.getListing;
+          if (!getListing) throw new Error(`Variation listing price publication ${child.sku} requires a listing-facing Trading GetItem read.`);
+          const expectedPriorChild = priorChild ?? previousBundle.children.find((candidate) => candidate.variationId === child.variationId);
+          if (!expectedPriorChild) throw new Error(`Variation listing existing offer ${child.sku} lacks a frozen prior payload.`);
+          const listing = await getListing(frozenListingId);
+          const listingEvidence = priceChanged && !restoringSoldOut ? listingPriceEvidence(listing, frozenListingId, expectedPriorChild) : null;
+          if (restoringSoldOut) {
+            // Zero-stock children are omitted from Trading GetItem. If the
+            // listing already contains this SKU, refuse a duplicate restock.
+            await assertRestockPreListing();
+          } else if (!listingEvidence) {
+            throw new Error(`Variation listing pre-state price ${child.sku} changed before its bulk mutation.`);
+          }
+        }
+        if (restoringSoldOut && activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), desiredBundle.group) === null) {
+          throw new Error(`Variation listing restock ${child.sku} has a missing or changed variation-specifics group.`);
+        }
         // A provider-side change after this final read and before the request
         // remains API TOCTOU; post-state mismatch is preserved as unknown.
-        await requireActiveMethod(input.mutations, 'updateOffer')(priorOfferId, asJson(child.offer));
+        if (priceChanged || restoringSoldOut) {
+          const payload = asJson({
+            requests: [{
+              offers: [{
+                availableQuantity: child.offer.availableQuantity,
+                offerId: priorOfferId,
+                price: child.offer.pricingSummary.price,
+              }],
+              shipToLocationAvailability: {
+                quantity: child.inventoryItem.availability.shipToLocationAvailability.quantity,
+              },
+              sku: child.sku,
+            }],
+          });
+          await requireActiveMethod(mutationGateway, 'bulkUpdatePriceQuantity')(payload);
+        } else {
+          await requireActiveMethod(mutationGateway, 'updateOffer')(priorOfferId, asJson(child.offer));
+        }
       } else {
         if (ownOfferRead.state === 'unknown') throw new Error(`Variation listing new offer ${child.sku} pre-state is unknown: ${ownOfferRead.reason}`);
         if (ownOfferRead.state !== 'proven_absent' && !(ownOfferRead.state === 'present' && ownOfferRead.value.length === 0)) {
           throw new Error(`Variation listing new offer ${child.sku} appeared before create.`);
         }
-        const created = await input.mutations.createOffer(asJson(child.offer));
+        const created = await mutationGateway.createOffer(asJson(child.offer));
         if (!created.offerId || typeof created.offerId !== 'string') throw new Error(`Variation listing new offer ${child.sku} create returned no offerId.`);
         returnedOfferId = created.offerId;
       }
@@ -1853,7 +2272,7 @@ export async function executeVariationListingActiveRevision(
   if (history.has('complete-group')) {
     const groupPre = async (): Promise<Json | null> => activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), previousBundle.group);
     const groupAfter = async (): Promise<Json | null> => activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), desiredBundle.group);
-    await executeActiveOperation(input, history, 'complete-group', groupAfter, groupPre, () => input.mutations.createOrReplaceInventoryItemGroup(desiredBundle.groupKey, asJson(desiredBundle.group)));
+    await executeActiveOperation(input, history, 'complete-group', groupAfter, groupPre, () => mutationGateway.createOrReplaceInventoryItemGroup(desiredBundle.groupKey, asJson(desiredBundle.group)));
   }
 
   const newChildren = desiredBundle.children.filter((child) => !previousByVariation.has(child.variationId));
@@ -1897,7 +2316,7 @@ export async function executeVariationListingActiveRevision(
     const mutate = async (): Promise<void> => {
       const read = await identifyOffer('UNPUBLISHED');
       if (read === null) throw new Error(`Variation listing publish offer ${child.sku} is absent before publish.`);
-      const result = await requireActiveMethod(input.mutations, 'publishOffer')(offerId);
+      const result = await requireActiveMethod(mutationGateway, 'publishOffer')(offerId);
       if (!result.listingId || result.listingId !== frozenListingId) throw new Error(`Variation listing publish offer ${child.sku} returned a different listing ID.`);
     };
     await executeActiveOperation(input, history, operationKey, after, pre, mutate);
@@ -1914,10 +2333,53 @@ export async function executeVariationListingActiveRevision(
     if (!offerId) throw new Error(`Variation listing final offer ${child.sku} has no durable offer ID.`);
     const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
     const evidence = activeOfferIgnoringQuantity(read, child.offer, { offerId, listingId: frozenListingId }, 'PUBLISHED', true);
-    if (!evidence) throw new Error(`Variation listing final offer ${child.sku} is absent.`);
+    if (!evidence) {
+      // An Offer can exist with the right identity yet retain an old price.
+      // Never describe a payload mismatch as absence during reconciliation.
+      throw new Error(`Variation listing final offer ${child.sku} does not match the desired non-quantity payload (including price); publication cannot be confirmed.`);
+    }
     listingIds.add(frozenListingId);
   }
   if (listingIds.size !== 1) throw new Error('Variation listing final reconciliation does not resolve one listing ID.');
+  if (listingPriceVerificationRequired) {
+    const getListing = input.remote.getListing;
+    if (!getListing) throw new Error('Variation listing price publication requires a listing-facing Trading GetItem read.');
+    const prices = listingVariationPrices(await getListing(frozenListingId), frozenListingId);
+    const listingChildren = desiredBundle.children.filter((child) => child.quantity > 0);
+    const desiredSkus = new Set(listingChildren.map((child) => child.sku));
+    if (prices.size !== desiredSkus.size || [...prices.keys()].some((sku) => !desiredSkus.has(sku))) {
+      throw new Error('Variation listing final listing-facing SKU set does not match the desired children.');
+    }
+    for (const child of listingChildren) {
+      const expected = expectedOfferPrice(child);
+      const observed = prices.get(child.sku);
+      if (!observed || observed.currency !== expected.currency || observed.value !== expected.value) {
+        throw new Error(`Variation listing final listing-facing price ${child.sku} does not match the desired price.`);
+      }
+    }
+  }
+
+  // The Offer and Inventory API can both report positive stock even when
+  // Trading GetItem still excludes a formerly sold-out child. Refuse local
+  // confirmation until its listing-facing identity, price and quantity match.
+  const restockedChildren = desiredBundle.children.filter((child) => {
+    const previous = previousBundle.children.find((candidate) => candidate.variationId === child.variationId);
+    const quantity = remoteQuantities?.[child.sku]
+      ? parseConfirmedRemoteQuantity(remoteQuantities[child.sku], child.sku).sellableQuantity
+      : previous?.quantity;
+    return Boolean(previous && quantity === 0 && child.quantity > 0);
+  });
+  if (restockedChildren.length > 0) {
+    const getListing = input.remote.getListing;
+    if (!getListing) throw new Error('Variation listing restock final reconciliation requires Trading GetItem.');
+    const listing = await getListing(frozenListingId);
+    for (const child of restockedChildren) {
+      assertListingPriceSet(listing, frozenListingId, desiredBundle.children, 'restock final state', true);
+      if (listingRestockEvidence(listing, frozenListingId, child) === null) {
+        throw new Error(`Variation listing restock ${child.sku} is not present with the exact listing-facing quantity and price.`);
+      }
+    }
+  }
 
   const reconcileKey = 'revision-reconcile';
   const reconcileRows = history.get(reconcileKey)!;

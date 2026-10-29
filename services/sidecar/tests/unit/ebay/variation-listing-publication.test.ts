@@ -228,7 +228,24 @@ function testHarness(withMedia = false, historicalOverlong = false) {
     setBlockMediaReads: (value: boolean) => { blockMediaReads = value; },
     setMediaReadExpirationMismatch: (value: boolean) => { mediaReadExpirationMismatch = value; },
     mutationsApi, transaction,
-    execute: (reconcileOnly = false) => executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows], loadRevision: async () => capturedRevision }, mutations: mutationsApi, remote, transaction, reconcileOnly, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() }),
+    execute: (reconcileOnly = false) => {
+      // Read-only recovery is only valid for a durable captured revision; the
+      // harness represents that pre-existing row without counting a capture.
+      if (reconcileOnly && !capturedRevision) {
+        capturedRevision = {
+          captured_at: '2026-09-01T00:00:00Z',
+          captured_desired_revision: plan.captureInput.capturedDesiredRevision,
+          group_id: plan.captureInput.groupId,
+          operation_count: plan.captureInput.operationPlan.length,
+          operation_plan: plan.captureInput.operationPlan.map((operation) => ({ intent: operation.intent, intent_digest: operation.intentDigest, intent_version: operation.intentVersion, operation_key: operation.operationKey, operation_kind: operation.operationKind, sequence_no: operation.sequenceNo, target_ref: operation.targetRef })),
+          revision_id: plan.captureInput.revisionId,
+          snapshot: plan.captureInput.snapshot,
+          snapshot_digest: plan.captureInput.snapshotDigest,
+          snapshot_version: plan.captureInput.snapshotVersion,
+        } as VariationListingRevisionRow;
+      }
+      return executeVariationListingPublication({ frozen: plan, journal: { listCheckpoints: async () => [...journalRows], loadRevision: async () => capturedRevision }, mutations: mutationsApi, remote, transaction, reconcileOnly, checkpointId: (() => { let n = 0; return () => `checkpoint-${++n}`; })() });
+    },
   };
 }
 

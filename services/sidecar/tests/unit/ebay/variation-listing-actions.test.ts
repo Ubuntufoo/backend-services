@@ -601,7 +601,7 @@ describe('YP6.2 variation listing actions', () => {
     }
   });
 
-  it('blocks reconcile through the default eBay gateway when the publish window is disabled', async () => {
+  it('keeps reconcile read-only when the publish window is disabled', async () => {
     const previous = process.env.EBAY_PUBLISH_ENABLED;
     process.env.EBAY_PUBLISH_ENABLED = 'false';
     try {
@@ -612,12 +612,15 @@ describe('YP6.2 variation listing actions', () => {
       });
       await expect(service.reconcile(groupId)).rejects.toMatchObject({
         status: {
-          code: 'publish_disabled',
+          code: 'reconcile_not_required',
           remoteState: 'known_unchanged',
           stage: 'preflight',
         },
       });
-      expect(access.value.loadAggregate).not.toHaveBeenCalled();
+      // No unresolved revision means no dependency resolution or remote
+      // gateway is reached; an unresolved active revision follows the
+      // read-only executor path and cannot invoke provider mutations.
+      expect(access.value.loadAggregate).toHaveBeenCalledTimes(1);
     } finally {
       if (previous === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
       else process.env.EBAY_PUBLISH_ENABLED = previous;
