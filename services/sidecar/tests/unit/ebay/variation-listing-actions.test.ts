@@ -553,6 +553,38 @@ describe('YP6.2 variation listing actions', () => {
     }
   });
 
+  it('rejects a net-zero staged revision before resolving any remote gateway', async () => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const confirmed = aggregate({ lifecycle_state: 'active', desired_revision: 3, last_confirmed_revision: 3 });
+      const current = structuredClone(confirmed);
+      current.group.desired_revision = 7;
+      current.group.updated_at = '2026-10-29T01:00:00Z';
+      const confirmedRevision = {
+        ...revision(1),
+        captured_desired_revision: 3,
+        snapshot: { aggregate: confirmed },
+      };
+      const access = data({ aggregate: current, revisions: [confirmedRevision] });
+      const remoteFactory = vi.fn();
+      const service = createVariationListingActionService({
+        data: access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory,
+      });
+
+      await expect(service.publishChanges(groupId, 7)).rejects.toMatchObject({
+        status: { code: 'no_pending_changes', remoteState: 'known_unchanged', stage: 'preflight' },
+      });
+      expect(remoteFactory).not.toHaveBeenCalled();
+      expect(access.value.captureRevision).not.toHaveBeenCalled();
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
+  });
+
   it('blocks retry of an unresolved initial publication when the publish window is disabled', async () => {
     const previous = process.env.EBAY_PUBLISH_ENABLED;
     process.env.EBAY_PUBLISH_ENABLED = 'false';

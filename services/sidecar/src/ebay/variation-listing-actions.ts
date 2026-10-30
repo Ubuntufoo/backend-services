@@ -64,6 +64,7 @@ import {
   hydrateVariationListingPermanentRemovalPlan,
   type VariationListingPermanentRemovalRemote,
 } from '@/ebay/variation-listing-permanent-removal.js';
+import { hasEffectiveVariationListingPendingChanges } from '@/ebay/variation-listing-pending-changes.js';
 import {
   executeRemovedSkuRemoteRetirement,
   type RemovedSkuRetirementRemote,
@@ -1819,21 +1820,30 @@ export function createVariationListingActionService(options: VariationListingAct
     if (pendingRemovals.length > 1) {
       throw validationError('publish_changes', groupId, 'permanent_removal_multiple_targets', 'Publish Changes supports exactly one staged permanent-removal target at a time.', ['review_pending_changes']);
     }
+    const existingKind: RevisionKind = pendingRemovals.length === 1 ? 'permanent_removal' : 'active';
+    const existing = revisions.find((revision) =>
+      revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === existingKind
+    );
+    const previous = revisions.find((revision) =>
+      revision.captured_desired_revision === aggregate.group.last_confirmed_revision
+    );
+    if (!existing) {
+      await assertNoOlderUnresolved('publish_changes', groupId, revisions, expectedDesiredRevision);
+      if (!previous) throw validationError('publish_changes', groupId, 'confirmed_revision_missing', 'The last confirmed publication revision is missing.', ['inspect_group_history']);
+      if (!hasEffectiveVariationListingPendingChanges(aggregate, previous)) {
+        throw validationError('publish_changes', groupId, 'no_pending_changes', 'There are no staged changes to publish.', ['edit_group_or_variations']);
+      }
+    }
     if (pendingRemovals.length === 1) {
       const target = pendingRemovals[0]!;
-      const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'permanent_removal');
-      if (!existing) await assertNoOlderUnresolved('publish_changes', groupId, revisions, expectedDesiredRevision);
       return await executePermanentRemoval(aggregate, target.variation_id, existing, progress);
     }
-    const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'active');
-    if (!existing) await assertNoOlderUnresolved('publish_changes', groupId, revisions, expectedDesiredRevision);
     const deps = await resolveDependencies();
     let frozen: VariationListingFrozenActiveRevision;
     if (existing) {
       frozen = hydrateActive(existing);
       progress('reconcile_existing_revision');
     } else {
-      const previous = revisions.find((revision) => revision.captured_desired_revision === aggregate.group.last_confirmed_revision);
       if (!previous) throw validationError('publish_changes', groupId, 'confirmed_revision_missing', 'The last confirmed publication revision is missing.', ['inspect_group_history']);
       const previousCheckpoints = await checkpoints(previous.revision_id);
       const priorAggregate = snapshotAggregate(previous);

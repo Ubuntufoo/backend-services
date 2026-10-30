@@ -55,6 +55,7 @@ import {
   requireVariationListingCreationProfile,
 } from '@/ebay/variation-listing-profiles.js';
 import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
+import { hasEffectiveVariationListingPendingChanges, pendingVariationPriceQuantityChanges } from '@/ebay/variation-listing-pending-changes.js';
 import {
   hasPendingStandardCapture,
   readCaptureWorkspace,
@@ -459,7 +460,8 @@ function serializeIntakeSession(session: VariationListingIntakeSession) {
 
 function serializeVariation(
   variation: VariationListingAggregateSnapshot['variations'][number],
-  copies: VariationListingAggregateSnapshot['copies']
+  copies: VariationListingAggregateSnapshot['copies'],
+  pendingPriceOrQuantityChange: boolean | null,
 ) {
   const pendingRemovalAt = variation.pending_removal_at;
   if (pendingRemovalAt !== null && pendingRemovalAt !== undefined && Number.isNaN(Date.parse(pendingRemovalAt))) {
@@ -477,6 +479,7 @@ function serializeVariation(
     priceAmount: variation.price_amount,
     priceCurrency: variation.price_currency,
     quantityAdjustmentCounter: variation.quantity_adjustment_counter,
+    pendingPriceOrQuantityChange,
     pendingRemovalAt: pendingRemovalAt ?? null,
     representativeCopyId: variation.representative_copy_id,
     copyCount: variationCopies.length,
@@ -487,7 +490,7 @@ function serializeVariation(
   };
 }
 
-function buildValidation(aggregate: VariationListingAggregateSnapshot) {
+function buildValidation(aggregate: VariationListingAggregateSnapshot, hasPendingChanges?: boolean) {
   const blockers: string[] = [];
   const reviewedReadiness =
     aggregate.variations.length === 0
@@ -554,10 +557,11 @@ function buildValidation(aggregate: VariationListingAggregateSnapshot) {
   return {
     blockers,
     initialPublicationReady: blockers.length === 0 && prePublication && reviewedReadiness.ready,
-    hasPendingChanges:
+    hasPendingChanges: hasPendingChanges ?? (
       aggregate.group.last_confirmed_revision === null
         ? aggregate.group.desired_revision > 0
-        : aggregate.group.desired_revision > aggregate.group.last_confirmed_revision,
+        : aggregate.group.desired_revision > aggregate.group.last_confirmed_revision
+    ),
   };
 }
 
@@ -790,6 +794,15 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
     : confirmedRevision.revisionId === latestRevision?.revisionId
       ? checkpoints
       : await dataAccess.listCheckpointsByRevisionId(confirmedRevision.revisionId);
+  const hasFrozenPostConfirmedRevision = aggregate.group.last_confirmed_revision !== null && revisions.some(
+    (revision) => revision.capturedDesiredRevision > aggregate.group.last_confirmed_revision!
+  );
+  const hasPendingChanges = aggregate.group.last_confirmed_revision === null
+    ? aggregate.group.desired_revision > 0
+    : aggregate.group.desired_revision > aggregate.group.last_confirmed_revision && (
+      hasFrozenPostConfirmedRevision ||
+      hasEffectiveVariationListingPendingChanges(aggregate, confirmedRevision?.source)
+    );
   const listingId = confirmedListingId(confirmedRevision, confirmedCheckpoints);
   const permanentRemovalRevision = [...revisions]
     .filter((candidate) => candidate.operationPlan.some(
@@ -853,9 +866,14 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
       });
     }
   }
+  const pendingPerVariation = pendingVariationPriceQuantityChanges(aggregate, confirmedRevision?.source);
   const variations = [...aggregate.variations]
     .sort((left, right) => left.position - right.position)
-    .map((variation) => serializeVariation(variation, aggregate.copies));
+    .map((variation) => serializeVariation(
+      variation,
+      aggregate.copies,
+      pendingPerVariation?.get(variation.variation_id) ?? null,
+    ));
   return {
     groupId: aggregate.group.group_id,
     groupKey: aggregate.group.group_key,
@@ -886,7 +904,7 @@ async function serializeAggregate(dataAccess: VariationListingApiDataAccess, agg
     },
     variationCount: variations.length,
     variations,
-    validation: buildValidation(aggregate),
+    validation: buildValidation(aggregate, hasPendingChanges),
     journal: summarizeJournal(
       latestRevision,
       checkpoints,

@@ -708,6 +708,54 @@ describe('YP6.1 variation listing API router', () => {
     expect(JSON.stringify(response.body)).not.toContain('browsePricing');
   });
 
+  it('serializes an advanced but net-zero desired revision as having no pending changes', async () => {
+    const confirmed = aggregate();
+    confirmed.group = { ...confirmed.group, desired_revision: 3, last_confirmed_revision: 3 };
+    confirmed.variations = confirmed.variations.map((variation) => ({
+      ...variation,
+      pending_removal_at: null,
+      quantity_adjustment_counter: 0,
+    }));
+    const current = structuredClone(confirmed);
+    current.group.desired_revision = 7;
+    current.group.updated_at = '2026-10-29T01:00:00Z';
+    const confirmedRevision = {
+      capturedDesiredRevision: 3,
+      groupId,
+      operationCount: 0,
+      operationPlan: [],
+      revisionId: '77777777-7777-4777-8777-777777777777',
+      snapshotDigest: 'd'.repeat(64),
+      source: {
+        revision_id: '77777777-7777-4777-8777-777777777777',
+        group_id: groupId,
+        captured_desired_revision: 3,
+        snapshot_version: 1,
+        snapshot_digest: 'd'.repeat(64),
+        snapshot: { aggregate: confirmed },
+        operation_plan: [],
+        operation_count: 0,
+        captured_at: now,
+      },
+    } as unknown as VariationListingRevision;
+    const response = await request(app(dataAccess({
+      loadAggregate: vi.fn(async () => current),
+      listRevisionsByGroupId: vi.fn(async () => [confirmedRevision]),
+      listCheckpointsByRevisionId: vi.fn(async () => []),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      desiredRevision: 7,
+      lastConfirmedRevision: 3,
+      validation: { hasPendingChanges: false },
+    });
+    expect(response.body.variations).toHaveLength(2);
+    expect(response.body.variations.every((variation: {pendingPriceOrQuantityChange: unknown}) =>
+      variation.pendingPriceOrQuantityChange === false,
+    )).toBe(true);
+  });
+
   it('exposes the confirmed revision listing identity after a newer revision is staged', async () => {
     const confirmedRevision = {
       ...latestRevision(),

@@ -2033,6 +2033,154 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'child-offer:variation-A', state: 'unknown', observed_remote_state: 'unknown' });
   });
 
+  it('blocks a quantity-only update on pre-existing Trading price drift before any Item or Offer write', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('B', 1)],
+    });
+    const base = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1 } });
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+    });
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...base.remote,
+      async getListing(listingId) {
+        return { Item: { ItemID: listingId, Variations: { Variation: [
+          { SKU: 'SKU-A', StartPrice: { '#text': '1.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+        ] } } };
+      },
+    };
+    const revisions = { current: null as VariationListingRevisionRow | null, captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    let itemWrites = 0;
+    let offerWrites = 0;
+    let confirmations = 0;
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => ({ offerId: 'unexpected' }),
+      createOrReplaceInventoryItem: async () => { itemWrites += 1; },
+      createOrReplaceInventoryItemGroup: async () => {},
+      publishOffer: async () => ({ listingId: 'listing-1' }),
+      bulkUpdatePriceQuantity: async () => { offerWrites += 1; },
+      updateOffer: async () => { offerWrites += 1; },
+    };
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+      loadAggregate: async () => current,
+      confirmRevision: async () => { confirmations += 1; return { ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }; },
+    }))).rejects.toThrow('frozen active revision pre-state');
+    expect(itemWrites).toBe(0);
+    expect(offerWrites).toBe(0);
+    expect(confirmations).toBe(0);
+    expect(revisions.captureCalls).toHaveLength(0);
+    expect(checkpoints).toHaveLength(0);
+  });
+
+  it('blocks a price-only Offer write when an unchanged Trading sibling price is stale', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1, 'copy-B', 0.99)],
+    });
+    const base = remoteFor(previous);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+    });
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...base.remote,
+      async getListing(listingId) {
+        return { Item: { ItemID: listingId, Variations: { Variation: [
+          { SKU: 'SKU-A', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+          // SKU-B is unchanged locally, but its listing-facing price drifted.
+          { SKU: 'SKU-B', StartPrice: { '#text': '1.99', '@_currencyID': 'USD' } },
+        ] } } };
+      },
+    };
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    let offerWrites = 0;
+    let confirmations = 0;
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => ({ offerId: 'unexpected' }),
+      createOrReplaceInventoryItem: async () => {},
+      createOrReplaceInventoryItemGroup: async () => {},
+      publishOffer: async () => ({ listingId: 'listing-1' }),
+      bulkUpdatePriceQuantity: async () => { offerWrites += 1; },
+      updateOffer: async () => { offerWrites += 1; },
+    };
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+      loadAggregate: async () => current,
+      confirmRevision: async () => { confirmations += 1; return { ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }; },
+    }))).rejects.toThrow('frozen active revision pre-state');
+    expect(offerWrites).toBe(0);
+    expect(confirmations).toBe(0);
+    expect(checkpoints).toHaveLength(0);
+  });
+
+  it('does not confirm a combined update when Item and Offer quantities succeed but Trading price stays stale', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 1.49, 1), variation('B', 1)],
+    });
+    const base = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1 } });
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+    });
+    const desired = buildVariationListingInventoryPayloadBundle({ aggregate: current, representativeImages: prepared.snapshot.confirmed.representativeImages });
+    const desiredA = desired.children.find((child) => child.sku === 'SKU-A')!;
+    const initialItem = await base.remote.getInventoryItem('SKU-A');
+    const initialOffer = await base.remote.getOffers('SKU-A', desiredA.offer.marketplaceId);
+    if (initialItem.state !== 'present' || initialOffer.state !== 'present' || initialOffer.value.length !== 1) throw new Error('test setup failed');
+    let itemA = initialItem.value;
+    let offerA = initialOffer.value[0]!;
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...base.remote,
+      async getInventoryItem(sku) { return sku === 'SKU-A' ? { state: 'present' as const, value: itemA } : base.remote.getInventoryItem(sku); },
+      async getOffers(sku, marketplaceId) { return sku === 'SKU-A' ? { state: 'present' as const, value: [{ ...offerA, marketplaceId }] } : base.remote.getOffers(sku, marketplaceId); },
+      // Keep the frozen .99 Trading prices after both Inventory and Offer writes.
+      async getListing(listingId) { return base.remote.getListing(listingId); },
+    };
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    let itemWrites = 0;
+    let bulkWrites = 0;
+    let confirmations = 0;
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => ({ offerId: 'unexpected' }),
+      async createOrReplaceInventoryItem(sku, payload) { itemWrites += 1; if (sku === 'SKU-A') itemA = { ...itemA, payload }; },
+      createOrReplaceInventoryItemGroup: async () => {},
+      publishOffer: async () => ({ listingId: 'listing-1' }),
+      updateOffer: async () => { throw new Error('combined update must use bulkUpdatePriceQuantity'); },
+      async bulkUpdatePriceQuantity(payload) {
+        bulkWrites += 1;
+        const row = (((payload as Record<string, Json>).requests as Json[])[0] as Record<string, Json>);
+        const offer = (row.offers as Json[])[0] as Record<string, Json>;
+        offerA = { ...offerA, payload: { ...(offerA.payload as Record<string, Json>), availableQuantity: offer.availableQuantity, pricingSummary: { price: offer.price } } };
+      },
+    };
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+      loadAggregate: async () => current,
+      confirmRevision: async () => { confirmations += 1; return { ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }; },
+    }))).rejects.toThrow('child-offer:variation-A returned without an exact after-state');
+    expect(itemWrites).toBe(1);
+    expect(bulkWrites).toBe(1);
+    expect(confirmations).toBe(0);
+    expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'child-offer:variation-A', state: 'unknown', observed_remote_state: 'unknown' });
+  });
+
   it('publishes a combined price and quantity change through bulk price/quantity and verifies every listing variation', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
@@ -2097,6 +2245,33 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(itemWrites).toEqual(['SKU-A']);
     expect(bulkPayloads).toHaveLength(1);
     expect(bulkPayloads[0]).toMatchObject({ requests: [{ sku: 'SKU-A', offers: [{ offerId: 'offer-SKU-A', availableQuantity: 2, price: { value: '1.49', currency: 'USD' } }], shipToLocationAvailability: { quantity: 2 } }] });
+
+    // A second combined edit must freeze the first revision's exact remote
+    // state, then route the next price/quantity pair through the same bulk
+    // operation without adopting stale Offer or Trading evidence.
+    const secondCurrent = aggregate({
+      group: group({ desired_revision: 3, last_confirmed_revision: 2, lifecycle_state: 'active' }),
+      variations: [variation('A', 0, 'copy-A', 4.99, 2), variation('B', 1)],
+      copies: current.copies,
+    });
+    const firstRevision = revisions.current;
+    if (!firstRevision) throw new Error('test setup did not retain the first durable revision');
+    const secondPrepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: secondCurrent,
+      previousRevision: firstRevision,
+      previousCheckpoints: checkpoints,
+      remote,
+      revisionId: 'revision-3',
+    });
+    const secondRevisions = { current: durableRevision(secondPrepared), captureCalls: [] as number[] };
+    const secondCheckpoints: VariationListingPublishingCheckpointRow[] = [];
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(secondPrepared, secondRevisions, secondCheckpoints, remote, mutations, {
+      loadAggregate: async () => secondCurrent,
+      confirmRevision: async () => ({ ...secondCurrent.group, last_confirmed_revision: 3, lifecycle_state: 'active' }),
+    }))).resolves.toMatchObject({ confirmedRevision: 3, listingId: 'listing-1' });
+    expect(itemWrites).toEqual(['SKU-A', 'SKU-A']);
+    expect(bulkPayloads).toHaveLength(2);
+    expect(bulkPayloads[1]).toMatchObject({ requests: [{ sku: 'SKU-A', offers: [{ offerId: 'offer-SKU-A', availableQuantity: 3, price: { value: '4.99', currency: 'USD' } }], shipToLocationAvailability: { quantity: 3 } }] });
   });
 
   it('fails closed when Trading GetItem returns a numeric variation price without currency', async () => {

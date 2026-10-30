@@ -752,6 +752,79 @@ async function verifyFrozenRemoteBaseline(
   }
 }
 
+/** Trading GetItem is the listing-facing price authority.  Verify the entire
+ * frozen sibling set before the first active-revision write so a stale price
+ * cannot be hidden by a successful Item/Offer quantity update.  Existing
+ * operation history is intentionally handled by the journal/reconciliation
+ * path; this gate only protects a clean revision before remote mutation. */
+async function verifyFrozenListingPriceBaseline(
+  input: VariationListingActiveRevisionExecutionInput,
+): Promise<void> {
+  const getListing = input.remote.getListing;
+  if (!getListing) {
+    throw new Error('Variation listing active revision requires a listing-facing Trading GetItem read before mutation.');
+  }
+  const listingId = input.frozen.snapshot.confirmed.remote.listingId;
+  const listing = await getListing(listingId);
+  const confirmedVariationIds = new Set(
+    input.frozen.snapshot.confirmed.aggregate.variations.map((variation) => variation.variation_id),
+  );
+  const hasNewVariation = input.frozen.snapshot.aggregate.variations.some(
+    (variation) => !confirmedVariationIds.has(variation.variation_id),
+  );
+  if (hasNewVariation) {
+    // A newly staged child is expected to be absent until its create/publish
+    // operations run. Validate every frozen sellable sibling without treating
+    // that not-yet-owned SKU (or a collision) as an existing listing member.
+    const prices = listingVariationPrices(listing, listingId, true);
+    const confirmedSkus = new Set(input.frozen.confirmedBundle.children.map((child) => child.sku));
+    const stagedNewSkus = new Set(
+      input.frozen.snapshot.aggregate.variations
+        .filter((variation) => !confirmedVariationIds.has(variation.variation_id))
+        .map((variation) => variation.sku),
+    );
+    const confirmedSellableSkus = new Set(
+      input.frozen.confirmedBundle.children
+        .filter((child) => child.quantity > 0)
+        .map((child) => child.sku),
+    );
+    const unexpectedSku = [...prices.keys()].find((sku) => !confirmedSellableSkus.has(sku));
+    if (unexpectedSku && stagedNewSkus.has(unexpectedSku)) {
+      throw new Error(`Variation listing new offer ${unexpectedSku} must be absent before create.`);
+    }
+    if (unexpectedSku && !confirmedSkus.has(unexpectedSku)) {
+      throw new Error('Variation listing frozen active revision pre-state SKU set contains an unknown listing-facing sibling.');
+    }
+    if (unexpectedSku) {
+      throw new Error('Variation listing frozen active revision pre-state SKU set does not match sellable listing-facing siblings.');
+    }
+    for (const child of input.frozen.confirmedBundle.children.filter((candidate) => candidate.quantity > 0)) {
+      const observed = prices.get(child.sku);
+      const expected = expectedOfferPrice(child);
+      if (!observed || observed.currency !== expected.currency || observed.value !== expected.value) {
+        throw new Error(`Variation listing frozen active revision pre-state price ${child.sku} does not match the frozen listing-facing sibling.`);
+      }
+    }
+    return;
+  }
+  assertListingPriceSet(
+    listing,
+    listingId,
+    input.frozen.confirmedBundle.children,
+    'frozen active revision pre-state',
+    false,
+    true,
+  );
+}
+
+function hasActiveRemoteMutation(
+  frozen: VariationListingFrozenActiveRevision,
+): boolean {
+  return frozen.captureInput.operationPlan.some((operation) =>
+    !['revision_reconcile', 'final_absence_verification'].includes(operation.operationKind)
+  );
+}
+
 export async function prepareVariationListingFrozenActiveRevision(
   input: PrepareVariationListingActiveRevisionInput
 ): Promise<VariationListingFrozenActiveRevision> {
@@ -1578,7 +1651,7 @@ function listingPrice(value: unknown, label: string): ListingVariationPrice {
   return { currency: normalizedCurrency, value: numeric.toFixed(2) };
 }
 
-function listingVariationPrices(value: unknown, listingId: string): Map<string, ListingVariationPrice> {
+function listingVariationPrices(value: unknown, listingId: string, allowEmpty = false): Map<string, ListingVariationPrice> {
   const root = unknownRecord(value, 'Trading GetItem response');
   const itemCandidate = root.Item ?? root;
   const item = unknownRecord(itemCandidate, 'Trading GetItem item');
@@ -1586,8 +1659,13 @@ function listingVariationPrices(value: unknown, listingId: string): Map<string, 
   if (observedListingId === undefined || String(observedListingId).trim() !== listingId) {
     throw new Error(`Variation listing Trading GetItem returned listing ${String(observedListingId)} instead of ${listingId}.`);
   }
+  if ((item.Variations === undefined || item.Variations === null) && allowEmpty) return new Map();
   const variationsContainer = unknownRecord(item.Variations, 'Trading GetItem variations');
   const rawVariations = variationsContainer.Variation;
+  if (rawVariations === undefined || rawVariations === null) {
+    if (allowEmpty) return new Map();
+    throw new Error('Variation listing Trading GetItem response has no variations.');
+  }
   const rows = Array.isArray(rawVariations) ? rawVariations : [rawVariations];
   const prices = new Map<string, ListingVariationPrice>();
   for (const rawVariation of rows) {
@@ -1597,18 +1675,23 @@ function listingVariationPrices(value: unknown, listingId: string): Map<string, 
     if (prices.has(sku)) throw new Error(`Variation listing Trading GetItem returned duplicate SKU ${sku}.`);
     prices.set(sku, listingPrice(variation.StartPrice, `Trading GetItem variation ${sku}`));
   }
-  if (prices.size === 0) throw new Error('Variation listing Trading GetItem response has no variations.');
+  if (prices.size === 0 && !allowEmpty) throw new Error('Variation listing Trading GetItem response has no variations.');
   return prices;
 }
 
-function listingVariationSellableQuantities(value: unknown, listingId: string): Map<string, number> {
+function listingVariationSellableQuantities(value: unknown, listingId: string, allowEmpty = false): Map<string, number> {
   const root = unknownRecord(value, 'Trading GetItem response');
   const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
   if (item.ItemID === undefined || String(item.ItemID).trim() !== listingId) {
     throw new Error(`Variation listing Trading GetItem returned listing ${String(item.ItemID)} instead of ${listingId}.`);
   }
+  if ((item.Variations === undefined || item.Variations === null) && allowEmpty) return new Map();
   const container = unknownRecord(item.Variations, 'Trading GetItem variations');
   const rawVariations = container.Variation;
+  if (rawVariations === undefined || rawVariations === null) {
+    if (allowEmpty) return new Map();
+    throw new Error('Variation listing Trading GetItem response has no variations.');
+  }
   const rows = Array.isArray(rawVariations) ? rawVariations : [rawVariations];
   const quantities = new Map<string, number>();
   for (const rawVariation of rows) {
@@ -1625,7 +1708,7 @@ function listingVariationSellableQuantities(value: unknown, listingId: string): 
     }
     quantities.set(sku, total - sold);
   }
-  if (quantities.size === 0) throw new Error('Variation listing Trading GetItem response has no variations.');
+  if (quantities.size === 0 && !allowEmpty) throw new Error('Variation listing Trading GetItem response has no variations.');
   return quantities;
 }
 
@@ -1635,8 +1718,9 @@ function assertListingPriceSet(
   expectedChildren: readonly VariationListingInventoryPayloadBundle['children'][number][],
   label: string,
   checkQuantities = false,
+  allowEmpty = false,
 ): void {
-  const prices = listingVariationPrices(value, listingId);
+  const prices = listingVariationPrices(value, listingId, allowEmpty);
   const expected = expectedChildren.filter((child) => child.quantity > 0);
   const expectedSkus = new Set(expected.map((child) => child.sku));
   if (prices.size !== expectedSkus.size || [...prices.keys()].some((sku) => !expectedSkus.has(sku))) {
@@ -1650,7 +1734,7 @@ function assertListingPriceSet(
     }
   }
   if (checkQuantities) {
-    const quantities = listingVariationSellableQuantities(value, listingId);
+    const quantities = listingVariationSellableQuantities(value, listingId, allowEmpty);
     for (const child of expected) {
       if (quantities.get(child.sku) !== child.quantity) {
         throw new Error(`Variation listing ${label} sibling ${child.sku} quantity changed outside the frozen transition.`);
@@ -1841,6 +1925,9 @@ export async function executeVariationListingActiveRevision(
   }
   if (!existingRevision || !hasListingMutationCheckpoint(input.frozen, existingCheckpoints)) {
     await verifyFrozenRemoteBaseline(input, Boolean(existingRevision));
+    if (hasActiveRemoteMutation(input.frozen)) {
+      await verifyFrozenListingPriceBaseline(input);
+    }
   }
   const captured = existingRevision
     ? { revision: existingRevision }
@@ -1948,10 +2035,11 @@ export async function executeVariationListingActiveRevision(
   const priorOfferIds = input.frozen.snapshot.confirmed.remote.offerIdsBySku;
   const frozenListingId = input.frozen.snapshot.confirmed.remote.listingId;
   const newOfferIdsByVariation = new Map<string, string>();
-  // Read-only reconciliation confirms the whole published variation set, so
-  // Trading GetItem evidence is mandatory even when the staged delta is
-  // quantity-only. Normal publication keeps the narrower price-change gate.
-  let listingPriceVerificationRequired = Boolean(input.readOnlyReconcile);
+  // Every active publication must match the listing-facing price of each
+  // sellable variation, even when the frozen delta is quantity-only or a
+  // series of staged edits nets to the confirmed price. Revision inequality
+  // alone does not prove that Trading carries the correct price.
+  let listingPriceVerificationRequired = true;
 
   for (const child of desiredBundle.children) {
     const priorVariation = previousByVariation.get(child.variationId);
@@ -1975,8 +2063,8 @@ export async function executeVariationListingActiveRevision(
       const getListing = input.remote.getListing;
       if (!getListing) throw new Error(`Variation listing restock ${child.sku} requires a listing-facing Trading GetItem read before mutation.`);
       const listing = await getListing(frozenListingId);
-      assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true);
-      if (listingVariationPrices(listing, frozenListingId).has(child.sku)) {
+      assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true, true);
+      if (listingVariationPrices(listing, frozenListingId, true).has(child.sku)) {
         throw new Error(`Variation listing restock ${child.sku} already appears in Trading before its frozen 0-to-positive update.`);
       }
     };
@@ -2045,6 +2133,16 @@ export async function executeVariationListingActiveRevision(
         );
         if (pairedOffer === null) {
           throw new Error(`Variation listing paired offer ${child.sku} changed before the Inventory Item mutation.`);
+        }
+        if (!restoringSoldOut && (priorChild.quantity > 0 || priceChanged)) {
+          // Keep the listing-facing price gate ahead of the Item write as well
+          // as the Offer guard below.  A quantity-only or combined revision
+          // must not leave a half-applied Item when Trading already drifted.
+          const getListing = input.remote.getListing;
+          if (!getListing) throw new Error(`Variation listing ${child.sku} publication requires a listing-facing Trading GetItem read before the Inventory Item mutation.`);
+          if (!listingPriceEvidence(await getListing(frozenListingId), frozenListingId, priorChild)) {
+            throw new Error(`Variation listing pre-state price ${child.sku} does not match the frozen active listing.`);
+          }
         }
       }
       // A provider-side change after this final read and before the request is
@@ -2167,7 +2265,7 @@ export async function executeVariationListingActiveRevision(
       }
       if (priceChanged) {
         const listingEvidence = listingPriceEvidence(listing, frozenListingId, expectedPriorChild);
-        if (!listingEvidence) throw new Error(`Variation listing pre-state price ${child.sku} does not match the frozen active listing.`);
+        if (!listingEvidence) throw new Error(`Variation listing pre-state price ${child.sku} changed before its bulk mutation; it does not match the frozen active listing.`);
         return asJson({ offer: evidence, listing: listingEvidence });
       }
       return evidence;
@@ -2203,6 +2301,16 @@ export async function executeVariationListingActiveRevision(
         );
         if (pairedItem === null) {
           throw new Error(`Variation listing paired Inventory Item ${child.sku} changed before the Offer mutation.`);
+        }
+        if (!priceChanged && !restoringSoldOut) {
+          // This can be a quantity-only update OR a change/revert/restage
+          // sequence whose net price is the previous confirmed price.
+          // Never send updateOffer on top of a listing-facing price drift.
+          const getListing = input.remote.getListing;
+          if (!getListing) throw new Error(`Variation listing ${child.sku} quantity publication requires Trading GetItem price evidence.`);
+          if (!priorChild || !listingPriceEvidence(await getListing(frozenListingId), frozenListingId, priorChild)) {
+            throw new Error(`Variation listing ${child.sku} listing-facing price does not match the confirmed pre-state before quantity mutation.`);
+          }
         }
         if (priceChanged || restoringSoldOut) {
           const getListing = input.remote.getListing;
@@ -2344,7 +2452,7 @@ export async function executeVariationListingActiveRevision(
   if (listingPriceVerificationRequired) {
     const getListing = input.remote.getListing;
     if (!getListing) throw new Error('Variation listing price publication requires a listing-facing Trading GetItem read.');
-    const prices = listingVariationPrices(await getListing(frozenListingId), frozenListingId);
+    const prices = listingVariationPrices(await getListing(frozenListingId), frozenListingId, true);
     const listingChildren = desiredBundle.children.filter((child) => child.quantity > 0);
     const desiredSkus = new Set(listingChildren.map((child) => child.sku));
     if (prices.size !== desiredSkus.size || [...prices.keys()].some((sku) => !desiredSkus.has(sku))) {
