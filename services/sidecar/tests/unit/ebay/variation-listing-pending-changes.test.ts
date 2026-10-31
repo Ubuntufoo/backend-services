@@ -13,7 +13,7 @@ function aggregate(): VariationListingAggregateSnapshot {
       derived_common_ebay_aspects: { Brand: ['Topps'], Sport: ['Basketball'] }, category_id: '261328', marketplace_id: 'EBAY_US',
       listing_format: 'FIXED_PRICE', merchant_location_key: 'main', fulfillment_policy_id: 'fulfillment', payment_policy_id: 'payment',
       return_policy_id: 'returns', condition_id: '4000', condition_token: 'VERY_GOOD', condition_description: 'Used cards',
-      condition_descriptors: [{ name: 'Card Condition', values: ['Excellent'] }], desired_revision: 3, last_confirmed_revision: 3,
+      condition_descriptors: [{ name: '40001', values: ['400012'] }], desired_revision: 3, last_confirmed_revision: 3,
       created_at: now, updated_at: now,
     },
     variations: [{
@@ -51,6 +51,17 @@ function staged(mutator?: (value: VariationListingAggregateSnapshot) => void) {
 }
 
 describe('effective variation-listing pending changes', () => {
+  it('compares derived condition semantics when persisted descriptors are stale', () => {
+    const confirmed = aggregate();
+    confirmed.group.condition_descriptors = [{ name: '40001', values: ['400012'] }];
+    const current = structuredClone(confirmed);
+    current.group.desired_revision = 7;
+    current.group.last_confirmed_revision = 3;
+    current.group.condition_descriptors = [];
+
+    expect(hasEffectiveVariationListingPendingChanges(current, revision(confirmed))).toBe(false);
+  });
+
   it.each([1, 3] as const)('recognizes a net-zero staged aggregate from a v%s confirmed snapshot', (version) => {
     const { confirmed, current } = staged();
     expect(hasEffectiveVariationListingPendingChanges(current, revision(confirmed, version))).toBe(false);
@@ -78,6 +89,7 @@ describe('effective variation-listing pending changes', () => {
     ['representative copy', (value: VariationListingAggregateSnapshot) => { value.variations[0]!.representative_copy_id = 'copy-2'; }],
     ['copy availability', (value: VariationListingAggregateSnapshot) => { value.copies[0]!.availability_state = 'unavailable'; }],
     ['copy condition', (value: VariationListingAggregateSnapshot) => { value.copies[0]!.condition_notes = 'Different'; }],
+    ['condition token', (value: VariationListingAggregateSnapshot) => { value.group.condition_token = 'EXCELLENT'; }],
     ['copy image', (value: VariationListingAggregateSnapshot) => { value.copies[0]!.front_r2_key = 'different.jpg'; }],
     ['pending removal', (value: VariationListingAggregateSnapshot) => { value.variations[0]!.pending_removal_at = now; }],
     ['new variation', (value: VariationListingAggregateSnapshot) => { value.variations.push({ ...value.variations[0]!, variation_id: 'variation-2', sku: 'SKU-2' }); }],
@@ -139,5 +151,25 @@ describe('effective variation-listing pending changes', () => {
     const { confirmed, current } = staged();
     const evidence = patch === undefined ? undefined : Object.assign(revision(confirmed), patch);
     expect(hasEffectiveVariationListingPendingChanges(current, evidence)).toBe(true);
+  });
+
+  it('fails closed for unsupported condition evidence', () => {
+    const { current, confirmed } = staged();
+    (confirmed.group as typeof confirmed.group & { condition_token: string }).condition_token = 'UNSUPPORTED';
+    expect(hasEffectiveVariationListingPendingChanges(current, revision(confirmed))).toBe(true);
+  });
+
+  it.each([
+    ['duplicate descriptor names', [
+      { name: '40001', values: ['400012'] },
+      { name: '40001', values: ['400013'] },
+    ]],
+    ['unknown descriptor key', [{ name: '40001', values: ['400012'], unsupported: 'x' }]],
+    ['invalid additional info', [{ name: '40001', values: ['400012'], additionalInfo: ' ' }]],
+  ] as const)('fails closed for identical malformed %s evidence', (_label, descriptors) => {
+    const { current, confirmed } = staged();
+    current.group.condition_descriptors = structuredClone(descriptors) as typeof current.group.condition_descriptors;
+    confirmed.group.condition_descriptors = structuredClone(descriptors) as typeof confirmed.group.condition_descriptors;
+    expect(hasEffectiveVariationListingPendingChanges(current, revision(confirmed))).toBe(true);
   });
 });

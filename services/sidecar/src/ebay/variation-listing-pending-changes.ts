@@ -4,6 +4,7 @@ import type {
 } from '@ebay-inventory/data';
 
 import { revisionSnapshotAggregate } from '@/ebay/variation-listing-active-revision.js';
+import { deriveVariationListingRawCardConditionDescriptors } from '@/ebay/variation-listing-payloads.js';
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
@@ -21,6 +22,47 @@ function canonicalJson(value: unknown): string {
   throw new Error('Variation listing pending comparison contains an unsupported value.');
 }
 
+function effectiveConditionDescriptors(aggregate: VariationListingAggregateSnapshot): Array<{ name: string; values: string[] }> {
+  const derived = deriveVariationListingRawCardConditionDescriptors(
+    aggregate.group.category_id,
+    aggregate.group.condition_token,
+  );
+  const persisted = aggregate.group.condition_descriptors;
+  if (!Array.isArray(persisted)) {
+    throw new Error('Variation listing pending comparison requires condition descriptors to be an array.');
+  }
+  // Empty persisted arrays are the known stale representation. Preserve any
+  // non-empty historical descriptor evidence so a custom/legacy payload cannot
+  // be silently treated as equivalent to the current derived contract.
+  if (persisted.length === 0) return derived;
+  const descriptors = persisted.map((descriptor) => {
+    if (descriptor === null || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
+      throw new Error('Variation listing pending comparison contains an invalid condition descriptor.');
+    }
+    const value = descriptor as Record<string, unknown>;
+    if (
+      typeof value.name !== 'string' || !/^\d+$/.test(value.name) ||
+      !Array.isArray(value.values) || value.values.length === 0 ||
+      value.values.some((entry) => typeof entry !== 'string' || !/^\d+$/.test(entry)) ||
+      new Set(value.values).size !== value.values.length ||
+      (value.additionalInfo !== undefined && (
+        typeof value.additionalInfo !== 'string' ||
+        value.additionalInfo.trim() !== value.additionalInfo ||
+        value.additionalInfo.length === 0 ||
+        value.additionalInfo.length > 30
+      )) ||
+      Object.keys(value).some((key) => !['name', 'values', 'additionalInfo'].includes(key))
+    ) {
+      throw new Error('Variation listing pending comparison contains an invalid condition descriptor.');
+    }
+    return descriptor as { name: string; values: string[] };
+  });
+  if (new Set(descriptors.map((descriptor) => descriptor.name)).size !== descriptors.length) {
+    throw new Error('Variation listing pending comparison contains duplicate condition descriptors.');
+  }
+  return descriptors;
+}
+
 function publicationProjection(aggregate: VariationListingAggregateSnapshot): unknown {
   if (!aggregate || typeof aggregate !== 'object' || !aggregate.group || typeof aggregate.group !== 'object') {
     throw new Error('Variation listing pending comparison requires a group.');
@@ -29,6 +71,10 @@ function publicationProjection(aggregate: VariationListingAggregateSnapshot): un
     throw new Error('Variation listing pending comparison requires variation and copy arrays.');
   }
   const group = aggregate.group;
+  // New/desired publication payloads derive the raw-card descriptor from the
+  // authoritative category + condition token. Persisted empty arrays may be
+  // stale; non-empty historical evidence remains authoritative for comparison.
+  const conditionDescriptors = effectiveConditionDescriptors(aggregate);
   const variations = aggregate.variations.map((variation) => ({
     groupId: variation.group_id,
     inventorySerial: variation.inventory_serial,
@@ -62,7 +108,7 @@ function publicationProjection(aggregate: VariationListingAggregateSnapshot): un
     group: {
       categoryId: group.category_id,
       conditionDescription: group.condition_description,
-      conditionDescriptors: group.condition_descriptors,
+      conditionDescriptors,
       conditionId: group.condition_id,
       conditionToken: group.condition_token,
       derivedCommonEbayAspects: group.derived_common_ebay_aspects,

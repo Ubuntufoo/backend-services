@@ -1250,6 +1250,9 @@ export async function readVariationListingQuantityStatus(
     if (!Number.isSafeInteger(afterPublish) || afterPublish > 2_147_483_647) {
       throw new Error(`Variation listing projected quantity for ${currentVariation.sku} is invalid.`);
     }
+    if (afterPublish < 0) {
+      throw new Error(`Variation listing projected quantity for ${currentVariation.sku} cannot be negative.`);
+    }
     const exactQuantities = observed.quantitiesBySku[currentVariation.sku];
     variations.push({
       variationId: currentVariation.variation_id,

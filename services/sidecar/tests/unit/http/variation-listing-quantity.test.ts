@@ -384,9 +384,14 @@ describe('YP9.6b2 quantity API', () => {
     expect(confirmed.captured_desired_revision).toBe(3);
   });
 
-  it('retains a negative projection for recovery with a later +1', async () => {
-    const status = await readVariationListingQuantityStatus(quantityStatusHarness(-1, 0), groupId);
-    expect(status.variations[0]?.afterPublish).toBe(-1);
+  it('rejects a negative projection but permits recovery after a later +1', async () => {
+    await expect(readVariationListingQuantityStatus(
+      quantityStatusHarness(-1, 0),
+      groupId,
+    )).rejects.toThrow('Variation listing projected quantity for BSKBL-Test-000001 cannot be negative.');
+
+    const recovered = await readVariationListingQuantityStatus(quantityStatusHarness(0, 0), groupId);
+    expect(recovered.variations[0]?.afterPublish).toBe(0);
   });
 
   it('fails closed when the confirmed watermark changes during the eBay read', async () => {

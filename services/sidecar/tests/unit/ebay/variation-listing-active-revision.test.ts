@@ -268,6 +268,152 @@ function listingVariation(child: { sku: string; quantity: number; offer: { prici
   };
 }
 
+type ZeroStockFailure =
+  | 'target-present'
+  | 'target-price-drift'
+  | 'sibling-price-drift'
+  | 'sibling-quantity-drift'
+  | 'sibling-sku-drift'
+  | 'offer-identity-drift'
+  | 'offer-nonquantity-drift'
+  | 'offer-quantity-drift'
+  | 'group-drift'
+  | 'item-unknown'
+  | 'offer-unknown'
+  | 'group-unknown'
+  | 'listing-unknown'
+  | 'listing-malformed'
+  | 'listing-identity-drift'
+  | 'item-quantity-drift';
+
+async function zeroStockFixture(failure?: ZeroStockFailure) {
+  const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+  const current = aggregate({
+    group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+    variations: [variation('A', 0, 'copy-A', 0.99, -2), variation('B', 1)],
+  });
+  const base = remoteFor(previous, {
+    'SKU-A': { inventoryItemQuantity: 2, offerQuantity: 2 },
+    'SKU-B': { inventoryItemQuantity: 1, offerQuantity: 1 },
+  });
+  let itemAQuantity = 2;
+  let offerAQuantity = 2;
+  let groupDrifted = false;
+  let itemWrites = 0;
+  let offerWrites = 0;
+  let itemWriteCompleted = false;
+  let itemAfterReadConsumed = false;
+  let offerReadsAfterItem = 0;
+  const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+    ...base.remote,
+    async getInventoryItem(sku) {
+      if (sku === 'SKU-A' && failure === 'item-unknown' && itemWriteCompleted && itemAfterReadConsumed) {
+        return { state: 'unknown' as const, reason: 'Inventory Item read unavailable' };
+      }
+      const read = await base.remote.getInventoryItem(sku);
+      if (sku !== 'SKU-A' || read.state !== 'present') return read;
+      if (sku === 'SKU-A' && failure === 'item-quantity-drift' && itemWriteCompleted && itemAfterReadConsumed) {
+        return { ...read, value: { ...read.value, payload: quantityPayload(read.value.payload, 1) } };
+      }
+      if (sku === 'SKU-A' && itemWriteCompleted && !itemAfterReadConsumed) itemAfterReadConsumed = true;
+      return { ...read, value: { ...read.value, payload: quantityPayload(read.value.payload, itemAQuantity) } };
+    },
+    async getOffers(sku, marketplaceId) {
+      if (sku === 'SKU-A' && itemWriteCompleted && (failure === 'offer-identity-drift' || failure === 'offer-unknown')) {
+        offerReadsAfterItem += 1;
+        if (offerReadsAfterItem === 1) return { state: 'proven_absent' as const };
+        if (offerReadsAfterItem >= 3 && failure === 'offer-unknown') return { state: 'unknown' as const, reason: 'Offer read unavailable' };
+        if (offerReadsAfterItem >= 3 && failure === 'offer-identity-drift') {
+          const read = await base.remote.getOffers(sku, marketplaceId);
+          if (read.state !== 'present') return read;
+          return { ...read, value: [{ ...read.value[0]!, offerId: 'offer-other', marketplaceId }] };
+        }
+      }
+      const read = await base.remote.getOffers(sku, marketplaceId);
+      if (sku !== 'SKU-A' || read.state !== 'present') return read;
+      const offer = read.value[0]!;
+      const payload = structuredClone(offer.payload) as Record<string, Json>;
+      payload.availableQuantity = offerAQuantity;
+      if (failure === 'offer-nonquantity-drift' && itemAQuantity === 0) {
+        payload.pricingSummary = { price: { value: '9.99', currency: 'USD' } };
+      }
+      return {
+        ...read,
+        value: [{
+          ...offer,
+          offerId: failure === 'offer-identity-drift' && itemAQuantity === 0 ? 'offer-other' : offer.offerId,
+          payload,
+          marketplaceId,
+        }],
+      };
+    },
+    async getListing(listingId) {
+      if (failure === 'listing-unknown' && itemAQuantity === 0) throw new Error('Trading read unavailable');
+      if (failure === 'listing-malformed' && itemAQuantity === 0) {
+        return { Item: { ItemID: listingId, Variations: { Variation: [{ SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1 }] } } };
+      }
+      const childA = base.bundle.children.find((child) => child.sku === 'SKU-A')!;
+      const childB = base.bundle.children.find((child) => child.sku === 'SKU-B')!;
+      const rows: Json[] = [listingVariation(childB, failure === 'sibling-quantity-drift' ? 2 : 1)];
+      if (failure === 'sibling-price-drift' && itemAQuantity === 0) {
+        const row = rows[0] as Record<string, Json>;
+        row.StartPrice = { '#text': '1.99', '@_currencyID': 'USD' };
+      }
+      if (failure === 'sibling-sku-drift' && itemAQuantity === 0) rows.push({ SKU: 'SKU-EXTRA', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } });
+      if (itemAQuantity > 0 || failure === 'target-present' || failure === 'target-price-drift') {
+        const target = listingVariation(childA, itemAQuantity);
+        if (failure === 'target-price-drift' && itemAQuantity === 0) (target as Record<string, Json>).StartPrice = { '#text': '1.99', '@_currencyID': 'USD' };
+        rows.unshift(target);
+      }
+      return {
+        Item: {
+          ItemID: failure === 'listing-identity-drift' && itemAQuantity === 0 ? 'listing-other' : listingId,
+          Variations: { Variation: rows },
+        },
+      };
+    },
+    async getInventoryItemGroup(groupKey) {
+      if (failure === 'group-unknown' && itemWriteCompleted) return { state: 'unknown' as const, reason: 'Group read unavailable' };
+      const read = await base.remote.getInventoryItemGroup(groupKey);
+      if (groupDrifted && read.state === 'present') {
+        return { ...read, value: { ...read.value, payload: { ...(read.value.payload as Record<string, Json>), title: 'drifted group' } } };
+      }
+      return read;
+    },
+  };
+  const prepared = await prepareVariationListingFrozenActiveRevision({
+    currentAggregate: current,
+    previousRevision: version1Revision(previous),
+    previousCheckpoints: version1Checkpoints(previous),
+    remote,
+    revisionId: 'revision-2',
+  });
+  const desired = prepared.desiredBundlePreview;
+  if (!desired) throw new Error('zero-stock fixture should have complete desired media');
+  const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+  const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+  const mutations: VariationListingActiveMutationGateway = {
+    createOffer: async () => ({ offerId: 'unexpected' }),
+    async createOrReplaceInventoryItem(sku, payload) {
+      if (sku !== 'SKU-A') return;
+      itemWrites += 1;
+      const availability = (payload as Record<string, Json>).availability as Record<string, Json>;
+      const ship = availability.shipToLocationAvailability as Record<string, Json>;
+      itemAQuantity = Number(ship.quantity);
+      itemWriteCompleted = true;
+      if (failure === 'offer-quantity-drift') offerAQuantity = 1;
+      if (failure === 'group-drift') groupDrifted = true;
+    },
+    createOrReplaceInventoryItemGroup: async () => {},
+    publishOffer: async () => ({ listingId: 'listing-1' }),
+    async updateOffer(_offerId, payload) {
+      offerWrites += 1;
+      offerAQuantity = Number((payload as Record<string, Json>).availableQuantity);
+    },
+  };
+  return { current, desired, prepared, revisions, checkpoints, remote, mutations, itemWrites: () => itemWrites, offerWrites: () => offerWrites };
+}
+
 describe('documented bulkUpdatePriceQuantity response contract', () => {
   const offerResult = { sku: 'SKU-A', offerId: 'offer-A', statusCode: 200 };
   const inventoryResult = { sku: 'SKU-A', statusCode: 200 };
@@ -2272,6 +2418,56 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(itemWrites).toEqual(['SKU-A', 'SKU-A']);
     expect(bulkPayloads).toHaveLength(2);
     expect(bulkPayloads[1]).toMatchObject({ requests: [{ sku: 'SKU-A', offers: [{ offerId: 'offer-SKU-A', availableQuantity: 3, price: { value: '4.99', currency: 'USD' } }], shipToLocationAvailability: { quantity: 3 } }] });
+  });
+
+  describe('YP10.9d zero-stock Offer handoff', () => {
+    const execute = (fixture: Awaited<ReturnType<typeof zeroStockFixture>>) => executeVariationListingActiveRevision(activeExecutionInput(
+      fixture.prepared,
+      fixture.revisions,
+      fixture.checkpoints,
+      fixture.remote,
+      fixture.mutations,
+      {
+        loadAggregate: async () => fixture.current,
+        confirmRevision: async () => ({ ...fixture.current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
+      }
+    ));
+
+    it('completes a positive-to-zero quantity handoff when Trading omits the target after Item write', async () => {
+      const fixture = await zeroStockFixture();
+      await expect(execute(fixture)).resolves.toMatchObject({ confirmedRevision: 2, listingId: 'listing-1' });
+      expect(fixture.itemWrites()).toBe(1);
+      expect(fixture.offerWrites()).toBe(1);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+    });
+
+    it.each([
+      ['target present', 'target-present'],
+      ['target price drift', 'target-price-drift'],
+      ['sibling price drift', 'sibling-price-drift'],
+      ['sibling quantity drift', 'sibling-quantity-drift'],
+      ['sibling SKU drift', 'sibling-sku-drift'],
+      ['Offer identity drift', 'offer-identity-drift'],
+      ['Offer non-quantity drift', 'offer-nonquantity-drift'],
+      ['Offer quantity drift', 'offer-quantity-drift'],
+      ['group drift', 'group-drift'],
+      ['Inventory Item read unknown after Item write', 'item-unknown'],
+      ['Offer read unknown after Item write', 'offer-unknown'],
+      ['group read unknown after Item write', 'group-unknown'],
+      ['Trading read unknown', 'listing-unknown'],
+      ['Trading read malformed', 'listing-malformed'],
+      ['Trading listing identity drift', 'listing-identity-drift'],
+      ['desired Item quantity drift', 'item-quantity-drift'],
+    ] as const)('fails closed for %s', async (_label, failure) => {
+      const fixture = await zeroStockFixture(failure);
+      await expect(execute(fixture)).rejects.toThrow();
+      expect(fixture.itemWrites()).toBe(1);
+      expect(fixture.offerWrites()).toBe(0);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'unknown']);
+      expect(fixture.checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(false);
+    });
   });
 
   it('fails closed when Trading GetItem returns a numeric variation price without currency', async () => {

@@ -756,6 +756,108 @@ describe('YP6.1 variation listing API router', () => {
     )).toBe(true);
   });
 
+  it('does not reintroduce pending state when only stale condition descriptors differ across confirmed history', async () => {
+    const confirmed = aggregate();
+    confirmed.group = {
+      ...confirmed.group,
+      desired_revision: 7,
+      last_confirmed_revision: 7,
+      condition_descriptors: [{ name: '40001', values: ['400012'] }],
+    };
+    confirmed.variations = confirmed.variations.map((variation) => ({
+      ...variation,
+      pending_removal_at: null,
+      quantity_adjustment_counter: 0,
+    }));
+    const current = structuredClone(confirmed);
+    current.group.desired_revision = 11;
+    current.group.condition_descriptors = [];
+
+    const revisionFor = (capturedDesiredRevision: number, snapshotAggregate?: VariationListingAggregateSnapshot) => ({
+      ...latestRevision(),
+      capturedDesiredRevision,
+      revisionId: `revision-${capturedDesiredRevision}`,
+      source: {
+        revision_id: `revision-${capturedDesiredRevision}`,
+        group_id: groupId,
+        captured_desired_revision: capturedDesiredRevision,
+        snapshot_version: snapshotAggregate ? 3 : 1,
+        snapshot_digest: 'd'.repeat(64),
+        snapshot: snapshotAggregate
+          ? {
+            aggregate: snapshotAggregate,
+            confirmed: {
+              aggregate: snapshotAggregate,
+              representativeImages: [],
+              remote: { listingId: 'listing-1', offerIdsBySku: {} },
+              revisionId: `revision-${capturedDesiredRevision}`,
+            },
+            mediaResources: [],
+            representativeImages: [],
+          }
+          : { aggregate: current },
+        operation_plan: [],
+        operation_count: 0,
+        captured_at: now,
+      },
+    } as unknown as VariationListingRevision);
+    const revisions = [
+      revisionFor(7, confirmed),
+      revisionFor(5),
+      revisionFor(4),
+      revisionFor(3),
+    ];
+    const response = await request(app(dataAccess({
+      loadAggregate: vi.fn(async () => current),
+      listRevisionsByGroupId: vi.fn(async () => revisions),
+      listCheckpointsByRevisionId: vi.fn(async () => []),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.validation).toMatchObject({ hasPendingChanges: false });
+  });
+
+  it('keeps a frozen revision newer than the confirmed watermark recovery-blocking', async () => {
+    const current = aggregate();
+    current.group = {
+      ...current.group,
+      desired_revision: 11,
+      last_confirmed_revision: 7,
+      condition_descriptors: [],
+    };
+    const newer = {
+      ...latestRevision(),
+      capturedDesiredRevision: 8,
+      revisionId: 'revision-8',
+    } as unknown as VariationListingRevision;
+    const confirmedAggregate = structuredClone(current);
+    confirmedAggregate.group.desired_revision = 7;
+    const confirmed = {
+      ...latestRevision(),
+      capturedDesiredRevision: 7,
+      revisionId: 'revision-7',
+      source: {
+        revision_id: 'revision-7',
+        group_id: groupId,
+        captured_desired_revision: 7,
+        snapshot_version: 1,
+        snapshot_digest: 'd'.repeat(64),
+        snapshot: { aggregate: confirmedAggregate },
+        operation_plan: [],
+        operation_count: 0,
+        captured_at: now,
+      },
+    } as unknown as VariationListingRevision;
+    const response = await request(app(dataAccess({
+      loadAggregate: vi.fn(async () => current),
+      listRevisionsByGroupId: vi.fn(async () => [newer, confirmed]),
+      listCheckpointsByRevisionId: vi.fn(async () => []),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.validation).toMatchObject({ hasPendingChanges: true });
+  });
+
   it('exposes the confirmed revision listing identity after a newer revision is staged', async () => {
     const confirmedRevision = {
       ...latestRevision(),

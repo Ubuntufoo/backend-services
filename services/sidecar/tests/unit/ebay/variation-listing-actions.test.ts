@@ -558,13 +558,25 @@ describe('YP6.2 variation listing actions', () => {
     process.env.EBAY_PUBLISH_ENABLED = 'true';
     try {
       const confirmed = aggregate({ lifecycle_state: 'active', desired_revision: 3, last_confirmed_revision: 3 });
+      confirmed.group.condition_descriptors = [{ name: '40001', values: ['400012'] }];
       const current = structuredClone(confirmed);
       current.group.desired_revision = 7;
+      current.group.condition_descriptors = [];
       current.group.updated_at = '2026-10-29T01:00:00Z';
       const confirmedRevision = {
-        ...revision(1),
+        ...revision(3),
         captured_desired_revision: 3,
-        snapshot: { aggregate: confirmed },
+        snapshot: {
+          aggregate: confirmed,
+          confirmed: {
+            aggregate: confirmed,
+            representativeImages: [],
+            remote: { listingId: 'listing-1', offerIdsBySku: {} },
+            revisionId,
+          },
+          mediaResources: [],
+          representativeImages: [],
+        },
       };
       const access = data({ aggregate: current, revisions: [confirmedRevision] });
       const remoteFactory = vi.fn();

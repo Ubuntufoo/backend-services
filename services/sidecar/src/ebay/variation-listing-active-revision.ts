@@ -2308,8 +2308,48 @@ export async function executeVariationListingActiveRevision(
           // Never send updateOffer on top of a listing-facing price drift.
           const getListing = input.remote.getListing;
           if (!getListing) throw new Error(`Variation listing ${child.sku} quantity publication requires Trading GetItem price evidence.`);
-          if (!priorChild || !listingPriceEvidence(await getListing(frozenListingId), frozenListingId, priorChild)) {
-            throw new Error(`Variation listing ${child.sku} listing-facing price does not match the confirmed pre-state before quantity mutation.`);
+          const listing = await getListing(frozenListingId);
+          const listingEvidence = priorChild && listingPriceEvidence(listing, frozenListingId, priorChild);
+          if (priorChild?.quantity > 0 && child.quantity === 0 && listingVariationPrices(listing, frozenListingId, true).has(child.sku)) {
+            throw new Error(`Variation listing zero-stock ${child.sku} unexpectedly remains present in Trading after the Inventory Item quantity reached zero.`);
+          }
+          if (!listingEvidence) {
+            const observedPriorOfferPayload = observedPriorOffer && object(
+              object(observedPriorOffer, `offer ${child.sku} evidence`).payload,
+              `offer ${child.sku} payload`
+            );
+            const observedPriorOfferQuantity = observedPriorOfferPayload
+              ? offerQuantity(observedPriorOfferPayload as Json, child.sku)
+              : null;
+            const targetItemAfter = pairedItem && inventoryItemQuantity(asJson(child.inventoryItem), child.sku) === 0;
+            const exactZeroStockHandoff = Boolean(
+              priorChild &&
+              priorChild.quantity > 0 &&
+              priorChild.offer.availableQuantity > 0 &&
+              child.quantity === 0 &&
+              child.offer.availableQuantity === 0 &&
+              observedPriorOfferQuantity === priorChild.offer.availableQuantity &&
+              targetItemAfter &&
+              canonicalJson(asJson(previousBundle.group)) === canonicalJson(asJson(desiredBundle.group)) &&
+              activeGroup(
+                await input.remote.getInventoryItemGroup(desiredBundle.groupKey),
+                previousBundle.group
+              ) !== null
+            );
+            if (!exactZeroStockHandoff) {
+              throw new Error(`Variation listing ${child.sku} listing-facing price does not match the confirmed pre-state before quantity mutation.`);
+            }
+            // Trading omits an existing variation immediately after its
+            // Inventory Item quantity reaches zero. Keep the listing identity,
+            // positive sibling SKU/price/quantity set, and target omission
+            // exact before allowing the paired Offer write to proceed.
+            assertListingPriceSet(
+              listing,
+              frozenListingId,
+              desiredBundle.children,
+              `zero-stock ${child.sku} handoff`,
+              true
+            );
           }
         }
         if (priceChanged || restoringSoldOut) {
