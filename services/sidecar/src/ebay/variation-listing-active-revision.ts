@@ -774,37 +774,25 @@ async function verifyFrozenListingPriceBaseline(
   );
   if (hasNewVariation) {
     // A newly staged child is expected to be absent until its create/publish
-    // operations run. Validate every frozen sellable sibling without treating
-    // that not-yet-owned SKU (or a collision) as an existing listing member.
+    // operations run. The confirmed listing-facing siblings still require the
+    // same exact quantity evidence as any other quantity-sensitive baseline.
     const prices = listingVariationPrices(listing, listingId, true);
-    const confirmedSkus = new Set(input.frozen.confirmedBundle.children.map((child) => child.sku));
     const stagedNewSkus = new Set(
       input.frozen.snapshot.aggregate.variations
         .filter((variation) => !confirmedVariationIds.has(variation.variation_id))
         .map((variation) => variation.sku),
     );
-    const confirmedSellableSkus = new Set(
-      input.frozen.confirmedBundle.children
-        .filter((child) => child.quantity > 0)
-        .map((child) => child.sku),
+    const stagedNewSku = [...prices.keys()].find((sku) => stagedNewSkus.has(sku));
+    if (stagedNewSku) throw new Error(`Variation listing new offer ${stagedNewSku} must be absent before create.`);
+    assertListingPriceSet(
+      listing,
+      listingId,
+      input.frozen.confirmedBundle.children,
+      'frozen active revision pre-state',
+      true,
+      true,
+      true,
     );
-    const unexpectedSku = [...prices.keys()].find((sku) => !confirmedSellableSkus.has(sku));
-    if (unexpectedSku && stagedNewSkus.has(unexpectedSku)) {
-      throw new Error(`Variation listing new offer ${unexpectedSku} must be absent before create.`);
-    }
-    if (unexpectedSku && !confirmedSkus.has(unexpectedSku)) {
-      throw new Error('Variation listing frozen active revision pre-state SKU set contains an unknown listing-facing sibling.');
-    }
-    if (unexpectedSku) {
-      throw new Error('Variation listing frozen active revision pre-state SKU set does not match sellable listing-facing siblings.');
-    }
-    for (const child of input.frozen.confirmedBundle.children.filter((candidate) => candidate.quantity > 0)) {
-      const observed = prices.get(child.sku);
-      const expected = expectedOfferPrice(child);
-      if (!observed || observed.currency !== expected.currency || observed.value !== expected.value) {
-        throw new Error(`Variation listing frozen active revision pre-state price ${child.sku} does not match the frozen listing-facing sibling.`);
-      }
-    }
     return;
   }
   assertListingPriceSet(
@@ -812,7 +800,8 @@ async function verifyFrozenListingPriceBaseline(
     listingId,
     input.frozen.confirmedBundle.children,
     'frozen active revision pre-state',
-    false,
+    true,
+    true,
     true,
   );
 }
@@ -1679,7 +1668,12 @@ function listingVariationPrices(value: unknown, listingId: string, allowEmpty = 
   return prices;
 }
 
-function listingVariationSellableQuantities(value: unknown, listingId: string, allowEmpty = false): Map<string, number> {
+function listingVariationSellableQuantities(
+  value: unknown,
+  listingId: string,
+  allowEmpty = false,
+  requiredSkus?: ReadonlySet<string>,
+): Map<string, number> {
   const root = unknownRecord(value, 'Trading GetItem response');
   const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
   if (item.ItemID === undefined || String(item.ItemID).trim() !== listingId) {
@@ -1698,12 +1692,23 @@ function listingVariationSellableQuantities(value: unknown, listingId: string, a
     const variation = unknownRecord(rawVariation, 'Trading GetItem variation');
     const sku = String(variation.SKU ?? '').trim();
     if (!sku || quantities.has(sku)) throw new Error('Variation listing Trading GetItem variation identity is malformed or duplicated.');
+    if (requiredSkus && !requiredSkus.has(sku)) continue;
     const totalRaw = variation.Quantity;
     const status = unknownRecord(variation.SellingStatus, `Trading GetItem variation ${sku} SellingStatus`);
     const soldRaw = status.QuantitySold;
     const total = Number(totalRaw);
     const sold = Number(soldRaw);
-    if ((typeof totalRaw !== 'number' && typeof totalRaw !== 'string') || (typeof soldRaw !== 'number' && typeof soldRaw !== 'string') || !Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(sold) || sold < 0 || sold > total) {
+    if (
+      (typeof totalRaw !== 'number' && typeof totalRaw !== 'string') ||
+      (typeof soldRaw !== 'number' && typeof soldRaw !== 'string') ||
+      (typeof totalRaw === 'string' && totalRaw.trim() === '') ||
+      (typeof soldRaw === 'string' && soldRaw.trim() === '') ||
+      !Number.isSafeInteger(total) ||
+      total < 0 ||
+      !Number.isSafeInteger(sold) ||
+      sold < 0 ||
+      sold > total
+    ) {
       throw new Error(`Variation listing Trading GetItem variation ${sku} quantity is malformed.`);
     }
     quantities.set(sku, total - sold);
@@ -1719,9 +1724,10 @@ function assertListingPriceSet(
   label: string,
   checkQuantities = false,
   allowEmpty = false,
+  allowRetainedZero = false,
 ): void {
   const prices = listingVariationPrices(value, listingId, allowEmpty);
-  const expected = expectedChildren.filter((child) => child.quantity > 0);
+  const expected = expectedChildren.filter((child) => child.quantity > 0 || (allowRetainedZero && prices.has(child.sku)));
   const expectedSkus = new Set(expected.map((child) => child.sku));
   if (prices.size !== expectedSkus.size || [...prices.keys()].some((sku) => !expectedSkus.has(sku))) {
     throw new Error(`Variation listing ${label} SKU set does not match the frozen listing-facing siblings.`);
@@ -1734,7 +1740,8 @@ function assertListingPriceSet(
     }
   }
   if (checkQuantities) {
-    const quantities = listingVariationSellableQuantities(value, listingId, allowEmpty);
+    const expectedSkus = new Set(expected.map((child) => child.sku));
+    const quantities = listingVariationSellableQuantities(value, listingId, allowEmpty, expectedSkus);
     for (const child of expected) {
       if (quantities.get(child.sku) !== child.quantity) {
         throw new Error(`Variation listing ${label} sibling ${child.sku} quantity changed outside the frozen transition.`);
@@ -2063,10 +2070,9 @@ export async function executeVariationListingActiveRevision(
       const getListing = input.remote.getListing;
       if (!getListing) throw new Error(`Variation listing restock ${child.sku} requires a listing-facing Trading GetItem read before mutation.`);
       const listing = await getListing(frozenListingId);
-      assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true, true);
-      if (listingVariationPrices(listing, frozenListingId, true).has(child.sku)) {
-        throw new Error(`Variation listing restock ${child.sku} already appears in Trading before its frozen 0-to-positive update.`);
-      }
+      // eBay can retain a zero-stock SKU with Out-of-Stock Control enabled.
+      // Either listing representation must preserve exact price, quantity and siblings.
+      assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true, true, true);
     };
     const assertRestockPreGroup = async (): Promise<void> => {
       if (activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), previousBundle.group) === null) {
@@ -2310,8 +2316,9 @@ export async function executeVariationListingActiveRevision(
           if (!getListing) throw new Error(`Variation listing ${child.sku} quantity publication requires Trading GetItem price evidence.`);
           const listing = await getListing(frozenListingId);
           const listingEvidence = priorChild && listingPriceEvidence(listing, frozenListingId, priorChild);
-          if (priorChild?.quantity > 0 && child.quantity === 0 && listingVariationPrices(listing, frozenListingId, true).has(child.sku)) {
-            throw new Error(`Variation listing zero-stock ${child.sku} unexpectedly remains present in Trading after the Inventory Item quantity reached zero.`);
+          if (priorChild?.quantity > 0 && child.quantity === 0) {
+            // Zero stock can be omitted or retained with exact zero sellable quantity.
+            assertListingPriceSet(listing, frozenListingId, desiredBundle.children, `zero-stock ${child.sku} handoff`, true, true, true);
           }
           if (!listingEvidence) {
             const observedPriorOfferPayload = observedPriorOffer && object(
@@ -2492,19 +2499,10 @@ export async function executeVariationListingActiveRevision(
   if (listingPriceVerificationRequired) {
     const getListing = input.remote.getListing;
     if (!getListing) throw new Error('Variation listing price publication requires a listing-facing Trading GetItem read.');
-    const prices = listingVariationPrices(await getListing(frozenListingId), frozenListingId, true);
-    const listingChildren = desiredBundle.children.filter((child) => child.quantity > 0);
-    const desiredSkus = new Set(listingChildren.map((child) => child.sku));
-    if (prices.size !== desiredSkus.size || [...prices.keys()].some((sku) => !desiredSkus.has(sku))) {
-      throw new Error('Variation listing final listing-facing SKU set does not match the desired children.');
-    }
-    for (const child of listingChildren) {
-      const expected = expectedOfferPrice(child);
-      const observed = prices.get(child.sku);
-      if (!observed || observed.currency !== expected.currency || observed.value !== expected.value) {
-        throw new Error(`Variation listing final listing-facing price ${child.sku} does not match the desired price.`);
-      }
-    }
+    assertListingPriceSet(
+      await getListing(frozenListingId), frozenListingId, desiredBundle.children,
+      'final listing-facing state', true, true, true
+    );
   }
 
   // The Offer and Inventory API can both report positive stock even when
@@ -2522,7 +2520,7 @@ export async function executeVariationListingActiveRevision(
     if (!getListing) throw new Error('Variation listing restock final reconciliation requires Trading GetItem.');
     const listing = await getListing(frozenListingId);
     for (const child of restockedChildren) {
-      assertListingPriceSet(listing, frozenListingId, desiredBundle.children, 'restock final state', true);
+      assertListingPriceSet(listing, frozenListingId, desiredBundle.children, 'restock final state', true, true, true);
       if (listingRestockEvidence(listing, frozenListingId, child) === null) {
         throw new Error(`Variation listing restock ${child.sku} is not present with the exact listing-facing quantity and price.`);
       }

@@ -58,7 +58,7 @@ function quantityDataAccess(options: { desiredRevision?: number; confirmedId?: s
   return { dataAccess, updateVariationQuantityAdjustment };
 }
 
-function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity: number) {
+function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity: number, includeUnresolvedRevision = false) {
   const sku = 'BSKBL-Test-000001';
   const skuB = 'BSKBL-Test-000002';
   const skuC = 'BSKBL-Test-000003';
@@ -268,6 +268,33 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
     evidence: { listingId: 'listing-1' },
     created_at: now,
   } as unknown as VariationListingPublishingCheckpointRow;
+  const unresolvedRevision = includeUnresolvedRevision
+    ? {
+      ...revisionSource,
+      revision_id: '77777777-7777-4777-8777-777777777777',
+      captured_desired_revision: 4,
+      operation_plan: [{
+        sequence_no: 1,
+        operation_key: 'child-offer:variation-A',
+        operation_kind: 'child_offer_write',
+        target_ref: sku,
+        intent_version: 1,
+        intent_digest: 'c'.repeat(64),
+        intent: {},
+      }],
+      operation_count: 1,
+    } as unknown as VariationListingRevisionRow
+    : null;
+  const unresolvedCheckpoint = unresolvedRevision
+    ? {
+      ...checkpoint,
+      revision_id: unresolvedRevision.revision_id,
+      operation_key: 'child-offer:variation-A',
+      state: 'started',
+      observed_remote_state: null,
+      checkpoint_number: 1,
+    } as unknown as VariationListingPublishingCheckpointRow
+    : null;
   const remote = {
     getInventoryItemGroup: async () => ({ state: 'present' as const, value: { payload: bundle.group as never, variantSKUs: [sku, skuB, skuC] } }),
     getInventoryItem: async (requestedSku: string) => {
@@ -282,8 +309,10 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
   return {
     data: {
       loadAggregate: async () => current,
-      listRevisionsByGroupId: async () => [{ source: revisionSource }],
-      listCheckpointsByRevisionId: async () => [{ source: checkpoint }],
+      listRevisionsByGroupId: async () => [{ source: revisionSource }, ...(unresolvedRevision ? [{ source: unresolvedRevision }] : [])],
+      listCheckpointsByRevisionId: async (revisionId: string) => revisionId === unresolvedRevision?.revision_id
+        ? [{ source: unresolvedCheckpoint! }]
+        : [{ source: checkpoint }],
     },
     remoteFactory: async () => ({ remote, mutations: {} as never }),
   };
@@ -392,6 +421,32 @@ describe('YP9.6b2 quantity API', () => {
 
     const recovered = await readVariationListingQuantityStatus(quantityStatusHarness(0, 0), groupId);
     expect(recovered.variations[0]?.afterPublish).toBe(0);
+  });
+
+  it('returns a structured 409 when a negative projection has an unresolved publication', async () => {
+    const harness = quantityStatusHarness(-1, 0, true);
+    await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toMatchObject({
+      httpStatus: 409,
+      status: {
+        code: 'quantity_projection_unavailable_reconciliation_required',
+        operationKey: 'child-offer:variation-A',
+        revisionId: '77777777-7777-4777-8777-777777777777',
+        remoteState: 'unknown',
+        requiresReconciliation: true,
+        retryStatus: 'reconciliation_required',
+      },
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({
+      readQuantityStatus: async (requestedGroupId) => readVariationListingQuantityStatus(harness, requestedGroupId),
+    }));
+    const response = await request(app).get(`/api/variation-listings/${groupId}/quantity-status`);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('quantity_projection_unavailable_reconciliation_required');
+    expect(response.body.status.operationKey).toBe('child-offer:variation-A');
+    expect(response.body.status.revisionId).toBe('77777777-7777-4777-8777-777777777777');
   });
 
   it('fails closed when the confirmed watermark changes during the eBay read', async () => {

@@ -129,10 +129,20 @@ function remoteFor(
           Item: {
             ItemID: listingId,
             Variations: {
-              Variation: [...offers.entries()].map(([sku, payload]) => {
+              Variation: [...offers.entries()].flatMap(([sku, payload]) => {
                 const pricing = (payload as Record<string, Json>).pricingSummary as Record<string, Json>;
                 const price = pricing.price as Record<string, Json>;
-                return { SKU: sku, StartPrice: { '#text': price.value, '@_currencyID': price.currency } };
+                const availability = (items.get(sku) as Record<string, Json>).availability as Record<string, Json>;
+                const ship = availability.shipToLocationAvailability as Record<string, Json>;
+                const itemQuantity = Number(ship.quantity);
+                const offerQuantity = Number((payload as Record<string, Json>).availableQuantity);
+                if (Math.min(itemQuantity, offerQuantity) <= 0) return [];
+                return {
+                  SKU: sku,
+                  StartPrice: { '#text': price.value, '@_currencyID': price.currency },
+                  Quantity: Math.min(itemQuantity, offerQuantity),
+                  SellingStatus: { QuantitySold: 0 },
+                };
               }),
             },
           },
@@ -270,7 +280,11 @@ function listingVariation(child: { sku: string; quantity: number; offer: { prici
 
 type ZeroStockFailure =
   | 'target-present'
+  | 'target-positive'
   | 'target-price-drift'
+  | 'sibling-missing-quantity'
+  | 'sibling-missing-sold'
+  | 'sibling-missing-both'
   | 'sibling-price-drift'
   | 'sibling-quantity-drift'
   | 'sibling-sku-drift'
@@ -355,13 +369,16 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
       const childA = base.bundle.children.find((child) => child.sku === 'SKU-A')!;
       const childB = base.bundle.children.find((child) => child.sku === 'SKU-B')!;
       const rows: Json[] = [listingVariation(childB, failure === 'sibling-quantity-drift' ? 2 : 1)];
+      const sibling = rows[0] as Record<string, Json>;
+      if (failure === 'sibling-missing-quantity' || failure === 'sibling-missing-both') delete sibling.Quantity;
+      if (failure === 'sibling-missing-sold' || failure === 'sibling-missing-both') delete sibling.SellingStatus;
       if (failure === 'sibling-price-drift' && itemAQuantity === 0) {
         const row = rows[0] as Record<string, Json>;
         row.StartPrice = { '#text': '1.99', '@_currencyID': 'USD' };
       }
       if (failure === 'sibling-sku-drift' && itemAQuantity === 0) rows.push({ SKU: 'SKU-EXTRA', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } });
-      if (itemAQuantity > 0 || failure === 'target-present' || failure === 'target-price-drift') {
-        const target = listingVariation(childA, itemAQuantity);
+      if (itemAQuantity > 0 || failure === 'target-present' || failure === 'target-positive' || failure === 'target-price-drift') {
+        const target = listingVariation(childA, failure === 'target-positive' && itemAQuantity === 0 ? 1 : itemAQuantity);
         if (failure === 'target-price-drift' && itemAQuantity === 0) (target as Record<string, Json>).StartPrice = { '#text': '1.99', '@_currencyID': 'USD' };
         rows.unshift(target);
       }
@@ -1413,6 +1430,21 @@ describe('YP8.2 active revision preparation', () => {
         if (sku === 'SKU-A') return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: 'offer-SKU-A', payload: offerA, sku, status: 'PUBLISHED' as const }] };
         return await originalGetOffers(sku, marketplaceId);
       },
+      async getListing(listingId: string) {
+        const listing = await base.remote.getListing(listingId);
+        const itemPayload = itemA as Record<string, Json>;
+        const offerPayload = offerA as Record<string, Json>;
+        const itemQuantity = Number((((itemPayload.availability as Record<string, Json>).shipToLocationAvailability as Record<string, Json>).quantity));
+        const offerQuantity = Number(offerPayload.availableQuantity);
+        const item = listing.Item as Record<string, Json>;
+        const variations = (item.Variations as Record<string, Json>).Variation as Json[];
+        const target = variations.find((row) => (row as Record<string, Json>).SKU === 'SKU-A') as Record<string, Json> | undefined;
+        if (target) {
+          target.Quantity = Math.min(itemQuantity, offerQuantity);
+          target.SellingStatus = { QuantitySold: 0 };
+        }
+        return listing;
+      },
     };
     let firstMutation = true;
     const mutations: VariationListingActiveMutationGateway = {
@@ -1535,7 +1567,10 @@ describe('YP8.2 active revision executor acceptance', () => {
     }
   );
 
-  it('adds a new variation through createOffer, tolerates a sale inside publishOffer, and confirms on the same listing ID', async () => {
+  it.each([
+    'unknown new Offer identity',
+    'replacement Offer identity',
+  ] as const)('fails closed when a sale inside publishOffer changes the new variation quantity (%s recovery)', async (recoveryScenario) => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active', next_inventory_serial: 4 }),
@@ -1574,7 +1609,18 @@ describe('YP8.2 active revision executor acceptance', () => {
               Variation: [...offers.entries()].map(([sku, rows]) => {
                 const pricing = (rows[0]!.payload as Record<string, Json>).pricingSummary as Record<string, Json>;
                 const price = pricing.price as Record<string, Json>;
-                return { SKU: sku, StartPrice: { '#text': price.value, '@_currencyID': price.currency } };
+                const payload = rows[0]!.payload as Record<string, Json>;
+                const itemPayload = items.get(sku)?.payload as Record<string, Json> | undefined;
+                const itemQuantity = itemPayload
+                  ? Number((((itemPayload.availability as Record<string, Json>).shipToLocationAvailability as Record<string, Json>).quantity))
+                  : Number(payload.availableQuantity ?? 0);
+                const offerQuantity = Number(payload.availableQuantity ?? itemQuantity);
+                return {
+                  SKU: sku,
+                  StartPrice: { '#text': price.value, '@_currencyID': price.currency },
+                  Quantity: Math.min(itemQuantity, offerQuantity),
+                  SellingStatus: { QuantitySold: 0 },
+                };
               }),
             },
           },
@@ -1667,11 +1713,10 @@ describe('YP8.2 active revision executor acceptance', () => {
     media.clear();
     checkpoints.splice(0, checkpoints.length);
     calls.splice(0, calls.length);
-    const result = await executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
       loadAggregate: async () => current,
       confirmRevision: async () => { calls.push('confirm'); return { ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }; },
-    }));
-    expect(result).toEqual({ confirmedRevision: 2, listingId: 'listing-1', revisionId: 'revision-2' });
+    }))).rejects.toThrow(/quantity changed outside/);
     expect(calls).toContain('create-offer:SKU-C');
     const createdItemC = createdItemPayloadAtCreate as Record<string, Json>;
     expect((createdItemC.availability as Record<string, Json>).shipToLocationAvailability).toMatchObject({ quantity: 2 });
@@ -1680,83 +1725,62 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect((offers.get('SKU-C')![0]!.payload as Record<string, Json>).availableQuantity).toBe(1);
     expect(calls).toContain('group-replace');
     expect(calls).toContain('publish:durable-offer-SKU-C');
+    expect(calls).not.toContain('confirm');
     expect(calls).not.toContain('update-offer:offer-SKU-C');
-    expect(checkpoints.filter((row) => row.operation_key === 'child-offer:variation-C').at(-1)).toMatchObject({ state: 'confirmed_complete', evidence: { offerId: 'durable-offer-SKU-C' } });
-    expect(checkpoints.filter((row) => row.operation_key === 'publish-offer:variation-C').at(-1)).toMatchObject({ state: 'confirmed_complete' });
     const mediaFront = calls.indexOf('media:https://source.test/C/front');
     const mediaBack = calls.indexOf('media:https://source.test/C/back');
     const childItem = calls.indexOf('item:SKU-C');
     const childOffer = calls.indexOf('create-offer:SKU-C');
     const groupReplace = calls.indexOf('group-replace');
     const publish = calls.indexOf('publish:durable-offer-SKU-C');
-    const confirm = calls.indexOf('confirm');
     expect(mediaFront).toBeGreaterThanOrEqual(0);
     expect(mediaBack).toBeGreaterThan(mediaFront);
     expect(childItem).toBeGreaterThan(mediaBack);
     expect(childOffer).toBeGreaterThan(childItem);
     expect(groupReplace).toBeGreaterThan(childOffer);
     expect(publish).toBeGreaterThan(groupReplace);
-    expect(confirm).toBeGreaterThan(publish);
 
-    // A buyer sale may lower both quantities after the new offer was
-    // published but before the revision watermark commit. Terminal journal
-    // evidence allows a read-only resume that preserves identity and payload
-    // while tolerating that quantity-only drift.
-    const createdItem = items.get('SKU-C')!;
-    const createdItemPayload = structuredClone(createdItem.payload) as unknown as Record<string, Json>;
-    (createdItemPayload.availability as Record<string, Json>).shipToLocationAvailability = { quantity: 1 };
-    createdItem.payload = createdItemPayload as Json;
-    const createdOffer = offers.get('SKU-C')![0]!;
-    const createdOfferPayload = structuredClone(createdOffer.payload) as unknown as Record<string, Json>;
-    createdOfferPayload.availableQuantity = 1;
-    createdOffer.payload = createdOfferPayload as Json;
-    const callsBeforeSaleResume = calls.length;
-    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
-      loadAggregate: async () => ({ ...current, group: { ...current.group, last_confirmed_revision: 1 } }),
-      confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-    }))).resolves.toMatchObject({ confirmedRevision: 2, listingId: 'listing-1' });
-    expect(calls).toHaveLength(callsBeforeSaleResume);
-    // Restore the exact frozen payload before the following foreign-identity
-    // regression; that branch intentionally proves unknown history cannot
-    // adopt a replacement offer.
-    (createdItem.payload as Record<string, Json>).availability = (collisionChild.inventoryItem as Record<string, Json>).availability;
-    (createdOffer.payload as Record<string, Json>).availableQuantity = 2;
-
+    // Independent recovery regressions: unknown new Offers cannot be adopted,
+    // and a replacement Offer ID cannot be substituted during resume.
     const terminalRows = [...checkpoints];
+    const createdItem = items.get('SKU-C');
+    if (createdItem) createdItem.payload = collisionChild.inventoryItem as unknown as Json;
     const foreignOffer = {
       lifecycleClass: null,
       listingId: null,
       marketplaceId: current.group.marketplace_id,
       offerId: 'foreign-offer-SKU-C',
-      payload: offers.get('SKU-C')![0]!.payload,
+      payload: collisionChild.offer as unknown as Json,
       sku: 'SKU-C',
       status: 'UNPUBLISHED' as const,
     };
     offers.set('SKU-C', [foreignOffer]);
-    checkpoints.splice(
-      0,
-      checkpoints.length,
-      ...terminalRows.filter((row) => row.operation_key !== 'child-offer:variation-C' && row.operation_key !== 'publish-offer:variation-C'),
-      checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-offer:variation-C', attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} }),
-      checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-offer:variation-C', attemptNumber: 1, checkpointNumber: 2, state: 'unknown', observedRemoteState: 'unknown', evidence: { reason: 'lost response' } }),
-    );
-    const callsBeforeUnknownResume = calls.length;
-    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
-      loadAggregate: async () => current,
-      confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-    }))).rejects.toThrow('no durable offer identity for resume');
-    expect(calls).toHaveLength(callsBeforeUnknownResume);
-
-    checkpoints.splice(0, checkpoints.length, ...terminalRows);
-    const callsBeforeReplacementResume = calls.length;
-    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
-      loadAggregate: async () => current,
-      confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-    }))).rejects.toThrow('durable offer ID drifted');
-    expect(calls).toHaveLength(callsBeforeReplacementResume);
+    if (recoveryScenario === 'unknown new Offer identity') {
+      checkpoints.splice(
+        0,
+        checkpoints.length,
+        ...terminalRows.filter((row) => row.operation_key !== 'child-offer:variation-C' && row.operation_key !== 'publish-offer:variation-C'),
+        checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-offer:variation-C', attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} }),
+        checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-offer:variation-C', attemptNumber: 1, checkpointNumber: 2, state: 'unknown', observedRemoteState: 'unknown', evidence: { reason: 'lost response' } }),
+      );
+      const callsBeforeResume = calls.length;
+      await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+        loadAggregate: async () => current,
+        confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
+      }))).rejects.toThrow('no durable offer identity for resume');
+      expect(calls).toHaveLength(callsBeforeResume);
+    } else {
+      checkpoints.splice(0, checkpoints.length, ...terminalRows);
+      const callsBeforeResume = calls.length;
+      await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+        loadAggregate: async () => current,
+        confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
+      }))).rejects.toThrow('durable offer ID drifted');
+      expect(calls).toHaveLength(callsBeforeResume);
+    }
   });
 
-  it('resumes terminal child writes after a sale changes quantities before final reconciliation', async () => {
+  it('fails closed when a sale changes quantities before final reconciliation', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
@@ -1789,7 +1813,7 @@ describe('YP8.2 active revision executor acceptance', () => {
         return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: payload as Json, sku, status: 'PUBLISHED' as const }] };
       },
       async getListing(listingId) {
-        return { Item: { ItemID: listingId, Variations: { Variation: [desiredA, desiredB].map((child) => ({ SKU: child.sku, StartPrice: { '#text': child.offer.pricingSummary.price.value, '@_currencyID': child.offer.pricingSummary.price.currency } })) } } };
+        return { Item: { ItemID: listingId, Variations: { Variation: [listingVariation(desiredA, 0), listingVariation(desiredB, desiredB.quantity)] } } };
       },
       async getInventoryItemGroup() { return { state: 'present' as const, value: { payload: desired.group as unknown as Json, variantSKUs: [...desired.group.variantSKUs].reverse() } }; },
     };
@@ -1804,7 +1828,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
       loadAggregate: async () => current,
       confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-    }))).resolves.toMatchObject({ confirmedRevision: 2, listingId: 'listing-1' });
+    }))).rejects.toThrow(/quantity changed outside/);
     expect(mutationCalls).toBe(0);
   });
 
@@ -1828,7 +1852,7 @@ describe('YP8.2 active revision executor acceptance', () => {
         return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: child.offer as Json, sku, status: 'PUBLISHED' as const }] };
       },
       async getListing(listingId: string) {
-        return { Item: { ItemID: listingId, Variations: { Variation: [desiredA, desiredB].map((child) => ({ SKU: child.sku, StartPrice: { '#text': child.offer.pricingSummary.price.value, '@_currencyID': child.offer.pricingSummary.price.currency } })) } } };
+        return { Item: { ItemID: listingId, Variations: { Variation: [listingVariation(desiredA, desiredA.quantity), listingVariation(desiredB, desiredB.quantity)] } } };
       },
     };
     let mutationCalls = 0;
@@ -2104,8 +2128,8 @@ describe('YP8.2 active revision executor acceptance', () => {
       async getListing(listingId: string) {
         const price = ((offerA as Record<string, Json>).pricingSummary as Record<string, Json>).price as Record<string, Json>;
         return { Item: { ItemID: listingId, Variations: { Variation: [
-          { SKU: 'SKU-A', StartPrice: { '#text': price.value, '@_currencyID': price.currency } },
-          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-A', StartPrice: { '#text': price.value, '@_currencyID': price.currency }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
         ] } } };
       },
     };
@@ -2197,8 +2221,8 @@ describe('YP8.2 active revision executor acceptance', () => {
       ...base.remote,
       async getListing(listingId) {
         return { Item: { ItemID: listingId, Variations: { Variation: [
-          { SKU: 'SKU-A', StartPrice: { '#text': '1.99', '@_currencyID': 'USD' } },
-          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-A', StartPrice: { '#text': '1.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
         ] } } };
       },
     };
@@ -2244,9 +2268,9 @@ describe('YP8.2 active revision executor acceptance', () => {
       ...base.remote,
       async getListing(listingId) {
         return { Item: { ItemID: listingId, Variations: { Variation: [
-          { SKU: 'SKU-A', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-A', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
           // SKU-B is unchanged locally, but its listing-facing price drifted.
-          { SKU: 'SKU-B', StartPrice: { '#text': '1.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '1.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
         ] } } };
       },
     };
@@ -2359,7 +2383,18 @@ describe('YP8.2 active revision executor acceptance', () => {
             Variations: {
               Variation: listingChildren.map((child) => {
                 const price = child.sku === 'SKU-A' ? offerPrice(offerA.payload) : child.offer.pricingSummary.price;
-                return { SKU: child.sku, StartPrice: { '#text': price.value, '@_currencyID': price.currency } };
+                const quantity = child.sku === 'SKU-A'
+                  ? Math.min(
+                    Number((((itemA.payload as Record<string, Json>).availability as Record<string, Json>).shipToLocationAvailability as Record<string, Json>).quantity),
+                    Number((offerA.payload as Record<string, Json>).availableQuantity),
+                  )
+                  : child.quantity;
+                return {
+                  SKU: child.sku,
+                  StartPrice: { '#text': price.value, '@_currencyID': price.currency },
+                  Quantity: quantity,
+                  SellingStatus: { QuantitySold: 0 },
+                };
               }),
             },
           },
@@ -2442,8 +2477,27 @@ describe('YP8.2 active revision executor acceptance', () => {
       expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
     });
 
+    it('accepts a retained zero-stock target with exact zero sellable quantity', async () => {
+      const fixture = await zeroStockFixture('target-present');
+      await expect(execute(fixture)).resolves.toMatchObject({ confirmedRevision: 2, listingId: 'listing-1' });
+      expect(fixture.itemWrites()).toBe(1);
+      expect(fixture.offerWrites()).toBe(1);
+    });
+
     it.each([
-      ['target present', 'target-present'],
+      ['missing Quantity', 'sibling-missing-quantity'],
+      ['missing QuantitySold', 'sibling-missing-sold'],
+      ['missing Quantity and QuantitySold', 'sibling-missing-both'],
+    ] as const)('fails closed when a positive sibling has %s Trading evidence', async (_label, failure) => {
+      const fixture = await zeroStockFixture(failure);
+      await expect(execute(fixture)).rejects.toThrow(/quantity|SellingStatus/i);
+      expect(fixture.itemWrites()).toBe(0);
+      expect(fixture.offerWrites()).toBe(0);
+      expect(fixture.checkpoints).toHaveLength(0);
+    });
+
+    it.each([
+      ['retained target with positive sellable quantity', 'target-positive'],
       ['target price drift', 'target-price-drift'],
       ['sibling price drift', 'sibling-price-drift'],
       ['sibling quantity drift', 'sibling-quantity-drift'],
@@ -2462,10 +2516,10 @@ describe('YP8.2 active revision executor acceptance', () => {
     ] as const)('fails closed for %s', async (_label, failure) => {
       const fixture = await zeroStockFixture(failure);
       await expect(execute(fixture)).rejects.toThrow();
-      expect(fixture.itemWrites()).toBe(1);
+      expect(fixture.itemWrites()).toBe(failure === 'sibling-quantity-drift' ? 0 : 1);
       expect(fixture.offerWrites()).toBe(0);
-      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
-      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'unknown']);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(failure === 'sibling-quantity-drift' ? [] : ['started', 'confirmed_complete']);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(failure === 'sibling-quantity-drift' ? [] : ['started', 'unknown']);
       expect(fixture.checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(false);
     });
   });
@@ -2513,8 +2567,8 @@ describe('YP8.2 active revision executor acceptance', () => {
       async getListing(listingId) {
         listingReads += 1;
         return { Item: { ItemID: listingId, Variations: { Variation: [
-          { SKU: 'SKU-A', StartPrice: { '#text': listingReads === 1 ? '0.99' : '1.99', '@_currencyID': 'USD' } },
-          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-A', StartPrice: { '#text': listingReads === 1 ? '0.99' : '1.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
         ] } } };
       },
     };
@@ -2553,9 +2607,9 @@ describe('YP8.2 active revision executor acceptance', () => {
         const price = (offerA.payload as Record<string, Json>).pricingSummary as Record<string, Json>;
         const amount = price.price as Record<string, Json>;
         return { Item: { ItemID: listingId, Variations: { Variation: [
-          { SKU: 'SKU-A', StartPrice: { '#text': amount.value, '@_currencyID': amount.currency } },
-          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
-          { SKU: 'SKU-EXTRA', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' } },
+          { SKU: 'SKU-A', StartPrice: { '#text': amount.value, '@_currencyID': amount.currency }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-EXTRA', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
         ] } } };
       },
     };
@@ -2607,7 +2661,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'unknown', 'retry_authorized', 'started', 'unknown', 'retry_exhausted']);
   });
 
-  it('publishes a 0-to-1 restock through one combined Item/Offer quantity update and exact Trading evidence', async () => {
+  it.each([false, true] as const)('publishes a 0-to-1 restock through one combined Item/Offer quantity update and exact Trading evidence (retained zero pre-state: %s)', async (retainedZeroPrestate) => {
     const { base, current, desired, prepared } = await restockFixture();
     const desiredA = desired.children.find((child) => child.sku === 'SKU-A')!;
     const desiredB = desired.children.find((child) => child.sku === 'SKU-B')!;
@@ -2632,6 +2686,7 @@ describe('YP8.2 active revision executor acceptance', () => {
       },
       async getListing(listingId) {
         const rows: Json[] = [listingVariation(desiredB, desiredB.quantity)];
+        if (retainedZeroPrestate && tradingAQuantity === null) rows.unshift(listingVariation(desiredA, 0));
         if (tradingAQuantity !== null) rows.unshift(listingVariation(desiredA, tradingAQuantity + 1, 1));
         return { Item: { ItemID: listingId, Variations: { Variation: rows } } };
       },
@@ -2772,7 +2827,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
       loadAggregate: async () => current,
       confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-    }))).rejects.toThrow(/already appears in Trading|SKU set does not match/);
+    }))).rejects.toThrow(/already appears in Trading|SKU set does not match|pre-state/);
     expect(itemWrites).toBe(0);
     expect(bulkCalls).toBe(0);
     expect(checkpoints).toHaveLength(0);

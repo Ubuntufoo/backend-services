@@ -1251,6 +1251,41 @@ export async function readVariationListingQuantityStatus(
       throw new Error(`Variation listing projected quantity for ${currentVariation.sku} is invalid.`);
     }
     if (afterPublish < 0) {
+      // After a partial remote write, the pending delta must not be applied again.
+      // Report the frozen recovery state rather than a generic HTTP 500.
+      for (const revision of [...revisions]
+        .filter((row) => row.captured_desired_revision > aggregate.group.last_confirmed_revision!)
+        .sort((a, b) => b.captured_desired_revision - a.captured_desired_revision)) {
+        const history = (await options.data.listCheckpointsByRevisionId(revision.revision_id))
+          .map((checkpoint) => checkpoint.source);
+        const unresolved = latestUnresolvedOperation(history, operationPlan(revision));
+        if (!unresolved) continue;
+        const exhausted = unresolved.state === 'retry_exhausted';
+        const remoteState = exhausted
+          ? unresolved.observed_remote_state === 'present'
+            ? 'known_changed' as const
+            : unresolved.observed_remote_state === 'proven_absent'
+              ? 'known_unchanged' as const
+              : 'unknown' as const
+          : 'unknown' as const;
+        throw new VariationListingActionError(409, {
+          action: 'reconcile',
+          affected: { groupId, variationId: currentVariation.variation_id, sku: currentVariation.sku },
+          category: exhausted ? 'terminal' : 'reconciliation',
+          code: exhausted ? 'retry_exhausted' : 'quantity_projection_unavailable_reconciliation_required',
+          issues: [],
+          operationKey: unresolved.operation_key,
+          revisionId: revision.revision_id,
+          recommendedActions: exhausted ? ['inspect_remote_state', 'resolve_manually'] : ['reconcile_remote_state', 'do_not_retry_blindly'],
+          remoteState,
+          requiresReconciliation: !exhausted || remoteState === 'unknown',
+          retryStatus: exhausted ? 'retry_exhausted' : 'reconciliation_required',
+          severity: 'error',
+          stage: 'quantity_status',
+          summary: 'eBay quantity is visible, but the pending projection is unavailable until this publication is reconciled. Do not retry.',
+          userActionRequired: true,
+        });
+      }
       throw new Error(`Variation listing projected quantity for ${currentVariation.sku} cannot be negative.`);
     }
     const exactQuantities = observed.quantitiesBySku[currentVariation.sku];
