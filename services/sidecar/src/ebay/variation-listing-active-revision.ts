@@ -2066,13 +2066,35 @@ export async function executeVariationListingActiveRevision(
       : priorChild?.quantity;
     const restoringSoldOut = Boolean(existed && frozenSellableQuantity === 0 && child.quantity > 0);
     if (restoringSoldOut) listingPriceVerificationRequired = true;
-    const assertRestockPreListing = async (): Promise<void> => {
-      const getListing = input.remote.getListing;
-      if (!getListing) throw new Error(`Variation listing restock ${child.sku} requires a listing-facing Trading GetItem read before mutation.`);
-      const listing = await getListing(frozenListingId);
-      // eBay can retain a zero-stock SKU with Out-of-Stock Control enabled.
-      // Either listing representation must preserve exact price, quantity and siblings.
-      assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true, true, true);
+    const assertRestockPreListing = async (afterItem = false, listingSnapshot?: unknown): Promise<void> => {
+      let listing = listingSnapshot;
+      if (listing === undefined) {
+        const getListing = input.remote.getListing;
+        if (!getListing) throw new Error(`Variation listing restock ${child.sku} requires a listing-facing Trading GetItem read before mutation.`);
+        listing = await getListing(frozenListingId);
+      }
+      if (!afterItem) {
+        assertListingPriceSet(listing, frozenListingId, previousBundle.children, `restock ${child.sku} pre-state`, true, true, true);
+        return;
+      }
+      // eBay can propagate the confirmed Item restock to Trading before the Offer write.
+      const itemRows = history.get(`child-item:${child.variationId}`);
+      const latestItem = itemRows ? activeLatest(itemRows) : null;
+      if (!itemRows || latestItem?.state !== 'confirmed_complete' || latestItem.observed_remote_state !== 'present' || !priorChild) {
+        throw new Error(`Variation listing restock ${child.sku} Item after-state is not confirmed.`);
+      }
+      const quantities = listingVariationSellableQuantities(listing, frozenListingId, true);
+      const tradingQuantity = quantities.get(child.sku) ?? 0;
+      if (tradingQuantity !== priorChild.quantity && tradingQuantity !== child.quantity) {
+        throw new Error(`Variation listing restock ${child.sku} Trading quantity is outside the frozen 0-to-positive transition.`);
+      }
+      if (activeItem(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, true) === null) {
+        throw new Error(`Variation listing restock ${child.sku} Item after-state is not confirmed.`);
+      }
+      const expected = previousBundle.children.map((candidate) =>
+        candidate.sku === child.sku ? { ...candidate, quantity: tradingQuantity } : candidate
+      );
+      assertListingPriceSet(listing, frozenListingId, expected, `restock ${child.sku} post-Item pre-Offer state`, true, true, true);
     };
     const assertRestockPreGroup = async (): Promise<void> => {
       if (activeGroup(await input.remote.getInventoryItemGroup(desiredBundle.groupKey), previousBundle.group) === null) {
@@ -2267,7 +2289,8 @@ export async function executeVariationListingActiveRevision(
       if (!getListing) throw new Error(`Variation listing ${child.sku} pre-state requires a listing-facing Trading GetItem read.`);
       const listing = await getListing(frozenListingId);
       if (restoringSoldOut) {
-        await assertRestockPreListing();
+        await assertRestockPreGroup();
+        await assertRestockPreListing(true, listing);
       }
       if (priceChanged) {
         const listingEvidence = listingPriceEvidence(listing, frozenListingId, expectedPriorChild);
@@ -2367,9 +2390,7 @@ export async function executeVariationListingActiveRevision(
           const listing = await getListing(frozenListingId);
           const listingEvidence = priceChanged && !restoringSoldOut ? listingPriceEvidence(listing, frozenListingId, expectedPriorChild) : null;
           if (restoringSoldOut) {
-            // Zero-stock children are omitted from Trading GetItem. If the
-            // listing already contains this SKU, refuse a duplicate restock.
-            await assertRestockPreListing();
+            await assertRestockPreListing(true, listing);
           } else if (!listingEvidence) {
             throw new Error(`Variation listing pre-state price ${child.sku} changed before its bulk mutation.`);
           }
