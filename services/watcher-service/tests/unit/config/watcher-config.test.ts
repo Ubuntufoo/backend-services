@@ -42,6 +42,19 @@ describe('watcher service config', () => {
     expect(config.processedDirectory).toBe('/var/tmp/processed-assets');
   });
 
+  it('defaults processed beside an explicitly configured incoming directory', () => {
+    const config = createWatcherServiceConfig({
+      cwd: '/repo/services/watcher-service',
+      env: {
+        WATCHER_BASE_DIR: './watcher',
+        WATCHER_INCOMING_DIR: '/main-backend/watcher/incoming',
+      },
+    });
+
+    expect(config.incomingDirectory).toBe('/main-backend/watcher/incoming');
+    expect(config.processedDirectory).toBe('/main-backend/watcher/processed');
+  });
+
   it('exposes the shared capture modes without duplication', () => {
     const config = createWatcherServiceConfig();
 

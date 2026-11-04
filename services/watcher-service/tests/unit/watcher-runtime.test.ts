@@ -149,6 +149,8 @@ describe('watcher runtime', () => {
       copyId: '33333333-3333-4333-8333-333333333333',
       groupId: '11111111-1111-4111-8111-111111111111',
       status: 'completed' as const,
+      archiveStatus: 'archived' as const,
+      archiveDirectory: '/watcher/processed/BSKBL-TestBucket',
       variationId: '22222222-2222-4222-8222-222222222222',
       timings: {
         identityMs: 20,
@@ -213,6 +215,8 @@ describe('watcher runtime', () => {
       typeof line === 'string' && line.includes('Variation batch completed')
     )?.[0];
     expect(rendered).toContain('identityReadEncodeMs: 4 ms');
+    expect(rendered).toContain('archiveStatus: archived');
+    expect(rendered).toContain('archiveDirectory: /watcher/processed/BSKBL-TestBucket');
     expect(rendered).toContain('totalMs: 28 ms');
   });
 

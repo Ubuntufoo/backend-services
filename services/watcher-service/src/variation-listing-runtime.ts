@@ -65,6 +65,7 @@ export type VariationListingRuntimeOutcome =
         totalMs: number;
       };
       archiveStatus?: 'archived' | 'manual_recovery_required';
+      archiveDirectory?: string;
       archiveMessage?: string;
       archiveRecoverySourcePaths?: readonly string[];
     };
@@ -386,10 +387,10 @@ export function createVariationListingRuntimeProcessor(
   const archivePersistedCompletion = async (
     command: VariationListingStorageReadyCompletionCommand,
     persisted: Awaited<ReturnType<typeof persistCompletion>>,
-  ): Promise<Pick<VariationListingRuntimeOutcome & {kind: 'completed'}, 'archiveStatus' | 'archiveMessage' | 'archiveRecoverySourcePaths'>> => {
+  ): Promise<Pick<VariationListingRuntimeOutcome & {kind: 'completed'}, 'archiveStatus' | 'archiveDirectory' | 'archiveMessage' | 'archiveRecoverySourcePaths'>> => {
     if (!archiveCompletion || !input.incomingDirectory || !input.processedDirectory) return {};
     try {
-      await archiveCompletion({
+      const archived = await archiveCompletion({
         command,
         incomingDirectory: input.incomingDirectory,
         persisted,
@@ -398,7 +399,7 @@ export function createVariationListingRuntimeProcessor(
       if (clearArchiveRecovery && input.incomingDirectory) {
         await clearArchiveRecovery(command, input.incomingDirectory);
       }
-      return {archiveStatus: 'archived'};
+      return {archiveStatus: 'archived', archiveDirectory: archived.bucketDirectory};
     } catch (error) {
       return {
         archiveMessage: operatorMessage(error),

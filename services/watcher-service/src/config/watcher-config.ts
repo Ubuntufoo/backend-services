@@ -1,3 +1,4 @@
+import { dirname } from 'node:path';
 import { WATCHER_CAPTURE_MODES, type WatcherCaptureMode } from './capture-modes.js';
 import {
   readVariationListingCaptureSourceKey,
@@ -64,7 +65,10 @@ export function createWatcherServiceConfig(
     : resolveWatcherChildPath(baseDirectory, WATCHER_DEFAULT_INCOMING_DIRECTORY);
   const processedDirectory = env.WATCHER_PROCESSED_DIR
     ? resolveAbsoluteWatcherPath(env.WATCHER_PROCESSED_DIR, cwd)
-    : resolveWatcherChildPath(baseDirectory, WATCHER_DEFAULT_PROCESSED_DIRECTORY);
+    : resolveWatcherChildPath(
+        env.WATCHER_INCOMING_DIR ? dirname(incomingDirectory) : baseDirectory,
+        WATCHER_DEFAULT_PROCESSED_DIRECTORY
+      );
 
   return {
     baseDirectory,

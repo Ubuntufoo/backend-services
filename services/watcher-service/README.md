@@ -51,6 +51,8 @@ Optional overrides:
 # WATCHER_PROCESSED_DIR=./watcher/processed
 ```
 
+When `WATCHER_INCOMING_DIR` is explicitly set but `WATCHER_PROCESSED_DIR` is not, the processed directory defaults to a sibling of the configured incoming directory. This keeps the incoming and processed folders together even if the watcher runs from a separate worktree. An explicit `WATCHER_PROCESSED_DIR` always takes precedence. Variation completion logs include the exact archived bucket directory.
+
 ## Capture Guidance
 
 - All-JPEG watcher groups use `enhance_crop` downstream. The finalized profile is JPEG q95,

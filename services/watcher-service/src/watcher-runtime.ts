@@ -158,7 +158,7 @@ function formatWatcherConsoleEvent(
     case 'variation_started':
       return `${prefix} Variation front captured\n${details('groupId', 'pairId')}`;
     case 'variation_completed':
-      return `${prefix} Variation batch completed\n${details('groupId', 'variationId', 'copyId', 'completionKind', 'status', 'archiveStatus', 'archiveMessage', 'identityReadEncodeMs', 'identityGenerationMs', 'identityMs', 'storageMs', 'persistenceMs', 'totalMs')}`;
+      return `${prefix} Variation batch completed\n${details('groupId', 'variationId', 'copyId', 'completionKind', 'status', 'archiveStatus', 'archiveDirectory', 'archiveMessage', 'identityReadEncodeMs', 'identityGenerationMs', 'identityMs', 'storageMs', 'persistenceMs', 'totalMs')}`;
     case 'watcher_group_completed':
       return `${prefix} Standard batch completed\n${details('listingId', 'captureMode', 'imageCount')}`;
     case 'batch_processed':

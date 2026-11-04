@@ -407,6 +407,7 @@ describe('variation listing runtime lifecycle hardening', () => {
 
     await expect(processor.process('/incoming/back.jpg')).resolves.toMatchObject({
       archiveStatus: 'archived',
+      archiveDirectory: '/processed/bucket',
       kind: 'completed',
     });
     expect(events).toEqual(['journal', 'persist', 'archive', 'clear']);
