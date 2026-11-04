@@ -7,6 +7,7 @@ import type {
   VariationListingVariationRow,
   VariationListingCopyRow,
 } from '@ebay-inventory/data';
+import { AxiosError } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -85,12 +86,14 @@ function testHarness(withMedia = false, historicalOverlong = false) {
   const journalRows: VariationListingPublishingCheckpointRow[] = [];
   let group: VariationListingRemoteGroup | null = null;
   let mutations = 0;
+  let mediaCreates = 0;
   let confirmations = 0;
   let lastConfirmedRevision: number | null = null;
   let capturedRevision: VariationListingRevisionRow | null = null;
   let failItem = false;
   let blockMediaReads = false;
   let mediaReadExpirationMismatch = false;
+  let failMediaCreate: Error | null = null;
   const remote = {
     async getInventoryItem(sku: string) { return items.has(sku) ? { state: 'present' as const, value: items.get(sku)! } : { state: 'proven_absent' as const }; },
     async getOffers(sku: string, _marketplace: string) { return { state: 'present' as const, value: offers.get(sku) ?? [] }; },
@@ -110,6 +113,8 @@ function testHarness(withMedia = false, historicalOverlong = false) {
   const mutationsApi = {
     async createMedia(sourceUrl: string) {
       mutations += 1;
+      mediaCreates += 1;
+      if (failMediaCreate) throw failMediaCreate;
       const resource = plan.snapshot.mediaResources.find((candidate) => candidate.sourceUrl === sourceUrl)!;
       const expected = expectedImages.find((candidate) => candidate.copyId === resource.copyId)!;
       const value = { expirationDate: '2026-10-01T00:00:00Z', imageId: `image-${resource.copyId}-${resource.role}`, imageUrl: resource.role === 'front' ? expected.frontEpsUrl : expected.backEpsUrl, location: `https://api.ebay.test/media/${resource.copyId}-${resource.role}` };
@@ -223,10 +228,12 @@ function testHarness(withMedia = false, historicalOverlong = false) {
   }
   return {
     group: () => group, items, journalRows, media, mutations: () => mutations, confirmations: () => confirmations,
+    mediaCreates: () => mediaCreates,
     bundle, plan, remote,
     setFailItem: (value: boolean) => { failItem = value; },
     setBlockMediaReads: (value: boolean) => { blockMediaReads = value; },
     setMediaReadExpirationMismatch: (value: boolean) => { mediaReadExpirationMismatch = value; },
+    setFailMediaCreate: (value: Error | null) => { failMediaCreate = value; },
     mutationsApi, transaction,
     execute: (reconcileOnly = false) => {
       // Read-only recovery is only valid for a durable captured revision; the
@@ -293,6 +300,47 @@ describe('executeVariationListingPublication', () => {
     expect(h.confirmations()).toBe(1);
     expect(h.journalRows.every((row) => row.state === 'started' || Object.keys(row.evidence).length > 0)).toBe(true);
     expect(h.journalRows.filter((row) => row.operation_key === 'group-publish').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+  });
+
+  it('stores sanitized Media HTTP 500 evidence and never retries the failed create', async () => {
+    const h = testHarness(true);
+    const axiosError = new AxiosError('Request failed with status code 500', 'ERR_BAD_RESPONSE', undefined, undefined, {
+      config: {} as never,
+      data: {
+        errors: [{
+          errorId: 190000,
+          domain: 'API_MEDIA',
+          category: 'APPLICATION',
+          message: 'provider response must not be persisted',
+        }],
+      },
+      headers: { 'x-ebay-c-request-id': 'media-request-500' },
+      status: 500,
+      statusText: 'Internal Server Error',
+    });
+    const failure = new Error('Failed to create eBay Media API image: Request failed with status code 500', {
+      cause: axiosError,
+    });
+    h.setFailMediaCreate(failure);
+
+    await expect(h.execute()).rejects.toBe(failure);
+    expect(h.mediaCreates()).toBe(1);
+    const mediaHistory = h.journalRows.filter((row) => row.operation_key === 'media:copy-A:front');
+    expect(mediaHistory.map((row) => row.state)).toEqual(['started', 'unknown']);
+    expect(mediaHistory[1]?.evidence).toMatchObject({
+      error: 'Failed to create eBay Media API image: HTTP 500',
+      httpStatus: 500,
+      method: 'POST',
+      endpoint: '/commerce/media/v1_beta/image/create_image_from_url',
+      requestId: 'media-request-500',
+      providerErrors: [{ errorId: 190000, domain: 'API_MEDIA', category: 'APPLICATION' }],
+    });
+    expect(mediaHistory[1]?.evidence).not.toHaveProperty('imageId');
+    expect(mediaHistory[1]?.evidence).not.toHaveProperty('location');
+    expect(JSON.stringify(mediaHistory[1]?.evidence)).not.toContain('provider response must not be persisted');
+
+    await expect(h.execute()).rejects.toThrow('unresolved checkpoint without a durably captured Media identity');
+    expect(h.mediaCreates()).toBe(1);
   });
 
   it('persists Media identity before read-back and resumes transient reconciliation without duplicate creation', async () => {

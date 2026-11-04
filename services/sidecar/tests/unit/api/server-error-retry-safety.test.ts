@@ -122,6 +122,24 @@ describe('eBay shared-client server-error retry safety', () => {
     expect(mockAuth.getAccessToken).toHaveBeenCalledTimes(1);
   });
 
+  it('does not replay a full URL POST after an ambiguous HTTP 500', async () => {
+    const payload = { imageUrl: 'https://example.com/image.jpg' };
+    let attempts = 0;
+    const scope = nock(origin)
+      .post(path, payload)
+      .reply(() => {
+        attempts += 1;
+        return [500, { errors: [{ errorId: 190000, message: 'System error' }] }];
+      });
+
+    await expect(client.postWithFullUrlResponse(`${origin}${path}`, payload)).rejects.toMatchObject({
+      response: { status: 500 },
+    });
+    expect(attempts).toBe(1);
+    expect(scope.isDone()).toBe(true);
+    expect(mockAuth.getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
   it('retains automatic token refresh and replay for ordinary GET 401 responses', async () => {
     mockAuth.getAccessToken.mockResolvedValueOnce('expired-token').mockResolvedValue('fresh-token');
     const scope = nock(origin)

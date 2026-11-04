@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import type { Json } from '@ebay-inventory/data';
 import type { EbayApiClient } from '@/api/client.js';
 import { withApiError } from '@/api/shared/request.js';
 import axios from 'axios';
@@ -30,6 +32,117 @@ const imageResponseSchema = z
     maxDimensionImageUrl: httpsUrlSchema.optional(),
   })
   .strict();
+
+function safeHeaderValue(headers: unknown, name: string): unknown {
+  try {
+    if (!headers || typeof headers !== 'object') return undefined;
+    const get = (headers as { get?: unknown }).get;
+    if (typeof get === 'function') {
+      const value = (get as (headerName: string) => unknown).call(headers, name);
+      if (value !== undefined) return value;
+    }
+    return Object.entries(headers as Record<string, unknown>).find(
+      ([key]) => key.toLowerCase() === name
+    )?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function safeObjectProperty(value: unknown, name: string): unknown {
+  try {
+    if (!value || typeof value !== 'object') return undefined;
+    return (value as Record<string, unknown>)[name];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Allowlisted, non-secret diagnostics for a failed Media create. Never persist raw
+ * response bodies, URLs, provider messages or the Axios request configuration.
+ */
+export function mediaCreateErrorEvidence(error: unknown): Json {
+  let cause: unknown = error;
+  for (let i = 0; i < 4 && !axios.isAxiosError(cause); i += 1) {
+    cause = safeObjectProperty(cause, 'cause');
+  }
+  const axiosError = axios.isAxiosError(cause) ? cause : null;
+  const response = safeObjectProperty(axiosError, 'response');
+  const status = safeObjectProperty(response, 'status');
+  const httpStatus = typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+  const evidence: Record<string, Json> = {
+    error: httpStatus !== undefined
+      ? 'Failed to create eBay Media API image: HTTP ' + httpStatus
+      : 'Failed to create eBay Media API image: request or response validation failed',
+    method: 'POST',
+    endpoint: mediaPath + '/image/create_image_from_url',
+  };
+  if (httpStatus !== undefined) evidence.httpStatus = httpStatus;
+  const transportCode = safeObjectProperty(axiosError, 'code');
+  if (typeof transportCode === 'string' && /^[A-Z][A-Z0-9_]{0,47}$/.test(transportCode)) {
+    evidence.transportCode = transportCode;
+  }
+  for (const header of ['x-ebay-c-request-id', 'x-ebay-correlation-id', 'x-ebay-c-trace-id']) {
+    const value = safeHeaderValue(safeObjectProperty(response, 'headers'), header);
+    if (typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value)) {
+      evidence.requestId = value;
+      evidence.requestIdHeader = header;
+      break;
+    }
+  }
+  const body = safeObjectProperty(response, 'data');
+  if (body !== undefined) {
+    try {
+      const serialized = typeof body === 'string' ? body : JSON.stringify(body);
+      if (typeof serialized === 'string') {
+        evidence.responseSha256 = createHash('sha256').update(serialized).digest('hex');
+      }
+    } catch {
+      // Error reporting must not interfere with the durable unknown checkpoint.
+    }
+  }
+  const errors = safeObjectProperty(body, 'errors');
+  let errorEntries: unknown[] = [];
+  try {
+    if (Array.isArray(errors)) errorEntries = errors.slice(0, 3);
+  } catch {
+    errorEntries = [];
+  }
+  if (errorEntries.length > 0) {
+    const details: Json[] = [];
+    for (const entry of errorEntries) {
+      if (!entry || typeof entry !== 'object') continue;
+      try {
+        if (Array.isArray(entry)) continue;
+      } catch {
+        continue;
+      }
+      const detail: Record<string, Json> = {};
+      for (const field of ['errorId', 'domain', 'category'] as const) {
+        const value = safeObjectProperty(entry, field);
+        if (field === 'errorId') {
+          if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+            detail[field] = value;
+          }
+          continue;
+        }
+        if (typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)) {
+          detail[field] = value;
+        }
+      }
+      const message = safeObjectProperty(entry, 'message');
+      if (typeof message === 'string') {
+        detail.messageSha256 = createHash('sha256').update(message).digest('hex');
+      }
+      if (Object.keys(detail).length > 0) details.push(detail);
+    }
+    if (details.length > 0) evidence.providerErrors = details;
+  }
+  return evidence;
+}
 
 export type MediaImageResponse = z.infer<typeof imageResponseSchema>;
 

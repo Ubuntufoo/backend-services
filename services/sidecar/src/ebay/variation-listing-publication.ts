@@ -11,6 +11,8 @@ import type {
   VariationListingTransactionGateway,
 } from '@ebay-inventory/data';
 
+import { mediaCreateErrorEvidence } from '@/api/listing-management/media.js';
+
 import {
   buildVariationListingHistoricalInventoryPayloadBundle,
   buildVariationListingInventoryPayloadBundle,
@@ -974,7 +976,7 @@ export async function executeVariationListingPublication(
       await appendCheckpoint(input, history, operationKey, {
         attemptNumber: 1,
         checkpointNumber: 2,
-        evidence: errorEvidence(error),
+        evidence: mediaCreateErrorEvidence(error),
         observedRemoteState: 'unknown',
         state: 'unknown',
       });

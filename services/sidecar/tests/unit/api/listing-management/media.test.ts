@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AxiosResponse } from 'axios';
+import { AxiosError, type AxiosResponse } from 'axios';
 import type { EbayApiClient } from '@/api/client.js';
-import { MediaApi } from '@/api/listing-management/media.js';
+import { MediaApi, mediaCreateErrorEvidence } from '@/api/listing-management/media.js';
 
 const imageUrl = 'https://cdn.example.test/source/front.webp';
 const epsImageUrl = 'https://i.ebayimg.com/images/g/example/s-l1600.webp';
@@ -102,6 +102,102 @@ describe('MediaApi', () => {
       );
 
       await expect(api.createImageFromUrl(imageUrl)).rejects.toThrow('Invalid');
+    });
+  });
+
+
+  describe('sanitized Media POST diagnostics', () => {
+    it('preserves bounded provider metadata without leaking source URL, token or provider message', () => {
+      const secret = 'https://source.example/private.jpg?token=private-value';
+      const config = { headers: { Authorization: 'Bearer TOPSECRET' }, url: secret } as never;
+      const error = new AxiosError('raw ' + secret, 'ERR_BAD_RESPONSE', config, undefined, {
+        config,
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { 'x-ebay-c-request-id': 'request-42', 'set-cookie': 'secret-cookie' },
+        data: { errors: [{ errorId: 190000, domain: 'API_MEDIA', category: 'APPLICATION', message: 'secret provider URL ' + secret, parameters: [{ value: secret }] }] },
+      });
+      const evidence = mediaCreateErrorEvidence(new Error('wrapped ' + secret, { cause: error }));
+      expect(evidence).toMatchObject({
+        httpStatus: 500,
+        method: 'POST',
+        endpoint: '/commerce/media/v1_beta/image/create_image_from_url',
+        transportCode: 'ERR_BAD_RESPONSE',
+        requestId: 'request-42',
+        providerErrors: [{ errorId: 190000, domain: 'API_MEDIA', category: 'APPLICATION' }],
+      });
+      const serialized = JSON.stringify(evidence);
+      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toContain('TOPSECRET');
+      expect(serialized).not.toContain('secret-cookie');
+      expect(serialized).not.toContain('secret provider URL');
+      expect(evidence).toHaveProperty('responseSha256');
+    });
+
+    it('fails closed on non-Axios errors without persisting raw messages', () => {
+      const evidence = mediaCreateErrorEvidence(new Error('secret raw image URL'));
+      expect(JSON.stringify(evidence)).not.toContain('secret raw image URL');
+      expect(evidence).toMatchObject({
+        error: 'Failed to create eBay Media API image: request or response validation failed',
+        method: 'POST',
+      });
+    });
+
+    it('tolerates missing or malformed provider error data while preserving status', () => {
+      const error = new AxiosError('Request failed with status code 502', 'ERR_BAD_GATEWAY', undefined, undefined, {
+        config: {} as never,
+        data: { errors: ['not-an-error-object', { errorId: { nested: true } }] },
+        headers: {},
+        status: 502,
+        statusText: 'Bad Gateway',
+      });
+      const evidence = mediaCreateErrorEvidence(error);
+
+      expect(evidence).toMatchObject({
+        error: 'Failed to create eBay Media API image: HTTP 502',
+        httpStatus: 502,
+        transportCode: 'ERR_BAD_GATEWAY',
+      });
+      expect(evidence).not.toHaveProperty('providerErrors');
+    });
+
+    it('preserves status when an Axios response has no body', () => {
+      const error = new AxiosError('Request failed with status code 500', 'ERR_BAD_RESPONSE', undefined, undefined, {
+        config: {} as never,
+        data: undefined,
+        headers: {},
+        status: 500,
+        statusText: 'Internal Server Error',
+      });
+      const evidence = mediaCreateErrorEvidence(error);
+
+      expect(evidence).toMatchObject({
+        error: 'Failed to create eBay Media API image: HTTP 500',
+        httpStatus: 500,
+        transportCode: 'ERR_BAD_RESPONSE',
+      });
+      expect(evidence).not.toHaveProperty('providerErrors');
+      expect(evidence).not.toHaveProperty('responseSha256');
+    });
+
+    it('fails closed when status and header accessors are malformed', () => {
+      const response = {
+        config: {} as never,
+        data: { errors: null },
+        headers: { get: () => { throw new Error('malformed headers'); } },
+        status: 999,
+        statusText: 'Unknown',
+      } as never;
+      const error = new AxiosError('malformed response', 'ERR_BAD_RESPONSE', undefined, undefined, response);
+      Object.defineProperty(response, 'status', { get() { throw new Error('malformed status'); } });
+      const evidence = mediaCreateErrorEvidence(error);
+
+      expect(evidence).toMatchObject({
+        error: 'Failed to create eBay Media API image: request or response validation failed',
+        method: 'POST',
+      });
+      expect(evidence).not.toHaveProperty('httpStatus');
+      expect(evidence).not.toHaveProperty('requestId');
     });
   });
 
