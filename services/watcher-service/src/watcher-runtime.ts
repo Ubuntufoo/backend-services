@@ -158,7 +158,7 @@ function formatWatcherConsoleEvent(
     case 'variation_started':
       return `${prefix} Variation front captured\n${details('groupId', 'pairId')}`;
     case 'variation_completed':
-      return `${prefix} Variation batch completed\n${details('groupId', 'variationId', 'copyId', 'completionKind', 'status', 'identityReadEncodeMs', 'identityGenerationMs', 'identityMs', 'storageMs', 'persistenceMs', 'totalMs')}`;
+      return `${prefix} Variation batch completed\n${details('groupId', 'variationId', 'copyId', 'completionKind', 'status', 'archiveStatus', 'archiveMessage', 'identityReadEncodeMs', 'identityGenerationMs', 'identityMs', 'storageMs', 'persistenceMs', 'totalMs')}`;
     case 'watcher_group_completed':
       return `${prefix} Standard batch completed\n${details('listingId', 'captureMode', 'imageCount')}`;
     case 'batch_processed':
@@ -223,6 +223,7 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
         createVariationListingRuntimeProcessor({
           captureSourceKey,
           incomingDirectory: config.incomingDirectory,
+          processedDirectory: config.processedDirectory,
           // Keep process credentials/configuration while allowing the explicit
           // config input to override watcher-local values in tests/embedders.
           env: {
@@ -255,6 +256,7 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
   const blockedVariationOwnedSourcePaths = new Set<string>();
   let standardGroupingPersistenceHealthy = true;
   const consumedVariationPaths = new Set<string>();
+  const manualVariationArchivePaths = new Set<string>();
   const legacyPathHints = new Set<string>(initialStandardReplayPaths);
   const variationRouteSnapshots = new Map<string, Promise<VariationListingRuntimeOwnership>>();
 
@@ -403,6 +405,10 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
             let variationProcessedCount = 0;
             const legacyGroupWasPending = state.groupingState.pending.length > 0;
             for (const [sourceIndex, sourcePath] of snapshot.entries()) {
+              if (manualVariationArchivePaths.has(sourcePath)) {
+                variationRouteSnapshots.delete(sourcePath);
+                continue;
+              }
               // A consumed Variation source is already durably owned and must
               // never be reconsidered for Standard grouping, even when a
               // pending Standard group or a failed marker gate is present.
@@ -473,6 +479,15 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
                 }
                 variationProcessedCount += 1;
                 consumedVariationPaths.add(sourcePath);
+                if (
+                  outcome.kind === 'completed' &&
+                  outcome.archiveStatus === 'manual_recovery_required' &&
+                  outcome.archiveRecoverySourcePaths
+                ) {
+                  for (const recoveryPath of outcome.archiveRecoverySourcePaths) {
+                    manualVariationArchivePaths.add(normalizeWatcherRuntimePath(recoveryPath));
+                  }
+                }
                 variationRetryAttempts.delete(sourcePath);
                 if (blockedVariationOwnedSourcePaths.has(sourcePath)) {
                   blockedVariationOwnedSourcePaths.clear();
@@ -650,6 +665,12 @@ export function startWatcherRuntime(input: StartWatcherRuntimeInput = {}): Watch
       logger.info('variation_retry_support_input_ignored', {
         path: normalizedPath,
         pairId: blockedVariationPairId,
+      });
+      return;
+    }
+    if (manualVariationArchivePaths.has(normalizedPath)) {
+      logger.info('variation_archive_manual_recovery_input_ignored', {
+        path: normalizedPath,
       });
       return;
     }

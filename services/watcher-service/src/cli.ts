@@ -8,6 +8,7 @@ import {
   persistStandardCaptureGroupingState,
   readStandardCaptureGroupingState,
 } from './standard-capture-state.js';
+import { recoverPendingVariationImageArchives } from './variation-image-archive.js';
 import { startWatcherRuntime } from './watcher-runtime.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -35,6 +36,10 @@ async function main(): Promise<void> {
   loadRootEnvironment();
 
   const config = createWatcherServiceConfig();
+  await recoverPendingVariationImageArchives({
+    incomingDirectory: config.incomingDirectory,
+    processedDirectory: config.processedDirectory,
+  });
   const restoredStandardState = await readStandardCaptureGroupingState(config.incomingDirectory);
   const runtime = startWatcherRuntime({
     config,

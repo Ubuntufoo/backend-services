@@ -1062,6 +1062,60 @@ describe('watcher runtime', () => {
     await runtime.close();
   });
 
+  it('blocks duplicate adds after completed Variation archive failure without Standard leakage', async () => {
+    const fakeWatcher = new FakeWatcher();
+    const logger = createLogger();
+    const frontPath = '/watcher/incoming/front.jpg';
+    const backPath = '/watcher/incoming/back.jpg';
+    const processor = {
+      process: vi.fn(async () => ({
+        archiveRecoverySourcePaths: [frontPath, backPath],
+        archiveStatus: 'manual_recovery_required' as const,
+        completionKind: 'new_variation' as const,
+        copyId: 'copy',
+        groupId: 'group',
+        kind: 'completed' as const,
+        status: 'completed' as const,
+        variationId: 'variation',
+      })),
+    };
+    const processIncomingImageBatch = vi.fn();
+    const runtime = startWatcherRuntime({
+      config: {
+        baseDirectory: '/watcher',
+        incomingDirectory: '/watcher/incoming',
+        processedDirectory: '/watcher/processed',
+        variationListingCaptureSourceKey: 'station-main',
+        supportedCaptureModes: ['single_2_image', 'lot_3_image'],
+        supportedImageExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+      },
+      logger,
+      processIncomingImageBatch,
+      variationListingRuntimeProcessor: processor,
+      watch: () => fakeWatcher,
+    });
+
+    fakeWatcher.emitAdd(backPath);
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    fakeWatcher.emitAdd(frontPath);
+    fakeWatcher.emitAdd(backPath);
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(processor.process).toHaveBeenCalledTimes(1);
+    expect(processIncomingImageBatch).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'variation_archive_manual_recovery_input_ignored',
+      {path: frontPath},
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      'variation_archive_manual_recovery_input_ignored',
+      {path: backPath},
+    );
+    await runtime.close();
+  });
+
   it('retains non-retryable variation failures without automatically retrying on later adds', async () => {
     const fakeWatcher = new FakeWatcher();
     const processor = {

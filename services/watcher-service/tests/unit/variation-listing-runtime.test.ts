@@ -313,6 +313,211 @@ describe('variation listing runtime lifecycle hardening', () => {
     expect(persistCompletion).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a durably completed pair out of retry when local archive needs manual recovery', async () => {
+    const media = preparedMedia('33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444');
+    const requestIdentityHandoff = vi.fn(async () => ({selectorValue: 'Card', variationMetadata: {}}));
+    const prepareCompletionMedia = vi.fn(async () => media);
+    const buildCompletionCommand = vi.fn((route, handoff, prepared) => ({
+      ...prepared,
+      capturePairId: route.pendingPair.pairId,
+      captureSourceKey: route.captureSourceKey,
+      captureStartedAt: route.pendingPair.startedAt,
+      completionKind: 'new_variation' as const,
+      conditionToken: handoff.conditionToken,
+      expectedDesiredRevision: route.pendingPair.expectedDesiredRevision,
+      frozenPriceAmount: route.pendingPair.priceAmount,
+      frozenPriceCurrency: 'USD' as const,
+      selectorValue: handoff.selectorValue,
+      targetGroupId: route.pendingPair.targetGroupId,
+      variationMetadata: handoff.variationMetadata,
+    }));
+    const persistCompletion = vi.fn(async () => ({status: 'completed' as const}));
+    const archiveCompletion = vi.fn(async () => {
+      throw new Error('archive destination unavailable');
+    });
+    const processor = createVariationListingRuntimeProcessor(
+      {captureSourceKey: 'station-main', incomingDirectory: '/incoming', processedDirectory: '/processed'},
+      {
+        routeEvent: vi.fn(async () => completionRoute()),
+        getGroupCaptureState: vi.fn(async () => ({conditionToken: 'EXCELLENT' as const, lifecycleState: 'active'})),
+        requestIdentityHandoff,
+        prepareCompletionMedia,
+        buildCompletionCommand,
+        persistCompletion,
+        archiveCompletion,
+        persistArchiveRecovery: vi.fn(async () => undefined),
+        clearArchiveRecovery: vi.fn(async () => undefined),
+        reportIntakeStatus: vi.fn(async () => undefined),
+      },
+    );
+
+    await expect(processor.process('/incoming/back.jpg')).resolves.toMatchObject({
+      archiveRecoverySourcePaths: ['/incoming/front.jpg', '/incoming/back.jpg'],
+      archiveStatus: 'manual_recovery_required',
+      kind: 'completed',
+      status: 'completed',
+    });
+    expect(requestIdentityHandoff).toHaveBeenCalledTimes(1);
+    expect(prepareCompletionMedia).toHaveBeenCalledTimes(1);
+    expect(persistCompletion).toHaveBeenCalledTimes(1);
+    expect(archiveCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists the recovery journal before durable completion and clears it after archive success', async () => {
+    const media = preparedMedia('33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444');
+    const events: string[] = [];
+    const processor = createVariationListingRuntimeProcessor(
+      {captureSourceKey: 'station-main', incomingDirectory: '/incoming', processedDirectory: '/processed'},
+      {
+        routeEvent: vi.fn(async () => completionRoute()),
+        getGroupCaptureState: vi.fn(async () => ({conditionToken: 'EXCELLENT' as const, lifecycleState: 'active'})),
+        requestIdentityHandoff: vi.fn(async () => ({selectorValue: 'Card', variationMetadata: {}})),
+        prepareCompletionMedia: vi.fn(async () => media),
+        buildCompletionCommand: vi.fn((route, handoff, prepared) => ({
+          ...prepared,
+          capturePairId: route.pendingPair.pairId,
+          captureSourceKey: route.captureSourceKey,
+          captureStartedAt: route.pendingPair.startedAt,
+          completionKind: 'new_variation' as const,
+          conditionToken: handoff.conditionToken,
+          expectedDesiredRevision: route.pendingPair.expectedDesiredRevision,
+          frozenPriceAmount: route.pendingPair.priceAmount,
+          frozenPriceCurrency: 'USD' as const,
+          selectorValue: handoff.selectorValue,
+          targetGroupId: route.pendingPair.targetGroupId,
+          variationMetadata: handoff.variationMetadata,
+        })),
+        persistArchiveRecovery: vi.fn(async () => {
+          events.push('journal');
+        }),
+        persistCompletion: vi.fn(async () => {
+          events.push('persist');
+          return {status: 'completed' as const};
+        }),
+        archiveCompletion: vi.fn(async () => {
+          events.push('archive');
+          return {status: 'archived' as const, bucketDirectory: '/processed/bucket', frontPath: '/processed/front', backPath: '/processed/back'};
+        }),
+        clearArchiveRecovery: vi.fn(async () => {
+          events.push('clear');
+        }),
+        reportIntakeStatus: vi.fn(async () => undefined),
+      },
+    );
+
+    await expect(processor.process('/incoming/back.jpg')).resolves.toMatchObject({
+      archiveStatus: 'archived',
+      kind: 'completed',
+    });
+    expect(events).toEqual(['journal', 'persist', 'archive', 'clear']);
+  });
+
+  it('retains manual recovery status when clearing the journal fails after archive success', async () => {
+    const media = preparedMedia('33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444');
+    const persistCompletion = vi.fn(async () => ({status: 'completed' as const}));
+    const archiveCompletion = vi.fn(async () => ({
+      status: 'archived' as const,
+      bucketDirectory: '/processed/bucket',
+      frontPath: '/processed/front',
+      backPath: '/processed/back',
+    }));
+    const clearArchiveRecovery = vi.fn(async () => {
+      throw new Error('journal unlink unavailable');
+    });
+    const processor = createVariationListingRuntimeProcessor(
+      {captureSourceKey: 'station-main', incomingDirectory: '/incoming', processedDirectory: '/processed'},
+      {
+        routeEvent: vi.fn(async () => completionRoute()),
+        getGroupCaptureState: vi.fn(async () => ({conditionToken: 'EXCELLENT' as const, lifecycleState: 'active'})),
+        requestIdentityHandoff: vi.fn(async () => ({selectorValue: 'Card', variationMetadata: {}})),
+        prepareCompletionMedia: vi.fn(async () => media),
+        buildCompletionCommand: vi.fn((route, handoff, prepared) => ({
+          ...prepared,
+          capturePairId: route.pendingPair.pairId,
+          captureSourceKey: route.captureSourceKey,
+          captureStartedAt: route.pendingPair.startedAt,
+          completionKind: 'new_variation' as const,
+          conditionToken: handoff.conditionToken,
+          expectedDesiredRevision: route.pendingPair.expectedDesiredRevision,
+          frozenPriceAmount: route.pendingPair.priceAmount,
+          frozenPriceCurrency: 'USD' as const,
+          selectorValue: handoff.selectorValue,
+          targetGroupId: route.pendingPair.targetGroupId,
+          variationMetadata: handoff.variationMetadata,
+        })),
+        persistArchiveRecovery: vi.fn(async () => undefined),
+        persistCompletion,
+        archiveCompletion,
+        clearArchiveRecovery,
+        reportIntakeStatus: vi.fn(async () => undefined),
+      },
+    );
+
+    await expect(processor.process('/incoming/back.jpg')).resolves.toMatchObject({
+      archiveRecoverySourcePaths: ['/incoming/front.jpg', '/incoming/back.jpg'],
+      archiveStatus: 'manual_recovery_required',
+      kind: 'completed',
+    });
+    expect(persistCompletion).toHaveBeenCalledTimes(1);
+    expect(archiveCompletion).toHaveBeenCalledTimes(1);
+    expect(clearArchiveRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rerun identity or media work when journal persistence fails before DB completion', async () => {
+    const media = preparedMedia('33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444');
+    const requestIdentityHandoff = vi.fn(async () => ({selectorValue: 'Card', variationMetadata: {}}));
+    const prepareCompletionMedia = vi.fn(async () => media);
+    const persistArchiveRecovery = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('journal fsync unavailable'))
+      .mockResolvedValue(undefined);
+    const persistCompletion = vi.fn(async () => ({status: 'completed' as const}));
+    const processor = createVariationListingRuntimeProcessor(
+      {captureSourceKey: 'station-main', incomingDirectory: '/incoming', processedDirectory: '/processed'},
+      {
+        routeEvent: vi.fn(async () => completionRoute()),
+        getGroupCaptureState: vi.fn(async () => ({conditionToken: 'EXCELLENT' as const, lifecycleState: 'active'})),
+        requestIdentityHandoff,
+        prepareCompletionMedia,
+        buildCompletionCommand: vi.fn((route, handoff, prepared) => ({
+          ...prepared,
+          capturePairId: route.pendingPair.pairId,
+          captureSourceKey: route.captureSourceKey,
+          captureStartedAt: route.pendingPair.startedAt,
+          completionKind: 'new_variation' as const,
+          conditionToken: handoff.conditionToken,
+          expectedDesiredRevision: route.pendingPair.expectedDesiredRevision,
+          frozenPriceAmount: route.pendingPair.priceAmount,
+          frozenPriceCurrency: 'USD' as const,
+          selectorValue: handoff.selectorValue,
+          targetGroupId: route.pendingPair.targetGroupId,
+          variationMetadata: handoff.variationMetadata,
+        })),
+        persistArchiveRecovery,
+        persistCompletion,
+        archiveCompletion: vi.fn(async () => ({
+          status: 'archived' as const,
+          bucketDirectory: '/processed/bucket',
+          frontPath: '/processed/front',
+          backPath: '/processed/back',
+        })),
+        clearArchiveRecovery: vi.fn(async () => undefined),
+        reportIntakeStatus: vi.fn(async () => undefined),
+      },
+    );
+
+    await expect(processor.process('/incoming/back.jpg')).rejects.toMatchObject({
+      name: 'VariationListingCaptureRetryableError',
+      failureKind: 'persistence',
+    });
+    expect(persistCompletion).not.toHaveBeenCalled();
+    await expect(processor.process('/incoming/back.jpg')).resolves.toMatchObject({kind: 'completed'});
+    expect(requestIdentityHandoff).toHaveBeenCalledTimes(1);
+    expect(prepareCompletionMedia).toHaveBeenCalledTimes(1);
+    expect(persistCompletion).toHaveBeenCalledTimes(1);
+    expect(persistArchiveRecovery).toHaveBeenCalledTimes(2);
+  });
+
   it('cleans prepared media after identity failure and exposes a retryable exact-pair error', async () => {
     const media = preparedMedia('33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444');
     const cleanupCompletionMedia = vi.fn(async () => undefined);

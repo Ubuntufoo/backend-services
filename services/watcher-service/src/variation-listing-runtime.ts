@@ -35,6 +35,14 @@ import {
   type VariationListingIntakeStatusRequest,
   type VariationListingSidecarEnvironment,
 } from './variation-listing-sidecar.js';
+import {
+  archiveVariationImagePair,
+  clearVariationImageArchiveRecovery,
+  persistVariationImageArchiveRecovery,
+  type VariationImageArchiveInput,
+  type VariationImageArchiveCommand,
+  type VariationImageArchiveResult,
+} from './variation-image-archive.js';
 
 export type VariationListingRuntimeOutcome =
   | { kind: 'legacy' }
@@ -56,6 +64,9 @@ export type VariationListingRuntimeOutcome =
         persistenceMs: number;
         totalMs: number;
       };
+      archiveStatus?: 'archived' | 'manual_recovery_required';
+      archiveMessage?: string;
+      archiveRecoverySourcePaths?: readonly string[];
     };
 
 export interface VariationListingRuntimeProcessor {
@@ -90,6 +101,7 @@ export type VariationListingRuntimeOwnership =
 export interface CreateVariationListingRuntimeProcessorInput {
   captureSourceKey: string;
   incomingDirectory?: string;
+  processedDirectory?: string;
   env?: NodeJS.ProcessEnv & VariationListingSidecarEnvironment;
 }
 
@@ -134,6 +146,15 @@ export interface VariationListingRuntimeProcessorDependencies {
   requestIdentityHandoff?: typeof requestVariationListingIdentityHandoff;
   reportIntakeStatus?: (input: VariationListingIntakeStatusRequest) => Promise<void>;
   getGroupConditionToken?: (groupId: string) => Promise<VariationListingCopyConditionToken>;
+  archiveCompletion?: (input: VariationImageArchiveInput) => Promise<VariationImageArchiveResult>;
+  persistArchiveRecovery?: (
+    command: VariationImageArchiveCommand,
+    incomingDirectory: string,
+  ) => Promise<unknown>;
+  clearArchiveRecovery?: (
+    command: VariationImageArchiveCommand,
+    incomingDirectory: string,
+  ) => Promise<void>;
 }
 
 function fail(message: string): never {
@@ -338,6 +359,54 @@ export function createVariationListingRuntimeProcessor(
       // never change durable capture ownership, retry, or persistence behavior.
     }
   };
+  const archiveCompletion = dependencies.archiveCompletion ?? (
+    input.incomingDirectory && input.processedDirectory
+      ? async (archiveInput: VariationImageArchiveInput) =>
+          await archiveVariationImagePair(archiveInput)
+      : undefined
+  );
+  const persistArchiveRecovery = dependencies.persistArchiveRecovery ?? (
+    input.incomingDirectory && input.processedDirectory
+      ? async (command: VariationImageArchiveCommand, incomingDirectory: string) =>
+          await persistVariationImageArchiveRecovery(command, incomingDirectory)
+      : undefined
+  );
+  const clearArchiveRecovery = dependencies.clearArchiveRecovery ?? (
+    input.incomingDirectory && input.processedDirectory
+      ? async (command: VariationImageArchiveCommand, incomingDirectory: string) =>
+          await clearVariationImageArchiveRecovery(command, incomingDirectory)
+      : undefined
+  );
+  const persistRecoveryBeforeCompletion = async (
+    command: VariationListingStorageReadyCompletionCommand,
+  ): Promise<void> => {
+    if (!persistArchiveRecovery || !input.incomingDirectory) return;
+    await persistArchiveRecovery(command, input.incomingDirectory);
+  };
+  const archivePersistedCompletion = async (
+    command: VariationListingStorageReadyCompletionCommand,
+    persisted: Awaited<ReturnType<typeof persistCompletion>>,
+  ): Promise<Pick<VariationListingRuntimeOutcome & {kind: 'completed'}, 'archiveStatus' | 'archiveMessage' | 'archiveRecoverySourcePaths'>> => {
+    if (!archiveCompletion || !input.incomingDirectory || !input.processedDirectory) return {};
+    try {
+      await archiveCompletion({
+        command,
+        incomingDirectory: input.incomingDirectory,
+        persisted,
+        processedDirectory: input.processedDirectory,
+      });
+      if (clearArchiveRecovery && input.incomingDirectory) {
+        await clearArchiveRecovery(command, input.incomingDirectory);
+      }
+      return {archiveStatus: 'archived'};
+    } catch (error) {
+      return {
+        archiveMessage: operatorMessage(error),
+        archiveRecoverySourcePaths: [command.frontSourceRef, command.backSourceRef],
+        archiveStatus: 'manual_recovery_required',
+      };
+    }
+  };
   const getGroupCaptureState = dependencies.getGroupCaptureState ?? (dependencies.getGroupConditionToken
     ? async (groupId) => ({
         conditionToken: await dependencies.getGroupConditionToken!(groupId),
@@ -410,15 +479,17 @@ export function createVariationListingRuntimeProcessor(
         });
         try {
           const persistenceStartedAt = Date.now();
+          await persistRecoveryBeforeCompletion(cachedCommand);
           const persisted = await persistCompletion(cachedCommand);
           clearPendingCompletionCommand(cachedCommand);
+          const archiveOutcome = await archivePersistedCompletion(cachedCommand, persisted);
           await safeReportIntakeStatus({
             captureSourceKey: cachedCommand.captureSourceKey,
             targetGroupId: cachedCommand.targetGroupId,
             pairId: cachedCommand.capturePairId,
             phase: 'ready',
             completionKind: cachedCommand.completionKind,
-            message: null,
+            message: archiveOutcome.archiveMessage ?? null,
           });
           return {
             kind: 'completed',
@@ -433,6 +504,7 @@ export function createVariationListingRuntimeProcessor(
               totalMs: elapsedMs(persistenceStartedAt),
             },
             variationId: cachedCommand.variationId,
+            ...archiveOutcome,
           };
         } catch (error) {
           const message = storageOperatorMessage(error);
@@ -686,6 +758,7 @@ export function createVariationListingRuntimeProcessor(
       const persistenceStartedAt = Date.now();
       let persisted;
       try {
+        await persistRecoveryBeforeCompletion(command);
         persisted = await persistCompletion(command);
       } catch (error) {
         const message = storageOperatorMessage(error);
@@ -707,6 +780,7 @@ export function createVariationListingRuntimeProcessor(
         );
       }
       clearPendingCompletionCommand(command);
+      const archiveOutcome = await archivePersistedCompletion(command, persisted);
       const persistenceMs = elapsedMs(persistenceStartedAt);
       await safeReportIntakeStatus({
         captureSourceKey: route.captureSourceKey,
@@ -714,7 +788,7 @@ export function createVariationListingRuntimeProcessor(
         pairId: route.pendingPair.pairId,
         phase: 'ready',
         completionKind: route.completionKind,
-        message: null,
+        message: archiveOutcome.archiveMessage ?? null,
       });
       return {
         kind: 'completed',
@@ -733,6 +807,7 @@ export function createVariationListingRuntimeProcessor(
           totalMs: elapsedMs(completionStartedAt),
         },
         variationId,
+        ...archiveOutcome,
       };
     },
   };
