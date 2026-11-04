@@ -314,7 +314,7 @@ describe('executeVariationListingPublication', () => {
           message: 'provider response must not be persisted',
         }],
       },
-      headers: { 'x-ebay-c-request-id': 'media-request-500' },
+      headers: { 'x-ebay-c-request-id': 'media-request-500', rlogid: 't6buonl%3F*70-18b1a81e1d9' },
       status: 500,
       statusText: 'Internal Server Error',
     });
@@ -333,6 +333,7 @@ describe('executeVariationListingPublication', () => {
       method: 'POST',
       endpoint: '/commerce/media/v1_beta/image/create_image_from_url',
       requestId: 'media-request-500',
+      rlogid: 't6buonl%3F*70-18b1a81e1d9',
       providerErrors: [{ errorId: 190000, domain: 'API_MEDIA', category: 'APPLICATION' }],
     });
     expect(mediaHistory[1]?.evidence).not.toHaveProperty('imageId');

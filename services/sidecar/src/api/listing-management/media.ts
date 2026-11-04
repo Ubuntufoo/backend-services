@@ -85,13 +85,18 @@ export function mediaCreateErrorEvidence(error: unknown): Json {
   if (typeof transportCode === 'string' && /^[A-Z][A-Z0-9_]{0,47}$/.test(transportCode)) {
     evidence.transportCode = transportCode;
   }
+  const headers = safeObjectProperty(response, 'headers');
   for (const header of ['x-ebay-c-request-id', 'x-ebay-correlation-id', 'x-ebay-c-trace-id']) {
-    const value = safeHeaderValue(safeObjectProperty(response, 'headers'), header);
+    const value = safeHeaderValue(headers, header);
     if (typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value)) {
       evidence.requestId = value;
       evidence.requestIdHeader = header;
       break;
     }
+  }
+  const rlogid = safeHeaderValue(headers, 'rlogid');
+  if (typeof rlogid === 'string' && /^[A-Za-z0-9_.:%*~-]{1,256}$/.test(rlogid)) {
+    evidence.rlogid = rlogid;
   }
   const body = safeObjectProperty(response, 'data');
   if (body !== undefined) {

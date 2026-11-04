@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AxiosError, type AxiosResponse } from 'axios';
+import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 import type { EbayApiClient } from '@/api/client.js';
 import { MediaApi, mediaCreateErrorEvidence } from '@/api/listing-management/media.js';
 
@@ -114,7 +114,7 @@ describe('MediaApi', () => {
         config,
         status: 500,
         statusText: 'Internal Server Error',
-        headers: { 'x-ebay-c-request-id': 'request-42', 'set-cookie': 'secret-cookie' },
+        headers: { 'x-ebay-c-request-id': 'request-42', Rlogid: 't6buonl%3F*70-18b1a81e1d9', 'set-cookie': 'secret-cookie' },
         data: { errors: [{ errorId: 190000, domain: 'API_MEDIA', category: 'APPLICATION', message: 'secret provider URL ' + secret, parameters: [{ value: secret }] }] },
       });
       const evidence = mediaCreateErrorEvidence(new Error('wrapped ' + secret, { cause: error }));
@@ -124,6 +124,7 @@ describe('MediaApi', () => {
         endpoint: '/commerce/media/v1_beta/image/create_image_from_url',
         transportCode: 'ERR_BAD_RESPONSE',
         requestId: 'request-42',
+        rlogid: 't6buonl%3F*70-18b1a81e1d9',
         providerErrors: [{ errorId: 190000, domain: 'API_MEDIA', category: 'APPLICATION' }],
       });
       const serialized = JSON.stringify(evidence);
@@ -132,6 +133,39 @@ describe('MediaApi', () => {
       expect(serialized).not.toContain('secret-cookie');
       expect(serialized).not.toContain('secret provider URL');
       expect(evidence).toHaveProperty('responseSha256');
+    });
+
+    it('rejects unsafe or unbounded rlogid response headers', () => {
+      for (const rlogid of ['secret\nAuthorization: Bearer x', 'a'.repeat(257)]) {
+        const error = new AxiosError('HTTP 500', 'ERR_BAD_RESPONSE', undefined, undefined, {
+          config: {} as never,
+          data: { errors: [{ errorId: 190000 }] },
+          headers: { rlogid },
+          status: 500,
+          statusText: 'Internal Server Error',
+        });
+        const evidence = mediaCreateErrorEvidence(error);
+        expect(evidence).not.toHaveProperty('rlogid');
+        expect(JSON.stringify(evidence)).not.toContain(rlogid);
+        expect(evidence).toHaveProperty('httpStatus', 500);
+      }
+    });
+
+    it('persists a valid AxiosHeaders rlogid independently of request ID headers', () => {
+      const rlogid = 't6buonl%3F*70-18b1a81e1d9';
+      const error = new AxiosError('HTTP 500', 'ERR_BAD_RESPONSE', undefined, undefined, {
+        config: {} as never,
+        data: undefined,
+        headers: new AxiosHeaders({ RLOGID: rlogid }),
+        status: 500,
+        statusText: 'Internal Server Error',
+      });
+
+      const evidence = mediaCreateErrorEvidence(error);
+
+      expect(evidence).toMatchObject({ httpStatus: 500, rlogid });
+      expect(evidence).not.toHaveProperty('requestId');
+      expect(evidence).not.toHaveProperty('requestIdHeader');
     });
 
     it('fails closed on non-Axios errors without persisting raw messages', () => {
