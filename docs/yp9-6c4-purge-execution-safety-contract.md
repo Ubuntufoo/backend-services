@@ -1,5 +1,9 @@
 # YP9.6c4 — cleanup execution safety contract (design only)
 
+> **Status: historical design context.** Current source and migration history,
+> not this pre-execution design, govern purge readiness. This document grants no
+> deletion authority and must not be used to infer current hosted migration state.
+
 The zero-quantity SKU removal and leftover image cleanup remain separate, operator-confirmed operations.
 
 ## Current implementation

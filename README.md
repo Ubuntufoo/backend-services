@@ -37,9 +37,12 @@ Primary root commands:
 Feature-branch local development reserves `http://localhost:3000` for the
 companion Next.js UI. The Sidecar HTTP API listens on
 `http://localhost:3002`; the watcher connects to that URL and does not bind a
-second HTTP listener. Keep `MCP_PORT=3002`, `SIDECAR_API_URL=http://localhost:3002`,
-and trusted-local `OAUTH_ENABLED=false` aligned using the explicit development
+second HTTP listener. Keep `MCP_PORT=3002` and
+`SIDECAR_API_URL=http://localhost:3002` aligned using the explicit development
 commands in `docs/local-development.md` (shell values override dotenv files).
+`OAUTH_ENABLED=false` is an unauthenticated development mode, not a Production
+containment boundary: loopback remains reachable by local processes and browser
+origins, and the publish flag does not guard every MCP or HTTP mutation.
 The generic runtime default remains 3000 when `MCP_PORT` is unset.
 Background job processing is opt-in: set `SIDECAR_JOB_RUNNER_ENABLED=true`
 only when you intend to run the polling loop.
@@ -57,4 +60,3 @@ only when you intend to run the polling loop.
 - [docs/API_STATUS.md](docs/API_STATUS.md) : Dated eBay API status snapshot.
 - [live-pilot-notes.md](live-pilot-notes.md)
 - [ROADMAP.md](ROADMAP.md)
-- [SCHEMA_SPEC.md](SCHEMA_SPEC.md) : The schema specification.

@@ -6,7 +6,9 @@ Streamable-HTTP MCP transport at `/`. The code defaults to
 explicitly use `MCP_PORT=3002`, yielding `http://localhost:3002/api/...` and
 `http://localhost:3002/`. `GET /health` is a small unauthenticated health
 response. OAuth protects MCP and `/api` when `OAUTH_ENABLED` is not `false`;
-keep the HTTP server on a trusted local boundary when OAuth is disabled.
+when OAuth is disabled, loopback reduces network exposure but does not prevent
+calls from local processes or browser origins and is not a Production
+access-control boundary.
 
 ## Routes
 

@@ -1,5 +1,8 @@
 # Controlled Live Pilot Notes
 
+> **Scope:** Standard single-listing pilot notes only. Variation pilots use
+> [`docs/variation-listings/production-pilot-checklist.md`](docs/variation-listings/production-pilot-checklist.md).
+
 ## Purpose
 
 Minimal notes for safely testing first real eBay listings while fulfillment/admin remains in Seller Hub.
@@ -14,7 +17,9 @@ Minimal notes for safely testing first real eBay listings while fulfillment/admi
 
 - Confirm `EBAY_ENVIRONMENT=production`.
 - Keep `SIDECAR_JOB_RUNNER_ENABLED=false` until the controlled publish window.
-- Keep `EBAY_PUBLISH_ENABLED=false` until all readiness checks pass; false or missing blocks publish execution before eBay API initialization.
+- Keep `EBAY_PUBLISH_ENABLED=false` until all readiness checks pass. It blocks
+  the guarded Standard publish path, but it is not a global MCP/HTTP mutation
+  lock and does not make an unauthenticated Production Sidecar safe to run.
 - Confirm production OAuth is valid.
 - Confirm production policy/location config is correct in `public.app_settings`.
 - Current env-specific values live under `public.app_settings.ebay_publish_config.production`.
@@ -44,7 +49,8 @@ Minimal notes for safely testing first real eBay listings while fulfillment/admi
 
 - App does not yet manage shipping labels.
 - App does not yet fully own order fulfillment.
-- Sold status and cleanup automation are future tasks.
+- Seller Hub remains authoritative for sold/order state; no local order ledger or
+  automatic sold-state reconciliation is planned.
 - Seller Hub remains operational fallback.
 
 ## Stop Conditions

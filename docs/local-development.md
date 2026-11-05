@@ -11,6 +11,9 @@
 - `OAUTH_ENABLED=false` disables OAuth protection for the HTTP MCP transport and
   `/api` routes. It does not disable eBay tools or eBay API calls.
 - For DB-only local work, set both `EBAY_ENABLED=false` and `OAUTH_ENABLED=false`.
+- Treat that combination as local development only. Loopback limits ordinary
+  network peers but does not exclude local processes or browser-originated
+  requests; it is not a Production access-control boundary.
 - The HTTP sidecar job runner is opt-in. Leave
   `SIDECAR_JOB_RUNNER_ENABLED=false` (or unset) during ordinary development;
   set it to `true` only when background job polling is intentional.
@@ -107,6 +110,8 @@ pnpm --filter @ebay-inventory/image-service check
 - `pnpm dev:sidecar:stdio` starts `services/sidecar/src/index.ts` for MCP
   clients over stdio; HTTP OAuth settings do not apply to stdio.
 - Sidecar job-runner loop starts only when `SIDECAR_JOB_RUNNER_ENABLED=true`.
-- Do not expose an HTTP sidecar with `OAUTH_ENABLED=false` beyond a trusted
-  local boundary; the MCP and `/api` surfaces are then unauthenticated.
+- Do not use an HTTP sidecar with `OAUTH_ENABLED=false` as a Production
+  containment boundary. MCP and `/api` are unauthenticated, wildcard CORS
+  permits browser origins, and `EBAY_PUBLISH_ENABLED=false` is not a global
+  mutation lock.
 - Companion UI lives outside this workspace; run it separately if needed.

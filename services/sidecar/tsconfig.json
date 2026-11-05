@@ -25,7 +25,6 @@
     "build",
     "docs",
     "tests",
-    "src/scripts/test-endpoints.ts",
     "eslint.config.js",
     "vitest.config.ts"
   ]

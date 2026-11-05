@@ -105,7 +105,9 @@ unchanged.
 
 ## Sandbox Notes
 
-- `pnpm ebay:diagnose-sandbox` and `pnpm ebay:diagnose-sandbox-config` are read-only.
+- `pnpm ebay:diagnose-sandbox` and `pnpm ebay:diagnose-sandbox-config` have
+  resource-read intent, but OAuth refresh and some eBay read transports use
+  HTTP `POST` and may update local credential state. Authorize them accordingly.
 - `pnpm ebay:setup-sandbox` bootstraps policies/location when sandbox account is eligible.
 - Some sandbox sellers are not eligible for Business Policy. In that case, manually seed canonical `public.app_settings` policy/location values and continue with mocked or injected IDs.
 - Sandbox cleanup targets the exact structured inventory SKU persisted in `listings.sku`, not local `listing_id`. The destructive CLI and `POST /api/listings/:listingId/delete-sandbox` share the permanent remote-plus-local deletion workflow documented in [operations.md](operations.md#sandbox-listing-cleanup).
@@ -114,4 +116,3 @@ unchanged.
 ## Generated Reference
 
 - eBay API status snapshot: [API_STATUS.md](API_STATUS.md)
-- Category reference: [ebay-category-ids.md](ebay-category-ids.md)

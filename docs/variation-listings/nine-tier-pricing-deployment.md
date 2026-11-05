@@ -1,5 +1,9 @@
 # Nine-tier Variation pricing — deployment record
 
+> **Status: historical deployment record.** Statements below about uncommitted
+> work or pending restart describe the 2026-09-23 run, not current repository or
+> runtime state. Do not use this record as fresh deployment evidence.
+
 **Date:** 2026-09-23. **Authority:** operator explicitly confirms approval of hosted Supabase migration application. **Source:** `supabase/migrations/20260922195000_expand_variation_listing_manual_price_499.sql` (historical identifier `20260922195000`).
 
 ## What was applied

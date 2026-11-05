@@ -22,7 +22,7 @@
 | HTTP/API | `services/sidecar/src/http/` | `services/sidecar/src/api/` | `pnpm --filter sidecar typecheck` |
 | Watcher intake | `services/watcher-service/src/` | `packages/data/src/repositories/` | `pnpm --filter @ebay-inventory/watcher-service check` |
 | Image processing | `services/image-service/src/` | `services/watcher-service/src/` | `pnpm --filter @ebay-inventory/image-service check` |
-| DB schema | `SCHEMA_SPEC.md` | `supabase/migrations/` | inspect live Supabase project |
+| DB schema | `supabase/migrations/` | `packages/data/src/repositories/` | inspect migration history and live Supabase project |
 
 ## Active Runtime Surface
 

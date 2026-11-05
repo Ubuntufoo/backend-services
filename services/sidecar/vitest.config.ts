@@ -42,12 +42,7 @@ export default defineConfig({
       },
     },
     include: ['tests/unit/**/*.test.ts'],
-    exclude: [
-      'node_modules',
-      'build',
-      'dist',
-      'tests/integration/**',
-    ],
+    exclude: ['node_modules', 'build', 'dist'],
     testTimeout: 10000,
     hookTimeout: 10000,
   },

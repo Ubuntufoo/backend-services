@@ -59,7 +59,7 @@ The example contains no buyer, address, contact, payment, tracking, token, or ra
 
 The proposed smallest stable idempotency identity is the ordered tuple `(orderId, lineItemId)`, exposed as a JSON-encoded `idempotencyKey`. `quantity` is line data, not identity. This recommendation is grounded in the generated contract's unique line-item description, but a real order must still be observed before treating that stability as a global operational guarantee.
 
-Re-reading or replaying the same proven order-line identity is a no-op in YP8.2. YP8.1 exposes the key but does not persist seen-state. A duplicate `lineItemId` inside one parsed order is surfaced as corruption and rejected.
+The parser exposes the stable `(orderId, lineItemId)` identity but does not persist seen-state. A duplicate `lineItemId` inside one parsed order is surfaced as corruption and rejected. No local order/sold-state subsystem is planned; Seller Hub remains the production source of truth.
 
 Each line in a partial or multi-line order is matched independently. An unresolved/non-variation line cannot mark a matched variation line twice or affect another listing. Different variation SKUs remain separate line identities. `quantity > 1` remains one line identity with its quantity; YP8.1 does not assign speculative physical copies.
 
@@ -75,10 +75,10 @@ Example (after an operator has an exact Sandbox order ID):
 pnpm --filter sidecar exec tsx src/scripts/inspect-variation-listing-order.ts --order-id SANDBOX-ORDER-001
 ```
 
-## YP8.2 handoff
+## YP8.2 disposition
 
-After real-payload review, YP8.2 may persist the exact order-line idempotency key, eBay order/line identifiers, exact SKU, quantity, and an explicitly owned local variation reference, with uniqueness enforcing replay no-op. It may then reconcile sold state and availability under its reviewed schema. No persistence, migration, copy decrement, or cleanup change belongs in YP8.1.
+The former YP8.2 handoff to persist order-line state and reconcile sold state is retired by the final product decision above. Do not add a variation-specific order table, sold-state ledger, copy decrement, or cleanup workflow from this evidence note.
 
-## Remaining evidence gap
+## Historical evidence note
 
-The configured Sandbox credentials were available, but the bounded 2026-08-01 through 2026-08-12 read returned no orders and therefore no qualifying variation purchase. An operator must create/complete one authorized Sandbox purchase against an existing variation listing, then run the diagnostic with its exact order ID and review the sanitized output. Until that evidence exists, YP8.1 remains evidence-pending and YP8.2 stays blocked.
+An earlier bounded 2026-08-01 through 2026-08-12 query returned no orders. That result is superseded by the exact Sandbox order evidence recorded in the Evidence status section; YP8.1 is complete. The earlier empty-query output remains historical provenance only and is not an open evidence gate.

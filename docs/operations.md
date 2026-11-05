@@ -5,17 +5,19 @@
 | Command | Purpose | Safety |
 | --- | --- | --- |
 | `pnpm validate:env` | Validate shared env contract | read-only |
-| `pnpm validate:ebay-oauth` | Validate refresh-token exchange | read-only |
-| `pnpm diagnose` | Sidecar diagnostics summary | read-only |
-| `pnpm ebay:diagnose-offer -- <offerId>` | Inspect one offer | read-only |
-| `pnpm ebay:diagnose-live-readiness` | Check live publish readiness | read-only |
-| `pnpm ebay:list-live-publish-config` | Print active live config summary | read-only |
-| `pnpm ebay:diagnose-sandbox` | Check sandbox seller program state | read-only |
-| `pnpm ebay:diagnose-sandbox-config` | Inspect sandbox policies/location/app settings | read-only |
+| `pnpm validate:ebay-oauth` | Validate refresh-token exchange | remote OAuth `POST`; no eBay resource write intended; separately authorize |
+| `pnpm diagnose` | Sidecar diagnostics summary | OAuth/API transport may use `POST`; no resource write intended |
+| `pnpm ebay:diagnose-offer -- <offerId>` | Inspect one offer | OAuth `POST` plus remote read; no resource write intended |
+| `pnpm ebay:diagnose-live-readiness` | Check live publish readiness | OAuth `POST` plus remote reads; no eBay resource write intended; separately authorize |
+| `pnpm ebay:list-live-publish-config` | Print active live config summary | OAuth `POST` plus remote reads; no eBay resource write intended; separately authorize |
+| `pnpm ebay:diagnose-sandbox` | Check sandbox seller program state | OAuth/API transport may use `POST`; no resource write intended |
+| `pnpm ebay:diagnose-sandbox-config` | Inspect sandbox policies/location/app settings | OAuth/API transport may use `POST`; no resource write intended |
 | `pnpm sync` | Sidecar dev sync helper | side effects depend on current implementation |
 | `pnpm update:api-status` | Refresh generated eBay status doc | writes `docs/API_STATUS.md` |
 
-Variation Listing `Publish`, `Publish Changes`, and publication-retry actions use the same authorized publish-window requirement as Standard listings when they use the real eBay gateway: `EBAY_PUBLISH_ENABLED=true`. The guard is checked before local publication state is advanced or any eBay mutation is attempted. Withdrawal remains available as a safety/recovery action when new publishing is disabled.
+Variation Listing `Publish`, `Publish Changes`, and publication-retry actions use the same authorized publish-window requirement as Standard listings when they use the real eBay gateway: `EBAY_PUBLISH_ENABLED=true`. The action-service guard blocks guarded remote publication calls, but the HTTP route may prepare intake locally before reaching that guard; a deliberate negative test therefore needs local-write approval. Withdrawal is a distinct remote mutation and is not a global consequence of the publish flag; authorize it separately when new publishing is disabled.
+
+The diagnostics above are resource-read intent, not transport-level read-only guarantees: OAuth refresh and some eBay read APIs use HTTP `POST`, and token refresh may update local credential state. Do not run them under a strict no-POST/no-write gate without separate authorization.
 
 ## Mutating eBay/Admin Commands
 

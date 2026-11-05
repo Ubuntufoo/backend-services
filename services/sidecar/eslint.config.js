@@ -200,7 +200,7 @@ export default tseslint.config(
 
   // Generated schema and tool definition files intentionally use assertion-heavy builders.
   {
-    files: ['src/schemas/**/*.ts', 'src/tools/**/*.ts', 'src/scripts/test-endpoints.ts'],
+    files: ['src/schemas/**/*.ts', 'src/tools/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unnecessary-type-assertion': 'off',
     },

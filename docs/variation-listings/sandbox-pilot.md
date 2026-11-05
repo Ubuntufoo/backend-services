@@ -134,8 +134,8 @@ All gates are fail-closed and must be recorded as pass/fail in the manifest.
 
 The dedicated CLI lives at
 `services/sidecar/src/scripts/variation-listing-sandbox-pilot.ts` with package command
-`ebay:pilot-variation-listing-sandbox`. Do not extend the broad `test-endpoints.ts` flow and do not use
-ad hoc MCP mutations: both have wider authority and weaker run ownership than this pilot needs.
+`ebay:pilot-variation-listing-sandbox`. Do not use ad hoc MCP mutations: they have wider authority
+and weaker run ownership than this pilot needs.
 
 Command shapes:
 

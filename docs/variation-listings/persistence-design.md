@@ -1,5 +1,7 @@
 # Variation-listing initial persistence design
 
+> **Status: superseded historical design.** This YP2.1/YP2.5 draft predates the applied YP2.8/YP2.9 six-table persistence simplification. Its operation tables, `recovery_required` overlay, session-version columns, and deferred RPC contract are not the current schema and must not guide new implementation or migrations. Use [`architecture.md`](architecture.md), [`intake-workflow.md`](intake-workflow.md), and [`persistence-simplification-audit.md`](persistence-simplification-audit.md) for the current contract; retain this file only as design provenance.
+
 > Post-publication clarification: this schema preserves local capture provenance and outbound revision history; it is not an order-management or sold-inventory ledger. Standard Single/Lot persistence remains separate and unchanged. For active Variation Listings, eBay is authoritative for current sellable quantity, while local copy identity is used to detect newly captured replenishment units relative to the last confirmed revision snapshot. Existing `availability_state` storage may remain for local eligibility/workflow compatibility but must not be interpreted as authoritative post-sale stock.
 
 

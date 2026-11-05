@@ -9,10 +9,10 @@ Note: Comment out early tasks that have been completed to keep the focus on upco
 | Fix |  BE/Pricing | Skip comp API and LLM reasoning for known sports-card singles | Add a new `skip_comp_api` checkbox beside the generate button that bypasses the comp API call and LLM reasoning step, returning only the Gemini listing output. |
 | Fix | BE/Listing | Add listing abandonment workflow | Add a new "Abandon Listing" button in the review UI that allows users to permanently delete a listing and all associated data, including persisted AI attempts, R2 images, and database rows. Ensure that this action is irreversible and prompts for confirmation before proceeding. |
 COMPLETED TASKS COMMENTED OUT -->
---------------- READY FOR LIVE PILOT: SPORTS CARD SINGLES --------------
+--------------- PHASE 10 COMPLETE; LIVE PILOTS REMAIN SEPARATELY GATED --------------
 **Phase 10 architecture guardrail:** Browse is a supplemental tactical-pricing branch, not a SoldComps replacement. The existing SoldComps provider, normalization, LLM/condition work, deterministic adjustments, persisted Suggested price, API result, and current UI rendering remain a complete standalone result and must continue to work exactly as they do now. Browse consumes the existing pricing output only after that baseline exists, derives a user-controllable credible live-market window, searches current fixed-price competition, and may later return a distinct nullable `tacticalSellPrice`. Browse must never overwrite the baseline Suggested price or `listings.price` automatically; the operator must always be able to ignore or skip Browse. `Auto Pricing?` remains the master per-listing switch: when false, neither SoldComps nor Browse runs. A separate `Skip Browse API` option may disable only Browse while leaving baseline pricing unchanged. Keep Browse options and result data separate from existing SoldComps modifier semantics, keep Browse behind a small read-only adapter/service boundary, add no generic provider/auth framework, and never fail `research_price`.
 
-**Phase 10 model routing:** `[DeepSeek Pro]` = bounded/lightweight implementation or focused tests with a stable contract. `[Codex]` = cross-cutting pricing/integration work, pagination/completeness state, live-production validation, or architecture decisions. The currently running 10C.1 task remains a Codex task. FE rows explicitly target `ebay-ui-app` and should be delegated independently from backend rows.
+**Phase 10 model routing (historical planning note):** `[DeepSeek Pro]` = bounded/lightweight implementation or focused tests with a stable contract. `[Codex]` = cross-cutting pricing/integration work, pagination/completeness state, live-production validation, or architecture decisions. Phase 10 implementation rows below are complete; any live-pilot action remains separately authorized and gated by current runbooks.
 
 | Shipping | BE/eBay Publish | Route eSE-eligible low-value singles through the externally managed three-tier policy | Eligibility propagation and fail-safe publish selection complete. Production policy IDs verified: `263022806013` (`3-Tier eSE + FedEx Ground Economy`) for eligible rounded prices below $20, and `262292202013` (`Free FedEx Ground Economy - 5 day`) otherwise; eBay owns the 1/2/3+ cart tiers. |
 
@@ -112,24 +112,9 @@ USE THIS COMMENT LINE AS A ROLLING MARKER FOR COMPLETED TASKS -->
 | 11H.1 | BE/Docs | Explore comic book taxonomy and publish constraints | Research eBay categories, condition IDs, required aspects, image needs, issue identity fields, raw/slab handling, and pricing feasibility for comic books. |
 | 11H.2 | BE/Architecture | Draft comic book implementation plan | Produce a separate backend plan for comics without forcing it through trading-card assumptions; no runtime behavior changes yet. |
 | 12 | BE/Archi | Re-evaluate dedicated pricing worker after live pilot | Decide whether to extract pricing into services/pricing-service based on live provider latency, queue impact, failure isolation needs, and local-dev overhead
-| 12 | $BE/DB$ | Add manual listing status reconciliation tool | Exported listings can later be batch-marked listed/sold after Seller Hub-managed pilot
-| 12 | DB | Store lean order rows | `order_id`, `listing_id`, `status`, `ship_by_date`, and `sale_price` are persisted
-| 12 | BE | `ebay-service`: implement `getUnshippedOrders()` | Order checks work against eBay API
-| 12 | BE | Match order SKU to `listing_id` | Sold listing is identified from order SKU
-| 12 | DB/BE | Update listing status to `sold` | Sale is tracked and listing status moves to `sold` when matched order data confirms sale
-| 12 | $BE$ | `job-runner`: schedule 4 order checks/day | Controlled order sync runs 4 times per day
-| 12 | $FE$ | Show due today/overdue warnings | 1-day handling risks are visible
-| 12 | $FE$ | Improve listing image preview gallery | All listing images are visible at usable review size
-| 12 | $BE$ | Normalize image orientation during asset processing | R2 images display with correct orientation
 | 12 | BE/DB | Add `ai_model_attempts` cleanup policy | Old AI attempt audit rows are pruned after listings are sold/closed and retention window passes
-| 12 | $BE/Archi$ | Evaluate benefit of extracting pricing into `services/pricing-service` | Decision based on live Apify latency, failure isolation needs, local dev overhead, and pricing module coupling
 | 13 | $BE/FE$ | Wire lot intake mode end-to-end | Lot listings can be intentionally created, reviewed, published, and shipped
 | 13 | $BE$ | Add local processed-output retention policy | `.image-service-output/<runId>` cleanup behavior is defined and enforced
-| 13 | DB | Add `r2_retention_policy`, `r2_delete_after`, `r2_deleted_at` | Safe cleanup fields exist
-| 13 | BE | On `sold`, set `r2_delete_after` | `r2_delete_after` is set from `sold_at + configured retention days`
-| 13 | $FE$ | Show cleanup status lightly | Cleanup status is visible without becoming a major UI surface
-| 13 | $BE$ | `r2-service`: `deleteObjects()` | R2 cleanup primitive works
-| 13 | BE | `job-runner`: cleanup eligible sold listings | Images are deleted after retention window
 | 14 | $FE$ | Add Sync Now buttons | Manual watcher/order sync control
 | 14 | FE | Add settings screen | Edit `app_settings` safely
 | 14 | $BE$ | Add service health checks | UI can show service status
@@ -137,7 +122,6 @@ USE THIS COMMENT LINE AS A ROLLING MARKER FOR COMPLETED TASKS -->
 | 14 | BE | Add production job-runner configuration | Tune polling interval, batch size, stale-running recovery, and worker enablement for production-like operation
 | 14 | $BE$ | Add tests for status transitions | Workflow protection
 | 14 | $BE$ | Add tests for publish validation | Prevent bad eBay calls
-| 14 | $Docs$ | Add OPERATIONS.md | How to run/use system
 | 14 | BE | Add read-only eBay query services | Messages, orders, listings, and inventory can be queried without LLM dependency
 | 14 | BE | Add assistant tool registry | Allowed read-only tools are centrally defined
 | 14 | BE | Add assistant intent router | Common user queries map to approved read-only tools

@@ -1,5 +1,10 @@
 # Supabase migration reconciliation
 
+> **Status: historical reconciliation snapshot.** This document records the
+> migration-ledger repair through YP2.6; it is not the current migration list or
+> proof of current hosted state. Use `supabase/migrations/` as the canonical
+> source history and verify the linked project before any migration operation.
+
 This repository tracks the canonical migration versions used by the linked
 production Supabase project. The verified history snapshot now includes both
 variation-listing migrations through the YP2.6 application of `20260829150000`.
