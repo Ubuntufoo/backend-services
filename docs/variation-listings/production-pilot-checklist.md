@@ -8,8 +8,8 @@ One new Production-only Variation bucket, three legitimate, physically owned, co
 
 | Variation | Initial qty | Proposed acceptance | Current authorization |
 | --- | ---: | --- | --- |
-| A | 1 | Separately approve 1 → 0, then 0 → 1 | Pending live readiness |
-| B | 1 | Eventually 1 → 0 and permanently remove sold-out SKU | **BLOCKED; skip entire B exercise for now** |
+| A | 1 | Separately approve positive-only 1 → 2 → 1; never restore from zero | Production account checks passed; other gates pending |
+| B | 1 | Eventually verify terminal 1 → 0 retirement under OOS disabled (sale-driven or manual); new stock becomes a fresh variation/SKU | **BLOCKED; skip entire B exercise for now** |
 | C | 1 | Unchanged control | No adjustment |
 
 Use the backend and frontend `feature/you-pick` worktrees. Do not alter existing Standard listings, main-branch resources, or unresolved Sandbox group/revision history. Do not reuse historical bucket tokens, SKUs, revision or operation IDs.
@@ -53,7 +53,7 @@ pnpm ebay:list-live-publish-config
 
 - [ ] Prove Production OAuth and **seller identity** separately; Account privileges alone do not establish the exact seller.
 - [ ] Confirm `EBAY_US`, active Production payment, fulfillment and return policies, an enabled merchant location, profile/category/aspects and effective publish settings.
-- [ ] Confirm Production **Out-of-Stock Control preference** from reliable seller-side evidence or a separately authorized Trading read. Never use the Sandbox-specific enabling script or `SetUserPreferences`. If disabled/unknown, **block A's zero-stock test**.
+- [x] Operator confirmed Production **Out-of-Stock Control is disabled** and explicitly elected to leave it disabled. All terminal-zero children are discontinued; later copies require new variation/SKU capture. Never use the Sandbox enabling script or `SetUserPreferences`. Do not attempt 0→positive restoration. Before testing B at zero, independently prove exact OOS-disabled eBay resource behavior and supported cleanup safety (YP10.11/YP9.6c5).
 - [ ] Use read-only inspection to establish relevant hosted migration/RPC/ACL state, pending capture sessions, new-pilot journal state, and current seller orders; do not trigger checkpoint-writing reconciliation.
 - [ ] Record sanitized results. With `EBAY_PUBLISH_ENABLED=false`, a disabled-guard warning is expected; any other required-check failure stops the pilot.
 - [ ] Confirm the real-gateway publish guard rejects with `publish_disabled` before creating a revision or resource. A deliberate UI negative test needs its own approval.
@@ -82,36 +82,36 @@ pnpm ebay:list-live-publish-config
 
 **Gate:** Three confirmed listing-facing children and unchanged listing identity.
 
-## Phase 5 — A qty 1 → 0, separately approved
+## Phase 5 — A qty 1 → 2, separately approved
 
-- [ ] Recheck Production Out-of-Stock Control, orders, current revisions and complete A/B/C remote quantities.
-- [ ] Separately authorize local staging of A `-1`; ensure B/C remain unchanged.
-- [ ] Authorize one **Publish Changes** for the decrement; enable/restart, publish once, then disable/restart.
-- [ ] Independently verify A Item/Offer zero and Trading listing-facing exact zero or documented omission. Do not infer Item deletion from an omitted Trading row.
-- [ ] Verify B/C at qty 1 with identical price, SKU, selector, images and the original listing ID; terminal revision and no order.
+- [ ] Recheck Production Out-of-Stock Control **disabled**, orders, current revisions and complete A/B/C remote quantities.
+- [ ] Separately authorize local staging of A `+1`; ensure B/C remain unchanged.
+- [ ] Authorize one **Publish Changes** for the increment; enable/restart, publish once, then disable/restart.
+- [ ] Independently verify A Inventory Item, Offer and Trading listing-facing available quantity **2**. No zero transition occurs.
+- [ ] Verify B/C at qty 1 with identical price, SKU, selector, images and original listing ID; terminal revision and no order.
 
-**Gate:** A confirmed zero; siblings unchanged. Unknown outcome means stop, not retry.
+**Gate:** A confirmed at quantity 2; siblings unchanged. Unknown outcome means stop, not retry.
 
-## Phase 6 — A qty 0 → 1, separately approved
+## Phase 6 — A qty 2 → 1, separately approved
 
-- [ ] Recheck zero baseline, relevant orders, OOS behavior and exact group/Item/Offer/Trading state.
-- [ ] Separately authorize local A `+1` stage, then a distinct one-time **Publish Changes** window with Sidecar restart before and after.
-- [ ] Verify A again has exact listing-facing sellable qty 1 with original price/images/selector/SKU; Item and Offer agree; B/C qty 1 and listing ID unchanged.
+- [ ] Recheck positive baseline (A quantity 2), orders, OOS-disabled policy and exact group/Item/Offer/Trading state.
+- [ ] Separately authorize local A `-1` stage, then a distinct one-time **Publish Changes** window with Sidecar restart before and after.
+- [ ] Verify A again has exact listing-facing sellable qty 1 with original price/images/selector/SKU; Item and Offer agree; B/C qty 1 and listing ID unchanged. No former zero-quantity SKU is revived.
 - [ ] Confirm terminal revision/journal, no pending adjustments and no unexpected order.
 
-**Gate:** A replenishment verified. This is sufficient to proceed to authorized withdrawal without testing B.
+**Gate:** A positive-only quantity increment/decrement verified. This is sufficient to proceed to authorized withdrawal without testing B.
 
-## Phase 7 — B permanent removal: NO-GO / SKIP
+## Phase 7 — B terminal-zero retirement: NO-GO / SKIP
 
-Do not zero or delete B under the initial pilot. A separate review must resolve:
+Do not zero or delete B under the initial pilot. Production OOS is disabled: a terminal zero, whether due to an eBay-confirmed sale or a published manual decrement, is intended to retire the child permanently. Reacquisition requires fresh capture and new SKU; never restore the old child. A separate review must resolve:
 - [ ] Target Item **non-quantity payload** is not compared to frozen payload immediately before c2b deletion, although survivor payloads are.
 - [ ] c2 journal/replay contract differs from executor's stricter no-mutation-replay behavior; document and test the final contract.
 - [ ] Hosted c1/c2/c2b migration, retirement RPC/ACL and journal state are not confirmed. The source retirement migration describes itself as unapplied; hosted state must be read, not assumed.
 - [ ] No integrated open-order preflight in permanent deletion; exact current orders must be independently verified.
-- [ ] Exact target Item/Offer/Trading zero, exhaustive Offers, no pending adjustment, at least two unchanged survivors and unambiguous remote state must all hold.
+- [ ] Establish exact post-zero Trading/Item/Offer/group state, including where eBay has already removed listing-facing child membership. Require only evidence actually applicable to that authoritative state; never infer remote Item/Offer deletion from Trading omission. Verify no pending adjustment, at least two unaffected survivors, and no ambiguous remote operation.
 - [ ] Historical eBay `25082` and HTTP `400` are stop conditions. No blind retries or unsupported repairs.
 
-If independently resolved, **B's decrement and irreversible SKU removal each need new explicit approvals**. YP9.6c4 local/R2 image purge is excluded and separately blocked.
+If independently resolved under YP10.11/YP9.6c5, **B's decrement and any irreversible SKU/remote/local cleanup each need new explicit approvals**. No automatic cleanup upon zero. YP9.6c4 local/R2 image purge is excluded and separately blocked.
 
 ## Phase 8 — Withdrawal and safety exit, separately approved
 
