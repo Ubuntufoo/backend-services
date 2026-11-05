@@ -66,6 +66,7 @@ function aggregate(overrides: Partial<VariationListingAggregateSnapshot['group']
       representative_copy_id: copyId,
       variation_metadata: {},
       quantity_adjustment_counter: 0,
+      pending_removal_at: null,
       created_at: '2026-09-02T00:00:00Z',
       updated_at: '2026-09-02T00:00:00Z',
     }],
@@ -689,6 +690,166 @@ describe('YP6.2 variation listing actions', () => {
       status: { code: 'permanent_removal_not_implemented', remoteState: 'known_unchanged' },
     });
     expect(harness.remoteFactory).not.toHaveBeenCalled();
+  });
+
+  it('rejects Publish Changes when permanent removal includes a sibling quantity change', async () => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const harness = activeWithdrawalHarness({ pending: true });
+      const confirmed = structuredClone((await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source);
+      const confirmedSnapshot = confirmed.snapshot as { aggregate: VariationListingAggregateSnapshot; confirmed: { aggregate: VariationListingAggregateSnapshot } };
+      confirmedSnapshot.aggregate.group.desired_revision = 3;
+      confirmedSnapshot.confirmed.aggregate.group.desired_revision = 3;
+      const current = harness.aggregate();
+      (current.variations[0] as typeof current.variations[number] & { pending_removal_at?: string })
+        .pending_removal_at = '2026-10-21T00:00:00.000Z';
+      current.variations[1]!.quantity_adjustment_counter += 1;
+      harness.access.value.listRevisionsByGroupId.mockResolvedValue([{ source: confirmed }]);
+
+      const service = createVariationListingActionService({
+        data: harness.access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory: harness.remoteFactory,
+      });
+
+      await expect(service.publishChanges(groupId, 4)).rejects.toMatchObject({
+        status: { code: 'permanent_removal_mixed_changes', remoteState: 'known_unchanged' },
+      });
+      expect(harness.remoteFactory).not.toHaveBeenCalled();
+      expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+      expect(harness.access.value.confirmRevision).not.toHaveBeenCalled();
+      expect(harness.access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+      expect(harness.access.value.advanceCleanupLifecycle).not.toHaveBeenCalled();
+      expect(harness.access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
+  });
+
+  it('rejects Publish Changes when the frozen removal target differs from the live marker', async () => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const harness = activeWithdrawalHarness({ pending: true });
+      const confirmed = structuredClone((await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source);
+      const confirmedSnapshot = confirmed.snapshot as { aggregate: VariationListingAggregateSnapshot; confirmed: { aggregate: VariationListingAggregateSnapshot } };
+      confirmedSnapshot.aggregate.group.desired_revision = 3;
+      confirmedSnapshot.confirmed.aggregate.group.desired_revision = 3;
+      const current = harness.aggregate();
+      (current.variations[1] as typeof current.variations[number] & { pending_removal_at?: string })
+        .pending_removal_at = '2026-10-21T00:00:00.000Z';
+      const frozenRemoval = structuredClone(historicalRemovalFixture().oldRevision);
+      frozenRemoval.captured_desired_revision = 4;
+      harness.access.value.listRevisionsByGroupId.mockResolvedValue([
+        { source: confirmed },
+        { source: frozenRemoval },
+      ]);
+
+      const service = createVariationListingActionService({
+        data: harness.access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory: harness.remoteFactory,
+      });
+
+      await expect(service.publishChanges(groupId, 4)).rejects.toMatchObject({
+        status: { code: 'permanent_removal_target_mismatch', remoteState: 'known_unchanged' },
+      });
+      expect(harness.remoteFactory).not.toHaveBeenCalled();
+      expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+      expect(harness.access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+      expect(harness.access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
+  });
+
+  it('rejects retry when an unresolved permanent removal includes a sibling quantity change', async () => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const harness = activeWithdrawalHarness({ pending: true });
+      const confirmed = structuredClone((await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source);
+      const confirmedSnapshot = confirmed.snapshot as { aggregate: VariationListingAggregateSnapshot; confirmed: { aggregate: VariationListingAggregateSnapshot } };
+      confirmedSnapshot.aggregate.group.desired_revision = 3;
+      confirmedSnapshot.confirmed.aggregate.group.desired_revision = 3;
+      const current = harness.aggregate();
+      (current.variations[0] as typeof current.variations[number] & { pending_removal_at?: string })
+        .pending_removal_at = '2026-10-21T00:00:00.000Z';
+      current.variations[1]!.quantity_adjustment_counter += 1;
+      const confirmedAggregate = structuredClone((confirmed.snapshot as { aggregate: VariationListingAggregateSnapshot }).aggregate);
+
+      const removalRevisionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const removalRevision: VariationListingRevisionRow = {
+        revision_id: removalRevisionId,
+        group_id: groupId,
+        captured_desired_revision: 4,
+        snapshot_version: 3,
+        snapshot_digest: 'a'.repeat(64),
+        snapshot: {
+          aggregate: confirmedAggregate,
+          confirmed: {
+            aggregate: structuredClone(confirmedAggregate),
+            representativeImages: [],
+            remote: { listingId: 'listing-1', offerIdsBySku: {}, quantitiesBySku: {} },
+            revisionId: confirmed.revision_id,
+          },
+          mediaResources: [],
+          representativeImages: [],
+          permanentRemoval: { targetVariationId: current.variations[0]!.variation_id },
+        } as never,
+        operation_plan: [{
+          sequence_no: 1,
+          operation_key: 'remove-group-membership',
+          operation_kind: 'permanent_removal_group_membership',
+          target_ref: current.group.group_key,
+          intent_version: 1,
+          intent_digest: 'b'.repeat(64),
+          intent: {},
+        }],
+        operation_count: 1,
+        captured_at: '2026-10-21T00:00:00Z',
+      };
+      const unresolvedCheckpoint: VariationListingPublishingCheckpointRow = {
+        checkpoint_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        revision_id: removalRevisionId,
+        operation_key: 'remove-group-membership',
+        attempt_number: 1,
+        checkpoint_number: 1,
+        state: 'unknown',
+        observed_remote_state: 'unknown',
+        evidence: { reason: 'test' },
+        created_at: '2026-10-21T00:00:00Z',
+      };
+      harness.access.value.listRevisionsByGroupId.mockResolvedValue([
+        { source: confirmed },
+        { source: removalRevision },
+      ]);
+      harness.access.value.listCheckpointsByRevisionId.mockImplementation(async (revisionId) => (
+        revisionId === removalRevisionId ? [{ source: unresolvedCheckpoint }] : []
+      ));
+
+      const service = createVariationListingActionService({
+        data: harness.access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory: harness.remoteFactory,
+      });
+
+      await expect(service.retry(groupId)).rejects.toMatchObject({
+        status: { code: 'permanent_removal_mixed_changes', remoteState: 'known_unchanged' },
+      });
+      expect(harness.remoteFactory).not.toHaveBeenCalled();
+      expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+      expect(harness.access.value.confirmRevision).not.toHaveBeenCalled();
+      expect(harness.access.value.confirmPermanentRemoval).not.toHaveBeenCalled();
+      expect(harness.access.value.advanceCleanupLifecycle).not.toHaveBeenCalled();
+      expect(harness.access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
   });
 
   it('fails closed before withdrawal ownership reads or mutations when removal is staged', async () => {

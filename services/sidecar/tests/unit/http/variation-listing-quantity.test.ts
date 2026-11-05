@@ -58,7 +58,12 @@ function quantityDataAccess(options: { desiredRevision?: number; confirmedId?: s
   return { dataAccess, updateVariationQuantityAdjustment };
 }
 
-function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity: number, includeUnresolvedRevision = false) {
+function quantityStatusHarness(
+  quantityAdjustmentCounter: number,
+  remoteQuantity: number,
+  includeUnresolvedRevision = false,
+  unresolvedState: 'started' | 'unknown' | 'retry_exhausted' = 'started',
+) {
   const sku = 'BSKBL-Test-000001';
   const skuB = 'BSKBL-Test-000002';
   const skuC = 'BSKBL-Test-000003';
@@ -290,8 +295,8 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
       ...checkpoint,
       revision_id: unresolvedRevision.revision_id,
       operation_key: 'child-offer:variation-A',
-      state: 'started',
-      observed_remote_state: null,
+      state: unresolvedState,
+      observed_remote_state: unresolvedState === 'retry_exhausted' ? 'unknown' : null,
       checkpoint_number: 1,
     } as unknown as VariationListingPublishingCheckpointRow
     : null;
@@ -316,6 +321,34 @@ function quantityStatusHarness(quantityAdjustmentCounter: number, remoteQuantity
     },
     remoteFactory: async () => ({ remote, mutations: {} as never }),
   };
+}
+
+function successfulQuantityDataAccess(initialCounter: -1 | 1) {
+  const harness = quantityStatusHarness(initialCounter, 0);
+  const updateVariationQuantityAdjustment = vi.fn(async ({ delta }: { delta: -1 | 1 }) => {
+    const aggregate = await harness.data.loadAggregate(groupId);
+    const variation = aggregate!.variations.find((row) => row.variation_id === variationId)!;
+    variation.quantity_adjustment_counter += delta;
+    return { group: aggregate!.group, variation };
+  });
+  const dataAccess = {
+    loadAggregate: harness.data.loadAggregate,
+    listRevisionsByGroupId: async (requestedGroupId: string) => {
+      const rows = await harness.data.listRevisionsByGroupId(requestedGroupId);
+      return rows.map(({ source }) => ({
+        revisionId: source.revision_id,
+        groupId: source.group_id,
+        capturedDesiredRevision: source.captured_desired_revision,
+        operationCount: source.operation_count,
+        operationPlan: source.operation_plan,
+        snapshotDigest: source.snapshot_digest,
+        source,
+      }));
+    },
+    listCheckpointsByRevisionId: harness.data.listCheckpointsByRevisionId,
+    updateVariationQuantityAdjustment,
+  } as unknown as VariationListingApiDataAccess;
+  return { dataAccess, updateVariationQuantityAdjustment };
 }
 
 describe('YP9.6b2 quantity API', () => {
@@ -361,6 +394,214 @@ describe('YP9.6b2 quantity API', () => {
     expect(response.status).toBe(409);
     expect(response.body.error).toBe('quantity_adjustment_requires_confirmed_variation');
     expect(updateVariationQuantityAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('rejects +1 staging for an authoritative terminal-zero SKU', async () => {
+    const { dataAccess, updateVariationQuantityAdjustment } = quantityDataAccess();
+    const readQuantityStatus = vi.fn(async () => ({
+      groupId,
+      desiredRevision: 4,
+      lastConfirmedRevision: 3,
+      variations: [{
+        variationId,
+        sku: 'BSKBL-Test-000001',
+        ebayQuantity: 0,
+        pendingAdjustment: 0,
+        afterPublish: 0,
+        soldOutRemovalEligible: false,
+      }],
+    }));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta: 1 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('terminal_zero_sku_restock_forbidden');
+    expect(updateVariationQuantityAdjustment).not.toHaveBeenCalled();
+    expect(readQuantityStatus).toHaveBeenCalledWith(groupId, { cancelNegativeAdjustmentForVariationId: variationId });
+  });
+
+  it('rejects stale authoritative quantity evidence before +1 staging', async () => {
+    const { dataAccess, updateVariationQuantityAdjustment } = quantityDataAccess();
+    const readQuantityStatus = vi.fn(async () => ({
+      groupId,
+      desiredRevision: 5,
+      lastConfirmedRevision: 3,
+      variations: [{ variationId, sku: 'BSKBL-Test-000001', ebayQuantity: 1, pendingAdjustment: 0, afterPublish: 1, soldOutRemovalEligible: false }],
+    }));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta: 1 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('variation_listing_state_stale');
+    expect(updateVariationQuantityAdjustment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['remote zero', 0, 0],
+    ['staged quantity already zero', 1, -1],
+  ] as const)('rejects -1 staging when %s', async (_label, ebayQuantity, pendingAdjustment) => {
+    const { dataAccess, updateVariationQuantityAdjustment } = quantityDataAccess();
+    const readQuantityStatus = vi.fn(async () => ({
+      groupId,
+      desiredRevision: 4,
+      lastConfirmedRevision: 3,
+      variations: [{
+        variationId, sku: 'BSKBL-Test-000001', ebayQuantity, pendingAdjustment,
+        afterPublish: ebayQuantity + pendingAdjustment, soldOutRemovalEligible: false,
+      }],
+    }));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta: -1 });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('quantity_adjustment_below_zero');
+    expect(updateVariationQuantityAdjustment).not.toHaveBeenCalled();
+    expect(readQuantityStatus).toHaveBeenCalledWith(groupId, { cancelNegativeAdjustmentForVariationId: variationId });
+  });
+
+  it('blocks any quantity staging while permanent removal is pending', async () => {
+    const { dataAccess, updateVariationQuantityAdjustment } = quantityDataAccess();
+    const original = dataAccess.loadAggregate;
+    dataAccess.loadAggregate = vi.fn(async (requestedGroupId) => {
+      const value = await original(requestedGroupId);
+      return { ...value, variations: value.variations.map((row) => ({ ...row, pending_removal_at: '2026-11-05T00:00:00Z' })) };
+    }) as typeof dataAccess.loadAggregate;
+    const readQuantityStatus = vi.fn();
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta: 1 });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('quantity_adjustment_pending_permanent_removal');
+    expect(updateVariationQuantityAdjustment).not.toHaveBeenCalled();
+    expect(readQuantityStatus).not.toHaveBeenCalled();
+  });
+
+  it('permits the private exact -1 cancellation preflight while public negative status still fails closed', async () => {
+    const harness = quantityStatusHarness(-1, 0);
+    await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toThrow('cannot be negative');
+    const status = await readVariationListingQuantityStatus({
+      ...harness,
+      cancelNegativeAdjustmentForVariationId: variationId,
+    }, groupId);
+    expect(status.variations[0]).toMatchObject({
+      variationId, ebayQuantity: 0, pendingAdjustment: -1, afterPublish: -1,
+    });
+    await expect(readVariationListingQuantityStatus({
+      ...quantityStatusHarness(-2, 0),
+      cancelNegativeAdjustmentForVariationId: variationId,
+    }, groupId)).rejects.toThrow('cannot be negative');
+    await expect(readVariationListingQuantityStatus({
+      ...quantityStatusHarness(-1, 0, true),
+      cancelNegativeAdjustmentForVariationId: variationId,
+    }, groupId)).rejects.toMatchObject({
+      status: { code: 'quantity_projection_unavailable_reconciliation_required' },
+    });
+  });
+
+  it.each([
+    ['started', 'pending -1', -1, 1],
+    ['started', 'pending +1', 1, -1],
+    ['retry exhausted', 'pending -1', -1, 1, 'retry_exhausted'],
+    ['retry exhausted', 'pending +1', 1, -1, 'retry_exhausted'],
+  ] as const)('blocks exact cancellation with an older %s journal (%s)', async (_state, _label, counter, delta, unresolvedState = 'started') => {
+    const harness = quantityStatusHarness(counter, 0, true, unresolvedState);
+    const updateVariationQuantityAdjustment = vi.fn();
+    const dataAccess = {
+      ...harness.data,
+      updateVariationQuantityAdjustment,
+    } as unknown as VariationListingApiDataAccess;
+    const readQuantityStatus = vi.fn(async (
+      requestedGroupId: string,
+      statusOptions?: { cancelNegativeAdjustmentForVariationId?: string },
+    ) => await readVariationListingQuantityStatus({ ...harness, ...statusOptions }, requestedGroupId));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe(unresolvedState === 'retry_exhausted'
+      ? 'retry_exhausted'
+      : 'quantity_projection_unavailable_reconciliation_required');
+    expect(updateVariationQuantityAdjustment).not.toHaveBeenCalled();
+    expect(readQuantityStatus).toHaveBeenCalledWith(groupId, { cancelNegativeAdjustmentForVariationId: variationId });
+  });
+
+  it.each([
+    ['cancel pending +1 at remote zero', -1, 0, 1, 1, 0, true],
+    ['cancel pending -1 at remote zero', 1, 0, -1, -1, 0, true],
+    ['ordinary restock remains forbidden', 1, 0, 0, 0, 409, false],
+    ['ordinary zero decrement remains forbidden', -1, 0, 0, 0, 409, false],
+    ['multi-unit pending increase cannot be canceled past zero', -1, 0, 2, 2, 409, false],
+  ] as const)('%s', async (_label, delta, ebayQuantity, pendingAdjustment, afterPublish, expectedCode, allowed) => {
+    const { dataAccess, updateVariationQuantityAdjustment } = allowed
+      ? successfulQuantityDataAccess(pendingAdjustment as -1 | 1)
+      : quantityDataAccess();
+    const readQuantityStatus = vi.fn(async () => ({
+      groupId, desiredRevision: 4, lastConfirmedRevision: 3,
+      variations: [{
+        variationId, sku: 'BSKBL-Test-000001', ebayQuantity, pendingAdjustment,
+        afterPublish, soldOutRemovalEligible: false,
+      }],
+    }));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta });
+    expect(updateVariationQuantityAdjustment).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(response.status).toBe(allowed ? 200 : expectedCode);
+    expect(readQuantityStatus).toHaveBeenCalledWith(groupId, { cancelNegativeAdjustmentForVariationId: variationId });
+  });
+
+  it.each([
+    ['cancels pending +1 at remote zero', -1, 1],
+    ['cancels pending -1 at remote zero', 1, -1],
+  ] as const)('returns HTTP 200 and the updated aggregate when it %s', async (_label, initialCounter, delta) => {
+    const { dataAccess, updateVariationQuantityAdjustment } = successfulQuantityDataAccess(initialCounter);
+    const readQuantityStatus = vi.fn(async () => ({
+      groupId, desiredRevision: 4, lastConfirmedRevision: 3,
+      variations: [{
+        variationId, sku: 'BSKBL-Test-000001', ebayQuantity: 0,
+        pendingAdjustment: initialCounter, afterPublish: initialCounter,
+        soldOutRemovalEligible: false,
+      }],
+    }));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta });
+
+    expect(response.status).toBe(200);
+    expect(response.body.variations.find((row: { variationId: string }) => row.variationId === variationId))
+      .toMatchObject({ variationId, quantityAdjustmentCounter: 0 });
+    expect(updateVariationQuantityAdjustment).toHaveBeenCalledWith({
+      groupId, variationId, expectedDesiredRevision: 4, delta,
+    });
+    expect(readQuantityStatus).toHaveBeenCalledWith(groupId, { cancelNegativeAdjustmentForVariationId: variationId });
   });
 
   it('rejects a positive projection above the signed int32 maximum', async () => {

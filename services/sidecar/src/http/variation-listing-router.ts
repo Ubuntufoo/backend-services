@@ -120,7 +120,7 @@ export interface VariationListingApiRouterOptions {
   generateGroupReview?: typeof generateVariationListingGroupReview;
   actions?: VariationListingApiActions;
   resolveCreationDefaults?: () => Promise<VariationListingCreationDefaults>;
-  readQuantityStatus?: (groupId: string) => Promise<VariationListingQuantityStatus>;
+  readQuantityStatus?: (groupId: string, options?: { cancelNegativeAdjustmentForVariationId?: string }) => Promise<VariationListingQuantityStatus>;
   assertSoldOutRemovalEligible?: (input: { groupId: string; variationId: string; expectedDesiredRevision: number }) => Promise<void>;
   readRemovedSkuPurgePreview?: (groupId: string, revisionId: string) => Promise<RemovedSkuPurgeReadiness | null>;
   readCaptureWorkspace?: () => Promise<CaptureWorkspace>;
@@ -937,8 +937,8 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
   const resolveCreationDefaults =
     options.resolveCreationDefaults ??
     (async () => await resolveVariationListingCreationDefaults(getSidecarDataAccess()));
-  const readQuantityStatus = options.readQuantityStatus ?? (async (groupId: string) =>
-    await readVariationListingQuantityStatus({ data: options.dataAccess ?? getSidecarDataAccess().variationListings }, groupId));
+  const readQuantityStatus = options.readQuantityStatus ?? (async (groupId: string, statusOptions?: { cancelNegativeAdjustmentForVariationId?: string }) =>
+    await readVariationListingQuantityStatus({ data: options.dataAccess ?? getSidecarDataAccess().variationListings, ...statusOptions }, groupId));
   const readWorkspace = options.readCaptureWorkspace ?? (async () => await readCaptureWorkspace());
   const writeWorkspace = options.writeCaptureWorkspace ?? (async (workspace) => await persistCaptureWorkspace(workspace));
   let cachedActions: VariationListingApiActions | undefined = options.actions;
@@ -1446,6 +1446,37 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
           expectedDesiredRevision: body.expectedDesiredRevision,
         },
       );
+      // Both signs require a current authoritative quantity projection.
+      // Zero is terminal with Out-of-Stock Control disabled.
+      const status = await readQuantityStatus(params.groupId, {
+        cancelNegativeAdjustmentForVariationId: params.variationId,
+      });
+      const targets = status.variations.filter((variation) => variation.variationId === params.variationId);
+      if (status.desiredRevision !== body.expectedDesiredRevision || targets.length !== 1) {
+        throw new VariationListingTransactionConflictError(
+          'variation_listing_state_stale',
+          'Variation listing changed during the eBay quantity read; refresh before adjusting quantity.',
+        );
+      }
+      const target = targets[0]!;
+      const cancelStagedDecrease = body.delta === 1 && target.ebayQuantity === 0 &&
+        target.pendingAdjustment === -1 && target.afterPublish === -1;
+      const cancelStagedIncrease = body.delta === -1 && target.ebayQuantity === 0 &&
+        target.pendingAdjustment === 1 && target.afterPublish === 1;
+      if (body.delta > 0 && target.ebayQuantity === 0 && !cancelStagedDecrease) {
+        res.status(409).json({
+          error: 'terminal_zero_sku_restock_forbidden',
+          message: 'A sold-out variation cannot be restocked. Capture the card as a new variation with a new SKU.',
+        });
+        return;
+      }
+      if (body.delta < 0 && !cancelStagedIncrease && (target.ebayQuantity === 0 || target.afterPublish + body.delta < 0)) {
+        res.status(409).json({
+          error: 'quantity_adjustment_below_zero',
+          message: 'The staged adjustment would make this variation quantity negative. Refresh the remote quantity.',
+        });
+        return;
+      }
       await dataAccess.updateVariationQuantityAdjustment({
         groupId: params.groupId,
         variationId: params.variationId,

@@ -154,6 +154,47 @@ export function hasEffectiveVariationListingPendingChanges(
 }
 
 /**
+ * A permanent-removal revision may contain exactly one staged removal marker.
+ * Compare the same publication projection used for net-change detection so
+ * sibling quantity/price, group details, copies, and image changes cannot be
+ * silently acknowledged by a removal-only confirmed watermark.
+ */
+export function hasOnlyVariationListingPermanentRemovalPending(
+  current: VariationListingAggregateSnapshot,
+  confirmedRevision: VariationListingRevisionRow | null | undefined,
+  targetVariationId: string,
+): boolean {
+  if (
+    !confirmedRevision ||
+    current.group.last_confirmed_revision === null ||
+    current.group.desired_revision <= current.group.last_confirmed_revision ||
+    confirmedRevision.group_id !== current.group.group_id ||
+    confirmedRevision.captured_desired_revision !== current.group.last_confirmed_revision ||
+    current.variations.filter((variation) => variation.pending_removal_at != null).length !== 1
+  ) return false;
+
+  try {
+    const confirmed = revisionSnapshotAggregate(confirmedRevision);
+    if (
+      confirmed.group.group_id !== current.group.group_id ||
+      confirmed.group.desired_revision !== confirmedRevision.captured_desired_revision ||
+      !confirmed.variations.some((variation) => variation.variation_id === targetVariationId)
+    ) return false;
+
+    const expected: VariationListingAggregateSnapshot = {
+      ...confirmed,
+      variations: confirmed.variations.map((variation) => ({
+        ...variation,
+        pending_removal_at: variation.variation_id === targetVariationId ? 'staged' : null,
+      })),
+    };
+    return canonicalJson(publicationProjection(current)) === canonicalJson(publicationProjection(expected));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Per-child price/quantity display evidence from the durable confirmed snapshot.
  * null means that the baseline cannot be trusted; do not claim a staged edit.
  * New children have separate publication readiness, not an edited old price.
