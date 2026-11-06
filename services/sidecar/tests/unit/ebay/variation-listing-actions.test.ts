@@ -435,6 +435,7 @@ function historicalRemovalFixture(options: {
       }),
       deleteInventoryItem: vi.fn(async (sku: string) => { deletes.push(sku); }),
     },
+    readRemovedSkuOrders: vi.fn(async () => ({ limit: 200, offset: 0, total: 0, orders: [] })),
   }));
   const checkpoints = [
     { revision_id: historicalRevisionId, operation_key: 'remove-group-membership', attempt_number: 1, checkpoint_number: 1, checkpoint_id: 'old-cp', state: 'confirmed_complete' as const, observed_remote_state: 'present' as const, evidence: {}, created_at: '2026-10-22T00:00:00Z' },
@@ -1051,6 +1052,72 @@ describe('YP6.2 variation listing actions', () => {
         retryStatus: 'retry_exhausted',
       },
     });
+  });
+
+  it.each([
+    ['publishChanges', 'started'], ['publishChanges', 'unknown'], ['publishChanges', 'ready'], ['publishChanges', 'missing'],
+    ['retry', 'started'], ['retry', 'unknown'], ['retry', 'ready'], ['retry', 'missing'],
+    ['reconcile', 'started'], ['reconcile', 'unknown'], ['reconcile', 'ready'], ['reconcile', 'missing'],
+  ] as const)('blocks unrelated active %s when historical c2b is %s', async (action, retirementState) => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const harness = activeWithdrawalHarness({ pending: action === 'publishChanges', unresolved: action !== 'publishChanges' });
+      if (action === 'retry') {
+        const activeUnknown = harness.journal.find((entry) => entry.operation_key === 'group-publish');
+        if (!activeUnknown) throw new Error('Active retry fixture lacks unresolved operation.');
+        activeUnknown.state = 'retry_authorized';
+        activeUnknown.observed_remote_state = 'present';
+      }
+      const historical = historicalRemovalFixture();
+      const c2Revision = structuredClone(historical.oldRevision);
+      c2Revision.captured_desired_revision = 2;
+      const c2Checkpoint = {
+        revision_id: c2Revision.revision_id,
+        operation_key: 'remove-group-membership',
+        attempt_number: 1,
+        checkpoint_number: 1,
+        checkpoint_id: `c2-${retirementState}`,
+        state: 'confirmed_complete' as const,
+        observed_remote_state: 'present' as const,
+        evidence: {},
+        created_at: '2026-10-22T00:00:00Z',
+      };
+      harness.journal.push(c2Checkpoint);
+      const activeRevision = (await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source;
+      harness.access.value.listRevisionsByGroupId.mockResolvedValue([
+        { source: activeRevision },
+        { source: c2Revision },
+      ]);
+      const retirementRecord = retirementState === 'missing' ? null : {
+        revisionId: c2Revision.revision_id,
+        groupId,
+        targetVariationId: variationId,
+        targetSku: 'BSKBL-McGrady-000001',
+        targetOfferId: 'offer-target',
+        state: retirementState,
+      };
+      const store = {
+        load: vi.fn(async () => retirementRecord),
+        prepare: vi.fn(), start: vi.fn(), markUnknown: vi.fn(), markComplete: vi.fn(),
+      } satisfies RemovedSkuRetirementStore;
+      harness.access.value.remoteRetirementStore = store;
+      const service = createVariationListingActionService({
+        data: harness.access.value,
+        publicImageBaseUrl: 'https://images.example.test',
+        remoteFactory: harness.remoteFactory,
+      });
+
+      const actionResult = action === 'publishChanges'
+        ? service.publishChanges(groupId, 4)
+        : action === 'retry' ? service.retry(groupId) : service.reconcile(groupId);
+      await expect(actionResult).rejects.toMatchObject({
+        status: { code: 'removed_sku_retirement_unresolved', remoteState: 'known_unchanged' },
+      });
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
   });
 
   it('reconciles a historical terminal c2 gap without regressing the local watermark', async () => {

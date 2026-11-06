@@ -65,6 +65,7 @@ import {
   type VariationListingPermanentRemovalRemote,
 } from '@/ebay/variation-listing-permanent-removal.js';
 import { hasEffectiveVariationListingPendingChanges, hasOnlyVariationListingPermanentRemovalPending } from '@/ebay/variation-listing-pending-changes.js';
+import { readRemovedSkuOrderSafety } from '@/ebay/variation-listing-order-evidence.js';
 import {
   executeRemovedSkuRemoteRetirement,
   type RemovedSkuRetirementRemote,
@@ -175,6 +176,8 @@ export interface VariationListingActionServiceOptions {
       }>>;
     };
     remote: VariationListingPublicationRemoteGateway;
+    /** Read-only Fulfillment getOrders; unavailable readers block destructive retirement. */
+    readRemovedSkuOrders?: (filter: string, limit: number, offset: number) => Promise<unknown>;
     assertMerchantLocation?: (merchantLocationKey: string) => Promise<void>;
   }>;
   publicImageBaseUrl?: string;
@@ -598,6 +601,8 @@ async function createProductionRemote() {
     };
     return {
       remote,
+      readRemovedSkuOrders: async (filter: string, limit: number, offset: number) =>
+        await api.fulfillment.getOrders(filter, limit, offset),
       assertMerchantLocation: async (merchantLocationKey) =>
         await assertVariationListingMerchantLocation(
           async (key) => await api.inventory.getInventoryLocation(key),
@@ -712,19 +717,40 @@ function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirem
         sku: read.value.sku,
         groupKeys: read.value.groupKeys,
         quantity: quantityFromInventoryPayload(read.value.payload),
+        payload: inventoryPayloadWithoutQuantity(read.value.payload),
       };
     },
-    readAllOffers: async (sku) => ({
-      complete: true,
-      offers: (await allOffers(sku)).map((offer) => ({
-        offerId: offer.offerId,
-        sku: offer.sku,
-        marketplaceId: offer.marketplaceId,
-        status: offer.status,
-        listingId: offer.listingId,
-        availableQuantity: offer.availableQuantity,
-      })),
-    }),
+    readAllOffers: async (sku) => {
+      const exhaustive = await allOffers(sku);
+      if (exhaustive.length === 0) return { complete: true, offers: [] };
+      const marketplace = exhaustive[0]!.marketplaceId;
+      if (exhaustive.length !== 1 || exhaustive.some((offer) => offer.marketplaceId !== marketplace)) {
+        throw new Error('Removed-SKU exhaustive Offer ownership cannot be reconciled to one marketplace.');
+      }
+      const scoped = await deps.remote.getOffers(sku, marketplace, { expectedNotFound: true });
+      if (scoped.state !== 'present' || scoped.value.length !== 1 ||
+          scoped.value[0]!.sku !== sku || scoped.value[0]!.marketplaceId !== marketplace ||
+          scoped.value[0]!.offerId !== exhaustive[0]!.offerId) {
+        throw new Error('Removed-SKU scoped Offer payload is missing or conflicts with exhaustive ownership.');
+      }
+      const observed = scoped.value[0]!;
+      if (observed.status !== exhaustive[0]!.status || observed.listingId !== exhaustive[0]!.listingId ||
+          quantityFromOfferPayload(observed.payload) !== exhaustive[0]!.availableQuantity) {
+        throw new Error('Removed-SKU exhaustive and scoped Offer lifecycle/quantity disagree.');
+      }
+      return { complete: true, offers: [{
+        ...exhaustive[0]!,
+        payload: offerPayloadWithoutQuantity(observed.payload),
+      }] };
+    },
+    readOrderSafety: async (plan) => {
+      if (!deps.readRemovedSkuOrders) throw new Error('Authoritative eBay Fulfillment order reader is unavailable.');
+      const snapshot = record(plan.captureInput.snapshot);
+      const aggregate = record(snapshot.aggregate);
+      const group = record(aggregate.group);
+      if (typeof group.created_at !== 'string') throw new Error('Frozen group creation date is unavailable for order coverage.');
+      return await readRemovedSkuOrderSafety(deps.readRemovedSkuOrders, plan.targetSku, group.created_at);
+    },
     verifySurvivors: async (plan) => {
       const group = await deps.remote.getInventoryItemGroup(plan.groupKey, { expectedNotFound: true });
       if (group.state !== 'present' || canonicalJson([...group.value.variantSKUs].sort()) !== canonicalJson([...plan.survivorSkus].sort()) || canonicalJson(groupPayloadWithoutMembership(group.value.payload)) !== canonicalJson(groupPayloadWithoutMembership(plan.replacementGroupPayload))) return false;
@@ -1926,6 +1952,26 @@ export function createVariationListingActionService(options: VariationListingAct
     return await executeInitial(aggregate, existing, inheritedRepresentativeImages);
   });
 
+  // A c2 membership revision can be terminal while its separate c2b Item/Offer
+  // retirement is still unresolved. Do not publish siblings across that gap.
+  const assertNoPendingRemovedSkuRetirement = async (
+    action: VariationListingActionName,
+    groupId: string,
+    revisions: readonly VariationListingRevisionRow[],
+  ): Promise<void> => {
+    const removals = revisions.filter((row) => revisionKind(row) === 'permanent_removal');
+    if (removals.length === 0) return;
+    const store = options.data.remoteRetirementStore;
+    for (const removal of removals) {
+      const record = store ? await store.load(removal.revision_id) : null;
+      if (record?.state !== 'confirmed_complete') {
+        throw validationError(action, groupId, 'removed_sku_retirement_unresolved',
+          'An older zero-SKU retirement is not durably completed; reconcile that exact removal before publishing other variations.',
+          ['inspect_group_history']);
+      }
+    }
+  };
+
   const publishChanges = (groupId: string, expectedDesiredRevision: number) => run('publish_changes', groupId, async (progress) => {
     assertPublicationMutationEnabled('publish_changes', groupId);
     const aggregate = await requireAggregate(groupId, 'publish_changes', expectedDesiredRevision);
@@ -1959,6 +2005,7 @@ export function createVariationListingActionService(options: VariationListingAct
       }
       return await executePermanentRemoval('publish_changes', aggregate, target.variation_id, existing, progress);
     }
+    await assertNoPendingRemovedSkuRetirement('publish_changes', groupId, revisions);
     const deps = await resolveDependencies();
     let frozen: VariationListingFrozenActiveRevision;
     if (existing) {
@@ -2111,6 +2158,7 @@ export function createVariationListingActionService(options: VariationListingAct
     progress('reconcile_remote_state', { operationKey: unresolved.operation_key, revisionId: revision.revision_id });
     if (revisionKind(revision) === 'initial') return await executeInitial(aggregate, revision);
     if (revisionKind(revision) === 'active') {
+      await assertNoPendingRemovedSkuRetirement('retry', groupId, revisions);
       const frozen = hydrateActive(revision);
       if (deps.assertMerchantLocation) {
         await deps.assertMerchantLocation(frozen.snapshot.aggregate.group.merchant_location_key);
@@ -2138,6 +2186,7 @@ export function createVariationListingActionService(options: VariationListingAct
     }
     progress('reconcile_remote_state', { operationKey: pending.operation.operation_key, revisionId: pending.revision.revision_id });
     if (revisionKind(pending.revision) === 'active') {
+      await assertNoPendingRemovedSkuRetirement('reconcile', groupId, await rows(groupId));
       const deps = await resolveDependencies();
       const frozen = hydrateActive(pending.revision);
       assertNoTerminalZeroRestock('reconcile', frozen);

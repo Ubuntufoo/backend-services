@@ -8,11 +8,13 @@ import {
 import type {VariationListingPermanentRemovalPlan} from '@/ebay/variation-listing-permanent-removal.js';
 
 const plan={
-  captureInput:{revisionId:'revision',groupId:'group',capturedDesiredRevision:4},
+  captureInput:{revisionId:'revision',groupId:'group',capturedDesiredRevision:4,snapshot:{aggregate:{group:{created_at:'2026-10-01T00:00:00Z'}}}},
   targetVariationId:'target-var',
   targetSku:'target',
   offerIdsBySku:{target:'offer'},
   quantitiesBySku:{target:{inventoryItemQuantity:0,offerQuantity:0,sellableQuantity:0}},
+  inventoryItemPayloadsBySku:{target:{title:'Frozen card'}},
+  offerPayloadsBySku:{target:{pricingSummary:{price:{value:'0.99',currency:'USD'}}}},
   survivorSkus:['one','two'],
   marketplaceId:'EBAY_US',
   listingId:'listing',
@@ -30,8 +32,9 @@ function setup() {
     markComplete:vi.fn(async()=>{state='confirmed_complete';return record();}),
   };
   const remote:RemovedSkuRetirementRemote={
-    readItem:vi.fn(async()=>present?{state:'present',sku:'target',groupKeys:[],quantity:0}:{state:'absent'}),
-    readAllOffers:vi.fn(async()=>({complete:true,offers:present?[{offerId:'offer',sku:'target',marketplaceId:'EBAY_US',status:'UNPUBLISHED' as const,listingId:null,availableQuantity:0}]:[]})),
+    readItem:vi.fn(async()=>present?{state:'present',sku:'target',groupKeys:[],quantity:0,payload:{title:'Frozen card'}}:{state:'absent'}),
+    readAllOffers:vi.fn(async()=>({complete:true,offers:present?[{offerId:'offer',sku:'target',marketplaceId:'EBAY_US',status:'UNPUBLISHED' as const,listingId:null,availableQuantity:0,payload:{pricingSummary:{price:{value:'0.99',currency:'USD'}}}}]:[]})),
+    readOrderSafety:vi.fn(async()=>({complete:true,openTargetLines:0,fulfilledTargetLines:0})),
     verifySurvivors:vi.fn(async()=>true),
     deleteInventoryItem:vi.fn(async()=>{present=false;}),
   };
@@ -59,7 +62,7 @@ describe('c2b remote Inventory Item retirement',()=>{
   });
   it('refuses foreign marketplace Offers, incomplete coverage and survivor changes',async()=>{
     const t=setup();
-    vi.mocked(t.remote.readAllOffers).mockResolvedValueOnce({complete:true,offers:[{offerId:'other',sku:'target',marketplaceId:'FOREIGN',status:'UNPUBLISHED',listingId:null,availableQuantity:0}]});
+    vi.mocked(t.remote.readAllOffers).mockResolvedValueOnce({complete:true,offers:[{offerId:'other',sku:'target',marketplaceId:'FOREIGN',status:'UNPUBLISHED',listingId:null,availableQuantity:0,payload:{pricingSummary:{price:{value:'0.99',currency:'USD'}}}}]});
     await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/foreign|mismatched/);
     expect(t.remote.deleteInventoryItem).not.toHaveBeenCalled();
     vi.mocked(t.remote.readAllOffers).mockResolvedValueOnce({complete:false,offers:[]});
@@ -69,10 +72,10 @@ describe('c2b remote Inventory Item retirement',()=>{
   });
   it('requires one exact unpublished zero Offer and accepts an ungrouped null Item',async()=>{
     const t=setup();
-    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:null,quantity:0});
+    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:null,quantity:0,payload:{title:'Frozen card'}});
     vi.mocked(t.remote.readAllOffers).mockResolvedValueOnce({complete:true,offers:[
-      {offerId:'offer',sku:'target',marketplaceId:'EBAY_US',status:'UNPUBLISHED',listingId:null,availableQuantity:0},
-      {offerId:'foreign',sku:'target',marketplaceId:'EBAY_GB',status:'UNPUBLISHED',listingId:null,availableQuantity:0},
+      {offerId:'offer',sku:'target',marketplaceId:'EBAY_US',status:'UNPUBLISHED',listingId:null,availableQuantity:0,payload:{pricingSummary:{price:{value:'0.99',currency:'USD'}}}},
+      {offerId:'foreign',sku:'target',marketplaceId:'EBAY_GB',status:'UNPUBLISHED',listingId:null,availableQuantity:0,payload:{pricingSummary:{price:{value:'0.99',currency:'USD'}}}},
     ]});
     await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/exact|foreign|mismatched/);
     expect(t.remote.deleteInventoryItem).not.toHaveBeenCalled();
@@ -87,8 +90,9 @@ describe('c2b remote Inventory Item retirement',()=>{
   });
   it('marks post-DELETE read ambiguity once and never retries blindly',async()=>{
     const t=setup();
-    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:[],quantity:0});
-    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:[],quantity:0});
+    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:[],quantity:0,payload:{title:'Frozen card'}});
+    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:[],quantity:0,payload:{title:'Frozen card'}});
+    vi.mocked(t.remote.readItem).mockResolvedValueOnce({state:'present',sku:'target',groupKeys:[],quantity:0,payload:{title:'Frozen card'}});
     await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/absence|unproven|exact removable/);
     expect(t.store.markUnknown).toHaveBeenCalledOnce();
     t.setState('unknown');
@@ -96,6 +100,46 @@ describe('c2b remote Inventory Item retirement',()=>{
     await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/unresolved/);
     expect(t.remote.deleteInventoryItem).toHaveBeenCalledOnce();
   });
+  it('rejects unexpected Offer metadata',async()=>{
+    const t=setup();
+    vi.mocked(t.remote.readAllOffers).mockResolvedValueOnce({
+      complete:true,offers:[{
+        offerId:'offer',sku:'target',marketplaceId:'EBAY_US',
+        status:'UNPUBLISHED',listingId:null,availableQuantity:0,
+        payload:{pricingSummary:{price:{value:'1.49',currency:'USD'}}},
+      }],
+    });
+    await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/foreign|mismatched/);
+    expect(t.store.start).not.toHaveBeenCalled();
+  });
+
+  it('rejects unexpected Inventory Item metadata',async()=>{
+    const t=setup();
+    vi.mocked(t.remote.readItem).mockResolvedValueOnce({
+      state:'present',sku:'target',groupKeys:[],quantity:0,payload:{title:'Other'},
+    });
+    await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/exact removable/);
+    expect(t.store.start).not.toHaveBeenCalled();
+  });
+
+  it('records post-start order drift without issuing a remote delete',async()=>{
+    const t=setup();
+    vi.mocked(t.remote.readOrderSafety)
+      .mockResolvedValueOnce({complete:true,openTargetLines:0,fulfilledTargetLines:0})
+      .mockResolvedValueOnce({complete:true,openTargetLines:1,fulfilledTargetLines:0});
+    await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/after durable start/);
+    expect(t.store.start).toHaveBeenCalledOnce();
+    expect(t.store.markUnknown).toHaveBeenCalledOnce();
+    expect(t.remote.deleteInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it('blocks retirement when an outstanding target order exists',async()=>{
+    const t=setup();
+    vi.mocked(t.remote.readOrderSafety).mockResolvedValueOnce({complete:true,openTargetLines:1,fulfilledTargetLines:0});
+    await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/outstanding order/);
+    expect(t.store.start).not.toHaveBeenCalled();
+  });
+
   it('does not DELETE when durable start CAS loses a concurrent race',async()=>{
     const t=setup();
     vi.mocked(t.store.start).mockRejectedValueOnce(new Error('concurrent start conflict'));

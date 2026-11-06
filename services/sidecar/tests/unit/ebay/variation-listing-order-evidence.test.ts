@@ -3,6 +3,7 @@ import {
   getVariationOrderLineIdempotencyKey,
   matchVariationOrderEvidence,
   parseVariationOrderEvidence,
+  readRemovedSkuOrderSafety,
 } from '@/ebay/variation-listing-order-evidence.js';
 import {
   parseInspectVariationListingOrderArgs,
@@ -200,5 +201,85 @@ describe('variation order evidence', () => {
     ]) {
       expect(() => parseInspectVariationListingOrderArgs(['--filter', filter])).toThrow(/filter/i);
     }
+  });
+});
+describe('removed-SKU order safety', () => {
+  const created = '2026-10-01T00:00:00Z';
+  const now = new Date('2026-11-06T00:00:00Z');
+  const empty = {limit:200,offset:0,total:0,orders:[]};
+
+  it('accepts complete empty order history',async()=>{
+    const read=async()=>empty;
+    await expect(readRemovedSkuOrderSafety(read,'SKU-B',created,now)).resolves.toEqual({
+      complete:true,openTargetLines:0,fulfilledTargetLines:0,
+    });
+  });
+
+  it('detects outstanding order and historical fulfilled lines',async()=>{
+    const read=async(filter:string)=>({
+      limit:200,offset:0,total:1,
+      orders:[{orderId:filter.includes('NOT_STARTED')?'open':'done',
+        orderFulfillmentStatus:filter.includes('NOT_STARTED')?'NOT_STARTED':'FULFILLED',
+        lineItems:[{lineItemId:'line',sku:'SKU-B',quantity:1}]}],
+    });
+    await expect(readRemovedSkuOrderSafety(read,'SKU-B',created,now)).resolves.toEqual({
+      complete:true,openTargetLines:1,fulfilledTargetLines:1,
+    });
+  });
+
+  it('fails closed when an IN_PROGRESS target line changes between filter passes', async () => {
+    const read = async (filter: string) => filter.includes('NOT_STARTED')
+      ? {
+        limit: 200, offset: 0, total: 1,
+        orders: [{ orderId: 'in-progress', orderFulfillmentStatus: 'IN_PROGRESS', lineItems: [{ lineItemId: 'line', sku: 'SKU-B', quantity: 1 }] }],
+      }
+      : empty;
+    await expect(readRemovedSkuOrderSafety(read, 'SKU-B', created, now))
+      .rejects.toThrow(/IN_PROGRESS target lines changed/);
+  });
+
+  it.each([
+    {total:1,offset:0,limit:200,orders:[]},
+    {total:0,offset:2,limit:200,orders:[]},
+    {total:0,offset:0,limit:200,orders:[],next:'unexpected'},
+  ])('rejects incomplete or contradictory pagination',async(page)=>{
+    await expect(readRemovedSkuOrderSafety(async()=>page,'SKU-B',created,now)).rejects.toThrow(/pagination|coverage|incomplete/);
+  });
+
+  it('rejects duplicate order identities across pages', async () => {
+    const firstPage = (status: string) => Array.from({ length: 200 }, (_, index) => ({
+      orderId: `order-${index}`,
+      orderFulfillmentStatus: status,
+      lineItems: [{ lineItemId: `line-${index}`, sku: 'SKU-B', quantity: 1 }],
+    }));
+    const read = async (filter: string, _limit: number, offset: number) => {
+      const status = filter.includes('NOT_STARTED') ? 'IN_PROGRESS' : 'FULFILLED';
+      const page = firstPage(status);
+      return offset === 0
+        ? { limit: 200, offset: 0, total: 201, orders: page, next: 'next-page' }
+        : { limit: 200, offset: 200, total: 201, orders: [{ ...page[199]!, lineItemId: 'duplicate-line' }] };
+    };
+    await expect(readRemovedSkuOrderSafety(read, 'SKU-B', created, now))
+      .rejects.toThrow(/duplicate order identities/);
+  });
+
+  it('rejects order history beyond the bounded inspection capacity', async () => {
+    const read = async (filter: string, _limit: number, offset: number) => ({
+      limit: 200,
+      offset,
+      total: 2001,
+      orders: Array.from({ length: 200 }, (_, index) => ({
+        orderId: `order-${offset + index}`,
+        orderFulfillmentStatus: filter.includes('NOT_STARTED') ? 'IN_PROGRESS' : 'FULFILLED',
+        lineItems: [{ lineItemId: `line-${offset + index}`, sku: 'OTHER', quantity: 1 }],
+      })),
+      next: 'more',
+    });
+    await expect(readRemovedSkuOrderSafety(read, 'SKU-B', created, now))
+      .rejects.toThrow(/bounded inspection capacity/);
+  });
+
+  it('rejects history beyond the supported two-year window',async()=>{
+    await expect(readRemovedSkuOrderSafety(async()=>empty,'SKU-B','2020-01-01T00:00:00Z',now)).rejects.toThrow(/two-year/);
   });
 });

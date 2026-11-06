@@ -47,6 +47,7 @@ export interface RemovedSkuRetirementOffer {
   status: 'PUBLISHED' | 'UNPUBLISHED';
   listingId: string | null;
   availableQuantity: number;
+  payload: Json;
 }
 
 /**
@@ -54,8 +55,9 @@ export interface RemovedSkuRetirementOffer {
  * marketplace-scoped getOffers method. Unknown/partial pagination blocks.
  */
 export interface RemovedSkuRetirementRemote {
-  readItem(sku: string): Promise<{state: 'present'; sku: string; groupKeys: string[] | null; quantity: number} | {state: 'absent'}>;
+  readItem(sku: string): Promise<{state: 'present'; sku: string; groupKeys: string[] | null; quantity: number; payload: Json} | {state: 'absent'}>;
   readAllOffers(sku: string): Promise<{complete: boolean; offers: RemovedSkuRetirementOffer[]}>;
+  readOrderSafety(plan: VariationListingPermanentRemovalPlan): Promise<{complete: boolean; openTargetLines: number; fulfilledTargetLines: number}>;
   verifySurvivors(plan: VariationListingPermanentRemovalPlan): Promise<boolean>;
   deleteInventoryItem(sku: string): Promise<void>;
 }
@@ -109,6 +111,27 @@ function completionEvidence(plan: VariationListingPermanentRemovalPlan, targetOf
   };
 }
 
+function canonicalJson(value: Json): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value)
+      .filter(([, part]) => part !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, part]) => `${JSON.stringify(key)}:${canonicalJson(part as Json)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function assertOrderSafety(plan: VariationListingPermanentRemovalPlan, remote: RemovedSkuRetirementRemote): Promise<number> {
+  const evidence = await remote.readOrderSafety(plan);
+  if (!evidence.complete || !Number.isSafeInteger(evidence.openTargetLines) || evidence.openTargetLines !== 0 ||
+      !Number.isSafeInteger(evidence.fulfilledTargetLines) || evidence.fulfilledTargetLines < 0) {
+    throw new RemovedSkuRetirementBlocked('Current eBay order history is incomplete or the discontinued SKU has outstanding order lines.');
+  }
+  return evidence.fulfilledTargetLines;
+}
+
 async function readTarget(
   plan: VariationListingPermanentRemovalPlan,
   remote: RemovedSkuRetirementRemote,
@@ -137,14 +160,17 @@ async function readTarget(
   }
   if (item.state !== 'present' || item.sku !== plan.targetSku ||
       !(item.groupKeys === null || (Array.isArray(item.groupKeys) && item.groupKeys.length === 0)) || item.quantity !== 0 ||
-      offerResult.offers.length !== 1) {
+      offerResult.offers.length !== 1 ||
+      plan.inventoryItemPayloadsBySku[plan.targetSku] === undefined ||
+      canonicalJson(item.payload) !== canonicalJson(plan.inventoryItemPayloadsBySku[plan.targetSku]!)) {
     throw new RemovedSkuRetirementBlocked('Target eBay Item/Offer resources are not in the exact removable state.');
   }
   const offer = offerResult.offers[0]!;
   if (offer.offerId !== plan.offerIdsBySku[plan.targetSku] ||
       offer.marketplaceId !== plan.marketplaceId || offer.status !== 'UNPUBLISHED' ||
-      offer.availableQuantity !== 0 ||
-      offer.listingId !== null) {
+      offer.availableQuantity !== 0 || offer.listingId !== null ||
+      plan.offerPayloadsBySku[plan.targetSku] === undefined ||
+      canonicalJson(offer.payload) !== canonicalJson(plan.offerPayloadsBySku[plan.targetSku]!)) {
     throw new RemovedSkuRetirementBlocked('The target SKU has a foreign, active, mismatched, or nonzero Offer.');
   }
   return 'present';
@@ -179,7 +205,12 @@ export async function executeRemovedSkuRemoteRetirement(input: {
     throw new RemovedSkuRetirementBlocked('The active group/listing or surviving variations changed.');
   }
   const initialState = await readTarget(plan, remote);
+  const initialFulfilledLines = await assertOrderSafety(plan, remote);
   if (initialState === 'absent') {
+    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent' ||
+        await assertOrderSafety(plan, remote) !== initialFulfilledLines) {
+      throw new RemovedSkuRetirementBlocked('Previously absent Item/Offer or order evidence changed before durable completion.');
+    }
     record = await store.markComplete(plan.captureInput.revisionId, completionEvidence(plan, targetOfferId));
     assertRecord(record, plan);
     if (record.state !== 'confirmed_complete') {
@@ -198,6 +229,22 @@ export async function executeRemovedSkuRemoteRetirement(input: {
   assertRecord(record, plan);
   if (record.state !== 'started') throw new RemovedSkuRetirementBlocked('Remote delete intent was not durably started.');
 
+  // The durable start is a second authorization boundary. Re-read all remote
+  // evidence after it, immediately before destructive DELETE. Never replay
+  // if one of these reads is unknown or has drifted.
+  try {
+    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'present' ||
+        await assertOrderSafety(plan, remote) !== initialFulfilledLines) {
+      throw new RemovedSkuRetirementBlocked('Exact target, survivor, or order evidence changed after durable deletion start.');
+    }
+  } catch (error) {
+    await store.markUnknown(record.revisionId, {
+      phase: 'post_start_pre_delete', state: 'unknown', targetSku: plan.targetSku, targetOfferId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw new RemovedSkuRetirementBlocked('Pre-delete state is unknown or changed after durable start; no DELETE was attempted.');
+  }
+
   try {
     await remote.deleteInventoryItem(plan.targetSku);
   } catch (error) {
@@ -211,7 +258,8 @@ export async function executeRemovedSkuRemoteRetirement(input: {
   // A successful HTTP response is not final proof. A failed read must persist
   // ambiguity, not replay or report success.
   try {
-    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent') {
+    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent' ||
+        await assertOrderSafety(plan, remote) !== initialFulfilledLines) {
       throw new RemovedSkuRetirementBlocked('eBay deletion returned but exact remote absence is unproven.');
     }
   } catch (error) {

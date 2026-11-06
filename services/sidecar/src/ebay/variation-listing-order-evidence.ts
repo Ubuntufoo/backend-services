@@ -153,3 +153,88 @@ export function matchVariationOrderLine(
   return matchVariationOrderEvidence({ orderId: line.orderId, lines: [line] }, localVariations)
     .lines[0];
 }
+
+
+/** Read-only, bounded proof for destructive removed-SKU retirement.
+ * eBay Fulfillment searches are seller-wide and expose at most two years of
+ * orders. A group outside that visibility window requires manual review. */
+export interface RemovedSkuOrderSafety {
+  complete: true;
+  openTargetLines: number;
+  fulfilledTargetLines: number;
+}
+
+export async function readRemovedSkuOrderSafety(
+  readOrders: (filter: string, limit: number, offset: number) => Promise<unknown>,
+  targetSku: string,
+  listingCreatedAt: string,
+  now: Date = new Date(),
+): Promise<RemovedSkuOrderSafety> {
+  const created = Date.parse(listingCreatedAt);
+  const oldest = new Date(now);
+  oldest.setUTCFullYear(oldest.getUTCFullYear() - 2);
+  if (!targetSku || !Number.isFinite(created) || created < oldest.getTime() || created > now.getTime()) {
+    throw new Error('Removed-SKU order history is outside the authoritative two-year Fulfillment window.');
+  }
+
+  const limit = 200;
+  const scan = async (filter: string, permitted: readonly string[]): Promise<{
+    count: number;
+    inProgressTargetLines: Map<string, number>;
+  }> => {
+    let total: number | undefined;
+    let count = 0;
+    const orderIds = new Set<string>();
+    const inProgressTargetLines = new Map<string, number>();
+    for (let offset = 0; offset < 2000; offset += limit) {
+      const raw = await readOrders(filter, limit, offset);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Fulfillment order page is invalid.');
+      const page = raw as Record<string, unknown>;
+      if (typeof page.total !== 'number' || !Number.isSafeInteger(page.total) || page.total < 0 ||
+          typeof page.offset !== 'number' || !Number.isSafeInteger(page.offset) || page.offset !== offset ||
+          typeof page.limit !== 'number' || !Number.isSafeInteger(page.limit) || page.limit !== limit ||
+          (total !== undefined && total !== page.total)) {
+        throw new Error('Fulfillment order pagination is incomplete or changed during inspection.');
+      }
+      total = page.total as number;
+      const orders = page.orders === undefined && total === 0 ? [] : page.orders;
+      if (!Array.isArray(orders) || orders.length !== Math.min(limit, Math.max(total - offset, 0))) {
+        throw new Error('Fulfillment order page coverage is incomplete.');
+      }
+      for (const rawOrder of orders) {
+        if (!rawOrder || typeof rawOrder !== 'object' || Array.isArray(rawOrder)) {
+          throw new Error('Fulfillment order is malformed.');
+        }
+        const status = (rawOrder as Record<string, unknown>).orderFulfillmentStatus;
+        if (typeof status !== 'string' || !permitted.includes(status)) {
+          throw new Error('Fulfillment order status does not match the requested filter.');
+        }
+        const evidence = parseVariationOrderEvidence(rawOrder);
+        if (orderIds.has(evidence.orderId)) throw new Error('Fulfillment pagination contains duplicate order identities.');
+        orderIds.add(evidence.orderId);
+        for (const line of evidence.lines) {
+          if (line.sku !== targetSku) continue;
+          if (filter.includes('NOT_STARTED') || status === 'FULFILLED') count += 1;
+          if (status === 'IN_PROGRESS') inProgressTargetLines.set(line.idempotencyKey, line.quantity);
+        }
+      }
+      const next = page.next;
+      if (next !== undefined && next !== null && typeof next !== 'string') {
+        throw new Error('Fulfillment order pagination cursor is invalid.');
+      }
+      const more = offset + orders.length < total;
+      if (more !== (typeof next === 'string' && next.length > 0)) {
+        throw new Error('Fulfillment pagination next-page evidence is inconsistent.');
+      }
+      if (!more) return { count, inProgressTargetLines };
+    }
+    throw new Error('Fulfillment order history exceeds the bounded inspection capacity.');
+  };
+  const open = await scan('orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}', ['NOT_STARTED', 'IN_PROGRESS']);
+  const fulfilled = await scan('orderfulfillmentstatus:{FULFILLED|IN_PROGRESS}', ['FULFILLED', 'IN_PROGRESS']);
+  if (open.inProgressTargetLines.size !== fulfilled.inProgressTargetLines.size ||
+      [...open.inProgressTargetLines].some(([key, quantity]) => fulfilled.inProgressTargetLines.get(key) !== quantity)) {
+    throw new Error('Fulfillment IN_PROGRESS target lines changed between safety filter passes.');
+  }
+  return { complete: true, openTargetLines: open.count, fulfilledTargetLines: fulfilled.count };
+}
