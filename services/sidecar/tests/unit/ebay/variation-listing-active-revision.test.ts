@@ -1806,7 +1806,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
       loadAggregate: async () => current,
       confirmRevision: async () => { calls.push('confirm'); return { ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }; },
-    }))).rejects.toThrow(/quantity changed outside/);
+    }))).rejects.toThrow(/including quantity/);
     expect(calls).toContain('create-offer:SKU-C');
     const createdItemC = createdItemPayloadAtCreate as Record<string, Json>;
     expect((createdItemC.availability as Record<string, Json>).shipToLocationAvailability).toMatchObject({ quantity: 2 });
@@ -1918,7 +1918,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
       loadAggregate: async () => current,
       confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' }),
-    }))).rejects.toThrow(/quantity changed outside/);
+    }))).rejects.toThrow(/including quantity/);
     expect(mutationCalls).toBe(0);
   });
 
@@ -2614,7 +2614,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     });
   });
 
-  it('characterizes the YP10.11 Trading zero/zero discrepancy as unresolved and fails closed', async () => {
+  it('read-only confirms the YP10.11 Trading zero/zero discrepancy from exact Inventory Item and Offer authority', async () => {
     const previous = aggregate({
       group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }),
       variations: [variation('A', 0), variation('B', 1), variation('C', 2)],
@@ -2646,49 +2646,112 @@ describe('YP8.2 active revision executor acceptance', () => {
     ]);
 
     const desiredBySku = new Map(desired.children.map((child) => [child.sku, child]));
+    type AuthorityFailure =
+      | 'item-quantity'
+      | 'offer-quantity'
+      | 'item-unknown'
+      | 'offer-unknown'
+      | 'group-unknown'
+      | 'listing-unknown'
+      | 'listing-omits-positive'
+      | 'listing-wrong-sku'
+      | 'listing-wrong-price'
+      | 'listing-retained-zero-positive';
+    let failure: AuthorityFailure | null = null;
     const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
       async getInventoryItem(sku) {
         const child = desiredBySku.get(sku);
         if (!child) return { state: 'proven_absent' as const };
-        return { state: 'present' as const, value: { groupKeys: [desired.groupKey], payload: child.inventoryItem as unknown as Json, sku } };
+        if (failure === 'item-unknown' && sku === 'SKU-A') return { state: 'unknown' as const, reason: 'Inventory Item read unavailable' };
+        const payload = structuredClone(child.inventoryItem) as unknown as Record<string, Json>;
+        if (failure === 'item-quantity' && sku === 'SKU-A') {
+          (payload.availability as Record<string, Json>).shipToLocationAvailability = { quantity: 2 };
+        }
+        return { state: 'present' as const, value: { groupKeys: [desired.groupKey], payload: payload as Json, sku } };
       },
       async getOffers(sku, marketplaceId) {
         const child = desiredBySku.get(sku);
         if (!child) return { state: 'present' as const, value: [] };
-        return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: child.offer as unknown as Json, sku, status: 'PUBLISHED' as const }] };
+        if (failure === 'offer-unknown' && sku === 'SKU-A') return { state: 'unknown' as const, reason: 'Offer read unavailable' };
+        const payload = structuredClone(child.offer) as unknown as Record<string, Json>;
+        if (failure === 'offer-quantity' && sku === 'SKU-A') payload.availableQuantity = 2;
+        return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: payload as Json, sku, status: 'PUBLISHED' as const }] };
       },
       async getListing(listingId) {
-        const rows = (['SKU-A', 'SKU-C'] as const).map((sku) => {
+        if (failure === 'listing-unknown') throw new Error('Trading read unavailable');
+        const skus = failure === 'listing-omits-positive' ? ['SKU-C'] as const : ['SKU-A', 'SKU-C'] as const;
+        const rows = skus.map((sku) => {
           const child = desiredBySku.get(sku)!;
-          return listingVariation(child, 0, 0);
+          const row = listingVariation(child, 0, 0) as Record<string, Json>;
+          if (failure === 'listing-wrong-sku' && sku === 'SKU-A') row.SKU = 'SKU-FOREIGN';
+          if (failure === 'listing-wrong-price' && sku === 'SKU-A') row.StartPrice = { '#text': '1.99', '@_currencyID': 'USD' };
+          return row as Json;
         });
+        if (failure === 'listing-retained-zero-positive') rows.push(listingVariation(desiredBySku.get('SKU-B')!, 1, 0));
         return { Item: { ItemID: listingId, Variations: { Variation: rows } } };
       },
       async getInventoryItemGroup() {
+        if (failure === 'group-unknown') return { state: 'unknown' as const, reason: 'Inventory Item Group read unavailable' };
         return { state: 'present' as const, value: { payload: desired.group as unknown as Json, variantSKUs: [...desired.group.variantSKUs] } };
       },
     };
     const terminalOperations = prepared.captureInput.operationPlan.filter((operation) => operation.operationKey !== 'revision-reconcile');
-    const checkpoints = terminalOperations.flatMap((operation) => [
+    const terminalCheckpoints = terminalOperations.flatMap((operation) => [
       checkpointFrom({ revisionId: 'revision-2', operationKey: operation.operationKey, attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} }),
       checkpointFrom({ revisionId: 'revision-2', operationKey: operation.operationKey, attemptNumber: 1, checkpointNumber: 2, state: 'confirmed_complete', observedRemoteState: 'present', evidence: { confirmed: true } }),
     ]);
+    const checkpoints = [...terminalCheckpoints];
     const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    let mutationCalls = 0;
+    let confirmations = 0;
     const mutations: VariationListingActiveMutationGateway = {
-      createOffer: async () => { throw new Error('read-only discrepancy characterization attempted Offer mutation'); },
-      createOrReplaceInventoryItem: async () => { throw new Error('read-only discrepancy characterization attempted Item mutation'); },
-      createOrReplaceInventoryItemGroup: async () => { throw new Error('read-only discrepancy characterization attempted Group mutation'); },
-      publishOffer: async () => { throw new Error('read-only discrepancy characterization attempted publish mutation'); },
-      updateOffer: async () => { throw new Error('read-only discrepancy characterization attempted Offer update'); },
+      createOffer: async () => { mutationCalls += 1; throw new Error('read-only discrepancy characterization attempted Offer mutation'); },
+      createOrReplaceInventoryItem: async () => { mutationCalls += 1; throw new Error('read-only discrepancy characterization attempted Item mutation'); },
+      createOrReplaceInventoryItemGroup: async () => { mutationCalls += 1; throw new Error('read-only discrepancy characterization attempted Group mutation'); },
+      publishOffer: async () => { mutationCalls += 1; throw new Error('read-only discrepancy characterization attempted publish mutation'); },
+      updateOffer: async () => { mutationCalls += 1; throw new Error('read-only discrepancy characterization attempted Offer update'); },
     };
-    await expect(executeVariationListingActiveRevision({
+    const executeReadOnly = () => executeVariationListingActiveRevision({
       ...activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
         loadAggregate: async () => current,
-        confirmRevision: async () => { throw new Error('Trading discrepancy must not confirm the revision'); },
+        confirmRevision: async () => {
+          confirmations += 1;
+          return { ...current.group, last_confirmed_revision: 2, lifecycle_state: 'active' };
+        },
       }),
       readOnlyReconcile: true,
-    })).rejects.toThrow('final listing-facing state sibling SKU-A quantity changed outside the frozen transition');
-    expect(checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(false);
+    });
+    const result = await executeReadOnly();
+    expect(result).toMatchObject({ confirmedRevision: 2, listingId: 'listing-1', revisionId: 'revision-2' });
+    expect(confirmations).toBe(1);
+    expect(mutationCalls).toBe(0);
+    expect(revisions.captureCalls).toHaveLength(0);
+    expect(checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(true);
+
+    const negativeCases: readonly [string, AuthorityFailure][] = [
+      ['wrong Inventory Item quantity', 'item-quantity'],
+      ['wrong Offer quantity', 'offer-quantity'],
+      ['unknown Inventory Item', 'item-unknown'],
+      ['unknown Offer', 'offer-unknown'],
+      ['unknown group', 'group-unknown'],
+      ['unknown Trading listing', 'listing-unknown'],
+      ['omitted positive Trading SKU', 'listing-omits-positive'],
+      ['wrong Trading SKU', 'listing-wrong-sku'],
+      ['wrong Trading price', 'listing-wrong-price'],
+      ['retained zero SKU with positive Trading quantity', 'listing-retained-zero-positive'],
+    ];
+    for (const [_label, negativeFailure] of negativeCases) {
+      failure = negativeFailure;
+      checkpoints.splice(0, checkpoints.length, ...terminalCheckpoints);
+      revisions.current = durableRevision(prepared);
+      mutationCalls = 0;
+      confirmations = 0;
+      await expect(executeReadOnly()).rejects.toThrow();
+      expect(mutationCalls).toBe(0);
+      expect(confirmations).toBe(0);
+      expect(revisions.captureCalls).toHaveLength(0);
+      expect(checkpoints).toEqual(terminalCheckpoints);
+    }
   });
 
   it('fails closed when Trading GetItem returns a numeric variation price without currency', async () => {

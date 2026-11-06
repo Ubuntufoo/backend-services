@@ -1722,7 +1722,7 @@ function assertListingPriceSet(
   listingId: string,
   expectedChildren: readonly VariationListingInventoryPayloadBundle['children'][number][],
   label: string,
-  checkQuantities = false,
+  checkQuantities: boolean | 'zero-only' = false,
   allowEmpty = false,
   allowRetainedZero = false,
 ): void {
@@ -1743,6 +1743,9 @@ function assertListingPriceSet(
     const expectedSkus = new Set(expected.map((child) => child.sku));
     const quantities = listingVariationSellableQuantities(value, listingId, allowEmpty, expectedSkus);
     for (const child of expected) {
+      // Inventory Item and Offer are quantity-authoritative for Inventory API listings.
+      // Still reject any Trading-positive variation that should be sold out.
+      if (checkQuantities === 'zero-only' && child.quantity > 0) continue;
       if (quantities.get(child.sku) !== child.quantity) {
         throw new Error(`Variation listing ${label} sibling ${child.sku} quantity changed outside the frozen transition.`);
       }
@@ -2340,8 +2343,9 @@ export async function executeVariationListingActiveRevision(
           const listing = await getListing(frozenListingId);
           const listingEvidence = priorChild && listingPriceEvidence(listing, frozenListingId, priorChild);
           if (priorChild?.quantity > 0 && child.quantity === 0) {
-            // Zero stock can be omitted or retained with exact zero sellable quantity.
-            assertListingPriceSet(listing, frozenListingId, desiredBundle.children, `zero-stock ${child.sku} handoff`, true, true, true);
+            // Trading may report zero for positive siblings managed by the Inventory API.
+            // Require their SKU/price identity and exact zero for any retained sold-out SKU.
+            assertListingPriceSet(listing, frozenListingId, desiredBundle.children, `zero-stock ${child.sku} handoff`, 'zero-only', true, true);
           }
           if (!listingEvidence) {
             const observedPriorOfferPayload = observedPriorOffer && object(
@@ -2369,16 +2373,14 @@ export async function executeVariationListingActiveRevision(
             if (!exactZeroStockHandoff) {
               throw new Error(`Variation listing ${child.sku} listing-facing price does not match the confirmed pre-state before quantity mutation.`);
             }
-            // Trading omits an existing variation immediately after its
-            // Inventory Item quantity reaches zero. Keep the listing identity,
-            // positive sibling SKU/price/quantity set, and target omission
-            // exact before allowing the paired Offer write to proceed.
+            // Keep exact listing identity, sibling SKU/price set and sold-out
+            // target absence; positive quantity authority is Inventory/Offer.
             assertListingPriceSet(
               listing,
               frozenListingId,
               desiredBundle.children,
               `zero-stock ${child.sku} handoff`,
-              true
+              'zero-only'
             );
           }
         }
@@ -2498,21 +2500,23 @@ export async function executeVariationListingActiveRevision(
     await executeActiveOperation(input, history, operationKey, after, pre, mutate);
   }
 
-  // Final exact aggregate read is the sole confirmation gate.
+  // Final exact aggregate read is the sole confirmation gate. Inventory Item
+  // and Offer quantities must BOTH match the frozen desired payload: Trading
+  // GetItem may report 0 for sellable Inventory API-managed variations.
   const finalGroup = await input.remote.getInventoryItemGroup(desiredBundle.groupKey);
   if (activeGroup(finalGroup, desiredBundle.group) === null) throw new Error('Variation listing final group is absent.');
   const listingIds = new Set<string>();
   for (const child of desiredBundle.children) {
-    if (activeItemIgnoringQuantity(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, true) === null) throw new Error(`Variation listing final item ${child.sku} is absent or changed outside quantity.`);
+    if (activeItem(await input.remote.getInventoryItem(child.sku), child, desiredBundle.groupKey, true) === null) throw new Error(`Variation listing final item ${child.sku} is absent or differs from the frozen payload (including quantity).`);
     const prior = previousByVariation.has(child.variationId);
     const offerId = prior ? priorOfferIds[child.sku] : newOfferIdsByVariation.get(child.variationId) ?? null;
     if (!offerId) throw new Error(`Variation listing final offer ${child.sku} has no durable offer ID.`);
     const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
-    const evidence = activeOfferIgnoringQuantity(read, child.offer, { offerId, listingId: frozenListingId }, 'PUBLISHED', true);
+    const evidence = activeOffer(read, child.offer, { offerId, listingId: frozenListingId }, 'PUBLISHED', true);
     if (!evidence) {
-      // An Offer can exist with the right identity yet retain an old price.
-      // Never describe a payload mismatch as absence during reconciliation.
-      throw new Error(`Variation listing final offer ${child.sku} does not match the desired non-quantity payload (including price); publication cannot be confirmed.`);
+      // A published Offer may retain a different price or quantity; neither
+      // can confirm this frozen revision, even when Trading disagrees.
+      throw new Error(`Variation listing final offer ${child.sku} does not match the frozen payload (including quantity and price); publication cannot be confirmed.`);
     }
     listingIds.add(frozenListingId);
   }
@@ -2522,7 +2526,7 @@ export async function executeVariationListingActiveRevision(
     if (!getListing) throw new Error('Variation listing price publication requires a listing-facing Trading GetItem read.');
     assertListingPriceSet(
       await getListing(frozenListingId), frozenListingId, desiredBundle.children,
-      'final listing-facing state', true, true, true
+      'final listing-facing state', 'zero-only', true, true
     );
   }
 
