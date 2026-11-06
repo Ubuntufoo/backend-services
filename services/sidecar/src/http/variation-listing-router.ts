@@ -26,6 +26,7 @@ import {
   assertVariationListingQuantityAdjustmentEligible,
   readVariationListingQuantityStatus,
   VariationListingActionError,
+  classifyVariationListingRevisionRecovery,
   type VariationListingActionDataAccess,
   type VariationListingQuantityStatus,
 } from '@/ebay/variation-listing-actions.js';
@@ -592,15 +593,22 @@ function summarizeJournal(
       latestByKey.set(checkpoint.operationKey, checkpoint);
     }
   }
-  // Match executor ordering: latest checkpoint per operation, then the first
-  // unresolved operation in the frozen executor plan (not checkpoint order).
-  const sequenceByKey = new Map(revision.operationPlan.map((operation) => [operation.operation_key, operation.sequence_no]));
-  const unresolved = [...latestByKey.values()]
-    .filter((checkpoint) => ['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(checkpoint.state))
-    .sort((left, right) =>
-      (sequenceByKey.get(left.operationKey) ?? Number.MAX_SAFE_INTEGER) -
-      (sequenceByKey.get(right.operationKey) ?? Number.MAX_SAFE_INTEGER)
-    )[0];
+  const recoverySignal = classifyVariationListingRevisionRecovery({
+    capturedDesiredRevision: revision.capturedDesiredRevision,
+    lastConfirmedRevision,
+    operationPlan: revision.operationPlan.map((operation) => ({
+      operationKey: operation.operation_key,
+      operationKind: operation.operation_kind,
+      sequenceNo: operation.sequence_no,
+    })),
+    checkpoints: checkpoints.map((checkpoint) => ({
+      operationKey: checkpoint.operationKey,
+      state: checkpoint.state,
+      observedRemoteState: checkpoint.observedRemoteState,
+      attemptNumber: checkpoint.attemptNumber,
+      checkpointNumber: checkpoint.checkpointNumber,
+    })),
+  });
   const reconciliationSupported =
     (revision.source.snapshot_version === 1 || revision.source.snapshot_version === 3) &&
     revision.operationPlan.every(
@@ -613,34 +621,57 @@ function summarizeJournal(
   const permanentRemovalRecovery = revision.operationPlan.some(
     (operation) => operation.operation_kind === 'permanent_removal_group_membership'
   );
-  let recovery = unresolved
-    ? unresolved.state === 'retry_authorized'
+  let recovery = recoverySignal
+    ? recoverySignal.kind === 'watermark_pending'
       ? {
-          operationKey: unresolved.operationKey,
+          operationKey: recoverySignal.operationKey,
           revisionId: revision.revisionId,
           requiresReconciliation: false,
-          remoteState: unresolved.observedRemoteState === 'unknown' ? 'unknown' : 'known_unchanged',
+          remoteState: 'known_changed' as const,
+          recommendedActions: ['retry_action'],
+          retryStatus: 'safe_to_retry' as const,
+        }
+      : recoverySignal.kind === 'missing'
+        ? {
+            operationKey: recoverySignal.operationKey,
+            revisionId: revision.revisionId,
+            requiresReconciliation: true,
+            reconciliationSupported: recoverySignal.operationKind === 'revision_reconcile' && reconciliationSupported,
+            remoteState: 'unknown' as const,
+            recommendedActions: recoverySignal.operationKind === 'revision_reconcile'
+              ? ['reconcile_remote_state', 'do_not_retry_blindly']
+              : ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
+            retryStatus: 'reconciliation_required' as const,
+          }
+        : recoverySignal.state === 'retry_authorized'
+      ? {
+          operationKey: recoverySignal.operationKey,
+          revisionId: revision.revisionId,
+          requiresReconciliation: false,
+          remoteState: recoverySignal.observedRemoteState === 'unknown' ? 'unknown' : 'known_unchanged',
           recommendedActions: ['retry_action'],
           retryStatus: 'safe_to_retry',
         }
-      : unresolved.state === 'retry_exhausted'
+      : recoverySignal.state === 'retry_exhausted'
         ? {
-            operationKey: unresolved.operationKey,
+            operationKey: recoverySignal.operationKey,
             revisionId: revision.revisionId,
-            requiresReconciliation: unresolved.observedRemoteState === 'unknown',
-            remoteState: unresolved.observedRemoteState === 'unknown'
+            requiresReconciliation: recoverySignal.observedRemoteState === 'unknown',
+            remoteState: recoverySignal.observedRemoteState === 'unknown'
               ? 'unknown'
-              : unresolved.observedRemoteState === 'present' ? 'known_changed' : 'known_unchanged',
+              : recoverySignal.observedRemoteState === 'present' ? 'known_changed' : 'known_unchanged',
             recommendedActions: ['inspect_remote_state', 'resolve_manually'],
             retryStatus: 'retry_exhausted',
           }
         : {
-            operationKey: unresolved.operationKey,
+            operationKey: recoverySignal.operationKey,
             revisionId: revision.revisionId,
             requiresReconciliation: true,
-            reconciliationSupported,
+            reconciliationSupported: recoverySignal.foreign ? false : reconciliationSupported,
             remoteState: 'unknown',
-            recommendedActions: reconciliationSupported
+            recommendedActions: recoverySignal.foreign
+              ? ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly']
+              : reconciliationSupported
               ? ['reconcile_remote_state', 'do_not_retry_blindly']
               : permanentRemovalRecovery
                 ? ['inspect_remote_state', 'retry_action', 'do_not_retry_blindly']
@@ -708,7 +739,9 @@ function summarizeJournal(
           checkpoint.state === 'started' ||
           checkpoint.state === 'unknown' ||
           checkpoint.observedRemoteState === 'unknown'
-      ),
+      ) || recoverySignal?.kind === 'missing' || recoverySignal?.foreign === true ||
+        (recoverySignal?.kind === 'checkpoint' && recoverySignal.operationKey === 'revision-reconcile' &&
+          (!['confirmed_complete', 'confirmed_no_op'].includes(recoverySignal.state) || recoverySignal.observedRemoteState !== 'present')),
       retryExhausted: checkpoints.some((checkpoint) => checkpoint.state === 'retry_exhausted'),
       recovery,
       remoteRetirement: retirementState === undefined

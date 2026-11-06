@@ -690,6 +690,40 @@ describe('YP9.6b2 quantity API', () => {
     expect(response.body.status.revisionId).toBe('77777777-7777-4777-8777-777777777777');
   });
 
+  it.each([
+    ['missing final proof', false, 'unknown', true, 'reconciliation_required'],
+    ['terminal final proof with stale watermark', true, 'known_changed', false, 'safe_to_retry'],
+  ] as const)('returns a structured 409 for remote zero plus staged -1 with %s', async (_label, terminal, remoteState, requiresReconciliation, retryStatus) => {
+    const harness = quantityStatusHarness(-1, 0);
+    const rows = await harness.data.listRevisionsByGroupId(groupId);
+    const confirmed = rows[0]!.source;
+    const newer = structuredClone(confirmed);
+    newer.revision_id = `synthetic-${terminal ? 'terminal' : 'missing'}`;
+    newer.captured_desired_revision = 4;
+    newer.operation_plan = [
+      { sequence_no: 1, operation_key: 'child-offer:variation-A', operation_kind: 'child_offer_write', target_ref: 'BSKBL-Test-000001', intent_version: 1, intent_digest: 'c'.repeat(64), intent: {} },
+      { sequence_no: 2, operation_key: 'revision-reconcile', operation_kind: 'revision_reconcile', target_ref: 'group', intent_version: 1, intent_digest: 'd'.repeat(64), intent: {} },
+    ];
+    newer.operation_count = 2;
+    const child = { ...(await harness.data.listCheckpointsByRevisionId(confirmed.revision_id))[0]!.source, revision_id: newer.revision_id, operation_key: 'child-offer:variation-A', state: 'confirmed_complete' as const, observed_remote_state: 'present' as const };
+    const final = { ...child, operation_key: 'revision-reconcile' };
+    harness.data.listRevisionsByGroupId = async () => [{ source: confirmed }, { source: newer }];
+    harness.data.listCheckpointsByRevisionId = async (revisionId: string) => revisionId === newer.revision_id
+      ? [{ source: child }, ...(terminal ? [{ source: final }] : [])]
+      : await quantityStatusHarness(-1, 0).data.listCheckpointsByRevisionId(revisionId);
+
+    await expect(readVariationListingQuantityStatus({ ...harness, cancelNegativeAdjustmentForVariationId: variationId }, groupId)).rejects.toMatchObject({
+      httpStatus: 409,
+      status: {
+        code: 'quantity_projection_unavailable_reconciliation_required',
+        operationKey: 'revision-reconcile',
+        remoteState,
+        requiresReconciliation,
+        retryStatus,
+      },
+    });
+  });
+
   it('fails closed when the confirmed watermark changes during the eBay read', async () => {
     const harness = quantityStatusHarness(1, 1);
     const initial = await harness.data.loadAggregate(groupId);

@@ -951,6 +951,101 @@ describe('YP6.1 variation listing API router', () => {
     expect(parity.body.journal.latestRevision.recovery).toMatchObject({operationKey: 'child-offer:1', retryStatus: 'reconciliation_required'});
   });
 
+  it('reports a terminal child with missing final revision proof as reconciliation-required', async () => {
+    const revision = latestRevision();
+    revision.operationPlan[1] = { ...revision.operationPlan[1]!, operation_key: 'revision-reconcile' };
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [revision]),
+      listCheckpointsByRevisionId: vi.fn(async () => [checkpoint()]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision).toMatchObject({
+      hasUnknownOutcome: true,
+      recovery: {
+        operationKey: 'revision-reconcile',
+        remoteState: 'unknown',
+        requiresReconciliation: true,
+        retryStatus: 'reconciliation_required',
+        recommendedActions: ['reconcile_remote_state', 'do_not_retry_blindly'],
+      },
+      operations: expect.arrayContaining([expect.objectContaining({ operationKey: 'revision-reconcile', state: 'pending' })]),
+    });
+  });
+
+  it('reports terminal revision proof with a stale watermark as safe idempotent retry', async () => {
+    const revision = latestRevision();
+    revision.operationPlan[1] = { ...revision.operationPlan[1]!, operation_key: 'revision-reconcile' };
+    const final = { ...checkpoint(), operationKey: 'revision-reconcile', checkpointId: 'revision-reconcile-complete' };
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [revision]),
+      listCheckpointsByRevisionId: vi.fn(async () => [checkpoint(), final]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.journal.latestRevision).toMatchObject({
+      hasUnknownOutcome: false,
+      recovery: {
+        operationKey: 'revision-reconcile',
+        remoteState: 'known_changed',
+        requiresReconciliation: false,
+        retryStatus: 'safe_to_retry',
+        recommendedActions: ['retry_action'],
+      },
+    });
+  });
+
+  it('surfaces a foreign journal checkpoint as an actionable unknown outcome', async () => {
+    const foreign = { ...checkpointWithState('started'), operationKey: 'foreign-operation' };
+    const response = await request(app(dataAccess({
+      listCheckpointsByRevisionId: vi.fn(async () => [foreign]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.body.journal.latestRevision).toMatchObject({
+      hasUnknownOutcome: true,
+      recovery: {
+        operationKey: 'foreign-operation',
+        remoteState: 'unknown',
+        requiresReconciliation: true,
+        recommendedActions: ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
+      },
+    });
+  });
+
+  it('does not advertise read-only reconcile for a missing non-reconcile operation', async () => {
+    const revision = latestRevision();
+    revision.operationPlan[1] = { ...revision.operationPlan[1]!, operation_key: 'revision-reconcile' };
+    const final = { ...checkpoint(), operationKey: 'revision-reconcile', checkpointId: 'revision-reconcile-complete' };
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [revision]),
+      listCheckpointsByRevisionId: vi.fn(async () => [final]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      operationKey: 'child-offer:1',
+      reconciliationSupported: false,
+      recommendedActions: ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
+      retryStatus: 'reconciliation_required',
+    });
+  });
+
+  it('does not treat malformed terminal revision proof as safe retry', async () => {
+    const revision = latestRevision();
+    revision.operationPlan[1] = { ...revision.operationPlan[1]!, operation_key: 'revision-reconcile' };
+    const malformed = { ...checkpoint(), operationKey: 'revision-reconcile', observedRemoteState: 'proven_absent', checkpointId: 'revision-reconcile-malformed' };
+    const response = await request(app(dataAccess({
+      listRevisionsByGroupId: vi.fn(async () => [revision]),
+      listCheckpointsByRevisionId: vi.fn(async () => [checkpoint(), malformed]),
+    }))).get(`/api/variation-listings/${groupId}`);
+
+    expect(response.body.journal.latestRevision.recovery).toMatchObject({
+      operationKey: 'revision-reconcile',
+      remoteState: 'unknown',
+      requiresReconciliation: true,
+      retryStatus: 'reconciliation_required',
+    });
+  });
+
   it('exposes reconciliation for an unresolved v3 active revision', async () => {
     const active = {
       ...latestRevision(),

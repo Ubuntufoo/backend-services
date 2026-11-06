@@ -23,6 +23,14 @@ const variationCId = '99999999-9999-4999-8999-999999999999';
 const copyCId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 const intentDigest = (intent: unknown) => createHash('sha256').update(JSON.stringify(intent)).digest('hex');
+const canonicalDigest = (value: unknown): string => {
+  const canonical = (child: unknown): string => Array.isArray(child)
+    ? `[${child.map(canonical).join(',')}]`
+    : child !== null && typeof child === 'object'
+      ? `{${Object.entries(child as Record<string, unknown>).filter(([, entry]) => entry !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`
+      : JSON.stringify(child) ?? 'null';
+  return createHash('sha256').update(canonical(value)).digest('hex');
+};
 
 function aggregate(overrides: Partial<VariationListingAggregateSnapshot['group']> = {}): VariationListingAggregateSnapshot {
   return {
@@ -251,6 +259,10 @@ function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: bool
     getInventoryItemGroup: vi.fn(async () => groupPresent ? { state: 'present' as const, value: { payload: bundle.group, variantSKUs: [...bundle.group.variantSKUs].reverse() } } : { state: 'proven_absent' as const }),
     getInventoryItem: vi.fn(async (sku: string) => { const child = bundle.children.find((entry) => entry.sku === sku)!; const payload = structuredClone(child.inventoryItem); if (options.saleDrift) payload.availability.shipToLocationAvailability.quantity = 0; return groupPresent ? { state: 'present' as const, value: { sku, groupKeys: [bundle.groupKey], payload } } : { state: 'proven_absent' as const }; }),
     getOffers: vi.fn(async (sku: string) => { const offer = groupPresent ? offerBySku.get(sku) : undefined; if (offer && options.saleDrift) { const drifted = { ...offer, payload: structuredClone(offer.payload) }; drifted.payload.availableQuantity = 0; return { state: 'present' as const, value: [drifted] }; } return { state: 'present' as const, value: offer ? [offer] : [] }; }),
+    getListing: vi.fn(async (listingId: string) => ({ Item: { ItemID: listingId, Variations: { Variation: bundle.children.flatMap((child) => {
+      const quantity = Math.min(child.inventoryItem.availability.shipToLocationAvailability.quantity, child.offer.availableQuantity);
+      return quantity > 0 ? [{ SKU: child.sku, StartPrice: { '#text': child.offer.pricingSummary.price.value, '@_currencyID': child.offer.pricingSummary.price.currency }, Quantity: quantity, SellingStatus: { QuantitySold: 0 } }] : [];
+    }) } } })),
     getMedia: vi.fn(async () => ({ state: 'proven_absent' as const })),
   };
   const deletes: string[] = [];
@@ -1723,6 +1735,77 @@ describe('YP6.2 variation listing actions', () => {
     ]);
   });
 
+  async function emptyActiveRetryHarness() {
+    const harness = activeWithdrawalHarness();
+    const current = harness.aggregate();
+    current.group.desired_revision = 4;
+    current.group.last_confirmed_revision = 3;
+    const frozen = (await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source;
+    const snapshot = frozen.snapshot as { aggregate: VariationListingAggregateSnapshot; confirmed: { aggregate: VariationListingAggregateSnapshot } };
+    snapshot.aggregate = { ...snapshot.aggregate, group: { ...snapshot.aggregate.group, desired_revision: 4, last_confirmed_revision: 3 } };
+    snapshot.confirmed.aggregate = { ...snapshot.confirmed.aggregate, group: { ...snapshot.confirmed.aggregate.group, desired_revision: 4, last_confirmed_revision: 3 } };
+    frozen.captured_desired_revision = 4;
+    frozen.operation_plan = frozen.operation_plan.map((operation) => ({ ...operation, intent_digest: intentDigest(operation.intent) }));
+    frozen.operation_count = frozen.operation_plan.length;
+    frozen.snapshot_digest = canonicalDigest(frozen.snapshot);
+    harness.journal.splice(0);
+    harness.access.value.confirmRevision.mockResolvedValue({ ...current.group, last_confirmed_revision: 4 });
+    return { harness, frozen };
+  }
+
+  it('retries an active frozen revision with an empty journal without recapturing', async () => {
+    const { harness } = await emptyActiveRetryHarness();
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).resolves.toMatchObject({ confirmedRevision: 4, revisionId });
+    expect(harness.access.value.captureRevision).not.toHaveBeenCalled();
+    expect(harness.access.value.confirmRevision).toHaveBeenCalledTimes(1);
+    expect(harness.journal[0]).toMatchObject({ operation_key: `child-item:${variationId}`, state: 'started' });
+    expect(harness.journal.at(-1)).toMatchObject({ operation_key: 'revision-reconcile', state: 'confirmed_complete' });
+  });
+
+  it('keeps an empty-journal Media operation blocked before remote resolution', async () => {
+    const { harness, frozen } = await emptyActiveRetryHarness();
+    const media = [
+      { copyId, role: 'front' as const, sourceUrl: 'https://source.example/front' },
+      { copyId, role: 'back' as const, sourceUrl: 'https://source.example/back' },
+    ];
+    frozen.snapshot = {
+      ...(frozen.snapshot as Record<string, unknown>),
+      mediaResources: media,
+    } as VariationListingRevisionRow['snapshot'];
+    const mediaOperations = media.map((entry, index) => ({
+      sequence_no: index + 1,
+      operation_key: `media:${entry.copyId}:${entry.role}`,
+      operation_kind: 'media_ingest',
+      target_ref: `${entry.copyId}:${entry.role}`,
+      intent_version: 1,
+      intent_digest: intentDigest(entry),
+      intent: entry,
+    }));
+    frozen.operation_plan = [
+      ...mediaOperations,
+      ...frozen.operation_plan.map((operation) => ({ ...operation, sequence_no: operation.sequence_no + mediaOperations.length })),
+    ];
+    frozen.operation_count = frozen.operation_plan.length;
+    frozen.snapshot_digest = canonicalDigest(frozen.snapshot);
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).rejects.toMatchObject({
+      status: { code: 'variation_listing_remote_outcome_unknown', operationKey: 'media:33333333-3333-4333-8333-333333333333:front', retryStatus: 'reconciliation_required' },
+    });
+    expect(harness.remoteFactory).not.toHaveBeenCalled();
+    expect(harness.journal).toHaveLength(0);
+  });
+
   it('blocks newer publish when an older revision has unresolved remote work', async () => {
     const access = data({ aggregate: aggregate({ desired_revision: 4, lifecycle_state: 'publish-ready' }), revisions: [revision()] });
     access.value.listCheckpointsByRevisionId.mockResolvedValue([{ source: { ...checkpoint('unknown', 'unknown'), operation_key: 'child-item:one' } }]);
@@ -1730,6 +1813,97 @@ describe('YP6.2 variation listing actions', () => {
     const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
     await expect(service.publish(groupId, 4)).rejects.toMatchObject({ status: { code: 'variation_listing_remote_outcome_unknown', requiresReconciliation: true } });
     expect(remoteFactory).not.toHaveBeenCalled();
+  });
+
+  it('blocks normal Publish Changes when a same-revision final proof is missing', async () => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const current = aggregate({ lifecycle_state: 'active', desired_revision: 4, last_confirmed_revision: 3 });
+      const frozen = revision(3);
+      frozen.captured_desired_revision = 4;
+      frozen.operation_plan = [
+        { sequence_no: 1, operation_key: 'child-offer:one', operation_kind: 'child_offer_write', target_ref: 'sku', intent_version: 1, intent_digest: 'b'.repeat(64), intent: {} },
+        { sequence_no: 2, operation_key: 'revision-reconcile', operation_kind: 'revision_reconcile', target_ref: 'group', intent_version: 1, intent_digest: 'c'.repeat(64), intent: {} },
+      ];
+      frozen.operation_count = 2;
+      const child = { ...checkpoint('confirmed_complete', 'present'), operation_key: 'child-offer:one' };
+      const access = data({ aggregate: current, revisions: [frozen], checkpoints: [child] });
+      const remoteFactory = vi.fn();
+      const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
+
+      await expect(service.publishChanges(groupId, 4)).rejects.toMatchObject({
+        status: {
+          code: 'variation_listing_remote_outcome_unknown',
+          operationKey: 'revision-reconcile',
+          requiresReconciliation: true,
+          retryStatus: 'reconciliation_required',
+        },
+      });
+      await expect(service.retry(groupId)).rejects.toMatchObject({
+        status: { code: 'variation_listing_remote_outcome_unknown', operationKey: 'revision-reconcile', retryStatus: 'reconciliation_required' },
+      });
+      expect(remoteFactory).not.toHaveBeenCalled();
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
+  });
+
+  it('recovers a terminal revision reconcile with a stale watermark read-only', async () => {
+    const harness = activeWithdrawalHarness();
+    const current = harness.aggregate();
+    current.group.desired_revision = 3;
+    current.group.last_confirmed_revision = 2;
+    const frozen = (await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source;
+    const activeSnapshot = frozen.snapshot as { aggregate: VariationListingAggregateSnapshot; confirmed: { aggregate: VariationListingAggregateSnapshot } };
+    activeSnapshot.aggregate = { ...activeSnapshot.aggregate, group: { ...activeSnapshot.aggregate.group, desired_revision: 3, last_confirmed_revision: 2 } };
+    activeSnapshot.confirmed.aggregate = { ...activeSnapshot.confirmed.aggregate, group: { ...activeSnapshot.confirmed.aggregate.group, desired_revision: 3, last_confirmed_revision: 2 } };
+    frozen.operation_plan = frozen.operation_plan
+      .filter((operation) => operation.operation_key.startsWith('child-offer:') || operation.operation_key === 'group-publish' || operation.operation_key === 'revision-reconcile')
+      .map((operation, index) => ({ ...operation, sequence_no: index + 1, intent_digest: intentDigest(operation.intent) }));
+    frozen.operation_count = frozen.operation_plan.length;
+    frozen.snapshot_digest = canonicalDigest(frozen.snapshot);
+    harness.access.value.confirmRevision.mockResolvedValue({ ...current.group, last_confirmed_revision: 3 });
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+    });
+
+    await expect(service.retry(groupId)).resolves.toMatchObject({ confirmedRevision: 3, revisionId });
+    expect(harness.access.value.confirmRevision).toHaveBeenCalledTimes(1);
+    expect(harness.access.value.confirmRevision).toHaveBeenCalledWith({ groupId, confirmedRevision: 3, expectedPreviousConfirmedRevision: 2 });
+    expect(harness.access.value.appendJournalCheckpoint).not.toHaveBeenCalled();
+    const resolved = await harness.remoteFactory.mock.results[0]!.value as { mutations: Record<string, ReturnType<typeof vi.fn>> };
+    for (const method of ['createMedia', 'createOrReplaceInventoryItem', 'createOffer', 'createOrReplaceInventoryItemGroup', 'publishInventoryItemGroup', 'publishOffer', 'updateOffer', 'withdrawInventoryItemGroup', 'deleteInventoryItem', 'deleteInventoryItemGroup', 'deleteOffer']) {
+      expect(resolved.mutations[method]).not.toHaveBeenCalled();
+    }
+  });
+
+  it('blocks newer Publish Changes on a foreign journal checkpoint before remote resolution', async () => {
+    const previousPublish = process.env.EBAY_PUBLISH_ENABLED;
+    process.env.EBAY_PUBLISH_ENABLED = 'true';
+    try {
+      const frozen = revision(3);
+      frozen.captured_desired_revision = 4;
+      const foreign = { ...checkpoint('started', null), operation_key: 'foreign-operation' };
+      const access = data({
+        aggregate: aggregate({ lifecycle_state: 'active', desired_revision: 4, last_confirmed_revision: 3 }),
+        revisions: [frozen],
+        checkpoints: [foreign],
+      });
+      const remoteFactory = vi.fn();
+      const service = createVariationListingActionService({ data: access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory });
+
+      await expect(service.publishChanges(groupId, 4)).rejects.toMatchObject({
+        status: { code: 'variation_listing_remote_outcome_unknown', operationKey: 'foreign-operation', requiresReconciliation: true },
+      });
+      expect(remoteFactory).not.toHaveBeenCalled();
+    } finally {
+      if (previousPublish === undefined) delete process.env.EBAY_PUBLISH_ENABLED;
+      else process.env.EBAY_PUBLISH_ENABLED = previousPublish;
+    }
   });
 
   it('fails closed instead of classifying an unsupported revision snapshot as initial publication', async () => {

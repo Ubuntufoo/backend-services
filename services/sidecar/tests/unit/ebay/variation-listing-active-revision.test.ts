@@ -954,6 +954,26 @@ describe('YP8.2 active revision preparation', () => {
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, [], remote, mutations))).rejects.toThrow('active_revision_reprepare_required');
     expect(revisions.captureCalls).toHaveLength(0);
     expect(mutationCalls).toBe(0);
+
+    const unknownRemote = {
+      ...base.remote,
+      async getInventoryItem(sku: string) {
+        if (sku === 'SKU-A') return { state: 'unknown' as const, reason: 'baseline read unavailable' };
+        return base.remote.getInventoryItem(sku);
+      },
+    };
+    const unknownRevisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    let unknownMutationCalls = 0;
+    const unknownMutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => { unknownMutationCalls += 1; return { offerId: 'unexpected' }; },
+      createOrReplaceInventoryItem: async () => { unknownMutationCalls += 1; },
+      createOrReplaceInventoryItemGroup: async () => { unknownMutationCalls += 1; },
+      publishOffer: async () => { unknownMutationCalls += 1; return { listingId: 'listing-1' }; },
+      updateOffer: async () => { unknownMutationCalls += 1; },
+    };
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, unknownRevisions, [], unknownRemote, unknownMutations))).rejects.toThrow('active_revision_reprepare_required');
+    expect(unknownRevisions.captureCalls).toHaveLength(0);
+    expect(unknownMutationCalls).toBe(0);
   });
 
   it('marks clean captured identity drift as known changed and reprepare-required', async () => {
@@ -1406,6 +1426,70 @@ describe('YP8.2 active revision preparation', () => {
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, malformed, base.remote, mutations))).rejects.toThrow('invalid reconciliation transition');
     malformed[2] = checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-offer:variation-A', attemptNumber: 2, checkpointNumber: 1, state: 'confirmed_complete', observedRemoteState: 'unknown', evidence: { payload: true } });
     await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, malformed, base.remote, mutations))).rejects.toThrow('terminal checkpoint requires present evidence');
+  });
+
+  it('resumes an existing active revision with no checkpoints after exact pre-state proof', async () => {
+    const previous = aggregate({
+      group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }),
+      variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1)],
+    });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [{ ...previous.variations[0]!, price_amount: 0.99 }, previous.variations[1]!],
+    });
+    const base = remoteFor(previous);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+    });
+    expect(prepared.captureInput.operationPlan.map((operation) => operation.operationKey)).toContain('child-offer:variation-A');
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    const desiredOffer = prepared.desiredBundlePreview!.children[0]!.offer as unknown as Json;
+    let offerA = base.bundle.children[0]!.offer as unknown as Json;
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...base.remote,
+      async getOffers(sku: string, marketplaceId: string) {
+        if (sku === current.variations[0]!.sku) return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: offerA, sku, status: 'PUBLISHED' as const }] };
+        return base.remote.getOffers(sku, marketplaceId);
+      },
+      async getListing(listingId: string) {
+        const listing = await base.remote.getListing(listingId) as { Item: { Variations: { Variation: Json[] } } };
+        const payload = offerA as Record<string, Json>;
+        const pricing = payload.pricingSummary as Record<string, Json>;
+        const price = pricing.price as Record<string, Json>;
+        const target = listing.Item.Variations.Variation.find((row) => (row as Record<string, Json>).SKU === current.variations[0]!.sku) as Record<string, Json>;
+        target.StartPrice = { '#text': price.value, '@_currencyID': price.currency };
+        return listing;
+      },
+    };
+    const mutationCalls: string[] = [];
+    const mutations: VariationListingActiveMutationGateway = {
+      bulkUpdatePriceQuantity: async () => {
+        expect(checkpoints[0]).toMatchObject({ operation_key: 'child-offer:variation-A', state: 'started' });
+        mutationCalls.push('bulkUpdatePriceQuantity');
+        offerA = desiredOffer;
+      },
+      createOffer: async () => ({ offerId: 'unexpected' }),
+      createOrReplaceInventoryItem: async () => {},
+      createOrReplaceInventoryItemGroup: async () => {},
+      publishOffer: async () => ({ listingId: 'listing-1' }),
+      updateOffer: async () => { mutationCalls.push('updateOffer'); },
+    };
+    const input = activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+      loadAggregate: async () => ({ ...current, group: { ...current.group, last_confirmed_revision: 1 } }),
+      confirmRevision: async () => ({ ...current.group, last_confirmed_revision: 2 }),
+    });
+
+    await expect(executeVariationListingActiveRevision(input)).resolves.toMatchObject({ confirmedRevision: 2, revisionId: 'revision-2' });
+    expect(revisions.captureCalls).toHaveLength(0);
+    expect(mutationCalls).toEqual(['bulkUpdatePriceQuantity']);
+    expect(checkpoints[0]).toMatchObject({ operation_key: 'child-offer:variation-A', state: 'started' });
+    expect(checkpoints).toContainEqual(expect.objectContaining({ operation_key: 'child-offer:variation-A', state: 'confirmed_complete', observed_remote_state: 'present' }));
+    expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'revision-reconcile', state: 'confirmed_complete' });
   });
 
   it('captures once and resumes from the durable revision without recapturing', async () => {

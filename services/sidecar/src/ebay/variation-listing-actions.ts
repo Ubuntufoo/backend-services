@@ -990,6 +990,87 @@ function latestUnresolvedOperation(
   )[0];
 }
 
+export type VariationListingRevisionRecoveryOperation = { operationKey: string; operationKind: string; sequenceNo: number };
+export type VariationListingRevisionRecoveryCheckpoint = { operationKey: string; state: VariationListingPublishingCheckpointRow['state']; observedRemoteState: VariationListingPublishingCheckpointRow['observed_remote_state']; attemptNumber: number; checkpointNumber: number };
+export type VariationListingRevisionRecovery = { operationKey: string; operationKind: string; kind: 'checkpoint' | 'missing' | 'watermark_pending'; state: VariationListingPublishingCheckpointRow['state'] | 'pending' | 'confirmation_pending'; observedRemoteState: VariationListingPublishingCheckpointRow['observed_remote_state']; checkpoint?: VariationListingRevisionRecoveryCheckpoint; foreign?: boolean };
+
+export function classifyVariationListingRevisionRecovery(input: {
+  capturedDesiredRevision: number;
+  lastConfirmedRevision: number | null;
+  operationPlan: readonly VariationListingRevisionRecoveryOperation[];
+  checkpoints: readonly VariationListingRevisionRecoveryCheckpoint[];
+}): VariationListingRevisionRecovery | null {
+  const orderedPlan = [...input.operationPlan].sort((left, right) => left.sequenceNo - right.sequenceNo);
+  const latestByKey = new Map<string, VariationListingRevisionRecoveryCheckpoint>();
+  for (const checkpoint of input.checkpoints) {
+    const previous = latestByKey.get(checkpoint.operationKey);
+    if (!previous || checkpoint.attemptNumber > previous.attemptNumber || (checkpoint.attemptNumber === previous.attemptNumber && checkpoint.checkpointNumber > previous.checkpointNumber)) latestByKey.set(checkpoint.operationKey, checkpoint);
+  }
+  const planKeys = new Set(orderedPlan.map((operation) => operation.operationKey));
+  const foreign = [...latestByKey.entries()].find(([operationKey]) => !planKeys.has(operationKey));
+  if (foreign) {
+    const [operationKey, checkpoint] = foreign;
+    return { operationKey, operationKind: 'foreign_checkpoint', kind: 'checkpoint', state: checkpoint.state, observedRemoteState: checkpoint.observedRemoteState, checkpoint, foreign: true };
+  }
+  for (const operation of orderedPlan) {
+    const latest = latestByKey.get(operation.operationKey);
+    if (!latest) continue;
+    if (['started', 'unknown', 'retry_authorized', 'retry_exhausted'].includes(latest.state)) {
+      return { operationKey: operation.operationKey, operationKind: operation.operationKind, kind: 'checkpoint', state: latest.state, observedRemoteState: latest.observedRemoteState, checkpoint: latest };
+    }
+  }
+
+  if (input.lastConfirmedRevision !== null && input.capturedDesiredRevision <= input.lastConfirmedRevision) return null;
+  const revisionReconcile = orderedPlan.find((operation) =>
+    operation.operationKey === 'revision-reconcile' && operation.operationKind === 'revision_reconcile'
+  );
+  if (!revisionReconcile) return null;
+  if (orderedPlan.some((operation) => operation.operationKind === 'permanent_removal_group_membership' || operation.operationKind === 'withdrawal' || operation.operationKind === 'final_absence_verification' || operation.operationKind.startsWith('cleanup_'))) return null;
+  const missing = orderedPlan.find((operation) => !latestByKey.has(operation.operationKey));
+  if (missing) return { operationKey: missing.operationKey, operationKind: missing.operationKind, kind: 'missing', state: 'pending', observedRemoteState: 'unknown' };
+  const terminalReconcile = latestByKey.get(revisionReconcile.operationKey);
+  if (!terminalReconcile || !['confirmed_complete', 'confirmed_no_op'].includes(terminalReconcile.state) || terminalReconcile.observedRemoteState !== 'present') {
+    return terminalReconcile
+      ? { operationKey: revisionReconcile.operationKey, operationKind: revisionReconcile.operationKind, kind: 'checkpoint', state: terminalReconcile.state, observedRemoteState: terminalReconcile.observedRemoteState, checkpoint: terminalReconcile }
+      : null;
+  }
+  return terminalReconcile
+    ? { operationKey: revisionReconcile.operationKey, operationKind: revisionReconcile.operationKind, kind: 'watermark_pending', state: 'confirmation_pending', observedRemoteState: terminalReconcile.observedRemoteState ?? 'present', checkpoint: terminalReconcile }
+    : null;
+}
+
+function classifyRevisionRow(
+  revision: VariationListingRevisionRow,
+  checkpoints: readonly VariationListingPublishingCheckpointRow[],
+  lastConfirmedRevision: number | null,
+): VariationListingRevisionRecovery | null {
+  return classifyVariationListingRevisionRecovery({ capturedDesiredRevision: revision.captured_desired_revision, lastConfirmedRevision, operationPlan: operationPlan(revision), checkpoints: checkpoints.filter((row) => row.revision_id === revision.revision_id).map((row) => ({ operationKey: row.operation_key, state: row.state, observedRemoteState: row.observed_remote_state, attemptNumber: row.attempt_number, checkpointNumber: row.checkpoint_number })) });
+}
+
+function checkpointForRecovery(
+  history: readonly VariationListingPublishingCheckpointRow[],
+  recovery: VariationListingRevisionRecovery,
+): VariationListingPublishingCheckpointRow | undefined {
+  return recovery.checkpoint && history.find((row) =>
+    row.operation_key === recovery.operationKey &&
+    row.attempt_number === recovery.checkpoint!.attemptNumber &&
+    row.checkpoint_number === recovery.checkpoint!.checkpointNumber
+  );
+}
+
+function throwRevisionRecovery(
+  action: VariationListingActionName,
+  groupId: string,
+  revision: VariationListingRevisionRow,
+  history: readonly VariationListingPublishingCheckpointRow[],
+  recovery: VariationListingRevisionRecovery,
+): never {
+  if (recovery.kind === 'checkpoint') {
+    throw unresolvedError(action, groupId, revision, checkpointForRecovery(history, recovery) ?? history[0]!);
+  }
+  throw revisionRecoveryError(action, groupId, revision, recovery);
+}
+
 function unresolvedError(
   action: VariationListingActionName,
   groupId: string,
@@ -1021,6 +1102,29 @@ function unresolvedError(
       ? 'An older action revision exhausted its bounded replay; reconcile it before starting a newer action.'
       : 'An older action revision has an unresolved remote outcome. Reconcile it before starting a newer action.',
     userActionRequired: true,
+  });
+}
+
+function revisionRecoveryError(
+  action: VariationListingActionName,
+  groupId: string,
+  revision: VariationListingRevisionRow,
+  recovery: VariationListingRevisionRecovery,
+): VariationListingActionError {
+  const confirmationPending = recovery.kind === 'watermark_pending';
+  const readOnlyReconcile = recovery.kind === 'missing' && recovery.operationKind === 'revision_reconcile';
+  return new VariationListingActionError(409, {
+    action, affected: { groupId }, category: confirmationPending ? 'state' : 'reconciliation',
+    code: confirmationPending ? 'variation_listing_revision_confirmation_pending' : 'variation_listing_remote_outcome_unknown',
+    issues: [], operationKey: recovery.operationKey,
+    recommendedActions: confirmationPending ? ['retry_action'] : readOnlyReconcile ? ['reconcile_remote_state', 'do_not_retry_blindly'] : ['inspect_remote_state', 'resolve_manually', 'do_not_retry_blindly'],
+    remoteState: confirmationPending ? 'known_changed' : 'unknown', requiresReconciliation: !confirmationPending,
+    retryStatus: confirmationPending ? 'safe_to_retry' : 'reconciliation_required', revisionId: revision.revision_id,
+    severity: 'error', stage: 'preflight', summary: confirmationPending
+      ? 'The frozen revision is fully reconciled remotely, but its local confirmation watermark is still pending; retry the idempotent finalization.'
+      : readOnlyReconcile
+        ? 'The frozen revision has an unstarted final reconciliation operation. Reconcile its exact remote state before retrying; do not retry blindly.'
+        : 'The frozen revision has an incomplete operation that cannot be read-only reconciled; inspect its exact remote state before retrying.', userActionRequired: true,
   });
 }
 
@@ -1238,31 +1342,40 @@ export async function readVariationListingQuantityStatus(
       .sort((a, b) => b.captured_desired_revision - a.captured_desired_revision)) {
       const history = (await options.data.listCheckpointsByRevisionId(revision.revision_id))
         .map((checkpoint) => checkpoint.source);
-      const unresolved = latestUnresolvedOperation(history, operationPlan(revision));
-      if (!unresolved) continue;
-      const exhausted = unresolved.state === 'retry_exhausted';
+      const recovery = classifyRevisionRow(revision, history, aggregate.group.last_confirmed_revision);
+      if (!recovery) continue;
+      const exhausted = recovery.kind === 'checkpoint' && recovery.state === 'retry_exhausted';
+      const confirmationPending = recovery.kind === 'watermark_pending';
       const remoteState = exhausted
-        ? unresolved.observed_remote_state === 'present'
+        ? recovery.observedRemoteState === 'present'
           ? 'known_changed' as const
-          : unresolved.observed_remote_state === 'proven_absent'
+          : recovery.observedRemoteState === 'proven_absent'
             ? 'known_unchanged' as const
             : 'unknown' as const
-        : 'unknown' as const;
+        : confirmationPending
+          ? 'known_changed' as const
+          : 'unknown' as const;
       throw new VariationListingActionError(409, {
         action: 'reconcile',
         affected: { groupId, variationId, sku },
-        category: exhausted ? 'terminal' : 'reconciliation',
+        category: exhausted ? 'terminal' : confirmationPending ? 'state' : 'reconciliation',
         code: exhausted ? 'retry_exhausted' : 'quantity_projection_unavailable_reconciliation_required',
         issues: [],
-        operationKey: unresolved.operation_key,
+        operationKey: recovery.operationKey,
         revisionId: revision.revision_id,
-        recommendedActions: exhausted ? ['inspect_remote_state', 'resolve_manually'] : ['reconcile_remote_state', 'do_not_retry_blindly'],
+        recommendedActions: exhausted
+          ? ['inspect_remote_state', 'resolve_manually']
+          : confirmationPending
+            ? ['retry_action']
+            : ['reconcile_remote_state', 'do_not_retry_blindly'],
         remoteState,
-        requiresReconciliation: !exhausted || remoteState === 'unknown',
-        retryStatus: exhausted ? 'retry_exhausted' : 'reconciliation_required',
+        requiresReconciliation: !exhausted && !confirmationPending || remoteState === 'unknown',
+        retryStatus: exhausted ? 'retry_exhausted' : confirmationPending ? 'safe_to_retry' : 'reconciliation_required',
         severity: 'error',
         stage: 'quantity_status',
-        summary: 'eBay quantity is visible, but the pending projection is unavailable until this publication is reconciled. Do not retry.',
+        summary: confirmationPending
+          ? 'eBay quantity is visible, but the frozen revision confirmation watermark is pending; retry the idempotent finalization before adjusting quantity.'
+          : 'eBay quantity is visible, but the pending projection is unavailable until this publication is reconciled. Do not retry.',
         userActionRequired: true,
       });
     }
@@ -1499,10 +1612,11 @@ export function createVariationListingActionService(options: VariationListingAct
   const checkpoints = async (revisionId: string) => (await options.data.listCheckpointsByRevisionId(revisionId)).map((checkpoint) => checkpoint.source);
   const newestFirst = (revisions: VariationListingRevisionRow[]) =>
     [...revisions].sort((left, right) => right.captured_desired_revision - left.captured_desired_revision);
-  const unresolvedRevision = async (revisions: VariationListingRevisionRow[]) => {
+  const unresolvedRevision = async (revisions: VariationListingRevisionRow[], lastConfirmedRevision: number | null = null) => {
     for (const revision of newestFirst(revisions)) {
-      const unresolved = latestUnresolvedOperation(await checkpoints(revision.revision_id), operationPlan(revision));
-      if (unresolved) return { operation: unresolved, revision };
+      const history = await checkpoints(revision.revision_id);
+      const recovery = classifyRevisionRow(revision, history, lastConfirmedRevision);
+      if (recovery) return { recovery, revision };
     }
     return null;
   };
@@ -1646,9 +1760,29 @@ export function createVariationListingActionService(options: VariationListingAct
   ): Promise<void> => {
     for (const revision of newestFirst(revisions)) {
       if (revision.captured_desired_revision >= desiredRevision) continue;
-      const unresolved = latestUnresolvedOperation(await checkpoints(revision.revision_id), operationPlan(revision));
-      if (unresolved) throw unresolvedError(action, groupId, revision, unresolved);
+      const history = await checkpoints(revision.revision_id);
+      const recovery = classifyRevisionRow(
+        revision,
+        history,
+        (await options.data.loadAggregate(groupId))?.group.last_confirmed_revision ?? null,
+      );
+      if (!recovery) continue;
+      throwRevisionRecovery(action, groupId, revision, history, recovery);
     }
+  };
+  const assertNoRevisionRecovery = async (
+    action: VariationListingActionName,
+    groupId: string,
+    revision: VariationListingRevisionRow,
+  ): Promise<void> => {
+    const history = await checkpoints(revision.revision_id);
+    const recovery = classifyRevisionRow(
+      revision,
+      history,
+      (await options.data.loadAggregate(groupId))?.group.last_confirmed_revision ?? null,
+    );
+    if (!recovery) return;
+    throwRevisionRecovery(action, groupId, revision, history, recovery);
   };
   const journalFor = (revision?: VariationListingRevisionRow) => ({
     listCheckpoints: checkpoints,
@@ -1923,7 +2057,8 @@ export function createVariationListingActionService(options: VariationListingAct
     if (aggregate.group.lifecycle_state !== 'publish-ready') throw validationError('publish', groupId, 'initial_publish_lifecycle_blocked', `Initial publication is not allowed from lifecycle ${aggregate.group.lifecycle_state}.`, ['complete_group_review']);
     const revisions = await rows(groupId);
     const existing = revisions.find((revision) => revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === 'initial');
-    if (!existing) await assertNoOlderUnresolved('publish', groupId, revisions, expectedDesiredRevision);
+    if (existing) await assertNoRevisionRecovery('publish', groupId, existing);
+    else await assertNoOlderUnresolved('publish', groupId, revisions, expectedDesiredRevision);
     let inheritedRepresentativeImages: ReturnType<typeof reconstructVariationListingConfirmedRepresentativeImages> | undefined;
     if (!existing) {
       const cleanupRevision = newestFirst(revisions).find((revision) =>
@@ -1986,6 +2121,7 @@ export function createVariationListingActionService(options: VariationListingAct
     const existing = revisions.find((revision) =>
       revision.captured_desired_revision === expectedDesiredRevision && revisionKind(revision) === existingKind
     );
+    if (existing) await assertNoRevisionRecovery('publish_changes', groupId, existing);
     const previous = revisions.find((revision) =>
       revision.captured_desired_revision === aggregate.group.last_confirmed_revision
     );
@@ -2041,11 +2177,59 @@ export function createVariationListingActionService(options: VariationListingAct
   const retry = (groupId: string) => run('retry', groupId, async (progress) => {
     const aggregate = await requireAggregate(groupId, 'retry');
     const revisions = await rows(groupId);
-    const pending = await unresolvedRevision(revisions);
+    const pending = await unresolvedRevision(revisions, aggregate.group.last_confirmed_revision);
     const revision = pending?.revision ?? newestFirst(revisions)[0];
     if (!revision) throw validationError('retry', groupId, 'retry_revision_missing', 'There is no frozen action revision to reconcile or retry.', ['refresh_group']);
     const history = await checkpoints(revision.revision_id);
-    const unresolved = latestUnresolvedOperation(history, operationPlan(revision));
+    const recovery = pending?.recovery ?? classifyRevisionRow(revision, history, aggregate.group.last_confirmed_revision);
+    if (recovery?.kind === 'missing') {
+      if (
+        revisionKind(revision) === 'active' &&
+        history.length === 0 &&
+        ['child_inventory_item_write', 'child_offer_write', 'complete_group_replace'].includes(recovery.operationKind)
+      ) {
+        assertPublicationMutationEnabled('retry', groupId);
+        assertNoPendingPermanentRemoval('retry', groupId, aggregate);
+        await assertNoPendingRemovedSkuRetirement('retry', groupId, revisions);
+        const deps = await resolveDependencies();
+        const frozen = hydrateActive(revision);
+        if (deps.assertMerchantLocation) {
+          await deps.assertMerchantLocation(frozen.snapshot.aggregate.group.merchant_location_key);
+        }
+        assertNoTerminalZeroRestock('retry', frozen);
+        progress('reconcile_remote_state', { operationKey: recovery.operationKey, revisionId: revision.revision_id });
+        return await executeVariationListingActiveRevisionPublication({
+          frozen,
+          journal: journalFor(revision),
+          mutations: deps.mutations,
+          remote: deps.remote,
+          transaction,
+        });
+      }
+      throw revisionRecoveryError('retry', groupId, revision, recovery);
+    }
+    if (recovery?.kind === 'watermark_pending') {
+      if (revisionKind(revision) !== 'active' && revisionKind(revision) !== 'initial') {
+        throw revisionRecoveryError('retry', groupId, revision, recovery);
+      }
+      progress('reconcile_remote_state', { operationKey: recovery.operationKey, revisionId: revision.revision_id });
+      if (revisionKind(revision) === 'active') {
+        await assertNoPendingRemovedSkuRetirement('retry', groupId, revisions);
+        const deps = await resolveDependencies();
+        const frozen = hydrateActive(revision);
+        assertNoTerminalZeroRestock('retry', frozen);
+        return await executeVariationListingActiveRevisionPublication({
+          frozen,
+          journal: journalFor(revision),
+          mutations: deps.mutations,
+          remote: deps.remote,
+          transaction,
+          readOnlyReconcile: true,
+        });
+      }
+      return await executeInitial(aggregate, revision, undefined, true);
+    }
+    const unresolved = recovery ? checkpointForRecovery(history, recovery) : undefined;
     if (!unresolved) {
       // A remote removal can be complete while the local finalizer response is
       // lost. The terminal journal is then durable, but the staged marker and
@@ -2180,11 +2364,14 @@ export function createVariationListingActionService(options: VariationListingAct
   const reconcile = (groupId: string) => run('reconcile', groupId, async (progress) => {
     const aggregate = await requireAggregate(groupId, 'reconcile');
     assertNoPendingPermanentRemoval('reconcile', groupId, aggregate);
-    const pending = await unresolvedRevision(await rows(groupId));
+    const pending = await unresolvedRevision(await rows(groupId), aggregate.group.last_confirmed_revision);
     if (!pending) {
       throw validationError('reconcile', groupId, 'reconcile_not_required', 'No unresolved operation requires reconciliation.', ['refresh_group']);
     }
-    progress('reconcile_remote_state', { operationKey: pending.operation.operation_key, revisionId: pending.revision.revision_id });
+    if (pending.recovery.kind === 'missing' && pending.recovery.operationKind !== 'revision_reconcile') {
+      throw revisionRecoveryError('reconcile', groupId, pending.revision, pending.recovery);
+    }
+    progress('reconcile_remote_state', { operationKey: pending.recovery.operationKey, revisionId: pending.revision.revision_id });
     if (revisionKind(pending.revision) === 'active') {
       await assertNoPendingRemovedSkuRetirement('reconcile', groupId, await rows(groupId));
       const deps = await resolveDependencies();
@@ -2438,8 +2625,10 @@ export function createVariationListingActionService(options: VariationListingAct
         cleanupRevisionId = cleanupRevision.revision_id;
       } else {
         const revisionsBefore = await rows(groupId);
-        const unresolved = await unresolvedRevision(revisionsBefore);
-        if (unresolved) throw unresolvedError('return_to_review', groupId, unresolved.revision, unresolved.operation);
+        const unresolved = await unresolvedRevision(revisionsBefore, aggregate.group.last_confirmed_revision);
+        if (unresolved) {
+          throwRevisionRecovery('return_to_review', groupId, unresolved.revision, await checkpoints(unresolved.revision.revision_id), unresolved.recovery);
+        }
 
         progress('cleanup_failed_initial_publication');
         const cleanupResult = await performUnpublishedAbandon('cleanup', groupId, expectedDesiredRevision, progress);
