@@ -52,13 +52,19 @@ function digest(value: Json): string {
   const canonical = (v: Json): string => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v !== null && typeof v === 'object' ? `{${Object.entries(v).sort(([a],[b]) => a.localeCompare(b)).map(([k,c]) => `${JSON.stringify(k)}:${canonical(c as Json)}`).join(',')}}` : JSON.stringify(v);
   return createHash('sha256').update(canonical(value)).digest('hex');
 }
+function representativeImages(previous: VariationListingAggregateSnapshot) {
+  return previous.copies.map((entry) => {
+    const token = entry.copy_id.replace(/^copy-/, '');
+    return { copyId: entry.copy_id, frontEpsUrl: eps(`${token}F`), backEpsUrl: eps(`${token}B`) };
+  });
+}
 function version1Revision(previous: VariationListingAggregateSnapshot): VariationListingRevisionRow {
-  const representativeImages = [{ copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') }, { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') }];
+  const images = representativeImages(previous);
   const snapshot = {
     aggregate: previous,
     confirmed: {
       aggregate: previous,
-      representativeImages,
+      representativeImages: images,
       remote: {
         listingId: 'listing-1',
         offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
@@ -66,7 +72,7 @@ function version1Revision(previous: VariationListingAggregateSnapshot): Variatio
       revisionId: 'revision-1',
     },
     mediaResources: [],
-    representativeImages,
+    representativeImages: images,
   } as Json;
   const offerOperations = previous.variations.map((entry, index) => ({ intent: {}, intent_digest: digest({}), intent_version: 1, operation_key: `child-offer:${entry.variation_id}`, operation_kind: 'child_offer_write', sequence_no: index + 1, target_ref: entry.sku }));
   const operationPlan = [
@@ -98,7 +104,7 @@ function remoteFor(
   quantityOverrides: Record<string, { inventoryItemQuantity?: number; offerQuantity?: number }> = {},
   historicalConditionPayload = false
 ) {
-  const images = [{ copyId: 'copy-A', frontEpsUrl: eps('AF'), backEpsUrl: eps('AB') }, { copyId: 'copy-B', frontEpsUrl: eps('BF'), backEpsUrl: eps('BB') }];
+  const images = representativeImages(previous);
   const bundleBuilder = historicalConditionPayload
     ? buildVariationListingHistoricalInventoryPayloadBundle
     : buildVariationListingInventoryPayloadBundle;
@@ -2606,6 +2612,83 @@ describe('YP8.2 active revision executor acceptance', () => {
       expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(failure === 'sibling-quantity-drift' ? [] : ['started', 'unknown']);
       expect(fixture.checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(false);
     });
+  });
+
+  it('characterizes the YP10.11 Trading zero/zero discrepancy as unresolved and fails closed', async () => {
+    const previous = aggregate({
+      group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }),
+      variations: [variation('A', 0), variation('B', 1), variation('C', 2)],
+      copies: [copy('A'), copy('B'), copy('C')],
+    });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
+      variations: [variation('A', 0), variation('B', 1, 'copy-B', 0.99, -1), variation('C', 2)],
+      copies: [copy('A'), copy('B'), copy('C')],
+    });
+    const base = remoteFor(previous, {
+      'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1 },
+      'SKU-B': { inventoryItemQuantity: 1, offerQuantity: 1 },
+      'SKU-C': { inventoryItemQuantity: 1, offerQuantity: 1 },
+    });
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+    });
+    const desired = prepared.desiredBundlePreview;
+    if (!desired) throw new Error('discrepancy fixture should have complete desired media');
+    expect(desired.children.map((child) => [child.sku, child.quantity])).toEqual([
+      ['SKU-A', 1],
+      ['SKU-B', 0],
+      ['SKU-C', 1],
+    ]);
+
+    const desiredBySku = new Map(desired.children.map((child) => [child.sku, child]));
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      async getInventoryItem(sku) {
+        const child = desiredBySku.get(sku);
+        if (!child) return { state: 'proven_absent' as const };
+        return { state: 'present' as const, value: { groupKeys: [desired.groupKey], payload: child.inventoryItem as unknown as Json, sku } };
+      },
+      async getOffers(sku, marketplaceId) {
+        const child = desiredBySku.get(sku);
+        if (!child) return { state: 'present' as const, value: [] };
+        return { state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: child.offer as unknown as Json, sku, status: 'PUBLISHED' as const }] };
+      },
+      async getListing(listingId) {
+        const rows = (['SKU-A', 'SKU-C'] as const).map((sku) => {
+          const child = desiredBySku.get(sku)!;
+          return listingVariation(child, 0, 0);
+        });
+        return { Item: { ItemID: listingId, Variations: { Variation: rows } } };
+      },
+      async getInventoryItemGroup() {
+        return { state: 'present' as const, value: { payload: desired.group as unknown as Json, variantSKUs: [...desired.group.variantSKUs] } };
+      },
+    };
+    const terminalOperations = prepared.captureInput.operationPlan.filter((operation) => operation.operationKey !== 'revision-reconcile');
+    const checkpoints = terminalOperations.flatMap((operation) => [
+      checkpointFrom({ revisionId: 'revision-2', operationKey: operation.operationKey, attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} }),
+      checkpointFrom({ revisionId: 'revision-2', operationKey: operation.operationKey, attemptNumber: 1, checkpointNumber: 2, state: 'confirmed_complete', observedRemoteState: 'present', evidence: { confirmed: true } }),
+    ]);
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => { throw new Error('read-only discrepancy characterization attempted Offer mutation'); },
+      createOrReplaceInventoryItem: async () => { throw new Error('read-only discrepancy characterization attempted Item mutation'); },
+      createOrReplaceInventoryItemGroup: async () => { throw new Error('read-only discrepancy characterization attempted Group mutation'); },
+      publishOffer: async () => { throw new Error('read-only discrepancy characterization attempted publish mutation'); },
+      updateOffer: async () => { throw new Error('read-only discrepancy characterization attempted Offer update'); },
+    };
+    await expect(executeVariationListingActiveRevision({
+      ...activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+        loadAggregate: async () => current,
+        confirmRevision: async () => { throw new Error('Trading discrepancy must not confirm the revision'); },
+      }),
+      readOnlyReconcile: true,
+    })).rejects.toThrow('final listing-facing state sibling SKU-A quantity changed outside the frozen transition');
+    expect(checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(false);
   });
 
   it('fails closed when Trading GetItem returns a numeric variation price without currency', async () => {
