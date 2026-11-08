@@ -34,7 +34,7 @@ function setup() {
   const remote:RemovedSkuRetirementRemote={
     readItem:vi.fn(async()=>present?{state:'present',sku:'target',groupKeys:[],quantity:0,payload:{title:'Frozen card'}}:{state:'absent'}),
     readAllOffers:vi.fn(async()=>({complete:true,offers:present?[{offerId:'offer',sku:'target',marketplaceId:'EBAY_US',status:'UNPUBLISHED' as const,listingId:null,availableQuantity:0,payload:{pricingSummary:{price:{value:'0.99',currency:'USD'}}}}]:[]})),
-    readOrderSafety:vi.fn(async()=>({complete:true,openTargetLines:0,fulfilledTargetLines:0})),
+    readOrderSafety:vi.fn(async()=>({complete:true,openTargetLines:0})),
     verifySurvivors:vi.fn(async()=>true),
     deleteInventoryItem:vi.fn(async()=>{present=false;}),
   };
@@ -48,12 +48,16 @@ describe('c2b remote Inventory Item retirement',()=>{
     expect(result.offerAbsent).toBe(true);
     expect(t.store.start).toHaveBeenCalledOnce();
     expect(t.remote.deleteInventoryItem).toHaveBeenCalledWith('target');
+    expect(t.remote.readOrderSafety).toHaveBeenCalledTimes(3);
+    expect(t.remote.deleteInventoryItem.mock.invocationCallOrder[0])
+      .toBeGreaterThan(t.remote.readOrderSafety.mock.invocationCallOrder[1]);
     expect(t.store.markComplete).toHaveBeenCalledOnce();
   });
   it('reconciles absent Item+Offer after a lost response, without another DELETE',async()=>{
     const t=setup();t.setPresent(false);t.setState('unknown');
     expect((await executeRemovedSkuRemoteRetirement({plan,...t})).state).toBe('confirmed_complete');
     expect(t.remote.deleteInventoryItem).not.toHaveBeenCalled();
+    expect(t.remote.readOrderSafety).toHaveBeenCalledTimes(2);
   });
   it('blocks retry of a pending or ambiguous deletion',async()=>{
     const t=setup();t.setState('started');
@@ -125,8 +129,8 @@ describe('c2b remote Inventory Item retirement',()=>{
   it('records post-start order drift without issuing a remote delete',async()=>{
     const t=setup();
     vi.mocked(t.remote.readOrderSafety)
-      .mockResolvedValueOnce({complete:true,openTargetLines:0,fulfilledTargetLines:0})
-      .mockResolvedValueOnce({complete:true,openTargetLines:1,fulfilledTargetLines:0});
+      .mockResolvedValueOnce({complete:true,openTargetLines:0})
+      .mockResolvedValueOnce({complete:true,openTargetLines:1});
     await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/after durable start/);
     expect(t.store.start).toHaveBeenCalledOnce();
     expect(t.store.markUnknown).toHaveBeenCalledOnce();
@@ -135,7 +139,7 @@ describe('c2b remote Inventory Item retirement',()=>{
 
   it('blocks retirement when an outstanding target order exists',async()=>{
     const t=setup();
-    vi.mocked(t.remote.readOrderSafety).mockResolvedValueOnce({complete:true,openTargetLines:1,fulfilledTargetLines:0});
+    vi.mocked(t.remote.readOrderSafety).mockResolvedValueOnce({complete:true,openTargetLines:1});
     await expect(executeRemovedSkuRemoteRetirement({plan,...t})).rejects.toThrow(/outstanding order/);
     expect(t.store.start).not.toHaveBeenCalled();
   });

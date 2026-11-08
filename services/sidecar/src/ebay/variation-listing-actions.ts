@@ -749,7 +749,7 @@ function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirem
       const aggregate = record(snapshot.aggregate);
       const group = record(aggregate.group);
       if (typeof group.created_at !== 'string') throw new Error('Frozen group creation date is unavailable for order coverage.');
-      return await readRemovedSkuOrderSafety(deps.readRemovedSkuOrders, plan.targetSku, group.created_at);
+      return await readRemovedSkuOrderSafety(deps.readRemovedSkuOrders, plan.targetSku, group.created_at, plan.listingId);
     },
     verifySurvivors: async (plan) => {
       const group = await deps.remote.getInventoryItemGroup(plan.groupKey, { expectedNotFound: true });

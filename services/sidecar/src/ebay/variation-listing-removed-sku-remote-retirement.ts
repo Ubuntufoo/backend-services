@@ -57,7 +57,7 @@ export interface RemovedSkuRetirementOffer {
 export interface RemovedSkuRetirementRemote {
   readItem(sku: string): Promise<{state: 'present'; sku: string; groupKeys: string[] | null; quantity: number; payload: Json} | {state: 'absent'}>;
   readAllOffers(sku: string): Promise<{complete: boolean; offers: RemovedSkuRetirementOffer[]}>;
-  readOrderSafety(plan: VariationListingPermanentRemovalPlan): Promise<{complete: boolean; openTargetLines: number; fulfilledTargetLines: number}>;
+  readOrderSafety(plan: VariationListingPermanentRemovalPlan): Promise<{complete: boolean; openTargetLines: number}>;
   verifySurvivors(plan: VariationListingPermanentRemovalPlan): Promise<boolean>;
   deleteInventoryItem(sku: string): Promise<void>;
 }
@@ -123,13 +123,11 @@ function canonicalJson(value: Json): string {
   return JSON.stringify(value);
 }
 
-async function assertOrderSafety(plan: VariationListingPermanentRemovalPlan, remote: RemovedSkuRetirementRemote): Promise<number> {
+async function assertOrderSafety(plan: VariationListingPermanentRemovalPlan, remote: RemovedSkuRetirementRemote): Promise<void> {
   const evidence = await remote.readOrderSafety(plan);
-  if (!evidence.complete || !Number.isSafeInteger(evidence.openTargetLines) || evidence.openTargetLines !== 0 ||
-      !Number.isSafeInteger(evidence.fulfilledTargetLines) || evidence.fulfilledTargetLines < 0) {
+  if (!evidence.complete || !Number.isSafeInteger(evidence.openTargetLines) || evidence.openTargetLines !== 0) {
     throw new RemovedSkuRetirementBlocked('Current eBay order history is incomplete or the discontinued SKU has outstanding order lines.');
   }
-  return evidence.fulfilledTargetLines;
 }
 
 async function readTarget(
@@ -205,12 +203,12 @@ export async function executeRemovedSkuRemoteRetirement(input: {
     throw new RemovedSkuRetirementBlocked('The active group/listing or surviving variations changed.');
   }
   const initialState = await readTarget(plan, remote);
-  const initialFulfilledLines = await assertOrderSafety(plan, remote);
+  await assertOrderSafety(plan, remote);
   if (initialState === 'absent') {
-    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent' ||
-        await assertOrderSafety(plan, remote) !== initialFulfilledLines) {
-      throw new RemovedSkuRetirementBlocked('Previously absent Item/Offer or order evidence changed before durable completion.');
+    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent') {
+      throw new RemovedSkuRetirementBlocked('Previously absent Item/Offer changed before durable completion.');
     }
+    await assertOrderSafety(plan, remote);
     record = await store.markComplete(plan.captureInput.revisionId, completionEvidence(plan, targetOfferId));
     assertRecord(record, plan);
     if (record.state !== 'confirmed_complete') {
@@ -233,10 +231,10 @@ export async function executeRemovedSkuRemoteRetirement(input: {
   // evidence after it, immediately before destructive DELETE. Never replay
   // if one of these reads is unknown or has drifted.
   try {
-    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'present' ||
-        await assertOrderSafety(plan, remote) !== initialFulfilledLines) {
-      throw new RemovedSkuRetirementBlocked('Exact target, survivor, or order evidence changed after durable deletion start.');
+    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'present') {
+      throw new RemovedSkuRetirementBlocked('Exact target or survivor evidence changed after durable deletion start.');
     }
+    await assertOrderSafety(plan, remote);
   } catch (error) {
     await store.markUnknown(record.revisionId, {
       phase: 'post_start_pre_delete', state: 'unknown', targetSku: plan.targetSku, targetOfferId,
@@ -258,10 +256,10 @@ export async function executeRemovedSkuRemoteRetirement(input: {
   // A successful HTTP response is not final proof. A failed read must persist
   // ambiguity, not replay or report success.
   try {
-    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent' ||
-        await assertOrderSafety(plan, remote) !== initialFulfilledLines) {
+    if (!await remote.verifySurvivors(plan) || await readTarget(plan, remote) !== 'absent') {
       throw new RemovedSkuRetirementBlocked('eBay deletion returned but exact remote absence is unproven.');
     }
+    await assertOrderSafety(plan, remote);
   } catch (error) {
     await store.markUnknown(record.revisionId, {
       phase: 'post_delete_reconcile', state: 'unknown', targetSku: plan.targetSku, targetOfferId,
