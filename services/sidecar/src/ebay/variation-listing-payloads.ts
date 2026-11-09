@@ -277,7 +277,12 @@ function validateAggregateIdentity(
   const ordered = [...variations].sort((left, right) => left.position - right.position);
   ordered.forEach((variation, index) => {
     if (variation.group_id !== group.group_id) throw new Error('Every variation must belong to the payload group.');
-    if (variation.position !== index) throw new Error('Variation positions must be contiguous from zero.');
+    // Hard deletion leaves gaps in persisted positions. They order survivors;
+    // only uniqueness and non-negative PostgreSQL int32 bounds are required.
+    if (!Number.isInteger(variation.position) || variation.position < 0 || variation.position > 2_147_483_647 ||
+        (index > 0 && variation.position <= ordered[index - 1]!.position)) {
+      throw new Error('Variation positions must be unique non-negative int32 values.');
+    }
     if (variation.price_currency !== CURRENCY || !isVariationListingManualPriceAmount(variation.price_amount)) {
       throw new Error('Variation prices must be persisted USD manual tiers.');
     }

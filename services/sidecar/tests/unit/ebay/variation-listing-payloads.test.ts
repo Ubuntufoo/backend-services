@@ -117,6 +117,27 @@ function build(overrides: {
 }
 
 describe('buildVariationListingInventoryPayloadBundle', () => {
+  it('keeps survivor order when hard deletion leaves position gaps', () => {
+    const input = fixture();
+    // The first or middle SKU may have been permanently deleted in the DB.
+    input.aggregate.variations[0]!.position = 2;
+    input.aggregate.variations[1]!.position = 0;
+    for (const buildBundle of [buildVariationListingInventoryPayloadBundle, buildVariationListingHistoricalInventoryPayloadBundle]) {
+      const bundle = buildBundle(input);
+      expect(bundle.children.map((child) => child.sku)).toEqual(['SKU-1', 'SKU-2']);
+      expect(bundle.group.variantSKUs).toEqual(['SKU-1', 'SKU-2']);
+    }
+    // Historical frozen revision fields are never rewritten.
+    expect(input.aggregate.variations.map((variation) => variation.position)).toEqual([2, 0]);
+  });
+
+  it('accepts survivor positions that begin above zero', () => {
+    const input = fixture();
+    input.aggregate.variations[0]!.position = 2;
+    input.aggregate.variations[1]!.position = 1;
+    expect(buildVariationListingHistoricalInventoryPayloadBundle(input).group.variantSKUs).toEqual(['SKU-1', 'SKU-2']);
+  });
+
   it('builds ordered child items/offers, complete group, and exact publish request', () => {
     const result = build();
 
@@ -187,7 +208,10 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
     ['overlong title', (a: VariationListingAggregateSnapshot) => ({ ...a, group: group({ title: 'x'.repeat(81) }) })],
     ['missing description', (a: VariationListingAggregateSnapshot) => ({ ...a, group: group({ description: null }) })],
     ['overlong description', (a: VariationListingAggregateSnapshot) => ({ ...a, group: group({ description: 'x'.repeat(4001) }) })],
-    ['non-contiguous positions', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v, i) => ({ ...v, position: i + 1 })) })],
+    ['duplicate positions', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v) => ({ ...v, position: 0 })) })],
+    ['negative positions', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v, i) => ({ ...v, position: i - 1 })) })],
+    ['fractional positions', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v, i) => ({ ...v, position: i + 0.5 })) })],
+    ['out-of-range positions', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v, i) => ({ ...v, position: 2_147_483_648 + i })) })],
     ['duplicate SKUs', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v) => ({ ...v, sku: 'SAME' })) })],
     ['duplicate selector values', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v) => ({ ...v, selector_value: 'SAME' })) })],
     ['non-manual variation price', (a: VariationListingAggregateSnapshot) => ({ ...a, variations: a.variations.map((v) => ({ ...v, price_amount: 1.23 })) })],

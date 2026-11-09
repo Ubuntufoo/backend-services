@@ -541,7 +541,7 @@ function tradingConditionMatches(raw: unknown, listingId: string, expected: Json
 }
 
 /** The listing-facing Trading response must prove all three frozen policy IDs. */
-function tradingVerifiedListingPolicies(
+export function tradingVerifiedListingPolicies(
   raw: unknown, listingId: string, expected: Json
 ): VariationListingVerifiedListingPolicies | null {
   const root = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;

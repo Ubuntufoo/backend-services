@@ -6,8 +6,10 @@ import {
   buildVariationListingPermanentRemovalPlan,
   executeVariationListingPermanentRemoval,
   hydrateVariationListingPermanentRemovalPlan,
+  verifiedPermanentRemovalOffersForPlan,
   type VariationListingPermanentRemovalRemote,
 } from '@/ebay/variation-listing-permanent-removal.js';
+import { normalizeOffers } from '@/ebay/variation-listing-actions.js';
 import { reconstructConfirmedRemoteIdentity } from '@/ebay/variation-listing-active-revision.js';
 import type { VariationListingRemoteOffer, VariationListingRemoteRead } from '@/ebay/variation-listing-publication.js';
 
@@ -31,6 +33,19 @@ function canonicalUtf8(value: unknown): string {
 
 function digestUtf8(value: Json): string {
   return createHash('sha256').update(canonicalUtf8(value)).digest('hex');
+}
+
+function digestLegacy(value: Json): string {
+  const serialize = (part: Json): string => {
+    if (Array.isArray(part)) return `[${part.map(serialize).join(',')}]`;
+    if (part !== null && typeof part === 'object') {
+      return `{${Object.entries(part).filter(([, child]) => child !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => `${JSON.stringify(key)}:${serialize(child)}`).join(',')}}`;
+    }
+    return JSON.stringify(part);
+  };
+  return createHash('sha256').update(serialize(value)).digest('hex');
 }
 
 const selectorBySku: Record<string, string> = {
@@ -203,7 +218,7 @@ function remoteHarness(options: {
   };
 }
 
-async function planFixture(remote: VariationListingPermanentRemovalRemote, options: { previousMedia?: boolean; targetCopy?: boolean; omitFrozenTargetCopy?: boolean; tamperCurrent?: (current: VariationListingAggregateSnapshot) => void; tamperPrevious?: (previousRevision: VariationListingRevisionRow) => void } = {}) {
+async function planFixture(remote: VariationListingPermanentRemovalRemote, options: { previousMedia?: boolean; targetCopy?: boolean; omitFrozenTargetCopy?: boolean; tamperCurrent?: (current: VariationListingAggregateSnapshot) => void; tamperPrevious?: (previousRevision: VariationListingRevisionRow) => void; previousLegacyDigest?: boolean; previousPermanentRemovalShape?: boolean } = {}) {
   const prior = aggregate();
   const current = aggregate();
   prior.group.desired_revision = 3;
@@ -269,13 +284,14 @@ async function planFixture(remote: VariationListingPermanentRemovalRemote, optio
     },
     mediaResources: previousMedia,
     representativeImages: [],
+    ...(options.previousPermanentRemovalShape ? { permanentRemoval: { a: 1, B: 2 } } : {}),
   };
   const previousRevision = {
     revision_id: '55555555-5555-4555-8555-555555555555',
     group_id: groupId,
     captured_desired_revision: 3,
     snapshot_version: 3,
-    snapshot_digest: digestUtf8(previousSnapshot as unknown as Json),
+    snapshot_digest: options.previousLegacyDigest ? digestLegacy(previousSnapshot as unknown as Json) : digestUtf8(previousSnapshot as unknown as Json),
     snapshot: previousSnapshot,
     operation_plan: previousOperationPlan,
     operation_count: previousOperationPlan.length,
@@ -337,6 +353,135 @@ function transactionHarness(options: { failConfirmOnce?: boolean } = {}) {
   };
   return { transaction, checkpoints, journal: { loadRevision: vi.fn(async () => revision), listCheckpoints: vi.fn(async () => checkpoints) } };
 }
+
+describe('YP10.11 verified Offer omission during permanent removal', () => {
+  function omissionRemote(options: { wrongPolicy?: boolean; wrongListing?: boolean; conflictingId?: boolean } = {}) {
+    const harness = remoteHarness();
+    const remote: VariationListingPermanentRemovalRemote = harness.remote;
+    const originalGetOffers = remote.getOffers;
+    const getListing = vi.fn(async () => ({
+      ItemID: options.wrongListing ? 'other-listing' : 'listing-1',
+      SellerProfiles: {
+        SellerShippingProfile: { ShippingProfileID: options.wrongPolicy ? 'other' : 'f' },
+        SellerPaymentProfile: { PaymentProfileID: 'p' },
+        SellerReturnProfile: { ReturnProfileID: 'r' },
+      },
+    }));
+    const getOffersWithVerifiedPolicies = vi.fn(async (
+      sku: string,
+      _marketplaceId: string,
+      verified: { listingId: string; fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string },
+      unpublishedTarget?: { sku: string; offerId: string },
+    ) => {
+      const read = await originalGetOffers(sku, 'EBAY_US');
+      if (read.state !== 'present') return read;
+      const offer = read.value[0]!;
+      const raw = {
+        ...offer.payload,
+        offerId: offer.offerId,
+        sku,
+        marketplaceId: 'EBAY_US',
+        format: 'FIXED_PRICE',
+        categoryId: '261328',
+        merchantLocationKey: 'main',
+        pricingSummary: { price: { currency: 'USD', value: '1.49' } },
+        listingPolicies: {
+          eBayPlusIfEligible: false,
+          ...(options.conflictingId ? { fulfillmentPolicyId: 'foreign-policy' } : {}),
+        },
+        status: offer.status,
+        listing: offer.listingId ? { listingId: offer.listingId, listingStatus: 'ACTIVE' } : {},
+      };
+      return { state: 'present' as const, value: normalizeOffers({ offers: [raw] }, verified, unpublishedTarget) };
+    });
+    remote.getOffers = vi.fn(async () => ({
+      state: 'unknown' as const,
+      reason: 'Inventory item semantic offer fulfillment policy ID is missing or invalid.',
+    }));
+    Object.assign(remote, { getListing, getOffersWithVerifiedPolicies });
+    return { ...harness, getListing, getOffersWithVerifiedPolicies };
+  }
+
+  it('builds the frozen removal plan using exact Trading policy proof, not an assumed policy', async () => {
+    const { remote, getListing, getOffersWithVerifiedPolicies } = omissionRemote();
+    const plan = await planFixture(remote);
+    expect(plan.targetSku).toBe(targetSku);
+    expect(plan.quantitiesBySku[targetSku]?.sellableQuantity).toBe(0);
+    expect(getListing).toHaveBeenCalledTimes(1);
+    expect(getOffersWithVerifiedPolicies).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['wrongPolicy', 'wrongListing', 'conflictingId'] as const)(
+    'blocks removal planning on %s',
+    async (reason) => {
+      const { remote } = omissionRemote({
+        wrongPolicy: reason === 'wrongPolicy',
+        wrongListing: reason === 'wrongListing',
+        conflictingId: reason === 'conflictingId',
+      });
+      await expect(planFixture(remote)).rejects.toThrow();
+    },
+  );
+
+  it('completes mocked group membership removal with verified omitted Offer policies', async () => {
+    const { remote, getListing } = omissionRemote();
+    const plan = await planFixture(remote);
+    const { journal, transaction } = transactionHarness();
+    const result = await executeVariationListingPermanentRemoval({ plan, remote, journal, transaction });
+    expect(result).toMatchObject({ revisionId: plan.captureInput.revisionId, membershipConfirmed: true });
+    expect(getListing).toHaveBeenCalled();
+    expect(remote.replaceInventoryItemGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles exact unpublished target after a mocked membership change', async () => {
+    const { remote, getOffersWithVerifiedPolicies } = omissionRemote();
+    const plan = await planFixture(remote);
+    await remote.replaceInventoryItemGroup(plan.groupKey, plan.replacementGroupPayload);
+    const verified = verifiedPermanentRemovalOffersForPlan(remote, plan);
+    const target = await verified.getOffers(targetSku, 'EBAY_US');
+    expect(target.state).toBe('present');
+    if (target.state !== 'present') return;
+    expect(target.value[0]).toMatchObject({
+      sku: targetSku,
+      status: 'UNPUBLISHED',
+      listingId: null,
+    });
+    expect(getOffersWithVerifiedPolicies).toHaveBeenLastCalledWith(
+      targetSku, 'EBAY_US',
+      expect.objectContaining({ fulfillmentPolicyId: 'f', paymentPolicyId: 'p', returnPolicyId: 'r' }),
+      { sku: targetSku, offerId: `offer-${targetSku}` },
+    );
+  });
+});
+
+describe('YP10.11 confirmed previous revision digest compatibility', () => {
+  it('distinguishes legacy locale sorting from UTF-8 byte sorting', () => {
+    const mixedCase = { a: 1, B: 2 } as Json;
+    expect(digestLegacy(mixedCase)).not.toBe(digestUtf8(mixedCase));
+  });
+  it('accepts a genuine historic locale-sorted snapshot while retaining hash verification', async () => {
+    const { remote } = remoteHarness();
+    const plan = await planFixture(remote, { previousLegacyDigest: true });
+    expect(plan.targetSku).toBe(targetSku);
+  });
+  it('rejects tampered historic snapshots even when they retain the legacy digest', async () => {
+    const { remote } = remoteHarness();
+    await expect(planFixture(remote, {
+      previousLegacyDigest: true,
+      tamperPrevious: (revision) => {
+        (revision.snapshot as unknown as {aggregate: {group: {title: string}}}).aggregate.group.title = 'tampered';
+      },
+    })).rejects.toThrow('snapshot digest does not match');
+  });
+
+  it('never applies legacy digest compatibility to permanent-removal snapshots', async () => {
+    const { remote } = remoteHarness();
+    await expect(planFixture(remote, {
+      previousLegacyDigest: true,
+      previousPermanentRemovalShape: true,
+    })).rejects.toThrow('snapshot digest does not match');
+  });
+});
 
 describe('YP9.6c2 permanent removal executor', () => {
   it('hydrates the frozen v3 survivor plan without remote reads', async () => {

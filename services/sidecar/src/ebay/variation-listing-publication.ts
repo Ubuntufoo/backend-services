@@ -86,11 +86,12 @@ export interface VariationListingPublicationReadGateway {
     marketplaceId: string,
     options?: VariationListingRemoteReadOptions
   ): Promise<VariationListingRemoteRead<VariationListingRemoteOffer[]>>;
-  /** Confirmed-quantity only: use independently verified Trading policy IDs for omitted Offer fields. */
+  /** Only exact Trading-verified omissions in confirmed quantity reads or permanent removal. */
   getOffersWithVerifiedPolicies?(
     sku: string,
     marketplaceId: string,
-    verified: VariationListingVerifiedListingPolicies
+    verified: VariationListingVerifiedListingPolicies,
+    unpublishedTarget?: { sku: string; offerId: string }
   ): Promise<VariationListingRemoteRead<VariationListingRemoteOffer[]>>;
 }
 

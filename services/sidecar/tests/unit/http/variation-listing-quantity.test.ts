@@ -63,6 +63,7 @@ function quantityStatusHarness(
   remoteQuantity: number,
   includeUnresolvedRevision = false,
   unresolvedState: 'started' | 'unknown' | 'retry_exhausted' = 'started',
+  positions: [number, number, number] = [0, 1, 2],
 ) {
   const sku = 'BSKBL-Test-000001';
   const skuB = 'BSKBL-Test-000002';
@@ -203,6 +204,9 @@ function quantityStatusHarness(
       },
     ],
   } as unknown as VariationListingAggregateSnapshot;
+  current.variations.forEach((variation, index) => {
+    variation.position = positions[index]!;
+  });
   const confirmed = structuredClone(current);
   confirmed.group.desired_revision = 3;
   confirmed.variations[0]!.quantity_adjustment_counter = 0;
@@ -424,6 +428,16 @@ describe('YP10.11 confirmed condition descriptor read fallback', () => {
     expect(getListing).toHaveBeenCalledWith('listing-1');
   });
 
+  it('reads confirmed quantity status when surviving positions contain a deletion gap', async () => {
+    const harness = quantityStatusHarness(0, 1, false, 'started', [0, 2, 3]);
+    const status = await readVariationListingQuantityStatus(harness, groupId);
+    expect(status.variations.map((variation) => variation.sku)).toEqual([
+      'BSKBL-Test-000001',
+      'BSKBL-Test-000002',
+      'BSKBL-Test-000003',
+    ]);
+  });
+
   it.each([
     ['changed descriptor', { ConditionDescriptor: { Name: 40001, Value: [400011] } }],
     ['missing descriptor', {}],
@@ -498,7 +512,7 @@ describe('YP10.11 Offer read boundary policy safety', () => {
       offers: [{ ...offer, listingPolicies: { ...offer.listingPolicies, fulfillmentPolicyId: 'different' } }],
     }, verified)).toThrow('conflicts');
     expect(() => normalizeOffers({ offers: [offer] }, { ...verified, listingId: 'other' }))
-      .toThrow('matching listing identity');
+      .toThrow('Offer policy omission lacks exact verified listing or removed-target identity.');
   });
 
   it('rejects incomplete Offer pagination metadata', () => {

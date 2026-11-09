@@ -63,6 +63,7 @@ import {
   buildVariationListingPermanentRemovalPlan,
   executeVariationListingPermanentRemoval,
   hydrateVariationListingPermanentRemovalPlan,
+  verifiedPermanentRemovalOffersForPlan,
   type VariationListingPermanentRemovalRemote,
 } from '@/ebay/variation-listing-permanent-removal.js';
 import { hasEffectiveVariationListingPendingChanges, hasOnlyVariationListingPermanentRemovalPending } from '@/ebay/variation-listing-pending-changes.js';
@@ -496,7 +497,11 @@ export function normalizeItem(raw: unknown, sku: string) {
   return { groupKeys, payload, sku, conditionDescriptorsOmitted: !conditionDescriptorsPresent };
 }
 
-export function normalizeOffers(raw: unknown, verified?: VariationListingVerifiedListingPolicies) {
+export function normalizeOffers(
+  raw: unknown,
+  verified?: VariationListingVerifiedListingPolicies,
+  unpublishedTarget?: { sku: string; offerId: string },
+) {
   const root = record(raw);
   const rows = Array.isArray(root.offers) ? root.offers as unknown[] : [];
   for (const key of ['next', 'prev'] as const) {
@@ -519,10 +524,19 @@ export function normalizeOffers(raw: unknown, verified?: VariationListingVerifie
     // Fill only truly omitted fields with independently verified Trading evidence.
     const source = verified
       ? (() => {
-          if (readString(listing, 'listingId') !== verified.listingId ||
-              readString(row, 'status').toUpperCase() !== 'PUBLISHED' ||
+          const listingId = readString(listing, 'listingId');
+          const status = readString(row, 'status').toUpperCase();
+          const published = status === 'PUBLISHED' && listingId === verified.listingId;
+          // After the removal group PUT, only the frozen removed Offer may
+          // become UNPUBLISHED and lose listingId.
+          const withdrawnTarget = status === 'UNPUBLISHED' &&
+            unpublishedTarget !== undefined &&
+            unpublishedTarget.sku === row.sku &&
+            unpublishedTarget.offerId === row.offerId &&
+            (!listingId || listingId === verified.listingId);
+          if ((!published && !withdrawnTarget) ||
               !row.listingPolicies || typeof row.listingPolicies !== 'object' || Array.isArray(row.listingPolicies)) {
-            throw new Error('Published Offer omitted policy IDs without matching listing identity.');
+            throw new Error('Offer policy omission lacks exact verified listing or removed-target identity.');
           }
           for (const name of policyNames) {
             if (name in policies && policies[name] !== verified[name]) {
@@ -631,8 +645,8 @@ async function createProductionRemote() {
         );
         return read.state === 'proven_absent' ? { state: 'present', value: [] } : read;
       },
-      getOffersWithVerifiedPolicies: async (sku, marketplaceId, verified) => await remoteRead(
-        async () => normalizeOffers(await api.inventory.getOffers(sku, marketplaceId), verified),
+      getOffersWithVerifiedPolicies: async (sku, marketplaceId, verified, unpublishedTarget) => await remoteRead(
+        async () => normalizeOffers(await api.inventory.getOffers(sku, marketplaceId), verified, unpublishedTarget),
       ),
       getListing: async (listingId) => await api.trading.getListing(listingId),
       getMedia: async (location) => await remoteRead(async () => await api.media.getImage(location)),
@@ -2029,7 +2043,7 @@ export function createVariationListingActionService(options: VariationListingAct
     const retirementResult = await executeRemovedSkuRemoteRetirement({
       plan,
       store: retirementStore,
-      remote: removedSkuRemote(deps),
+      remote: removedSkuRemote({ ...deps, remote: verifiedPermanentRemovalOffersForPlan(deps.remote, plan) }),
     });
     const targetStillPresent = aggregate.variations.some((variation) =>
       variation.variation_id === plan.targetVariationId || variation.sku === plan.targetSku

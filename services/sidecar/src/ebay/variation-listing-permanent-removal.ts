@@ -15,6 +15,7 @@ import type {
 
 import {
   reconstructConfirmedRemoteIdentity,
+  tradingVerifiedListingPolicies,
   reconstructVariationListingConfirmedRepresentativeImages,
   revisionSnapshotAggregate,
 } from '@/ebay/variation-listing-active-revision.js';
@@ -39,6 +40,60 @@ export interface VariationListingPermanentRemovalRemote extends VariationListing
   /** Exhaustive, unfiltered Offer collection used to prove there is exactly
    * one frozen marketplace Offer and no foreign Offer before a Group PUT. */
   getAllOffersForSku?(sku: string): Promise<readonly VariationListingExhaustiveOffer[]>;
+}
+
+/** Reconcile omitted Offer policies only with the frozen listing's independently
+ * confirmed Trading SellerProfiles. All other remote payload checks remain strict. */
+export function verifiedPermanentRemovalOffers<T extends VariationListingPublicationReadGateway & {
+  getListing?: (listingId: string) => Promise<unknown>;
+}>(
+  remote: T,
+  expected: {
+    listingId: string;
+    targetSku: string;
+    targetOfferId: string;
+    fulfillmentPolicyId: string;
+    paymentPolicyId: string;
+    returnPolicyId: string;
+  },
+): T {
+  let listingRead: Promise<unknown> | undefined;
+  return {
+    ...remote,
+    getOffers: async (sku: string, marketplaceId: string, options?: { expectedNotFound?: boolean }) => {
+      const read = await remote.getOffers(sku, marketplaceId, options);
+      if (read.state !== 'unknown' ||
+          !/offer (?:fulfillment|payment|return) policy ID is missing or invalid/.test(read.reason) ||
+          !remote.getListing || !remote.getOffersWithVerifiedPolicies) return read;
+      listingRead ??= remote.getListing(expected.listingId);
+      const verified = tradingVerifiedListingPolicies(await listingRead, expected.listingId, asJson({
+        fulfillmentPolicyId: expected.fulfillmentPolicyId,
+        paymentPolicyId: expected.paymentPolicyId,
+        returnPolicyId: expected.returnPolicyId,
+      }));
+      if (!verified) throw new Error('Permanent removal Offer policies cannot be verified against the frozen listing.');
+      return await remote.getOffersWithVerifiedPolicies(
+        sku, marketplaceId, verified, { sku: expected.targetSku, offerId: expected.targetOfferId },
+      );
+    },
+  } as T;
+}
+
+export function verifiedPermanentRemovalOffersForPlan<T extends VariationListingPublicationReadGateway & {
+  getListing?: (listingId: string) => Promise<unknown>;
+}>(remote: T, plan: VariationListingPermanentRemovalPlan): T {
+  const root = object(plan.captureInput.snapshot, 'permanent-removal frozen snapshot');
+  const confirmed = object(root.confirmed, 'permanent-removal confirmed parent');
+  const aggregate = object(confirmed.aggregate, 'permanent-removal confirmed aggregate');
+  const group = object(aggregate.group, 'permanent-removal confirmed group');
+  return verifiedPermanentRemovalOffers(remote, {
+    listingId: plan.listingId,
+    targetSku: plan.targetSku,
+    targetOfferId: requiredString(plan.offerIdsBySku[plan.targetSku], 'frozen target Offer ID'),
+    fulfillmentPolicyId: requiredString(group.fulfillment_policy_id, 'frozen fulfillment policy ID'),
+    paymentPolicyId: requiredString(group.payment_policy_id, 'frozen payment policy ID'),
+    returnPolicyId: requiredString(group.return_policy_id, 'frozen return policy ID'),
+  });
 }
 
 export interface VariationListingExhaustiveOffer {
@@ -127,6 +182,33 @@ function asJson<T>(value: T): Json {
 
 function digest(value: Json): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+// Initial and active v3 revisions were captured with localeCompare key order.
+// Verify historical immutable snapshots with their original digest algorithm.
+// Permanent-removal revisions keep their C/UTF-8 canonical digest unchanged.
+function legacyRevisionDigest(value: Json): string {
+  const serialize = (part: Json): string => {
+    if (Array.isArray(part)) return `[${part.map(serialize).join(',')}]`;
+    if (part !== null && typeof part === 'object') {
+      return `{${Object.entries(part)
+        .filter(([, child]) => child !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => `${JSON.stringify(key)}:${serialize(child as Json)}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(part);
+  };
+  return createHash('sha256').update(serialize(value)).digest('hex');
+}
+
+function isPermanentRemovalRevision(revision: VariationListingRevisionRow): boolean {
+  const root = object(revision.snapshot, 'previous confirmed revision snapshot');
+  if (root[removalMetadataKey] !== undefined) return true;
+  return Array.isArray(revision.operation_plan) && revision.operation_plan.some((candidate) => {
+    if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+    return (candidate as Record<string, unknown>).operation_kind === OPERATION_KIND;
+  });
 }
 
 function object(value: Json, label: string): Record<string, Json> {
@@ -687,12 +769,13 @@ async function exactRemoteState(
   const offerPayloadsBySku: Record<string, Json> = {};
   const seenOfferIds = new Set<string>();
   const selectorBySku = frozenSelectorBySku(plan);
+  const verifiedRemote = verifiedPermanentRemovalOffersForPlan(remote, plan);
   for (const sku of [plan.targetSku, ...plan.survivorSkus]) {
     const item = exactPresent(await remote.getInventoryItem(sku), `Variation listing item ${sku}`);
     if (item.sku !== sku) throw new Error(`Variation listing item ${sku} identity changed.`);
     groupKeysBySku[sku] = item.groupKeys ? [...item.groupKeys] : null;
     inventoryItemPayloadsBySku[sku] = payloadWithoutQuantity(item.payload, 'item');
-    const offers = exactPresent(await remote.getOffers(sku, plan.marketplaceId), `Variation listing offers ${sku}`);
+    const offers = exactPresent(await verifiedRemote.getOffers(sku, plan.marketplaceId), `Variation listing offers ${sku}`);
     if (offers.length !== 1) throw new Error(`Variation listing SKU ${sku} must have exactly one offer.`);
     const offer = offers[0]!;
     if (offer.sku !== sku || offer.marketplaceId !== plan.marketplaceId || offer.offerId !== plan.offerIdsBySku[sku]) {
@@ -753,7 +836,10 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
     }
     throw new Error('Existing permanent-removal revision is missing frozen metadata; rebuild is forbidden.');
   }
-  if (digest(input.previousRevision.snapshot) !== input.previousRevision.snapshot_digest) {
+  const snapshotDigestMatches = digest(input.previousRevision.snapshot) === input.previousRevision.snapshot_digest;
+  const legacyDigestMatches = !isPermanentRemovalRevision(input.previousRevision) &&
+    legacyRevisionDigest(input.previousRevision.snapshot) === input.previousRevision.snapshot_digest;
+  if (!snapshotDigestMatches && !legacyDigestMatches) {
     throw new Error('Variation listing previous confirmed revision snapshot digest does not match its durable snapshot.');
   }
   const previousAggregate = revisionSnapshotAggregate(input.previousRevision);
@@ -776,10 +862,19 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
   const inventoryItemPayloadsBySku: Record<string, Json> = {};
   const offerPayloadsBySku: Record<string, Json> = {};
   const seenOfferIds = new Set<string>();
+  const previousIdentity = reconstructConfirmedRemoteIdentity(input.previousRevision, input.previousCheckpoints);
+  const verifiedRemote = verifiedPermanentRemovalOffers(input.remote, {
+    listingId: previousIdentity.listingId,
+    targetSku: target.sku,
+    targetOfferId: requiredString(previousIdentity.offerIdsBySku[target.sku], 'frozen target Offer ID'),
+    fulfillmentPolicyId: requiredString(previousAggregate.group.fulfillment_policy_id, 'frozen fulfillment policy ID'),
+    paymentPolicyId: requiredString(previousAggregate.group.payment_policy_id, 'frozen payment policy ID'),
+    returnPolicyId: requiredString(previousAggregate.group.return_policy_id, 'frozen return policy ID'),
+  });
   for (const variation of input.aggregate.variations) {
     const item = exactPresent(await input.remote.getInventoryItem(variation.sku), `Variation listing item ${variation.sku}`);
     if (item.sku !== variation.sku || !item.groupKeys || item.groupKeys.length !== 1 || item.groupKeys[0] !== input.aggregate.group.group_key) throw new Error(`Variation listing item ${variation.sku} identity/group association changed.`);
-    const offers = exactPresent(await input.remote.getOffers(variation.sku, input.aggregate.group.marketplace_id), `Variation listing offers ${variation.sku}`);
+    const offers = exactPresent(await verifiedRemote.getOffers(variation.sku, input.aggregate.group.marketplace_id), `Variation listing offers ${variation.sku}`);
     if (offers.length !== 1) throw new Error(`Variation listing SKU ${variation.sku} must have exactly one offer.`);
     const offer = offers[0]!;
     if (offer.sku !== variation.sku || offer.marketplaceId !== input.aggregate.group.marketplace_id || offer.status !== 'PUBLISHED' || offer.lifecycleClass !== 'active' || !offer.listingId) throw new Error(`Variation listing offer ${variation.sku} is not one active published offer.`);
@@ -807,7 +902,6 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
   if (targetQuantity.inventoryItemQuantity !== 0 || targetQuantity.offerQuantity !== 0 || targetQuantity.sellableQuantity !== 0) throw new Error('Variation listing removal target must already be zero in Item and Offer.');
   const survivorSkus = previousSurvivors.map((variation) => variation.sku);
   const replacementGroupPayload = exactGroupPayload(group.payload, survivorSkus, selectorBySku);
-  const previousIdentity = reconstructConfirmedRemoteIdentity(input.previousRevision, input.previousCheckpoints);
   if (previousIdentity.listingId !== [...listingIds][0]) throw new Error('Variation listing previous confirmed listing identity changed.');
   for (const variation of input.aggregate.variations) {
     if (previousIdentity.offerIdsBySku[variation.sku] !== offerIdsBySku[variation.sku]) throw new Error(`Variation listing previous confirmed offer identity changed for ${variation.sku}.`);
