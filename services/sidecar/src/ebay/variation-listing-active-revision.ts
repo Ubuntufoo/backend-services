@@ -22,6 +22,7 @@ import {
 import {
   type VariationListingMediaResource,
   type VariationListingPublicationReadGateway,
+  type VariationListingVerifiedListingPolicies,
   type VariationListingRemoteOffer,
   type VariationListingRemoteMedia,
 } from '@/ebay/variation-listing-publication.js';
@@ -509,10 +510,72 @@ function desiredActiveQuantities(
   return quantities;
 }
 
+/** Inventory Item GET may omit a persisted raw-card descriptor. The listing-facing
+ * Trading response is an acceptable proof only for that exact omission. */
+function tradingConditionMatches(raw: unknown, listingId: string, expected: Json): boolean {
+  const root = unknownRecord(raw, 'Trading GetItem condition response');
+  const item = unknownRecord(root.Item ?? root, 'Trading GetItem condition item');
+  // This variation-listing payload family is restricted to raw cards (condition 4000).
+  if (String(item.ItemID ?? '') !== listingId || String(item.ConditionID ?? '') !== '4000') return false;
+  const wrapper = item.ConditionDescriptors;
+  if (!wrapper || typeof wrapper !== 'object' || Array.isArray(wrapper)) return false;
+  const rawRows = (wrapper as Record<string, unknown>).ConditionDescriptor;
+  const rows = Array.isArray(rawRows) ? rawRows : [rawRows];
+  const id = (value: unknown): string | null => {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+    if (typeof value === 'string' && /^\d+$/.test(value)) return value;
+    return null;
+  };
+  if (rows.length === 0) return false;
+  const descriptors: Array<{ name: string; values: string[] }> = [];
+  for (const rawRow of rows) {
+    if (!rawRow || typeof rawRow !== 'object' || Array.isArray(rawRow)) return false;
+    const row = rawRow as Record<string, unknown>;
+    const name = id(row.Name);
+    const rawValues = Array.isArray(row.Value) ? row.Value : [row.Value];
+    const values = rawValues.map(id);
+    if (!name || values.length === 0 || values.some((value) => value === null)) return false;
+    descriptors.push({ name, values: values as string[] });
+  }
+  return canonicalJson(asJson(descriptors)) === canonicalJson(expected);
+}
+
+/** The listing-facing Trading response must prove all three frozen policy IDs. */
+function tradingVerifiedListingPolicies(
+  raw: unknown, listingId: string, expected: Json
+): VariationListingVerifiedListingPolicies | null {
+  const root = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  const itemValue = root?.Item ?? root;
+  if (!itemValue || typeof itemValue !== 'object' || Array.isArray(itemValue)) return null;
+  const item = itemValue as Record<string, unknown>;
+  if (String(item.ItemID ?? '') !== listingId) return null;
+  const profiles = item.SellerProfiles;
+  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) return null;
+  const rows = profiles as Record<string, unknown>;
+  const frozen = object(expected, 'frozen Offer listing policies');
+  const readId = (profile: string, field: string): string | null => {
+    const value = rows[profile];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const id = (value as Record<string, unknown>)[field];
+    if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) return String(id);
+    if (typeof id === 'string' && id.length > 0 && id === id.trim()) return id;
+    return null;
+  };
+  const fulfillmentPolicyId = readId('SellerShippingProfile', 'ShippingProfileID');
+  const paymentPolicyId = readId('SellerPaymentProfile', 'PaymentProfileID');
+  const returnPolicyId = readId('SellerReturnProfile', 'ReturnProfileID');
+  if (!fulfillmentPolicyId || !paymentPolicyId || !returnPolicyId ||
+      frozen.fulfillmentPolicyId !== fulfillmentPolicyId ||
+      frozen.paymentPolicyId !== paymentPolicyId ||
+      frozen.returnPolicyId !== returnPolicyId) return null;
+  return { listingId, fulfillmentPolicyId, paymentPolicyId, returnPolicyId };
+}
+
 export async function reconcilePublishedQuantityBaseline(
-  remote: VariationListingPublicationReadGateway,
+  remote: VariationListingPublicationReadGateway & { getListing?: (listingId: string) => Promise<unknown> },
   expected: VariationListingInventoryPayloadBundle,
-  expectedRemoteIdentity?: Pick<VariationListingConfirmedRemoteIdentity, 'listingId' | 'offerIdsBySku'>
+  expectedRemoteIdentity?: Pick<VariationListingConfirmedRemoteIdentity, 'listingId' | 'offerIdsBySku'>,
+  allowVerifiedOmissions = false,
 ): Promise<{
   listingId: string;
   offers: VariationListingRemoteOffer[];
@@ -526,6 +589,7 @@ export async function reconcilePublishedQuantityBaseline(
   const quantitiesBySku: Record<string, VariationListingConfirmedRemoteQuantity> = {};
   const listingIds = new Set<string>();
   const offerIds = new Set<string>();
+  let listingRead: Promise<unknown> | undefined;
   for (const child of expected.children) {
     const itemRead = await remote.getInventoryItem(child.sku);
     if (itemRead.state === 'unknown') throw new Error(`Variation listing item ${child.sku} read is unknown: ${itemRead.reason}`);
@@ -533,11 +597,49 @@ export async function reconcilePublishedQuantityBaseline(
     if (itemRead.value.sku !== child.sku || itemRead.value.groupKeys?.length !== 1 || itemRead.value.groupKeys[0] !== expected.groupKey) {
       throw new Error(`Variation listing confirmed item ${child.sku} identity/group association changed.`);
     }
-    if (canonicalJson(inventoryPayloadWithoutQuantity(itemRead.value.payload, child.sku)) !== canonicalJson(inventoryPayloadWithoutQuantity(asJson(child.inventoryItem), child.sku))) {
-      throw new Error(`Variation listing confirmed item ${child.sku} changed outside quantity.`);
+    const observedItem = inventoryPayloadWithoutQuantity(itemRead.value.payload, child.sku);
+    const expectedItem = inventoryPayloadWithoutQuantity(asJson(child.inventoryItem), child.sku);
+    if (canonicalJson(observedItem) !== canonicalJson(expectedItem)) {
+      const observed = structuredClone(observedItem);
+      const frozen = structuredClone(expectedItem);
+      const actualDescriptors = object(observed, 'remote item').conditionDescriptors;
+      const expectedDescriptors = object(frozen, 'confirmed item').conditionDescriptors;
+      delete object(observed, 'remote item').conditionDescriptors;
+      delete object(frozen, 'confirmed item').conditionDescriptors;
+      const listingId = expectedRemoteIdentity?.listingId;
+      const getListing = remote.getListing;
+      if (
+        !allowVerifiedOmissions ||
+        itemRead.value.conditionDescriptorsOmitted !== true ||
+        !Array.isArray(actualDescriptors) || actualDescriptors.length !== 0 ||
+        !Array.isArray(expectedDescriptors) || expectedDescriptors.length === 0 ||
+        canonicalJson(observed) !== canonicalJson(frozen) ||
+        !listingId || !getListing
+      ) {
+        throw new Error(`Variation listing confirmed item ${child.sku} changed outside quantity.`);
+      }
+      listingRead ??= getListing(listingId);
+      if (!tradingConditionMatches(await listingRead, listingId, expectedDescriptors)) {
+        throw new Error(`Variation listing confirmed item ${child.sku} condition descriptor cannot be verified from Trading GetItem.`);
+      }
     }
 
-    const offerRead = await remote.getOffers(child.sku, child.offer.marketplaceId);
+    let offerRead = await remote.getOffers(child.sku, child.offer.marketplaceId);
+    if (
+      allowVerifiedOmissions &&
+      offerRead.state === 'unknown' &&
+      /offer (?:fulfillment|payment|return) policy ID is missing or invalid/.test(offerRead.reason) &&
+      expectedRemoteIdentity?.listingId && remote.getListing && remote.getOffersWithVerifiedPolicies
+    ) {
+      listingRead ??= remote.getListing(expectedRemoteIdentity.listingId);
+      const evidence = tradingVerifiedListingPolicies(
+        await listingRead, expectedRemoteIdentity.listingId, asJson(child.offer.listingPolicies)
+      );
+      if (!evidence) {
+        throw new Error(`Variation listing confirmed offer ${child.sku} policies cannot be verified from Trading GetItem.`);
+      }
+      offerRead = await remote.getOffersWithVerifiedPolicies(child.sku, child.offer.marketplaceId, evidence);
+    }
     if (offerRead.state === 'unknown') throw new Error(`Variation listing offer ${child.sku} read is unknown: ${offerRead.reason}`);
     if (offerRead.state === 'proven_absent' || offerRead.value.length !== 1) {
       throw new Error(`Variation listing confirmed SKU ${child.sku} must have exactly one remote offer.`);

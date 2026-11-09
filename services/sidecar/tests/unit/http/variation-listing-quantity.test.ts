@@ -11,7 +11,7 @@ import {
   createVariationListingApiRouter,
   type VariationListingApiDataAccess,
 } from '@/http/variation-listing-router.js';
-import { readVariationListingQuantityStatus } from '@/ebay/variation-listing-actions.js';
+import { normalizeItem, normalizeOffers, readVariationListingQuantityStatus } from '@/ebay/variation-listing-actions.js';
 import { buildVariationListingHistoricalInventoryPayloadBundle } from '@/ebay/variation-listing-payloads.js';
 import { updateVariationListingQuantityAdjustmentRequestSchema } from '@/schemas/variation-listing-api.js';
 
@@ -350,6 +350,257 @@ function successfulQuantityDataAccess(initialCounter: -1 | 1) {
   } as unknown as VariationListingApiDataAccess;
   return { dataAccess, updateVariationQuantityAdjustment };
 }
+
+describe('YP10.11 confirmed condition descriptor read fallback', () => {
+  it('treats explicit null descriptors as malformed rather than omitted', () => {
+    expect(() => normalizeItem({
+      sku: 'SKU-1',
+      availability: { shipToLocationAvailability: { quantity: 0 } },
+      condition: 'USED',
+      conditionDescriptors: null,
+      product: { aspects: {} },
+    }, 'SKU-1')).toThrow();
+  });
+
+  function descriptorHarness(options: {
+    listing?: unknown;
+    omitted?: boolean;
+    nonDescriptorDrift?: boolean;
+  } = {}) {
+    const harness = quantityStatusHarness(0, 1);
+    const originalRevisions = harness.data.listRevisionsByGroupId;
+    harness.data.listRevisionsByGroupId = async (requestedGroupId) => {
+      const rows = await originalRevisions(requestedGroupId);
+      return rows.map(({ source }) => {
+        const revision = structuredClone(source);
+        const snapshot = revision.snapshot as unknown as {
+          aggregate: VariationListingAggregateSnapshot;
+          confirmed: { aggregate: VariationListingAggregateSnapshot };
+        };
+        const descriptors = [{ name: '40001', values: ['400012'] }];
+        snapshot.aggregate.group.condition_descriptors = descriptors;
+        snapshot.confirmed.aggregate.group.condition_descriptors = descriptors;
+        return { source: revision };
+      });
+    };
+    const listing = options.listing ?? {
+      ItemID: 'listing-1',
+      ConditionID: 4000,
+      ConditionDescriptors: { ConditionDescriptor: { Name: 40001, Value: [400012] } },
+    };
+    const getListing = vi.fn(async () => listing);
+    const originalRemoteFactory = harness.remoteFactory;
+    harness.remoteFactory = async () => {
+      const dependencies = await originalRemoteFactory();
+      const getInventoryItem = dependencies.remote.getInventoryItem;
+      return {
+        ...dependencies,
+        remote: {
+          ...dependencies.remote,
+          getInventoryItem: async (sku: string) => {
+            const result = await getInventoryItem(sku);
+            if (result.state !== 'present') return result;
+            const item = structuredClone(result.value);
+            if (options.nonDescriptorDrift) {
+              (item.payload as { condition: string }).condition = 'DIFFERENT';
+            }
+            return {
+              state: 'present' as const,
+              value: { ...item, conditionDescriptorsOmitted: options.omitted ?? true },
+            };
+          },
+          getListing,
+        },
+      };
+    };
+    return { harness, getListing };
+  }
+
+  it('accepts only an omitted descriptor verified by Trading for the same listing (one read for all siblings)', async () => {
+    const { harness, getListing } = descriptorHarness();
+    const status = await readVariationListingQuantityStatus(harness, groupId);
+    expect(status.variations).toHaveLength(3);
+    expect(getListing).toHaveBeenCalledTimes(1);
+    expect(getListing).toHaveBeenCalledWith('listing-1');
+  });
+
+  it.each([
+    ['changed descriptor', { ConditionDescriptor: { Name: 40001, Value: [400011] } }],
+    ['missing descriptor', {}],
+  ])('rejects %s from Trading', async (_name, conditionDescriptors) => {
+    const { harness } = descriptorHarness({
+      listing: { ItemID: 'listing-1', ConditionID: 4000, ConditionDescriptors: conditionDescriptors },
+    });
+    await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toThrow('cannot be verified');
+  });
+
+  it('rejects Trading condition or listing identity changes', async () => {
+    for (const listing of [
+      { ItemID: 'wrong-listing', ConditionID: 4000, ConditionDescriptors: { ConditionDescriptor: { Name: 40001, Value: [400012] } } },
+      { ItemID: 'listing-1', ConditionID: 2750, ConditionDescriptors: { ConditionDescriptor: { Name: 40001, Value: [400012] } } },
+    ]) {
+      const { harness } = descriptorHarness({ listing });
+      await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toThrow('cannot be verified');
+    }
+  });
+
+  it('rejects missing omission evidence and unrelated Item drift before Trading lookup', async () => {
+    for (const options of [{ omitted: false }, { nonDescriptorDrift: true }]) {
+      const { harness, getListing } = descriptorHarness(options);
+      await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toThrow('changed outside quantity');
+      expect(getListing).not.toHaveBeenCalled();
+    }
+  });
+
+  it('fails closed if Trading is unavailable', async () => {
+    const { harness } = descriptorHarness();
+    const factory = harness.remoteFactory;
+    harness.remoteFactory = async () => {
+      const dependencies = await factory();
+      return { ...dependencies, remote: { ...dependencies.remote, getListing: undefined } };
+    };
+    await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toThrow('changed outside quantity');
+  });
+});
+
+describe('YP10.11 Offer read boundary policy safety', () => {
+  const offer = {
+    sku: 'BSKBL-Test-000001',
+    offerId: 'offer-1',
+    marketplaceId: 'EBAY_US',
+    format: 'FIXED_PRICE',
+    categoryId: '261328',
+    merchantLocationKey: 'main',
+    availableQuantity: 1,
+    pricingSummary: { price: { currency: 'USD', value: '1.49' } },
+    status: 'PUBLISHED',
+    listing: { listingId: 'listing-1', listingStatus: 'ACTIVE' },
+    listingPolicies: { eBayPlusIfEligible: false },
+  };
+  const verified = {
+    listingId: 'listing-1',
+    fulfillmentPolicyId: 'fulfillment',
+    paymentPolicyId: 'payment',
+    returnPolicyId: 'returns',
+  };
+  it('allows only independently verified omission, never normal Offer normalization', () => {
+    expect(() => normalizeOffers({ offers: [offer] })).toThrow('fulfillment policy ID');
+    expect(normalizeOffers({ offers: [offer] }, verified)[0]?.payload).toMatchObject({
+      listingPolicies: {
+        fulfillmentPolicyId: 'fulfillment',
+        paymentPolicyId: 'payment',
+        returnPolicyId: 'returns',
+      },
+    });
+  });
+  it('rejects explicit conflicting policy IDs and unrelated listing identities', () => {
+    expect(() => normalizeOffers({
+      offers: [{ ...offer, listingPolicies: { ...offer.listingPolicies, fulfillmentPolicyId: 'different' } }],
+    }, verified)).toThrow('conflicts');
+    expect(() => normalizeOffers({ offers: [offer] }, { ...verified, listingId: 'other' }))
+      .toThrow('matching listing identity');
+  });
+
+  it('rejects incomplete Offer pagination metadata', () => {
+    expect(() => normalizeOffers({ offers: [offer], next: '/offer?offset=1' }, verified)).toThrow('pagination');
+    expect(() => normalizeOffers({ offers: [offer], total: 2 }, verified)).toThrow('total');
+  });
+});
+
+describe('YP10.11 verified Offer policy fallback', () => {
+  function harnessWithOmittedPolicies(listing: unknown = {
+    ItemID: 'listing-1',
+    SellerProfiles: {
+      SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+      SellerPaymentProfile: { PaymentProfileID: 'payment' },
+      SellerReturnProfile: { ReturnProfileID: 'returns' },
+    },
+  }) {
+    const harness = quantityStatusHarness(0, 1);
+    const originalFactory = harness.remoteFactory;
+    const getListing = vi.fn(async () => listing);
+    const getOffersWithVerifiedPolicies = vi.fn(async (
+      sku: string, _marketplace: string, verified: {
+        listingId: string; fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string;
+      }
+    ) => {
+      if (verified.listingId !== 'listing-1' || verified.fulfillmentPolicyId !== 'fulfillment' ||
+          verified.paymentPolicyId !== 'payment' || verified.returnPolicyId !== 'returns') {
+        throw Error('Unexpected policy proof');
+      }
+      const original = await (await originalFactory()).remote.getOffers(sku);
+      if (original.state !== 'present' || original.value.length !== 1) return original;
+      const normalized = original.value[0]!;
+      const rawOffer = {
+        ...normalized.payload,
+        offerId: normalized.offerId,
+        status: normalized.status,
+        listing: { listingId: normalized.listingId, listingStatus: 'ACTIVE' },
+        listingPolicies: { eBayPlusIfEligible: false },
+      };
+      return {
+        state: 'present' as const,
+        value: normalizeOffers({ offers: [rawOffer] }, verified),
+      };
+    });
+    const remoteFactory = async () => {
+      const dependencies = await originalFactory();
+      return {
+        ...dependencies,
+        remote: {
+          ...dependencies.remote,
+          getOffers: async () => ({ state: 'unknown' as const, reason: 'Inventory item semantic offer fulfillment policy ID is missing or invalid.' }),
+          getOffersWithVerifiedPolicies,
+          getListing,
+        },
+      };
+    };
+    return { harness: { ...harness, remoteFactory }, getListing, getOffersWithVerifiedPolicies };
+  }
+
+  it('accepts exact Trading policies and makes one listing read across sibling offers', async () => {
+    const { harness, getListing, getOffersWithVerifiedPolicies } = harnessWithOmittedPolicies();
+    const status = await readVariationListingQuantityStatus(harness, groupId);
+    expect(status.variations).toHaveLength(3);
+    expect(getListing).toHaveBeenCalledTimes(1);
+    expect(getOffersWithVerifiedPolicies).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['incorrect policy', { ItemID: 'listing-1', SellerProfiles: {
+      SellerShippingProfile: { ShippingProfileID: 'different' },
+      SellerPaymentProfile: { PaymentProfileID: 'payment' },
+      SellerReturnProfile: { ReturnProfileID: 'returns' },
+    } }],
+    ['missing policies', { ItemID: 'listing-1', SellerProfiles: {} }],
+    ['wrong listing', { ItemID: 'other-listing', SellerProfiles: {
+      SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+      SellerPaymentProfile: { PaymentProfileID: 'payment' },
+      SellerReturnProfile: { ReturnProfileID: 'returns' },
+    } }],
+  ])('rejects %s before Offer fallback', async (_name, listing) => {
+    const { harness, getOffersWithVerifiedPolicies } = harnessWithOmittedPolicies(listing);
+    await expect(readVariationListingQuantityStatus(harness, groupId)).rejects.toThrow('policies cannot be verified');
+    expect(getOffersWithVerifiedPolicies).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the policy fallback for unrelated Offer errors', async () => {
+    const { harness, getListing } = harnessWithOmittedPolicies();
+    const factory = harness.remoteFactory;
+    const remoteFactory = async () => {
+      const dependencies = await factory();
+      return {
+        ...dependencies,
+        remote: {
+          ...dependencies.remote,
+          getOffers: async () => ({ state: 'unknown' as const, reason: 'Unrelated read failure' }),
+        },
+      };
+    };
+    await expect(readVariationListingQuantityStatus({ ...harness, remoteFactory }, groupId)).rejects.toThrow('Unrelated read failure');
+    expect(getListing).not.toHaveBeenCalled();
+  });
+});
 
 describe('YP9.6b2 quantity API', () => {
   it.each([-1, 1] as const)('accepts delta %i and rejects arbitrary quantity edits', (delta) => {

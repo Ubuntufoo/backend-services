@@ -35,6 +35,8 @@ export interface VariationListingRemoteInventoryItem {
   groupKeys: string[] | null;
   payload: Json;
   sku: string;
+  /** True only when the eBay Inventory Item GET omitted the descriptor field. */
+  conditionDescriptorsOmitted?: boolean;
 }
 
 export interface VariationListingRemoteOffer {
@@ -59,6 +61,13 @@ export interface VariationListingRemoteMedia {
   location: string;
 }
 
+export interface VariationListingVerifiedListingPolicies {
+  listingId: string;
+  fulfillmentPolicyId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+}
+
 export interface VariationListingRemoteReadOptions {
   expectedNotFound?: boolean;
 }
@@ -76,6 +85,12 @@ export interface VariationListingPublicationReadGateway {
     sku: string,
     marketplaceId: string,
     options?: VariationListingRemoteReadOptions
+  ): Promise<VariationListingRemoteRead<VariationListingRemoteOffer[]>>;
+  /** Confirmed-quantity only: use independently verified Trading policy IDs for omitted Offer fields. */
+  getOffersWithVerifiedPolicies?(
+    sku: string,
+    marketplaceId: string,
+    verified: VariationListingVerifiedListingPolicies
   ): Promise<VariationListingRemoteRead<VariationListingRemoteOffer[]>>;
 }
 

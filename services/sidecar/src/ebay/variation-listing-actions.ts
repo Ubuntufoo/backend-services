@@ -28,6 +28,7 @@ import {
   type VariationListingPublicationMutationGateway,
   type VariationListingPublicationRemoteGateway,
   type VariationListingRemoteRead,
+  type VariationListingVerifiedListingPolicies,
 } from '@/ebay/variation-listing-publication.js';
 import { validateVariationListingMerchantLocation } from '@/ebay/inventory-location-validation.js';
 import {
@@ -451,13 +452,14 @@ export function normalizeItem(raw: unknown, sku: string) {
   if (rawSku !== undefined && (typeof rawSku !== 'string' || rawSku.trim() !== sku)) {
     throw new Error(`eBay inventory item identity mismatch for ${sku}.`);
   }
+  const conditionDescriptorsPresent = Object.prototype.hasOwnProperty.call(row, 'conditionDescriptors');
   const semanticSource = {
     ...row,
     // eBay may omit conditionDescriptors from GET responses when the persisted
     // descriptor list is empty. Normalize that transport omission to [] only
     // at the remote-read boundary; the later semantic comparison still fails
     // closed if the frozen publication intent expected any real descriptors.
-    conditionDescriptors: row.conditionDescriptors ?? [],
+    conditionDescriptors: conditionDescriptorsPresent ? row.conditionDescriptors : [],
     sku: typeof rawSku === 'string' && rawSku.trim() ? rawSku : sku,
   };
   const semantic = projectInventoryItemSemanticSnapshot(semanticSource);
@@ -491,15 +493,48 @@ export function normalizeItem(raw: unknown, sku: string) {
   if (typeof row.conditionDescription === 'string' && row.conditionDescription.trim()) {
     payload.conditionDescription = row.conditionDescription.trim();
   }
-  return { groupKeys, payload, sku };
+  return { groupKeys, payload, sku, conditionDescriptorsOmitted: !conditionDescriptorsPresent };
 }
 
-function normalizeOffers(raw: unknown) {
-  const rows = Array.isArray(record(raw).offers) ? record(raw).offers as unknown[] : [];
+export function normalizeOffers(raw: unknown, verified?: VariationListingVerifiedListingPolicies) {
+  const root = record(raw);
+  const rows = Array.isArray(root.offers) ? root.offers as unknown[] : [];
+  for (const key of ['next', 'prev'] as const) {
+    if (key in root && root[key] !== null && root[key] !== undefined &&
+        (typeof root[key] !== 'string' || root[key].trim() !== '')) {
+      throw new Error(`eBay Offer response is incomplete because ${key} pagination is present.`);
+    }
+  }
+  for (const key of ['size', 'total'] as const) {
+    if (key in root && (typeof root[key] !== 'number' || !Number.isSafeInteger(root[key]) || root[key] < 0 || root[key] !== rows.length)) {
+      throw new Error(`eBay Offer response has inconsistent ${key} pagination metadata.`);
+    }
+  }
   return rows.map((candidate) => {
     const row = record(candidate);
-    const semantic = projectOfferSemanticSnapshot(row);
     const listing = record(row.listing);
+    const policies = record(row.listingPolicies);
+    const policyNames = ['fulfillmentPolicyId', 'paymentPolicyId', 'returnPolicyId'] as const;
+    const missing = policyNames.filter((name) => !(name in policies));
+    // Fill only truly omitted fields with independently verified Trading evidence.
+    const source = verified
+      ? (() => {
+          if (readString(listing, 'listingId') !== verified.listingId ||
+              readString(row, 'status').toUpperCase() !== 'PUBLISHED' ||
+              !row.listingPolicies || typeof row.listingPolicies !== 'object' || Array.isArray(row.listingPolicies)) {
+            throw new Error('Published Offer omitted policy IDs without matching listing identity.');
+          }
+          for (const name of policyNames) {
+            if (name in policies && policies[name] !== verified[name]) {
+              throw new Error(`Published Offer ${name} conflicts with independently verified policy evidence.`);
+            }
+          }
+          const resolved = { ...policies };
+          for (const name of missing) resolved[name] = verified[name];
+          return { ...row, listingPolicies: resolved };
+        })()
+      : row;
+    const semantic = projectOfferSemanticSnapshot(source);
     const listingStatusRaw = readString(listing, 'listingStatus').toUpperCase();
     const supportedListingStatuses = new Set(['ACTIVE', 'OUT_OF_STOCK', 'INACTIVE', 'ENDED', 'EBAY_ENDED', 'NOT_LISTED']);
     if (listingStatusRaw && !supportedListingStatuses.has(listingStatusRaw)) throw new Error('eBay offer listing status is unsupported.');
@@ -596,6 +631,9 @@ async function createProductionRemote() {
         );
         return read.state === 'proven_absent' ? { state: 'present', value: [] } : read;
       },
+      getOffersWithVerifiedPolicies: async (sku, marketplaceId, verified) => await remoteRead(
+        async () => normalizeOffers(await api.inventory.getOffers(sku, marketplaceId), verified),
+      ),
       getListing: async (listingId) => await api.trading.getListing(listingId),
       getMedia: async (location) => await remoteRead(async () => await api.media.getImage(location)),
     };
@@ -1402,7 +1440,8 @@ export async function readVariationListingQuantityStatus(
   const observed = await reconcilePublishedQuantityBaseline(
     dependencies!.remote,
     confirmedBundle,
-    durableRemoteIdentity
+    durableRemoteIdentity,
+    true,
   );
 
   // A publication can confirm a new revision without advancing desired_revision.
