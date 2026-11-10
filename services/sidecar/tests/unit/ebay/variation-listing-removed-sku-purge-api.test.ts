@@ -1,3 +1,7 @@
+import {mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+
 import {describe, expect, it, vi} from 'vitest';
 import type {
   VariationListingAggregateSnapshot,
@@ -10,12 +14,15 @@ import {
   readRemovedSkuPurgePreview,
   type RemovedSkuPurgePreviewDependencies,
 } from '@/ebay/variation-listing-removed-sku-purge-api.js';
-import {buildRemovedSkuPurgeCandidateManifest} from '@/ebay/variation-listing-removed-sku-purge-preview.js';
+import {
+  buildRemovedSkuPurgeCandidateManifest,
+  type RemovedSkuPurgeCandidateManifest,
+} from '@/ebay/variation-listing-removed-sku-purge-preview.js';
 import type {RemovedSkuOwnershipRows} from '@/ebay/variation-listing-removed-sku-ownership.js';
 import type {RemovedSkuPurgeReadiness} from '@/ebay/variation-listing-removed-sku-purge-readiness.js';
 
 vi.mock('@/ebay/variation-listing-removed-sku-purge-preview.js', () => ({
-  buildRemovedSkuPurgeCandidateManifest: vi.fn(() => ({deletionAuthorized: false})),
+  buildRemovedSkuPurgeCandidateManifest: vi.fn(() => ({deletionAuthorized: false, targetVariationId: '44444444-4444-4444-8444-444444444444', targetSku: 'SKU'})),
 }));
 
 const groupId = '11111111-1111-4111-8111-111111111111';
@@ -54,7 +61,7 @@ const readiness: RemovedSkuPurgeReadiness = {
   localPresent: 0,
   localUnverifiedOrShared: 1,
   databaseReferenceConflicts: 0,
-  databaseWitnessUsed: false,
+  databaseWitnessUsed: true,
   blockers: ['diagnostic only'],
   deletionAuthorized: false,
 };
@@ -65,6 +72,7 @@ function dependencies(overrides: Partial<RemovedSkuPurgePreviewDependencies> = {
     readRevision: vi.fn().mockResolvedValue(revision()),
     readCheckpoints: vi.fn().mockResolvedValue([] as VariationListingPublishingCheckpointRow[]),
     readOwnershipRows: vi.fn().mockResolvedValue(rows),
+    readPredeleteWitness: vi.fn().mockResolvedValue({deletionAuthorized:false}),
     localRoots: [],
     inspectR2Metadata: vi.fn().mockResolvedValue({objectKey: 'secret/key', status: 'unknown'}),
     inspectReadiness: vi.fn().mockResolvedValue(readiness),
@@ -94,6 +102,20 @@ describe('removed-SKU preview watcher roots', () => {
       {kind: 'incoming', absolutePath: '/tmp/production-watcher/incoming'},
       {kind: 'processed', absolutePath: '/tmp/archive-override'},
     ]);
+  });
+
+  it('binds the restricted witness RPC to the exact candidate identity', async () => {
+    const rpc = vi.fn().mockResolvedValue({data: {deletionAuthorized: false}, error: null});
+    const deps = createRemovedSkuPurgePreviewDependencies({}, {rpc} as never);
+    await expect(deps.readPredeleteWitness(
+      groupId, revisionId, '44444444-4444-4444-8444-444444444444', 'SKU',
+    )).resolves.toEqual({deletionAuthorized: false});
+    expect(rpc).toHaveBeenCalledWith('inspect_variation_removed_sku_ownership', {
+      p_group_id: groupId,
+      p_revision_id: revisionId,
+      p_target_variation_id: '44444444-4444-4444-8444-444444444444',
+      p_target_sku: 'SKU',
+    });
   });
 });
 
@@ -147,10 +169,12 @@ describe('readRemovedSkuPurgePreview', () => {
     expect(deps.readAggregate).toHaveBeenCalledWith(groupId);
     expect(deps.readCheckpoints).toHaveBeenCalledWith(revisionId);
     expect(deps.readOwnershipRows).toHaveBeenCalledOnce();
+    expect(deps.readPredeleteWitness).toHaveBeenCalledWith(groupId, revisionId, readiness.targetVariationId, readiness.targetSku);
     expect(inspectReadiness).toHaveBeenCalledWith(expect.objectContaining({
       revision: expect.objectContaining({revision_id: revisionId, group_id: groupId}),
       currentAggregate: expect.objectContaining({group: expect.objectContaining({group_id: groupId})}),
       ownershipRows: rows,
+      predeleteWitness: {deletionAuthorized:false},
     }));
   });
 
@@ -180,11 +204,116 @@ describe('readRemovedSkuPurgePreview', () => {
     expect(deps.inspectReadiness).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the restricted witness RPC fails or returns no evidence', async () => {
+    const rejected = dependencies({readPredeleteWitness: vi.fn().mockRejectedValue(new Error('RPC unavailable'))});
+    await expect(readRemovedSkuPurgePreview(groupId, revisionId, rejected)).rejects.toThrow('RPC unavailable');
+    expect(rejected.readOwnershipRows).not.toHaveBeenCalled();
+    expect(rejected.inspectReadiness).not.toHaveBeenCalled();
+
+    const missing = dependencies({readPredeleteWitness: vi.fn().mockResolvedValue(null as never)});
+    await expect(readRemovedSkuPurgePreview(groupId, revisionId, missing)).rejects.toThrow(/no evidence/);
+    expect(missing.inspectReadiness).not.toHaveBeenCalled();
+  });
+
   it('keeps scan failures and forged authorization fail-closed', async () => {
     const failedScan = dependencies({readOwnershipRows: vi.fn().mockRejectedValue(new Error('scan failed'))});
     await expect(readRemovedSkuPurgePreview(groupId, revisionId, failedScan)).rejects.toThrow('scan failed');
 
     const forged = dependencies({inspectReadiness: vi.fn().mockResolvedValue({...readiness, deletionAuthorized: true as never})});
     await expect(readRemovedSkuPurgePreview(groupId, revisionId, forged)).rejects.toThrow(/authorization/);
+    const skipped = dependencies({inspectReadiness: vi.fn().mockResolvedValue({...readiness, databaseWitnessUsed: false})});
+    await expect(readRemovedSkuPurgePreview(groupId, revisionId, skipped)).rejects.toThrow(/authorization/);
+  });
+
+  it('routes malformed and mismatched raw witnesses through real readiness validation', async () => {
+    const incoming = await mkdtemp(join(tmpdir(), 'removed-sku-preview-incoming-'));
+    const processed = await mkdtemp(join(tmpdir(), 'removed-sku-preview-processed-'));
+    const targetVariationId = '44444444-4444-4444-8444-444444444444';
+    const copyId = '55555555-5555-4555-8555-555555555555';
+    const candidate: RemovedSkuPurgeCandidateManifest = {
+      groupId,
+      revisionId,
+      targetVariationId,
+      targetSku: 'SKU',
+      copies: [{
+        copyId,
+        frontR2Key: `variation-listing/${groupId}/${targetVariationId}/${copyId}/front-0123456789ab.jpg`,
+        backR2Key: `variation-listing/${groupId}/${targetVariationId}/${copyId}/back-abcdef012345.png`,
+        localSourceRefs: [join(incoming, 'front.jpg'), join(incoming, 'back.jpg')],
+      }],
+      r2ObjectKeys: [
+        `variation-listing/${groupId}/${targetVariationId}/${copyId}/front-0123456789ab.jpg`,
+        `variation-listing/${groupId}/${targetVariationId}/${copyId}/back-abcdef012345.png`,
+      ],
+      localSourceRefs: [join(incoming, 'front.jpg'), join(incoming, 'back.jpg')],
+      ownershipChecks: [
+        {scope: 'variation-groups', status: 'unverified'},
+        {scope: 'standard-single-lot', status: 'unverified'},
+        {scope: 'prior-revisions', status: 'unverified'},
+        {scope: 'local-files', status: 'unverified'},
+        {scope: 'r2-objects', status: 'unverified'},
+      ],
+      deletionAuthorized: false,
+      requiredChecks: ['check all frozen resources'],
+    };
+    const witness = {
+      version: 1,
+      groupId,
+      revisionId,
+      targetVariationId,
+      targetSku: 'SKU',
+      confirmedRevision: 1,
+      desiredRevision: 1,
+      capturedDesiredRevision: 1,
+      copyIds: [copyId],
+      r2ObjectKeys: [...candidate.r2ObjectKeys],
+      sourceRefs: [...candidate.localSourceRefs],
+      liveVariationReferenceCount: 0,
+      standardReferenceCount: 0,
+      otherGroupRevisionReferenceCount: 0,
+      sameGroupHistoricalReferencesVerified: false,
+      journalHistoryVerified: false,
+      referenceSearchComplete: false,
+      singleStatementSnapshot: true,
+      deletionAuthorized: false,
+    } as const;
+    const currentAggregate = {
+      group: {
+        group_id: groupId,
+        desired_revision: 1,
+        last_confirmed_revision: 1,
+        sku_category_code: 'OTHER',
+        sku_bucket_token: 'WitnessTest',
+      },
+      variations: [],
+      copies: [],
+    } as unknown as VariationListingAggregateSnapshot;
+
+    try {
+      for (const rawWitness of [
+        {...witness, groupId: foreignGroupId},
+        {...witness, extra: true},
+      ]) {
+        vi.mocked(buildRemovedSkuPurgeCandidateManifest)
+          .mockReturnValueOnce(candidate)
+          .mockReturnValueOnce(candidate);
+        const deps: RemovedSkuPurgePreviewDependencies = {
+          readAggregate: vi.fn().mockResolvedValue(currentAggregate),
+          readRevision: vi.fn().mockResolvedValue(revision()),
+          readCheckpoints: vi.fn().mockResolvedValue([]),
+          readOwnershipRows: vi.fn().mockResolvedValue(rows),
+          readPredeleteWitness: vi.fn().mockResolvedValue(rawWitness),
+          localRoots: [
+            {kind: 'incoming', absolutePath: incoming},
+            {kind: 'processed', absolutePath: processed},
+          ],
+          inspectR2Metadata: vi.fn(async (key) => ({objectKey: key, status: 'unknown'})),
+        };
+        await expect(readRemovedSkuPurgePreview(groupId, revisionId, deps)).rejects.toThrow();
+        expect(deps.readPredeleteWitness).toHaveBeenCalledWith(groupId, revisionId, targetVariationId, 'SKU');
+      }
+    } finally {
+      await Promise.all([rm(incoming, {recursive: true, force: true}), rm(processed, {recursive: true, force: true})]);
+    }
   });
 });

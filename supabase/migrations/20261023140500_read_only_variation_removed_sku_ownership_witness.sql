@@ -302,47 +302,35 @@ begin
        or c.capture_front_source_ref = any(source_refs)
        or c.capture_back_source_ref = any(source_refs);
 
+  -- The live Standard Listings schema stores media as text[] (not jsonb).
+  -- Unknown or malformed entries fail closed, including unrelated legacy rows.
   if exists (
     select 1 from public.listings l
-     where jsonb_typeof(l.r2_object_keys) is distinct from 'array'
-        or jsonb_typeof(l.image_urls) is distinct from 'array'
+     where l.r2_object_keys is null
+        or l.image_urls is null
         or exists (
-          select 1 from jsonb_array_elements(
-            case when jsonb_typeof(l.r2_object_keys) = 'array' then l.r2_object_keys else '[]'::jsonb end
-          ) value
-           where jsonb_typeof(value) is distinct from 'string'
-              or nullif(btrim(value #>> '{}'), '') is null
-              or value #>> '{}' <> btrim(value #>> '{}')
+          select 1 from unnest(l.r2_object_keys) value
+           where value is null or value !~ '^[^[:space:]]' or value !~ '[^[:space:]]$'
         )
         or exists (
-          select 1 from jsonb_array_elements(
-            case when jsonb_typeof(l.image_urls) = 'array' then l.image_urls else '[]'::jsonb end
-          ) value
-           where jsonb_typeof(value) is distinct from 'string'
-              or nullif(btrim(value #>> '{}'), '') is null
-              or value #>> '{}' <> btrim(value #>> '{}')
+          select 1 from unnest(l.image_urls) value
+           where value is null or value !~ '^[^[:space:]]' or value !~ '[^[:space:]]$'
         )
   ) then
     raise exception 'removed-SKU ownership witness standard listing media arrays are malformed';
   end if;
   select count(*) into standard_conflicts from public.listings l
     where exists (
-       select 1 from jsonb_array_elements_text(
-         case when jsonb_typeof(l.r2_object_keys) = 'array' then l.r2_object_keys else '[]'::jsonb end
-       ) k where k = any(r2_keys)
+       select 1 from unnest(l.r2_object_keys) k where k = any(r2_keys)
     )
     or exists (
-       select 1 from jsonb_array_elements_text(
-         case when jsonb_typeof(l.image_urls) = 'array' then l.image_urls else '[]'::jsonb end
-       ) url
+       select 1 from unnest(l.image_urls) url
        cross join unnest(r2_keys) key
        where strpos(url, key) > 0
           or strpos(lower(url), lower(replace(key, '/', '%2f'))) > 0
     )
     or exists (
-       select 1 from jsonb_array_elements_text(
-         case when jsonb_typeof(l.image_urls) = 'array' then l.image_urls else '[]'::jsonb end
-       ) url
+       select 1 from unnest(l.image_urls) url
        cross join unnest(source_refs) ref
        where url = ref
           or strpos(url, ref) > 0

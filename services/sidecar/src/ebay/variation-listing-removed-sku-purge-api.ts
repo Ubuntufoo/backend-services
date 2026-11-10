@@ -5,6 +5,7 @@ import {
   inspectR2ObjectMetadata,
   listVariationListingPublishingCheckpointsByRevisionId,
   type SupabaseDataClient,
+  type Json,
   type VariationListingAggregateSnapshot,
   type VariationListingPublishingCheckpointRow,
   type VariationListingRevisionRow,
@@ -24,6 +25,8 @@ export interface RemovedSkuPurgePreviewDependencies {
   readRevision(revisionId: string): Promise<VariationListingRevisionRow | null>;
   readCheckpoints(revisionId: string): Promise<VariationListingPublishingCheckpointRow[]>;
   readOwnershipRows(): Promise<RemovedSkuOwnershipRows>;
+  /** Restricted, read-only service-role database snapshot. */
+  readPredeleteWitness(groupId: string, revisionId: string, variationId: string, sku: string): Promise<Json>;
   localRoots: readonly RemovedSkuLocalArtifactRoot[];
   inspectR2Metadata: RemovedSkuR2MetadataInspector;
   /** Test seam for the pure readiness aggregation; production uses the real inspector. */
@@ -33,8 +36,8 @@ export interface RemovedSkuPurgePreviewDependencies {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
- * The endpoint's only I/O is SELECT/HEAD and bounded local inspection.
- * It does NOT call the deferred witness RPC or create deletion capability.
+ * Diagnostic only: SELECT/HEAD, read-only service-role witness RPC, and local inspection.
+ * The witness never grants cleanup authorization.
  */
 export function createRemovedSkuPurgePreviewDependencies(
   env: NodeJS.ProcessEnv = process.env,
@@ -48,6 +51,19 @@ export function createRemovedSkuPurgePreviewDependencies(
     readCheckpoints: async (revisionId) =>
       (await listVariationListingPublishingCheckpointsByRevisionId(client, revisionId)).map((row) => row.source),
     readOwnershipRows: async () => await readRemovedSkuOwnershipRows(client),
+    readPredeleteWitness: async (groupId, revisionId, variationId, sku) => {
+      const {data, error} = await client.rpc('inspect_variation_removed_sku_ownership' as never, {
+        p_group_id: groupId,
+        p_revision_id: revisionId,
+        p_target_variation_id: variationId,
+        p_target_sku: sku,
+      } as never);
+      if (error) throw new Error('Removed-SKU read-only database witness RPC failed.', {cause: error});
+      if (data === null || data === undefined) {
+        throw new Error('Removed-SKU read-only database witness returned no evidence.');
+      }
+      return data as Json;
+    },
     // Scan configured watcher roots, including the archive destination.
     // Original capture refs may still point to incoming after archival.
     localRoots: [
@@ -92,12 +108,18 @@ export async function readRemovedSkuPurgePreview(
   // Hydrate and validate the immutable c2 removal before starting complete
   // cross-owner scans. This rejects staged, nonterminal, malformed, and stale
   // revisions while the operation is still on the cheap preflight path.
-  buildRemovedSkuPurgeCandidateManifest({
+  const candidate = buildRemovedSkuPurgeCandidateManifest({
     revision,
     checkpoints,
     currentAggregate: aggregate,
   });
-
+  // Do not silently fall back to a witness-free preview when the RPC fails.
+  const witness = await resolvedDependencies.readPredeleteWitness(
+    groupId, revisionId, candidate.targetVariationId, candidate.targetSku,
+  );
+  if (witness === null || witness === undefined) {
+    throw new Error('Removed-SKU read-only database witness returned no evidence.');
+  }
   const rows = await resolvedDependencies.readOwnershipRows();
 
   const result = await (resolvedDependencies.inspectReadiness ?? inspectRemovedSkuPurgeReadiness)({
@@ -107,8 +129,10 @@ export async function readRemovedSkuPurgePreview(
     ownershipRows: rows,
     localRoots: resolvedDependencies.localRoots,
     r2MetadataInspector: resolvedDependencies.inspectR2Metadata,
+    predeleteWitness: witness,
   });
-  if (result.deletionAuthorized !== false || result.groupId !== groupId || result.revisionId !== revisionId) {
+  if (result.deletionAuthorized !== false || result.databaseWitnessUsed !== true ||
+      result.groupId !== groupId || result.revisionId !== revisionId) {
     throw new Error('Removed-SKU purge preview returned inconsistent identity or authorization.');
   }
   return result;

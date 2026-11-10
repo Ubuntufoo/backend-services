@@ -30,6 +30,7 @@ const psql = (sql, role = null) => docker(
 const sqlLiteral = value => value === null
   ? 'null'
   : `'${String(value).replaceAll("'", "''")}'`;
+const textArrayLiteral = values => `ARRAY[${values.map(sqlLiteral).join(', ')}]::text[]`;
 const jsonLiteral = value => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
 const assert = (condition, message) => { if (!condition) throw new Error(`assertion failed: ${message}`); };
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -203,8 +204,9 @@ const witnessSql = group => `select public.inspect_variation_removed_sku_ownersh
 );`;
 
 async function main() {
-  const [listings, persistence, journal, simplify, canonicalMigration, witness] = await Promise.all([
+  const [listings, listingsImageArrays, persistence, journal, simplify, canonicalMigration, witness] = await Promise.all([
     read('supabase/migrations/20260516220000_create_listings_table.sql'),
+    read('supabase/migrations/20260519163107_listings_image_arrays_text.sql'),
     read('supabase/migrations/20260828150000_create_variation_listing_persistence.sql'),
     read('supabase/migrations/20260829150000_create_variation_listing_publishing_journal.sql'),
     read('supabase/migrations/20260831170000_simplify_variation_listing_persistence.sql'),
@@ -246,6 +248,7 @@ create or replace function extensions.digest(data text, typ text)
 returns bytea language sql immutable strict as $$ select public.digest(data, typ); $$;
 grant execute on function extensions.digest(text, text) to public;`);
     await psql(listings);
+    await psql(listingsImageArrays);
     await psql(persistence);
     await psql(journal);
     await psql(simplify);
@@ -300,8 +303,8 @@ grant execute on function extensions.digest(text, text) to public;`);
 
     await psql(`insert into public.listings (listing_id, listing_type, r2_object_keys, image_urls)
 values (${sqlLiteral('synthetic-standard-conflict')}, 'single',
-  jsonb_build_array(${sqlLiteral(groups.clean.targetFront)}),
-  jsonb_build_array(${sqlLiteral(`https://images.invalid/raw/${groups.clean.targetBack}`)}, ${sqlLiteral(`https://images.invalid/${groups.clean.targetFront.replaceAll('/', '%2f')}`)}));`);
+  ${textArrayLiteral([groups.clean.targetFront])},
+  ${textArrayLiteral([`https://images.invalid/raw/${groups.clean.targetBack}`, `https://images.invalid/${groups.clean.targetFront.replaceAll('/', '%2f')}`])});`);
     const conflict = JSON.parse((await psql(witnessSql(groups.clean), 'service_role')).trim());
     assert(conflict.standardReferenceCount === 1, 'raw and encoded standard references counted');
     assert(conflict.deletionAuthorized === false, 'standard conflict remains non-authorizing');
@@ -320,8 +323,18 @@ values (${sqlLiteral('66666666-6666-4666-8666-666666666666')}::uuid, ${sqlLitera
     await psql(`alter table public.listings alter column image_urls drop not null;
 insert into public.listings (listing_id, listing_type, r2_object_keys, image_urls)
 values (${sqlLiteral('synthetic-malformed-media')}, 'lot',
-  jsonb_build_array(${sqlLiteral('   ')}), null);`);
+  ${textArrayLiteral(['   '])}, null);`);
     await assertFailure(witnessSql(groups.clean), 'malformed and NULL standard media arrays', 'standard listing media arrays are malformed');
+    await psql(`delete from public.listings where listing_id = ${sqlLiteral('synthetic-malformed-media')};
+insert into public.listings (listing_id, listing_type, r2_object_keys, image_urls)
+values (${sqlLiteral('synthetic-tab-only-media')}, 'lot',
+  ARRAY[chr(9)]::text[], ARRAY['https://images.invalid/valid']::text[]);`);
+    await assertFailure(witnessSql(groups.clean), 'tab-only standard media array entry', 'standard listing media arrays are malformed');
+    await psql(`delete from public.listings where listing_id = ${sqlLiteral('synthetic-tab-only-media')};
+insert into public.listings (listing_id, listing_type, r2_object_keys, image_urls)
+values (${sqlLiteral('synthetic-edge-whitespace-media')}, 'lot',
+  ARRAY['edge-key' || chr(9)]::text[], ARRAY[chr(10) || 'edge-image' || chr(13)]::text[]);`);
+    await assertFailure(witnessSql(groups.clean), 'edge-whitespace standard media array entries', 'standard listing media arrays are malformed');
 
     const aclRows = (await psql(`select coalesce(bool_or(x.grantee = (select oid from pg_roles where rolname = 'service_role') and x.privilege_type = 'EXECUTE'), false),
        coalesce(bool_or(x.grantee = (select oid from pg_roles where rolname = 'anon') and x.privilege_type = 'EXECUTE'), false),
@@ -336,7 +349,7 @@ values (${sqlLiteral('synthetic-malformed-media')}, 'lot',
     await assertFailure(witnessSql(groups.clean), 'anon cannot execute witness', 'permission denied for function', 'anon');
     await assertFailure(witnessSql(groups.clean), 'authenticated cannot execute witness', 'permission denied for function', 'authenticated');
 
-    console.log('witness integration: passed (1 green path, 6 witness rejection paths, 3 non-authorizing conflict paths, 2 ACL denial paths, search_path checks)');
+    console.log('witness integration: passed (1 green path, 8 witness rejection paths, 3 non-authorizing conflict paths, 2 ACL denial paths, search_path checks)');
   } finally {
     if (started) await docker(['rm', '-f', name]).catch(() => {});
   }
