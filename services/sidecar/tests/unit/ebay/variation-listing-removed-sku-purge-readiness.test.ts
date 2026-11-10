@@ -45,6 +45,22 @@ describe('removed-SKU read-only purge readiness',()=>{
   expect(result.blockers).toContain('No consistent-snapshot database witness was supplied.');
   expect(result.blockers).toContain('At least one frozen R2 object is absent; the candidate resource set is stale.');
  });
+ it('treats an exact verified archive as a moved source but never authorizes deletion',()=>{
+  const archived=local();
+  archived.sourceFiles=archived.sourceFiles.map(file=>({...file,status:'missing' as const,resolvedPath:null}));
+  archived.candidates=archived.candidates.map((file,index)=>({
+    ...file,rootKind:'processed' as const,match:'verified-archive' as const,
+    absolutePath:'/archive/'+index+'.jpg',sourceRef:candidate.localSourceRefs[index]!,
+    r2Key:candidate.r2ObjectKeys[index]!,
+  }));
+  const result=summarizeRemovedSkuPurgeReadiness({candidate,ownership:ownership(),local:archived,predelete:null});
+  expect(result.deletionAuthorized).toBe(false);
+  expect(result.blockers.some(message=>message.startsWith('Local '))).toBe(false);
+  expect(result.blockers.some(message=>message.startsWith('At least one frozen local'))).toBe(false);
+  expect(result.blockers).toContain('No consistent-snapshot database witness was supplied.');
+  const forged={...archived,candidates:[{...archived.candidates[0]!,r2Key:'not-the-frozen-key'},archived.candidates[1]!]};
+  expect(()=>summarizeRemovedSkuPurgeReadiness({candidate,ownership:ownership(),local:forged,predelete:null})).toThrow(/archived evidence/);
+ });
  it('rejects inconsistent scope identity or forged deletion permission',()=>{
   expect(()=>summarizeRemovedSkuPurgeReadiness({candidate,ownership:{...ownership(),groupId:'foreign'},local:local(),predelete:null})).toThrow();
   expect(()=>summarizeRemovedSkuPurgeReadiness({candidate,ownership:{...ownership(),deletionAuthorized:true as never},local:local(),predelete:null})).toThrow();
@@ -56,7 +72,7 @@ describe('removed-SKU read-only purge readiness',()=>{
   const files=local();
   files.candidates=[];
   const result=summarizeRemovedSkuPurgeReadiness({candidate,ownership:ownership(),local:files,predelete:null});
-  expect(result.blockers).toContain('Configured local inventory did not produce exactly one candidate for every frozen source file.');
+  expect(result.blockers).toContain('Configured local inventory did not produce exactly one verified file per frozen source.');
   expect(result.deletionAuthorized).toBe(false);
   expect(()=>summarizeRemovedSkuPurgeReadiness({candidate:{...candidate,r2ObjectKeys:['other']},ownership:ownership(),local:local(),predelete:null})).toThrow();
   expect(()=>summarizeRemovedSkuPurgeReadiness({candidate:{...candidate,localSourceRefs:['/root/other.jpg']},ownership:ownership(),local:local(),predelete:null})).toThrow();

@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {mkdtemp, mkdir, writeFile, symlink, link, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -97,6 +98,60 @@ describe('read-only removed SKU local artifact inventory',()=>{
     expect(result.deletionAuthorized).toBe(false);
     expect(result.scannedConfiguredRootsCompletely).toBe(false);
     expect(result.sourceFiles[0]?.status).toBe('shared');
+  });
+
+  it('verifies archived replacement bytes and rejects tampering, duplicates, missing and links',async()=>{
+    const root=await mkdtemp(join(tmpdir(),'yp-c4-archive-'));dirs.push(root);
+    const incoming=join(root,'incoming'),processed=join(root,'processed');
+    await mkdir(incoming);await mkdir(processed);
+    const groupId='11111111-1111-4111-8111-111111111111';
+    const variationId='22222222-2222-4222-8222-222222222222';
+    const copyId='33333333-3333-4333-8333-333333333333';
+    const bucket='BSKBL-Remove--'+groupId;
+    const archiveDir=join(processed,bucket);await mkdir(archiveDir);
+    const item=candidate(join(incoming,'front.jpg'),join(incoming,'back.jpg'));
+    item.groupId=groupId;item.targetVariationId=variationId;
+    const files=(['front','back'] as const).map(role=>{
+      const bytes=Buffer.from(role+' verified image');
+      const hash=createHash('sha256').update(bytes).digest('hex').slice(0,12);
+      const key=['variation-listing',groupId,variationId,copyId,role+'-'+hash+'.jpg'].join('/');
+      const path=join(archiveDir,copyId+'_'+role+'-'+hash+'.jpg');
+      return {bytes,key,path};
+    });
+    for(const file of files) await writeFile(file.path,file.bytes);
+    item.copies=[{copyId,frontR2Key:files[0]!.key,backR2Key:files[1]!.key,localSourceRefs:[...item.localSourceRefs]}];
+    item.r2ObjectKeys=files.map(file=>file.key);
+    const roots=[{kind:'incoming' as const,absolutePath:incoming},{kind:'processed' as const,absolutePath:processed}];
+    const inspect=()=>inventoryRemovedSkuLocalArtifacts({candidate:item,roots,archiveBucketName:bucket});
+    const good=await inspect();
+    expect(good.deletionAuthorized).toBe(false);
+    expect(good.scannedConfiguredRootsCompletely).toBe(true);
+    expect(good.sourceFiles.map(file=>file.status)).toEqual(['missing','missing']);
+    expect(good.candidates).toHaveLength(2);
+    expect(good.candidates.every(file=>file.match==='verified-archive' && file.status==='present' && file.sourceRef && file.r2Key)).toBe(true);
+    await writeFile(files[0]!.path,'tampered');
+    expect((await inspect()).scannedConfiguredRootsCompletely).toBe(false);
+    expect((await inspect()).candidates.some(file=>file.status==='unverified')).toBe(true);
+    await writeFile(files[0]!.path,files[0]!.bytes);
+    await link(files[0]!.path,join(root,'hardlink.jpg'));
+    expect((await inspect()).candidates.some(file=>file.status==='shared')).toBe(true);
+    await rm(join(root,'hardlink.jpg'));
+    await writeFile(join(incoming,'front.jpg'),files[0]!.bytes);
+    expect((await inspect()).unresolved.some(reason=>reason.includes('Both frozen source'))).toBe(true);
+    await rm(join(incoming,'front.jpg'));
+    const lookalike=join(archiveDir,copyId+'_front-000000000000.jpg');
+    await writeFile(lookalike,'extra');
+    const unexpected=await inspect();
+    expect(unexpected.candidates.some(file=>file.match==='identity-in-path')).toBe(true);
+    expect(unexpected.deletionAuthorized).toBe(false);
+    await rm(lookalike);
+    await expect(inventoryRemovedSkuLocalArtifacts({
+      candidate:item,roots,archiveBucketName:'BSKBL-Invalid--wrong-group',
+    })).rejects.toThrow(/archive identity/);
+    await rm(files[1]!.path);
+    expect((await inspect()).scannedConfiguredRootsCompletely).toBe(false);
+    await symlink(files[0]!.path,files[1]!.path);
+    expect((await inspect()).unresolved.some(reason=>reason.includes('symbolic link'))).toBe(true);
   });
 
   it('does not traverse a configured-root symlink directory',async()=>{

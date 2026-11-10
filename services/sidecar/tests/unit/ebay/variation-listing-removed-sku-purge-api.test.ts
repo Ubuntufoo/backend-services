@@ -6,6 +6,7 @@ import type {
 } from '@ebay-inventory/data';
 
 import {
+  createRemovedSkuPurgePreviewDependencies,
   readRemovedSkuPurgePreview,
   type RemovedSkuPurgePreviewDependencies,
 } from '@/ebay/variation-listing-removed-sku-purge-api.js';
@@ -70,6 +71,31 @@ function dependencies(overrides: Partial<RemovedSkuPurgePreviewDependencies> = {
     ...overrides,
   };
 }
+
+describe('removed-SKU preview watcher roots', () => {
+  it('includes incoming and its processed sibling for explicitly configured storage', () => {
+    const incoming = '/tmp/production-watcher/incoming';
+    const deps = createRemovedSkuPurgePreviewDependencies(
+      {WATCHER_INCOMING_DIR: incoming},
+      {} as never,
+    );
+    expect(deps.localRoots).toEqual([
+      {kind: 'incoming', absolutePath: incoming},
+      {kind: 'processed', absolutePath: '/tmp/production-watcher/processed'},
+    ]);
+  });
+
+  it('respects the explicit processed directory override', () => {
+    const deps = createRemovedSkuPurgePreviewDependencies(
+      {WATCHER_INCOMING_DIR: '/tmp/production-watcher/incoming', WATCHER_PROCESSED_DIR: '/tmp/archive-override'},
+      {} as never,
+    );
+    expect(deps.localRoots).toEqual([
+      {kind: 'incoming', absolutePath: '/tmp/production-watcher/incoming'},
+      {kind: 'processed', absolutePath: '/tmp/archive-override'},
+    ]);
+  });
+});
 
 describe('readRemovedSkuPurgePreview', () => {
   it('rejects malformed UUIDs before any dependency I/O', async () => {

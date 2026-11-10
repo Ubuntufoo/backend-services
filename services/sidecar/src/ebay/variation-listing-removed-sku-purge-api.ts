@@ -10,7 +10,7 @@ import {
   type VariationListingRevisionRow,
 } from '@ebay-inventory/data';
 
-import { resolveWatcherIncomingDirectory } from '@/http/standard-capture-state.js';
+import { resolveWatcherIncomingDirectory, resolveWatcherProcessedDirectory } from '@/http/standard-capture-state.js';
 import { buildRemovedSkuPurgeCandidateManifest } from '@/ebay/variation-listing-removed-sku-purge-preview.js';
 import { readRemovedSkuOwnershipRows, type RemovedSkuOwnershipRows, type RemovedSkuR2MetadataInspector } from '@/ebay/variation-listing-removed-sku-ownership.js';
 import {
@@ -48,9 +48,12 @@ export function createRemovedSkuPurgePreviewDependencies(
     readCheckpoints: async (revisionId) =>
       (await listVariationListingPublishingCheckpointsByRevisionId(client, revisionId)).map((row) => row.source),
     readOwnershipRows: async () => await readRemovedSkuOwnershipRows(client),
-    // Variation capture keeps original incoming refs; no speculative cache/
-    // processed root is assumed. Unknown roots remain explicit blockers.
-    localRoots: [{kind: 'incoming', absolutePath: resolveWatcherIncomingDirectory(env)}],
+    // Scan configured watcher roots, including the archive destination.
+    // Original capture refs may still point to incoming after archival.
+    localRoots: [
+      {kind: 'incoming', absolutePath: resolveWatcherIncomingDirectory(env)},
+      {kind: 'processed', absolutePath: resolveWatcherProcessedDirectory(env)},
+    ],
     inspectR2Metadata: async (key) => await inspectR2ObjectMetadata(key, {env}),
   };
 }

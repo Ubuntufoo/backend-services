@@ -13,7 +13,7 @@ returns jsonb
 language plpgsql
 stable
 security definer
-set search_path = pg_catalog, public, pg_temp
+set search_path = ''
 as $$
 declare
   g public.variation_listing_groups%rowtype;
@@ -45,7 +45,8 @@ begin
   operation := r.operation_plan->0;
   if g.lifecycle_state <> 'active'
      or g.last_confirmed_revision is null
-     or g.last_confirmed_revision < r.captured_desired_revision
+     or g.last_confirmed_revision is distinct from g.desired_revision
+     or r.captured_desired_revision is distinct from g.desired_revision
      or r.snapshot_version <> 3
      or r.snapshot_digest is distinct from
        encode(extensions.digest(public.variation_listing_recovery_canonical_json(r.snapshot), 'sha256'), 'hex')
@@ -70,8 +71,18 @@ begin
     raise exception 'removed-SKU ownership witness revision or confirmation watermark invalid';
   end if;
   if jsonb_typeof(operation) is distinct from 'object'
+     or (select count(*) from jsonb_object_keys(operation)) <> 7
+     or exists (
+       select 1 from jsonb_object_keys(operation) k
+        where k not in ('operation_key', 'operation_kind', 'target_ref',
+                        'sequence_no', 'intent_version', 'intent_digest', 'intent')
+     )
+     or jsonb_typeof(operation->'operation_key') is distinct from 'string'
+     or jsonb_typeof(operation->'operation_kind') is distinct from 'string'
+     or jsonb_typeof(operation->'target_ref') is distinct from 'string'
      or jsonb_typeof(operation->'sequence_no') is distinct from 'number'
      or jsonb_typeof(operation->'intent_version') is distinct from 'number'
+     or jsonb_typeof(operation->'intent_digest') is distinct from 'string'
      or jsonb_typeof(operation->'intent') is distinct from 'object'
      or operation->>'intent_digest' !~ '^[0-9a-f]{64}$'
      or encode(extensions.digest(public.variation_listing_recovery_canonical_json(operation->'intent'), 'sha256'), 'hex') is distinct from operation->>'intent_digest'
@@ -80,6 +91,8 @@ begin
   end if;
   if operation->'intent'->>'groupKey' is distinct from g.group_key
      or operation->'intent'->>'targetSku' is distinct from p_target_sku
+     or jsonb_typeof(operation->'intent'->'groupKey') is distinct from 'string'
+     or jsonb_typeof(operation->'intent'->'targetSku') is distinct from 'string'
      or (select count(*) from jsonb_object_keys(operation->'intent')) <> 3
      or not (operation->'intent' ? 'groupKey')
      or not (operation->'intent' ? 'targetSku')
@@ -291,30 +304,49 @@ begin
 
   if exists (
     select 1 from public.listings l
-     where exists (
-       select 1 from unnest(coalesce(l.r2_object_keys, '{}'::text[])) value
-        where value is null
-     )
+     where jsonb_typeof(l.r2_object_keys) is distinct from 'array'
+        or jsonb_typeof(l.image_urls) is distinct from 'array'
         or exists (
-       select 1 from unnest(coalesce(l.image_urls, '{}'::text[])) value
-        where value is null
-     )
+          select 1 from jsonb_array_elements(
+            case when jsonb_typeof(l.r2_object_keys) = 'array' then l.r2_object_keys else '[]'::jsonb end
+          ) value
+           where jsonb_typeof(value) is distinct from 'string'
+              or nullif(btrim(value #>> '{}'), '') is null
+              or value #>> '{}' <> btrim(value #>> '{}')
+        )
+        or exists (
+          select 1 from jsonb_array_elements(
+            case when jsonb_typeof(l.image_urls) = 'array' then l.image_urls else '[]'::jsonb end
+          ) value
+           where jsonb_typeof(value) is distinct from 'string'
+              or nullif(btrim(value #>> '{}'), '') is null
+              or value #>> '{}' <> btrim(value #>> '{}')
+        )
   ) then
     raise exception 'removed-SKU ownership witness standard listing media arrays are malformed';
   end if;
   select count(*) into standard_conflicts from public.listings l
     where exists (
-       select 1 from unnest(coalesce(l.r2_object_keys, '{}'::text[])) k where k = any(r2_keys)
+       select 1 from jsonb_array_elements_text(
+         case when jsonb_typeof(l.r2_object_keys) = 'array' then l.r2_object_keys else '[]'::jsonb end
+       ) k where k = any(r2_keys)
     )
     or exists (
-       select 1 from unnest(coalesce(l.image_urls, '{}'::text[])) url
+       select 1 from jsonb_array_elements_text(
+         case when jsonb_typeof(l.image_urls) = 'array' then l.image_urls else '[]'::jsonb end
+       ) url
        cross join unnest(r2_keys) key
        where strpos(url, key) > 0
+          or strpos(lower(url), lower(replace(key, '/', '%2f'))) > 0
     )
     or exists (
-       select 1 from unnest(coalesce(l.image_urls, '{}'::text[])) url
+       select 1 from jsonb_array_elements_text(
+         case when jsonb_typeof(l.image_urls) = 'array' then l.image_urls else '[]'::jsonb end
+       ) url
        cross join unnest(source_refs) ref
        where url = ref
+          or strpos(url, ref) > 0
+          or strpos(lower(url), lower(replace(ref, '/', '%2f'))) > 0
     );
 
   -- Immutable historical revisions cannot be assumed free of consumers.
@@ -329,7 +361,7 @@ begin
       select 1 from unnest(r2_keys || source_refs) resource
       where exists (
         with recursive walk(value) as (
-          select hr.snapshot
+          select jsonb_build_array(hr.snapshot, coalesce(hr.operation_plan, 'null'::jsonb))
           union all
           select child.value
             from walk parent
@@ -349,7 +381,11 @@ begin
         )
         select 1 from walk
          where jsonb_typeof(walk.value) = 'string'
-           and walk.value #>> '{}' = resource
+           and (
+             walk.value #>> '{}' = resource
+             or strpos(walk.value #>> '{}', resource) > 0
+             or strpos(lower(walk.value #>> '{}'), lower(replace(resource, '/', '%2f'))) > 0
+           )
       )
     );
 
@@ -381,7 +417,7 @@ end;
 $$;
 
 revoke all on function public.inspect_variation_removed_sku_ownership(uuid, uuid, uuid, text)
-  from public, anon, authenticated;
+  from public, anon, authenticated, service_role;
 grant execute on function public.inspect_variation_removed_sku_ownership(uuid, uuid, uuid, text)
   to service_role;
 

@@ -23,6 +23,9 @@ const WITNESS_KEYS = [
   'sameGroupHistoricalReferencesVerified', 'journalHistoryVerified',
   'referenceSearchComplete', 'singleStatementSnapshot', 'deletionAuthorized',
 ];
+// PostgreSQL uuid accepts all hexadecimal version/variant nibbles; preserve
+// that contract while requiring the canonical text shape emitted by jsonb.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface RemovedSkuPredeleteWitness {
   version: 1;
@@ -83,6 +86,14 @@ function strings(value: unknown, label: string): string[] {
   return [...result];
 }
 
+function uuids(value: unknown, label: string): string[] {
+  const result = strings(value, label);
+  if (result.some((entry) => !UUID.test(entry))) {
+    throw new Error(`Removed-SKU pre-delete ${label} are malformed.`);
+  }
+  return result;
+}
+
 function count(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new Error('Removed-SKU pre-delete witness count is malformed.');
@@ -113,10 +124,13 @@ function validateCandidate(candidate: unknown): {
 } {
   const value = object(candidate, 'candidate');
   exactKeys(value, CANDIDATE_KEYS, 'candidate');
-  for (const key of ['groupId', 'revisionId', 'targetVariationId', 'targetSku'] as const) {
-    if (!trimmedString(value[key])) {
+  for (const key of ['groupId', 'revisionId', 'targetVariationId'] as const) {
+    if (!trimmedString(value[key]) || !UUID.test(value[key])) {
       throw new Error(`Removed-SKU pre-delete candidate ${key} is malformed.`);
     }
+  }
+  if (!trimmedString(value.targetSku)) {
+    throw new Error('Removed-SKU pre-delete candidate targetSku is malformed.');
   }
   if (value.deletionAuthorized !== false) {
     throw new Error('Removed-SKU pre-delete candidate deletion authorization is invalid.');
@@ -133,7 +147,7 @@ function validateCandidate(candidate: unknown): {
   for (const rawCopy of value.copies) {
     const copy = object(rawCopy, 'candidate copy');
     exactKeys(copy, COPY_KEYS, 'candidate copy');
-    if (!trimmedString(copy.copyId) || !trimmedString(copy.frontR2Key) ||
+    if (!trimmedString(copy.copyId) || !UUID.test(copy.copyId) || !trimmedString(copy.frontR2Key) ||
         !trimmedString(copy.backR2Key) || copy.frontR2Key === copy.backR2Key) {
       throw new Error('Removed-SKU pre-delete candidate copy identity is malformed.');
     }
@@ -210,7 +224,7 @@ export function assessRemovedSkuPredeleteWitness(
     confirmedRevision: revision(value.confirmedRevision),
     desiredRevision: revision(value.desiredRevision),
     capturedDesiredRevision: revision(value.capturedDesiredRevision),
-    copyIds: strings(value.copyIds, 'witness copy IDs'),
+    copyIds: uuids(value.copyIds, 'witness copy IDs'),
     r2ObjectKeys: strings(value.r2ObjectKeys, 'witness R2 object keys'),
     sourceRefs: strings(value.sourceRefs, 'witness source references'),
     liveVariationReferenceCount: count(value.liveVariationReferenceCount),
@@ -223,7 +237,7 @@ export function assessRemovedSkuPredeleteWitness(
     deletionAuthorized: false as const,
   };
   if (witness.confirmedRevision !== witness.desiredRevision ||
-      witness.confirmedRevision < witness.capturedDesiredRevision ||
+      witness.capturedDesiredRevision !== witness.confirmedRevision ||
       !sameSet(witness.copyIds, validCandidate.copyIds) ||
       !sameSet(witness.r2ObjectKeys, validCandidate.r2ObjectKeys) ||
       !sameSet(witness.sourceRefs, validCandidate.localSourceRefs)) {

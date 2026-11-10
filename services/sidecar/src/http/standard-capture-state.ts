@@ -1,6 +1,6 @@
 import {access, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 
 const STANDARD_CAPTURE_STATE_FILE = '.standard-capture-pending.json';
 const CAPTURE_WORKSPACE_STATE_FILE = '.capture-workspace.json';
@@ -29,6 +29,14 @@ export function resolveWatcherIncomingDirectory(
   if (env.WATCHER_INCOMING_DIR) return resolve(WATCHER_PACKAGE_DIR, env.WATCHER_INCOMING_DIR);
   const base = resolve(WATCHER_PACKAGE_DIR, env.WATCHER_BASE_DIR || 'watcher');
   return resolve(base, 'incoming');
+}
+
+/** Mirrors the watcher's processed root without inferring paths from image metadata. */
+export function resolveWatcherProcessedDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (env.WATCHER_PROCESSED_DIR) return resolve(WATCHER_PACKAGE_DIR, env.WATCHER_PROCESSED_DIR);
+  return resolve(dirname(resolveWatcherIncomingDirectory(env)), 'processed');
 }
 
 function workspaceStatePath(incomingDirectory: string): string {

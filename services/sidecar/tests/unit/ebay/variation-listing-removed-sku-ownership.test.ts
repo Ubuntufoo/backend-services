@@ -95,6 +95,30 @@ describe('read-only removed SKU ownership audit', () => {
     expect(findRemovedSkuReferenceConflicts(candidate, attest(data)).filter((x) => x.scope === 'prior-revisions')).toHaveLength(3);
   });
 
+  it('recognizes only exact same-copy legacy mediaResources provenance', () => {
+    const copyId = candidate.copies[0]!.copyId;
+    const front = `https://images.example.com/${candidate.r2ObjectKeys[0]}`;
+    const back = `https://images.example.com/${candidate.r2ObjectKeys[1]}`;
+    const own = rows();
+    own.revisions.push({revision_id: 'v1-media', group_id: candidate.groupId, snapshot: {
+      mediaResources: [
+        {copyId, role: 'front', sourceUrl: front},
+        {copyId, role: 'back', sourceUrl: back},
+      ],
+    }});
+    expect(findRemovedSkuReferenceConflicts(candidate, attest(own))).toEqual([]);
+
+    const shared = rows();
+    shared.revisions.push(
+      {revision_id: 'wrong-role', group_id: candidate.groupId, snapshot: {mediaResources: [{copyId, role: 'back', sourceUrl: front}]}},
+      {revision_id: 'wrong-copy', group_id: candidate.groupId, snapshot: {mediaResources: [{copyId: 'other', role: 'front', sourceUrl: front}]}},
+      {revision_id: 'other-group', group_id: 'different-group', snapshot: {mediaResources: [{copyId, role: 'front', sourceUrl: front}]}},
+      {revision_id: 'query-string', group_id: candidate.groupId, snapshot: {mediaResources: [{copyId, role: 'back', sourceUrl: `${back}?tracking=1`}]}},
+      {revision_id: 'wrong-location', group_id: candidate.groupId, snapshot: {otherMedia: [{copyId, role: 'front', sourceUrl: front}]}},
+    );
+    expect(findRemovedSkuReferenceConflicts(candidate, attest(shared)).filter((x) => x.scope === 'prior-revisions')).toHaveLength(5);
+  });
+
   it('does not treat another copy key as provenance when carried by the deleted copy', () => {
     const copyId = '55555555-5555-4555-8555-555555555555';
     const frontR2Key = `variation-listing/${candidate.groupId}/${candidate.targetVariationId}/${copyId}/front-112233445566.jpg`;

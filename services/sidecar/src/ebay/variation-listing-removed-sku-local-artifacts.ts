@@ -1,5 +1,7 @@
-import { lstat, readdir, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {createHash} from 'node:crypto';
+import {constants as fsConstants, type Stats} from 'node:fs';
+import {lstat, open, readdir, realpath} from 'node:fs/promises';
+import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 
 import type { RemovedSkuPurgeCandidateManifest } from '@/ebay/variation-listing-removed-sku-purge-preview.js';
 import {
@@ -18,9 +20,12 @@ export interface RemovedSkuLocalArtifactRoot {
 export interface RemovedSkuLocalArtifactCandidate {
   absolutePath: string;
   rootKind: RemovedSkuLocalRootKind;
-  match: 'source-reference' | 'identity-in-path';
+  match: 'source-reference' | 'identity-in-path' | 'verified-archive';
   status: 'present' | 'shared' | 'unverified';
   reason: string;
+  /** Only populated for an exact path-and-hash verified archived file. */
+  sourceRef?: string;
+  r2Key?: string;
 }
 
 export interface RemovedSkuLocalArtifactInventory {
@@ -120,6 +125,34 @@ function tokenMatch(part: string, identity: string): boolean {
 }
 
 /**
+ * A digest check is diagnostic, not a deletion-time file lock. Open with
+ * O_NOFOLLOW and compare file identity before/after streaming the bytes.
+ */
+async function matchesFrozenArchiveHash(path: string, observed: Stats, digest: string): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const before = await handle.stat();
+    if (!before.isFile() || before.nlink !== 1 || before.dev !== observed.dev ||
+        before.ino !== observed.ino || before.size !== observed.size ||
+        before.mtimeMs !== observed.mtimeMs || before.ctimeMs !== observed.ctimeMs) return false;
+    const hash = createHash('sha256');
+    for await (const chunk of handle.createReadStream({autoClose: false})) hash.update(chunk);
+    const after = await handle.stat();
+    const current = await lstat(path);
+    const stable = [after, current].every((stat) =>
+      stat.isFile() && stat.nlink === 1 && stat.dev === before.dev &&
+      stat.ino === before.ino && stat.size === before.size &&
+      stat.mtimeMs === before.mtimeMs && stat.ctimeMs === before.ctimeMs);
+    return stable && hash.digest('hex').slice(0, 12) === digest;
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
+}
+
+/**
  * A deliberately read-only inventory of explicitly configured watcher roots.
  * A path/name match is NOT a resource ownership claim, and unknown locations
  * cannot be certified absent. No recursive removal, file writes or R2 calls.
@@ -127,6 +160,8 @@ function tokenMatch(part: string, identity: string): boolean {
 export async function inventoryRemovedSkuLocalArtifacts(input: {
   candidate: RemovedSkuPurgeCandidateManifest;
   roots: readonly RemovedSkuLocalArtifactRoot[];
+  /** Frozen group archive directory identity, from the validated active aggregate. */
+  archiveBucketName?: string;
   maxEntries?: number;
   maxDepth?: number;
 }): Promise<RemovedSkuLocalArtifactInventory> {
@@ -163,6 +198,37 @@ export async function inventoryRemovedSkuLocalArtifacts(input: {
     ...candidate.copies.map((copy) => copy.copyId)];
   const results: RemovedSkuLocalArtifactCandidate[] = [];
   const unresolved: string[] = [];
+  const expectedArchives = new Map<string, {sourceRef: string; r2Key: string; digest: string}>();
+  if (input.archiveBucketName !== undefined) {
+    const processed = roots.filter((root) => root.kind === 'processed');
+    const bucket = input.archiveBucketName;
+    const bucketToken = bucket.slice(0, bucket.length - candidate.groupId.length - 2);
+    if (processed.length !== 1 || !bucket.endsWith(`--${candidate.groupId}`) ||
+        !/^(?:BSKBL|BSBL|OTHER)-[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/.test(bucketToken) ||
+        bucketToken.length > 38) {
+      throw new Error('Removed-SKU local inventory: archive identity or processed root is invalid.');
+    }
+    for (const copy of candidate.copies) {
+      for (const [role, r2Key, sourceRef] of [
+        ['front', copy.frontR2Key, copy.localSourceRefs[0]!],
+        ['back', copy.backR2Key, copy.localSourceRefs[1]!],
+      ] as const) {
+        const prefix = `variation-listing/${candidate.groupId}/${candidate.targetVariationId}/${copy.copyId}/${role}-`;
+        const match = r2Key.startsWith(prefix)
+          ? /^([0-9a-f]{12})(\.(?:jpg|jpeg|png|webp))$/.exec(r2Key.slice(prefix.length))
+          : null;
+        if (!match) {
+          unresolved.push('Frozen R2 key does not match the watcher archive identity.');
+          continue;
+        }
+        const archivePath = join(processed[0]!.path, bucket, `${copy.copyId}_${role}-${match[1]}${match[2]}`);
+        if (expectedArchives.has(archivePath)) {
+          throw new Error('Removed-SKU local inventory: archived image paths are duplicated.');
+        }
+        expectedArchives.set(archivePath, {sourceRef, r2Key, digest: match[1]!});
+      }
+    }
+  }
   let scannedEntryCount = 0;
   async function walk(root: {kind: RemovedSkuLocalRootKind; path: string}, directory: string, depth: number): Promise<void> {
     if (depth > maxDepth) {
@@ -209,9 +275,10 @@ export async function inventoryRemovedSkuLocalArtifacts(input: {
         continue;
       }
       const fromReference = resolvedSources.has(path);
+      const expectedArchive = root.kind === 'processed' ? expectedArchives.get(path) : undefined;
       const localParts = relative(root.path, path).split(sep);
       const nameMatch = localParts.some((part) => identifiers.some((identity) => tokenMatch(part, identity)));
-      if (!fromReference && !nameMatch) continue;
+      if (!fromReference && !nameMatch && !expectedArchive) continue;
       try {
         const [physical, metadata] = await Promise.all([realpath(path), lstat(path)]);
         if (!within(root.path, physical) || !metadata.isFile()) {
@@ -222,20 +289,28 @@ export async function inventoryRemovedSkuLocalArtifacts(input: {
           unresolved.push(`Candidate requires additional verification: ${path} ${reason}`);
           continue;
         }
-        const status = metadata.nlink > 1 ? 'shared' : 'present';
+        const status = metadata.nlink > 1 ? 'shared' :
+          expectedArchive && !(await matchesFrozenArchiveHash(path, metadata, expectedArchive.digest))
+            ? 'unverified' : 'present';
+        const verifiedArchive = expectedArchive && status === 'present';
         results.push({
           absolutePath: physical,
           rootKind: root.kind,
-          match: fromReference ? 'source-reference' : 'identity-in-path',
+          match: verifiedArchive ? 'verified-archive' : fromReference ? 'source-reference' : 'identity-in-path',
           status,
-          reason: metadata.nlink > 1
+          ...(verifiedArchive ? {sourceRef: expectedArchive.sourceRef, r2Key: expectedArchive.r2Key} : {}),
+          reason: status === 'shared'
             ? 'Multiple filesystem hard links; ownership cannot be attributed.'
-            : fromReference
-              ? 'Frozen capture source path is present; ownership is not proven.'
-              : 'Path mentions removed identity; association and ownership are unverified.',
+            : expectedArchive
+              ? verifiedArchive
+                ? 'Exact watcher archive path and frozen R2 SHA-256 prefix verified; deletion-time identity remains unproven.'
+                : 'Expected archived image failed stable-file or SHA-256 verification.'
+              : fromReference
+                ? 'Frozen capture source path is present; ownership is not proven.'
+                : 'Path mentions removed identity; association and ownership are unverified.',
         });
-        if (status === 'shared') {
-          unresolved.push(`Candidate requires additional verification: ${physical} has shared filesystem ownership.`);
+        if (status !== 'present') {
+          unresolved.push(`Candidate requires additional verification: ${physical} is ${status}.`);
         }
       } catch {
         const reason = 'Candidate file changed or could not be inspected.';
@@ -248,8 +323,14 @@ export async function inventoryRemovedSkuLocalArtifacts(input: {
   }
   for (const root of roots) await walk(root, root.path, 0);
   for (const source of sourceFiles) {
+    const archived = results.filter((item) =>
+      item.match === 'verified-archive' && item.sourceRef === source.sourceRef);
+    if (source.status === 'missing' && archived.length === 1) continue;
     if (source.status === 'missing' || source.status === 'unverified' || source.status === 'shared') {
       unresolved.push(`Frozen source path requires additional verification: ${source.reason}`);
+    }
+    if (archived.length > 0) {
+      unresolved.push('Both frozen source and archived image are present, or archive identity is duplicated.');
     }
     if (source.status === 'present' && source.resolvedPath &&
         !results.some((item) => item.absolutePath === source.resolvedPath)) {

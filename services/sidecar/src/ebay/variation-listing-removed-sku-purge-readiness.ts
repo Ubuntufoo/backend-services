@@ -69,7 +69,7 @@ const OWNERSHIP_SCOPES = [
 ] as const;
 const R2_STATUSES = ['present', 'absent', 'unknown', 'inaccessible'] as const;
 const LOCAL_FILE_STATUSES = ['missing', 'present', 'unverified', 'shared'] as const;
-const LOCAL_CANDIDATE_MATCHES = ['source-reference', 'identity-in-path'] as const;
+const LOCAL_CANDIDATE_MATCHES = ['source-reference', 'identity-in-path', 'verified-archive'] as const;
 const LOCAL_CANDIDATE_STATUSES = ['present', 'unverified', 'shared'] as const;
 const LOCAL_ROOT_KINDS = ['incoming', 'processed', 'staging', 'cache'] as const;
 
@@ -193,6 +193,15 @@ function validateReadinessInputs(
       throw new Error('Removed-SKU readiness local candidate inventory is malformed.');
     }
   }
+  for (const item of local.candidates.filter((file) => file.match === 'verified-archive')) {
+    if (item.rootKind !== 'processed' || item.status !== 'present' ||
+        !nonEmptyString(item.sourceRef) || !nonEmptyString(item.r2Key) ||
+        !candidate.copies.some((copy) =>
+          (copy.localSourceRefs[0] === item.sourceRef && copy.frontR2Key === item.r2Key) ||
+          (copy.localSourceRefs[1] === item.sourceRef && copy.backR2Key === item.r2Key))) {
+      throw new Error('Removed-SKU readiness archived evidence does not match frozen copy identity.');
+    }
+  }
 
   if (predelete !== null) {
     const witness = predelete.witness;
@@ -263,16 +272,23 @@ export function summarizeRemovedSkuPurgeReadiness(input: {
     'At least one frozen R2 object is absent; the candidate resource set is stale.');
   add(!local.scannedConfiguredRootsCompletely || local.unresolved.length > 0,
     'Local file inventory is incomplete, ambiguous, or contains unresolved resources.');
-  add(local.candidates.some((item) => item.match !== 'source-reference' ||
-      item.status !== 'present'), 'Local candidate paths are not exclusive frozen source references.');
-  add(local.sourceFiles.some((file) => file.status !== 'present' || file.resolvedPath === null),
-    'At least one frozen local source reference is missing, shared, or unverified.');
-  const sourcePaths = local.sourceFiles
-    .filter((file) => file.status === 'present' && file.resolvedPath !== null)
-    .map((file) => file.resolvedPath as string);
-  add(sourcePaths.some((path) => local.candidates.filter((item) =>
-    item.match === 'source-reference' && item.absolutePath === path).length !== 1),
-  'Configured local inventory did not produce exactly one candidate for every frozen source file.');
+  const archiveFor = (sourceRef: string) =>
+    local.candidates.filter((item) =>
+      item.match === 'verified-archive' && item.status === 'present' && item.sourceRef === sourceRef);
+  add(local.candidates.some((item) =>
+      (item.match !== 'source-reference' && item.match !== 'verified-archive') ||
+      item.status !== 'present'),
+    'Local candidate paths are not exclusively verified frozen sources or archives.');
+  add(local.sourceFiles.some((file) =>
+    !((file.status === 'present' && file.resolvedPath !== null && archiveFor(file.sourceRef).length === 0) ||
+      (file.status === 'missing' && archiveFor(file.sourceRef).length === 1))),
+    'At least one frozen local source lacks an exclusive verified file or archive.');
+  add(local.sourceFiles.some((file) => {
+    const matches = local.candidates.filter((item) =>
+      (item.match === 'source-reference' && item.absolutePath === file.resolvedPath) ||
+      (item.match === 'verified-archive' && item.sourceRef === file.sourceRef));
+    return matches.length !== 1;
+  }), 'Configured local inventory did not produce exactly one verified file per frozen source.');
   add(predelete === null, 'No consistent-snapshot database witness was supplied.');
   if (predelete) blockers.push(...predelete.blockers);
   blockers.push(
@@ -334,6 +350,7 @@ export async function inspectRemovedSkuPurgeReadiness(input: {
     inventoryRemovedSkuLocalArtifacts({
       candidate,
       roots: input.localRoots,
+      archiveBucketName: `${input.currentAggregate.group.sku_category_code}-${input.currentAggregate.group.sku_bucket_token}--${candidate.groupId}`,
     }),
   ]);
   const predelete = input.predeleteWitness === undefined ? null :

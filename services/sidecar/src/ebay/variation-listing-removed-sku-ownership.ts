@@ -415,13 +415,30 @@ export function findRemovedSkuReferenceConflicts(
         const ownCopy = revision.group_id === candidate.groupId &&
           value.variation_id === candidate.targetVariationId &&
           typeof value.copy_id === 'string' ? allowedCopies.get(value.copy_id) : undefined;
+        // Legacy v1 mediaResources use copyId/role/sourceUrl instead of copy fields.
+        // Only an exact same-group copy/role/key in that array is provenance.
+        const mediaPrefix = `revision:${revision.revision_id}.mediaResources[`;
+        const mediaCopy = revision.group_id === candidate.groupId &&
+          owner.startsWith(mediaPrefix) && /^\d+\]$/.test(owner.slice(mediaPrefix.length)) &&
+          Object.keys(value).sort().join(',') === 'copyId,role,sourceUrl' &&
+          typeof value.copyId === 'string' ? allowedCopies.get(value.copyId) : undefined;
+        const mediaKey = mediaCopy && (value.role === 'front' ? mediaCopy.frontR2Key :
+          value.role === 'back' ? mediaCopy.backR2Key : undefined);
+        let ownMediaUrl = false;
+        if (mediaKey && typeof value.sourceUrl === 'string') {
+          try {
+            const url = new URL(value.sourceUrl);
+            ownMediaUrl = url.protocol === 'https:' && !url.username && !url.password &&
+              !url.search && !url.hash && url.pathname.replace(/^\/+/, '') === mediaKey;
+          } catch { /* Malformed URLs cannot establish provenance. */ }
+        }
         for (const [key, child] of Object.entries(value)) {
           const provenanceValue = ownCopy && (
             (key === 'front_r2_key' && child === ownCopy.frontR2Key) ||
             (key === 'back_r2_key' && child === ownCopy.backR2Key) ||
             (key === 'capture_front_source_ref' && child === ownCopy.localSourceRefs[0]) ||
             (key === 'capture_back_source_ref' && child === ownCopy.localSourceRefs[1])
-          );
+          ) || (key === 'sourceUrl' && ownMediaUrl);
           visit(child, `${owner}.${key}`, Boolean(provenanceValue), depth + 1);
         }
         return;

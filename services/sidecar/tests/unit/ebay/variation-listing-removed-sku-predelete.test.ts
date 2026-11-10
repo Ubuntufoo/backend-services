@@ -112,11 +112,32 @@ describe('YP9.6c4 read-only pre-delete witness', () => {
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), confirmedRevision: 0 })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), desiredRevision: 6 })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), capturedDesiredRevision: 6 })).toThrow();
+    expect(() => assessRemovedSkuPredeleteWitness(candidate, {
+      ...witness(), confirmedRevision: 8, desiredRevision: 8, capturedDesiredRevision: 7,
+    })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), deletionAuthorized: true })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), sameGroupHistoricalReferencesVerified: true })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), journalHistoryVerified: true })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), referenceSearchComplete: true })).toThrow();
     expect(() => assessRemovedSkuPredeleteWitness(candidate, { ...witness(), singleStatementSnapshot: false })).toThrow();
+  });
+
+  it('rejects stale identity and invalid SQL-output shapes', () => {
+    expect(() => assessRemovedSkuPredeleteWitness(candidate, {
+      ...witness(), revisionId: '99999999-9999-4999-8999-999999999999',
+    })).toThrow();
+    expect(() => assessRemovedSkuPredeleteWitness(candidate, {
+      ...witness(), copyIds: ['not-a-uuid'],
+    })).toThrow();
+    expect(() => assessRemovedSkuPredeleteWitness(candidate, {
+      ...witness(), liveVariationReferenceCount: null,
+    })).toThrow();
+    expect(() => assessRemovedSkuPredeleteWitness(candidate, {
+      ...witness(), r2ObjectKeys: [candidate.r2ObjectKeys[0], 7],
+    })).toThrow();
+    expect(() => assessRemovedSkuPredeleteWitness(
+      { ...candidate, groupId: 'not-a-uuid' }, witness(),
+    )).toThrow();
   });
 
   it('detaches returned resource arrays from mutable witness input', () => {
