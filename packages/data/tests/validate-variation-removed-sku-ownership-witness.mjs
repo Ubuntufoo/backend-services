@@ -40,6 +40,8 @@ const groups = {
   badOperation: { id: '33333333-3333-4333-8333-333333333333', revision: '33333333-3333-4333-8333-333333333393', bucket: 'BadOperationC', listing: '10000000003' },
   liveTarget: { id: '44444444-4444-4444-8444-444444444444', revision: '44444444-4444-4444-8444-444444444494', bucket: 'LiveTargetD', listing: '10000000004' },
   otherGroup: { id: '55555555-5555-4555-8555-555555555555', revision: '55555555-5555-4555-8555-555555555595', bucket: 'OtherGroupE', listing: '10000000005' },
+  badSource: { id: '77777777-7777-4777-8777-777777777777', revision: '77777777-7777-4777-8777-777777777797', bucket: 'BadSourceF', listing: '10000000007' },
+  liveShared: { id: '88888888-8888-4888-8888-888888888888', revision: '88888888-8888-4888-8888-888888888898', bucket: 'LiveSharedG', listing: '10000000008' },
 };
 
 for (const group of Object.values(groups)) {
@@ -55,6 +57,7 @@ for (const group of Object.values(groups)) {
   group.targetFrontRef = `${group.bucket}-front-2`;
   group.targetBackRef = `${group.bucket}-back-2`;
 }
+groups.liveShared.sharedFront = groups.clean.targetFront;
 
 const read = relative => readFile(`${root}/${relative}`, 'utf8');
 
@@ -79,7 +82,9 @@ ${group.variationIds.map((variationId, index) => {
   const serial = index + 1;
   const copyId = group.copyIds[index];
   const sku = group.skus[index];
-  const front = `variation-listing/${group.bucket}/front-${serial}`;
+  const front = index === 0 && group.sharedFront
+    ? group.sharedFront
+    : `variation-listing/${group.bucket}/front-${serial}`;
   const back = `variation-listing/${group.bucket}/back-${serial}`;
   const frontRef = `${group.bucket}-front-${serial}`;
   const backRef = `${group.bucket}-back-${serial}`;
@@ -99,20 +104,24 @@ update public.variation_listing_variations
 }).join('\n')}
 commit;`;
 
-const aggregate = group => `jsonb_build_object(
+const aggregate = (group, malformedSource = false) => `jsonb_build_object(
   'group', (select to_jsonb(g) from public.variation_listing_groups g where g.group_id = ${sqlLiteral(group.id)}::uuid),
   'variations', (select coalesce(jsonb_agg(to_jsonb(v) order by v.position), '[]'::jsonb)
                    from public.variation_listing_variations v where v.group_id = ${sqlLiteral(group.id)}::uuid),
-  'copies', (select coalesce(jsonb_agg(to_jsonb(c) order by c.copy_id), '[]'::jsonb)
+  'copies', (select coalesce(jsonb_agg(${malformedSource
+    ? `case when c.copy_id = ${sqlLiteral(group.targetCopyId)}::uuid
+             then jsonb_set(to_jsonb(c), '{capture_front_source_ref}', to_jsonb(' '::text))
+             else to_jsonb(c) end`
+    : 'to_jsonb(c)'} order by c.copy_id), '[]'::jsonb)
               from public.variation_listing_copies c
               join public.variation_listing_variations v on v.variation_id = c.variation_id
              where v.group_id = ${sqlLiteral(group.id)}::uuid)
 )`;
 
-const snapshot = group => `jsonb_build_object(
-  'aggregate', ${aggregate(group)},
+const snapshot = (group, malformedSource = false) => `jsonb_build_object(
+  'aggregate', ${aggregate(group, malformedSource)},
   'confirmed', jsonb_build_object(
-    'aggregate', ${aggregate(group)},
+    'aggregate', ${aggregate(group, malformedSource)},
     'remote', jsonb_build_object('listingId', ${sqlLiteral(group.listing)})
   ),
   'permanentRemoval', jsonb_build_object(
@@ -132,9 +141,9 @@ const intent = group => `jsonb_build_object(
   'survivorSkus', jsonb_build_array(${sqlLiteral(group.skus[0])}, ${sqlLiteral(group.skus[2])})
 )`;
 
-const seedRevision = (group, { checkpoint = true, badDigest = false } = {}) => `
+const seedRevision = (group, { checkpoint = true, badDigest = false, malformedSource = false } = {}) => `
 with payload as (
-  select ${snapshot(group)} as snapshot, ${intent(group)} as intent
+  select ${snapshot(group, malformedSource)} as snapshot, ${intent(group)} as intent
 )
 insert into public.variation_listing_revisions
   (revision_id, group_id, captured_desired_revision, snapshot_version, snapshot_digest,
@@ -211,12 +220,18 @@ async function main() {
   try {
     await docker(['run', '-d', '--rm', '--network', 'none', '--name', name, '-e', `POSTGRES_PASSWORD=${password}`, 'postgres:17-alpine']);
     started = true;
-    for (let attempt = 0; attempt < 240; attempt += 1) {
-      try { await psql('select 1;'); break; }
-      catch (error) {
-        if (attempt === 239) throw new Error(`postgres readiness timeout: ${error.message}`);
-        await sleep(250);
+    let readyChecks = 0;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      try {
+        await psql('select 1;');
+        readyChecks += 1;
+        if (readyChecks === 2) break;
       }
+      catch (error) {
+        readyChecks = 0;
+        if (attempt === 59) throw new Error(`postgres readiness timeout: ${error.message}`);
+      }
+      await sleep(1_000);
     }
 
     await psql(`create role anon;
@@ -237,19 +252,21 @@ grant execute on function extensions.digest(text, text) to public;`);
     await psql(canonical);
     await psql(witness);
 
-    await psql(Object.values(groups).map(seedGroup).join('\n'));
+    await psql(Object.values(groups).filter(group => group !== groups.liveShared).map(seedGroup).join('\n'));
     await psql([
       seedRevision(groups.clean),
       seedRevision(groups.noCheckpoint, { checkpoint: false }),
       seedRevision(groups.badOperation, { badDigest: true }),
       seedRevision(groups.liveTarget),
       seedRevision(groups.otherGroup),
+      seedRevision(groups.badSource, { malformedSource: true }),
     ].join('\n'));
     await psql([
       removeTarget(groups.clean),
       removeTarget(groups.noCheckpoint),
       removeTarget(groups.badOperation),
       removeTarget(groups.otherGroup),
+      removeTarget(groups.badSource),
     ].join('\n'));
 
     const clean = JSON.parse((await psql(witnessSql(groups.clean), 'service_role')).trim());
@@ -273,7 +290,13 @@ grant execute on function extensions.digest(text, text) to public;`);
     await assertFailure(witnessSql(groups.clean).replace(groups.clean.revision, '99999999-9999-4999-8999-999999999999'), 'foreign revision identity', 'revision does not exist');
     await assertFailure(witnessSql(groups.noCheckpoint), 'missing terminal checkpoint', 'lacks exact terminal membership proof');
     await assertFailure(witnessSql(groups.badOperation), 'malformed operation digest', 'operation intent digest is invalid');
+    await assertFailure(witnessSql(groups.badSource), 'malformed frozen source reference', 'frozen copy identity is malformed');
     await assertFailure(witnessSql(groups.liveTarget), 'still-live target', 'target still exists');
+
+    await psql(seedGroup(groups.liveShared));
+    const sharedLive = JSON.parse((await psql(witnessSql(groups.clean), 'service_role')).trim());
+    assert(sharedLive.liveVariationReferenceCount === 1, 'unrelated live variation reference counted');
+    assert(sharedLive.deletionAuthorized === false, 'live variation conflict remains non-authorizing');
 
     await psql(`insert into public.listings (listing_id, listing_type, r2_object_keys, image_urls)
 values (${sqlLiteral('synthetic-standard-conflict')}, 'single',
@@ -313,7 +336,7 @@ values (${sqlLiteral('synthetic-malformed-media')}, 'lot',
     await assertFailure(witnessSql(groups.clean), 'anon cannot execute witness', 'permission denied for function', 'anon');
     await assertFailure(witnessSql(groups.clean), 'authenticated cannot execute witness', 'permission denied for function', 'authenticated');
 
-    console.log('witness integration: passed (1 green path, 9 fail-closed paths, ACL/search_path checks)');
+    console.log('witness integration: passed (1 green path, 6 witness rejection paths, 3 non-authorizing conflict paths, 2 ACL denial paths, search_path checks)');
   } finally {
     if (started) await docker(['rm', '-f', name]).catch(() => {});
   }

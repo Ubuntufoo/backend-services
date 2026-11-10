@@ -220,7 +220,7 @@ function validateReadinessInputs(
         !Number.isSafeInteger(witness.desiredRevision) || witness.desiredRevision < 1 ||
         !Number.isSafeInteger(witness.capturedDesiredRevision) || witness.capturedDesiredRevision < 1 ||
         witness.confirmedRevision !== witness.desiredRevision ||
-        witness.confirmedRevision < witness.capturedDesiredRevision ||
+        witness.confirmedRevision !== witness.capturedDesiredRevision ||
         !nonNegativeSafeInteger(witness.liveVariationReferenceCount) ||
         !nonNegativeSafeInteger(witness.standardReferenceCount) ||
         !nonNegativeSafeInteger(witness.otherGroupRevisionReferenceCount)) {

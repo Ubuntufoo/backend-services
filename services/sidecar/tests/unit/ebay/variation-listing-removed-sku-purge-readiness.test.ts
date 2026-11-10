@@ -93,6 +93,9 @@ describe('removed-SKU read-only purge readiness',()=>{
   const staleWitness={...predelete,referenceCountsClear:false as const,
    witness:{...predelete.witness,confirmedRevision:2}};
   expect(()=>summarizeRemovedSkuPurgeReadiness({candidate,ownership:ownership(),local:local(),predelete:staleWitness})).toThrow();
+  const staleCapturedRevision={...predelete,referenceCountsClear:false as const,
+   witness:{...predelete.witness,confirmedRevision:2,desiredRevision:2,capturedDesiredRevision:1}};
+  expect(()=>summarizeRemovedSkuPurgeReadiness({candidate,ownership:ownership(),local:local(),predelete:staleCapturedRevision})).toThrow();
  });
  it('surfaces unresolved local and shared database ownership independently',()=>{
   const data=ownership();data.referenceConflicts=[{scope:'standard-single-lot',owner:'listing:x',resource:'key/front'}];
