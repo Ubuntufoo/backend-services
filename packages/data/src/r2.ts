@@ -154,6 +154,27 @@ export function buildPublicImageUrl(publicBaseUrl: string, objectKey: string): s
   return `${trimTrailingSlash(publicBaseUrl)}/${encodeObjectKeyForPublicUrl(objectKey)}`;
 }
 
+/**
+ * Variation image keys are write-once, content-addressed references.
+ * Enforce this for every caller of the shared uploader, not only the watcher.
+ * This does not prevent writes from outside this application or authorize deletion.
+ */
+function assertImmutableVariationUpload(
+  objectKey: string,
+  body: Buffer | Uint8Array,
+  createOnce: boolean | undefined
+): void {
+  if (!objectKey.trim().toLowerCase().startsWith('variation-listing/')) return;
+  if (createOnce !== true) {
+    throw new Error('Variation image uploads require atomic create-once semantics.');
+  }
+  const match = /^variation-listing\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/(?:front|back)-([0-9a-f]{12})\.(?:jpg|jpeg|png|webp)$/.exec(objectKey);
+  const digest = createHash('sha256').update(body).digest('hex').slice(0, 12);
+  if (!match || match[1] !== digest) {
+    throw new Error('Variation image object key must match the exact image content digest.');
+  }
+}
+
 export async function uploadImage(
   input: UploadImageInput,
   options: UploadImageOptions = {}
@@ -166,11 +187,12 @@ export async function uploadImage(
     throw new Error('body must not be empty');
   }
 
+  const objectKey = options.objectKey ?? buildR2ImageObjectKey(input);
+  assertNonEmpty('objectKey', objectKey);
+  assertImmutableVariationUpload(objectKey, input.body, options.createOnce);
+
   const config = options.config ?? loadR2ImageStorageConfig(options.env);
   const client = options.client ?? createR2ImageStorageClientFromConfig(config);
-  const objectKey = options.objectKey ?? buildR2ImageObjectKey(input);
-
-  assertNonEmpty('objectKey', objectKey);
 
   await client.send(
     new PutObjectCommand({

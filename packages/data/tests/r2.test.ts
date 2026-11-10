@@ -207,10 +207,10 @@ describe('shared R2 image storage service', () => {
       filename: 'front.jpg',
       contentType: 'image/jpeg',
       body: Buffer.from('image-bytes'),
-    }, {env: r2Env, objectKey: 'variation-listing/group/variation/copy/front-abcd.jpg', createOnce: true});
+    }, {env: r2Env, objectKey: 'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg', createOnce: true});
 
     expect(putObjectCommandMock).toHaveBeenCalledWith(expect.objectContaining({
-      Key: 'variation-listing/group/variation/copy/front-abcd.jpg',
+      Key: 'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
       IfNoneMatch: '*',
     }));
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -226,12 +226,76 @@ describe('shared R2 image storage service', () => {
       filename: 'back.jpg',
       contentType: 'image/jpeg',
       body: Buffer.from('image-bytes'),
-    }, {env: r2Env, objectKey: 'variation-listing/group/variation/copy/back-abcd.jpg', createOnce: true}))
+    }, {env: r2Env, objectKey: 'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/back-2c8648d103e3.jpg', createOnce: true}))
       .rejects.toThrow('PreconditionFailed');
 
     expect(putObjectCommandMock).toHaveBeenCalledWith(expect.objectContaining({IfNoneMatch: '*'}));
     expect(deleteObjectCommandMock).not.toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, false])(
+    'rejects a Variation upload with createOnce=%s before any remote request',
+    async (createOnce) => {
+      const {uploadImage} = await import('../src/index.js');
+      const options = createOnce === undefined
+        ? {
+            env: r2Env,
+            objectKey: 'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
+          }
+        : {
+            env: r2Env,
+            objectKey: 'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
+            createOnce,
+          };
+      await expect(uploadImage({
+        listingId: 'variation-group', filename: 'front.jpg',
+        contentType: 'image/jpeg', body: Buffer.from('image-bytes'),
+      }, options)).rejects.toThrow(/create-once/);
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(s3ClientMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects mismatched frozen image content even when create-once is set', async () => {
+    const {uploadImage} = await import('../src/index.js');
+    await expect(uploadImage({
+      listingId: 'variation-group', filename: 'back.jpg',
+      contentType: 'image/jpeg', body: Buffer.from('replacement-bytes'),
+    }, {
+      env: r2Env, createOnce: true,
+      objectKey: 'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/back-2c8648d103e3.jpg',
+    })).rejects.toThrow(/content digest/);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(s3ClientMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'variation-listing/11111111-1111-0111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
+    'variation-listing/11111111-1111-4111-0111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
+  ])('rejects malformed Variation UUID path %s before any remote request', async (objectKey) => {
+    const {uploadImage} = await import('../src/index.js');
+    await expect(uploadImage({
+      listingId: 'variation-group', filename: 'front.jpg',
+      contentType: 'image/jpeg', body: Buffer.from('image-bytes'),
+    }, {env: r2Env, objectKey, createOnce: true})).rejects.toThrow(/content digest/);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(s3ClientMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'variation-listing/not-a-canonical-path',
+    'variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.gif',
+    ' variation-listing/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
+    'VARIATION-LISTING/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/front-2c8648d103e3.jpg',
+  ])('rejects malformed Variation object key %s before any remote request', async (objectKey) => {
+    const {uploadImage} = await import('../src/index.js');
+    await expect(uploadImage({
+      listingId: 'variation-group', filename: 'front.jpg',
+      contentType: 'image/jpeg', body: Buffer.from('image-bytes'),
+    }, {env: r2Env, objectKey, createOnce: true})).rejects.toThrow(/content digest/);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(s3ClientMock).not.toHaveBeenCalled();
   });
 
   it('rejects empty upload bodies before attempting to send an object', async () => {
@@ -252,6 +316,7 @@ describe('shared R2 image storage service', () => {
     ).rejects.toThrow(/body must not be empty/);
 
     expect(sendMock).not.toHaveBeenCalled();
+    expect(s3ClientMock).not.toHaveBeenCalled();
   });
 
   it('deletes only normalized exact object keys', async () => {
