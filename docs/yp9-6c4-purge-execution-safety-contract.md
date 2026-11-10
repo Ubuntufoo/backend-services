@@ -26,6 +26,10 @@ conditional-delete guarantee, or the separately authorized operator-confirmation
 workflow. Those remain EXEC2–EXEC4 gates; no local file, R2 object, eBay
 resource, or hosted row is deleted by this foundation.
 
+## EXEC3 storage investigation — offline only
+
+Cloudflare R2's documented S3 API supports atomic conditional PutObject (If-None-Match: *) but provides no documented conditional DeleteObject identity guarantee. The shared R2 uploader has an opt-in create-once option, enabled only for Variation capture uploads. A 412, unknown upload outcome, partial success, malformed success, or downstream persistence failure never triggers an unconditional delete of either expected key; the watcher fails closed and leaves media for explicit reconciliation. Standard uploads retain their existing overwrite behavior. Even successful create-once uploads do not grant deletion authority; no unconditional production R2 deletion is permitted for removed-SKU cleanup.
+
 ## Mandatory gates before any future deletion
 1. Rehydrate and verify the exact v3 revision/intent and complete ordered terminal journal; verify target absent and active survivors unchanged.
 2. Identify exclusively owned keys/paths across Variation, Standard Single/Lot, historical revisions, media consumers and supported encoded references. Unknown, partial or unavailable evidence blocks deletion. Historical same-copy provenance is not automatically another owner.

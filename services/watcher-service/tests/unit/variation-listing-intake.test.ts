@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Json, VariationListingIntakeSession } from '@ebay-inventory/data';
+
+const uploadImageMock = vi.hoisted(() => vi.fn());
 
 // Keep this focused suite runnable against a checkout with stale package build output.
 // Production resolves the shared reader from @ebay-inventory/data after its build.
@@ -9,6 +11,7 @@ vi.mock('@ebay-inventory/data', async () => {
   const actual = await vi.importActual<typeof import('@ebay-inventory/data')>('@ebay-inventory/data');
   return {
     ...actual,
+    uploadImage: uploadImageMock,
     VARIATION_LISTING_COPY_CONDITION_TOKENS: [
       'NEAR_MINT_OR_BETTER',
       'EXCELLENT',
@@ -26,8 +29,11 @@ vi.mock('@ebay-inventory/data', async () => {
   };
 });
 
+afterEach(() => uploadImageMock.mockReset());
+
 import {
   buildVariationListingR2ImageObjectKey,
+  cleanupVariationListingPreparedCompletionMedia,
   createWatcherServiceConfig,
   createVariationListingRuntimeProcessor,
   requestVariationListingIdentityHandoff,
@@ -446,6 +452,32 @@ describe('variation listing image ownership and storage', () => {
     expect(uploadStoredImage).toHaveBeenCalledTimes(2);
   });
 
+  it('uses create-once uploads for the default Variation storage seam', async () => {
+    uploadImageMock.mockImplementation(async (_input: unknown, options: { objectKey: string }) => ({
+      objectKey: options.objectKey,
+      publicUrl: `https://images.example/${options.objectKey}`,
+    }));
+
+    await storeVariationListingCompletionCandidate(
+      completionCandidate('duplicate_copy'),
+      { completionKind: 'duplicate_copy', conditionToken: 'EXCELLENT' },
+      {
+        createId: () => COPY_ID,
+        readImage: async (sourcePath) => Buffer.from(sourcePath),
+      },
+    );
+
+    expect(uploadImageMock).toHaveBeenCalledTimes(2);
+    expect(uploadImageMock.mock.calls[0]?.[1]).toMatchObject({
+      createOnce: true,
+      objectKey: expect.stringMatching(/\/front-[0-9a-f]{12}\.jpg$/),
+    });
+    expect(uploadImageMock.mock.calls[1]?.[1]).toMatchObject({
+      createOnce: true,
+      objectKey: expect.stringMatching(/\/back-[0-9a-f]{12}\.png$/),
+    });
+  });
+
   it('validates new-variation metadata before any storage side effect', async () => {
     const readImage = vi.fn(async () => Buffer.from('bytes'));
     const uploadStoredImage = vi.fn();
@@ -498,7 +530,7 @@ describe('variation listing image ownership and storage', () => {
     expect(uploadStoredImage).not.toHaveBeenCalled();
   });
 
-  it('stops on a storage failure and never invokes any persistence seam', async () => {
+  it('fails closed on a partial storage failure without deleting either survivor key', async () => {
     const uploadStoredImage = vi.fn().mockRejectedValueOnce(new Error('R2 unavailable'));
     const deleteStoredImages = vi.fn(async () => undefined);
 
@@ -516,16 +548,117 @@ describe('variation listing image ownership and storage', () => {
           uploadStoredImage,
         }
       )
-    ).rejects.toThrow('R2 unavailable');
+    ).rejects.toMatchObject({
+      message: 'R2 upload failed (front upload: R2 unavailable).',
+      name: 'VariationListingStoragePreparationError',
+      retryable: false,
+      cleanupMessage: 'Automatic R2 cleanup skipped; any resulting keys require explicit reconciliation.',
+    });
 
-    // Both uploads fully settle, then both deterministic intended keys are
-    // deleted even though only one upload reported a failure.
+    // Both uploads fully settle, but neither deterministic key is deleted:
+    // the rejection could be a 412, an ambiguous result, or a partial write.
     expect(uploadStoredImage).toHaveBeenCalledTimes(2);
-    expect(deleteStoredImages).toHaveBeenCalledTimes(1);
-    expect(deleteStoredImages.mock.calls[0]?.[0]).toEqual([
-      expect.stringMatching(/\/front-[0-9a-f]{12}\./),
-      expect.stringMatching(/\/back-[0-9a-f]{12}\./),
-    ]);
+    expect(deleteStoredImages).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the second upload rejects after the first succeeds', async () => {
+    const uploadStoredImage = vi.fn(async (input: { objectKey: string; sourcePath: string }) => {
+      if (input.sourcePath.includes('back')) throw new Error('R2 unavailable');
+      return { objectKey: input.objectKey, publicUrl: `https://images.example/${input.objectKey}` };
+    });
+    const deleteStoredImages = vi.fn(async () => undefined);
+
+    await expect(
+      storeVariationListingCompletionCandidate(
+        completionCandidate('duplicate_copy'),
+        { completionKind: 'duplicate_copy', conditionToken: 'EXCELLENT' },
+        {
+          createId: () => COPY_ID,
+          deleteStoredImages,
+          readImage: async (sourcePath) => Buffer.from(sourcePath),
+          uploadStoredImage,
+        },
+      )
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(deleteStoredImages).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when both uploads reject without deleting either key', async () => {
+    const uploadStoredImage = vi.fn().mockRejectedValue(new Error('R2 unavailable'));
+    const deleteStoredImages = vi.fn(async () => undefined);
+
+    await expect(
+      storeVariationListingCompletionCandidate(
+        completionCandidate('duplicate_copy'),
+        { completionKind: 'duplicate_copy', conditionToken: 'EXCELLENT' },
+        {
+          createId: () => COPY_ID,
+          deleteStoredImages,
+          readImage: async (sourcePath) => Buffer.from(sourcePath),
+          uploadStoredImage,
+        },
+      )
+    ).rejects.toMatchObject({
+      message: 'R2 upload failed (front upload: R2 unavailable; back upload: R2 unavailable).',
+      retryable: false,
+      cleanupMessage: 'Automatic R2 cleanup skipped; any resulting keys require explicit reconciliation.',
+    });
+
+    expect(deleteStoredImages).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on malformed upload success without deleting either key', async () => {
+    const uploadStoredImage = vi.fn(async (input: { objectKey: string; sourcePath: string }) => ({
+      objectKey: input.sourcePath.includes('front') ? 'unexpected-key' : input.objectKey,
+      publicUrl: `https://images.example/${input.objectKey}`,
+    }));
+    const deleteStoredImages = vi.fn(async () => undefined);
+
+    await expect(
+      storeVariationListingCompletionCandidate(
+        completionCandidate('duplicate_copy'),
+        { completionKind: 'duplicate_copy', conditionToken: 'EXCELLENT' },
+        {
+          createId: () => COPY_ID,
+          deleteStoredImages,
+          readImage: async (sourcePath) => Buffer.from(sourcePath),
+          uploadStoredImage,
+        },
+      )
+    ).rejects.toMatchObject({
+      name: 'VariationListingStoragePreparationError',
+      retryable: false,
+      cleanupMessage: 'Automatic R2 cleanup skipped; any resulting keys require explicit reconciliation.',
+    });
+
+    expect(deleteStoredImages).not.toHaveBeenCalled();
+  });
+
+  it('does not delete prepared keys after downstream persistence failure', async () => {
+    const deleteStoredImages = vi.fn(async () => {
+      throw new Error('unconditional delete must not run');
+    });
+
+    await expect(
+      cleanupVariationListingPreparedCompletionMedia(
+        {
+          backR2Key: 'variation-listing/group/variation/copy/back.png',
+          backSourceRef: '/incoming/back.png',
+          copyId: COPY_ID,
+          frontR2Key: 'variation-listing/group/variation/copy/front.jpg',
+          frontSourceRef: '/incoming/front.JPG',
+          variationId: VARIATION_ID,
+        },
+        { deleteStoredImages },
+      )
+    ).rejects.toMatchObject({
+      name: 'VariationListingStoragePreparationError',
+      retryable: false,
+      cleanupMessage: 'Automatic R2 cleanup skipped; any resulting keys require explicit reconciliation.',
+    });
+
+    expect(deleteStoredImages).not.toHaveBeenCalled();
   });
 
   it('starts front/back reads and uploads concurrently with deterministic ordering', async () => {

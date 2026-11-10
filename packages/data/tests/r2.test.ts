@@ -198,6 +198,42 @@ describe('shared R2 image storage service', () => {
     });
   });
 
+  it('supports opt-in atomic create-once variation uploads without changing ordinary uploads', async () => {
+    sendMock.mockResolvedValue({ETag: '"new-object"'});
+    const {uploadImage} = await import('../src/index.js');
+
+    await uploadImage({
+      listingId: 'variation-group',
+      filename: 'front.jpg',
+      contentType: 'image/jpeg',
+      body: Buffer.from('image-bytes'),
+    }, {env: r2Env, objectKey: 'variation-listing/group/variation/copy/front-abcd.jpg', createOnce: true});
+
+    expect(putObjectCommandMock).toHaveBeenCalledWith(expect.objectContaining({
+      Key: 'variation-listing/group/variation/copy/front-abcd.jpg',
+      IfNoneMatch: '*',
+    }));
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(deleteObjectCommandMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a conditional upload conflict without deleting existing objects', async () => {
+    sendMock.mockRejectedValueOnce(Object.assign(new Error('PreconditionFailed'), {$metadata: {httpStatusCode: 412}}));
+    const {uploadImage} = await import('../src/index.js');
+
+    await expect(uploadImage({
+      listingId: 'variation-group',
+      filename: 'back.jpg',
+      contentType: 'image/jpeg',
+      body: Buffer.from('image-bytes'),
+    }, {env: r2Env, objectKey: 'variation-listing/group/variation/copy/back-abcd.jpg', createOnce: true}))
+      .rejects.toThrow('PreconditionFailed');
+
+    expect(putObjectCommandMock).toHaveBeenCalledWith(expect.objectContaining({IfNoneMatch: '*'}));
+    expect(deleteObjectCommandMock).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects empty upload bodies before attempting to send an object', async () => {
     const { uploadImage } = await import('../src/index.js');
 

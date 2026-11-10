@@ -6,7 +6,6 @@ import {
   VARIATION_LISTING_COPY_CONDITION_TOKENS,
   VARIATION_LISTING_MANUAL_PRICE_AMOUNTS,
   createSupabaseServiceClient,
-  deleteR2Objects,
   getVariationListingIntakeSessionBySourceKey,
   isVariationListingManualPriceAmount,
   uploadImage,
@@ -519,7 +518,11 @@ async function defaultUploadStoredImage(input: {
       filename: basename(input.sourcePath),
       listingId: input.targetGroupId,
     },
-    { objectKey: input.objectKey }
+    // Variation keys are immutable capture-owned names. A conditional
+    // create prevents a retry or collision from replacing an existing key;
+    // rollback never deletes a key because R2 has no conditional delete
+    // identity guarantee.
+    { objectKey: input.objectKey, createOnce: true }
   );
 }
 
@@ -560,14 +563,14 @@ function validateStorageHandoffBeforeMedia(
 
 async function cleanupStoredObjectKeys(
   objectKeys: readonly string[],
-  dependencies: PrepareVariationListingCompletionMediaDependencies,
+  _dependencies: PrepareVariationListingCompletionMediaDependencies,
 ): Promise<string | null> {
-  try {
-    await (dependencies.deleteStoredImages ?? deleteR2Objects)(objectKeys);
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
+  // R2 DeleteObject is unconditional. Even deterministic keys may preexist,
+  // belong to a previous attempt, or reflect an ambiguous upload outcome, so
+  // never speculate by deleting either survivor. Leave leaked media for
+  // explicit reconciliation instead.
+  void objectKeys;
+  return 'Automatic R2 cleanup skipped; any resulting keys require explicit reconciliation.';
 }
 
 export async function cleanupVariationListingPreparedCompletionMedia(
@@ -658,7 +661,10 @@ export async function prepareVariationListingCompletionMedia(
     ].filter((value): value is string => value !== null);
     throw new VariationListingStoragePreparationError(
       `R2 upload failed (${messages.join('; ')}).`,
-      { retryable: cleanupMessage === null, cleanupMessage },
+      // A rejection may be a 412, an ambiguous transport result, or a
+      // partial success. Retrying would risk replacing or colliding with a
+      // survivor, so fail closed and retain keys for reconciliation.
+      { retryable: false, cleanupMessage },
     );
   }
   if (frontUpload.value.objectKey !== frontR2Key || backUpload.value.objectKey !== backR2Key) {

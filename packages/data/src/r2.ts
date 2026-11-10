@@ -43,6 +43,8 @@ interface UploadImageOptions {
   config?: R2ImageStorageConfig;
   env?: NodeJS.ProcessEnv;
   objectKey?: string;
+  /** Opt-in atomic create-once upload; a preexisting key must never be overwritten. */
+  createOnce?: boolean;
 }
 
 interface DeleteR2ObjectsOptions {
@@ -175,6 +177,7 @@ export async function uploadImage(
       Bucket: config.bucketName,
       Key: objectKey,
       Body: input.body,
+      ...(options.createOnce === true ? {IfNoneMatch: '*'} : {}),
       CacheControl: 'public, max-age=31536000, immutable',
       ContentType: input.contentType,
     })
