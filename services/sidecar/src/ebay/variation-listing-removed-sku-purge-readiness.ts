@@ -323,8 +323,8 @@ export function summarizeRemovedSkuPurgeReadiness(input: {
 /**
  * End-to-end read-only preparation boundary. The candidate constructor
  * revalidates the immutable v3 snapshot and the COMPLETE c2 checkpoint
- * history using the production journal inspector. The optional SQL witness
- * remains unapplied and non-authorizing; never treat this preview as a lock.
+ * history using the production journal inspector. The deployed read-only SQL
+ * witness is non-authorizing; never treat this preview as a lock.
  */
 export async function inspectRemovedSkuPurgeReadiness(input: {
   revision: VariationListingRevisionRow;

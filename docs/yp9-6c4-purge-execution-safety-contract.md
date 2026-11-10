@@ -7,7 +7,24 @@
 The zero-quantity SKU removal and leftover image cleanup remain separate, operator-confirmed operations.
 
 ## Current implementation
-GET /api/variation-listings/:groupId/removed-sku-purge-preview/:revisionId returns non-cacheable, non-executable readiness diagnostics. It uses the immutable v3 revision, complete checkpoint journal, current aggregate, paginated cross-owner data, configured incoming directory and R2 HEAD. The response always has deletionAuthorized:false. When OAuth middleware is absent, the route returns diagnostic counts and blockers but redacts absolute local paths and R2 object keys; only a request authenticated by that middleware receives those resource identities. The proposed witness SQL migration is unapplied and is not used by this endpoint. Neither an R2 HEAD result nor a filename match proves exclusive ownership.
+GET /api/variation-listings/:groupId/removed-sku-purge-preview/:revisionId returns non-cacheable, non-executable readiness diagnostics. It uses the immutable v3 revision, complete checkpoint journal, current aggregate, paginated cross-owner data, configured incoming directory and R2 HEAD. The response always has deletionAuthorized:false. When OAuth middleware is absent, the route returns diagnostic counts and blockers but redacts absolute local paths and R2 object keys; only a request authenticated by that middleware receives those resource identities. The restricted read-only ownership-witness SQL function was deployed and verified on production on 2026-11-10, and this preview uses it as additional non-authorizing evidence (`databaseWitnessUsed:true` on success). Neither an R2 HEAD result nor a filename match proves exclusive ownership.
+
+## EXEC1 offline journal foundation (not deployed)
+
+The worktree contains an additive, unapplied PostgreSQL journal migration and a
+Sidecar persistence seam for a future executor. It freezes the immutable
+group/revision/variation/SKU identity and each local/R2 resource, records
+per-resource CAS versions and `planned`/`attempting`/`removed`/`already_absent`/
+`failed`/`unknown` outcomes, and persists an attempt barrier before any future
+provider call. Interrupted or ambiguous attempts become `unknown` and cannot be
+blindly retried. The journal is deliberately non-authorizing: both confirmation
+and deletion flags are permanently false, no confirmation API or delete runner
+exists, and the migration has not been applied to any hosted database.
+
+EXEC1 does not solve deletion-time local identity/quarantine, an atomic R2
+conditional-delete guarantee, or the separately authorized operator-confirmation
+workflow. Those remain EXEC2–EXEC4 gates; no local file, R2 object, eBay
+resource, or hosted row is deleted by this foundation.
 
 ## Mandatory gates before any future deletion
 1. Rehydrate and verify the exact v3 revision/intent and complete ordered terminal journal; verify target absent and active survivors unchanged.
