@@ -21,7 +21,32 @@ begin
      or retirement.observed_remote_state <> 'proven_absent'
      or retirement.c2_terminal_checkpoint_id is null
      or retirement.completed_at is null
-     or retirement.evidence = '{}'::jsonb then
+     or pg_catalog.jsonb_typeof(retirement.evidence) is distinct from 'object'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'revisionId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'targetSku') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'targetOfferId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'marketplaceId') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'listingId') is distinct from 'string'
+     or retirement.evidence->>'revisionId' is distinct from retirement.revision_id::text
+     or retirement.evidence->>'targetSku' is distinct from retirement.target_sku
+     or retirement.evidence->>'targetOfferId' is distinct from retirement.target_offer_id
+     or retirement.evidence->>'marketplaceId' is distinct from retirement.marketplace_id
+     or retirement.evidence->>'listingId' is distinct from retirement.listing_id
+     or pg_catalog.jsonb_typeof(retirement.evidence->'item') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'item'->'state') is distinct from 'string'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'item'->'sku') is distinct from 'string'
+     or retirement.evidence->'item'->>'state' is distinct from 'absent'
+     or retirement.evidence->'item'->>'sku' is distinct from retirement.target_sku
+     or pg_catalog.jsonb_typeof(retirement.evidence->'offers') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'offers'->'complete') is distinct from 'boolean'
+     or retirement.evidence->'offers'->>'complete' is distinct from 'true'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'offers'->'offers') is distinct from 'array'
+     or coalesce((select pg_catalog.jsonb_array_length(retirement.evidence->'offers'->'offers')
+                    where pg_catalog.jsonb_typeof(retirement.evidence->'offers'->'offers') = 'array'), 0) <> 0
+     or pg_catalog.jsonb_typeof(retirement.evidence->'survivors') is distinct from 'object'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'survivors'->'exact') is distinct from 'boolean'
+     or retirement.evidence->'survivors'->>'exact' is distinct from 'true'
+     or pg_catalog.jsonb_typeof(retirement.evidence->'survivors'->'skus') is distinct from 'array' then
     raise exception 'c2b remote retirement is not confirmed';
   end if;
   select * into revision from public.variation_listing_revisions
@@ -32,12 +57,15 @@ begin
      or revision.snapshot->'permanentRemoval'->>'targetSku' is distinct from retirement.target_sku then
     raise exception 'c2b retirement does not match frozen v3 revision';
   end if;
+  if retirement.evidence->'survivors'->'skus' is distinct from revision.snapshot->'permanentRemoval'->'survivorSkus' then
+    raise exception 'c2b remote retirement evidence does not match frozen survivors';
+  end if;
   select * into checkpoint from public.variation_listing_publishing_checkpoints
    where checkpoint_id = retirement.c2_terminal_checkpoint_id
      and revision_id = p_revision_id
      and operation_key = 'remove-group-membership';
-  if not found or checkpoint.state <> 'confirmed_complete'
-     or checkpoint.observed_remote_state <> 'present' then
+  if not found or checkpoint.state not in ('confirmed_complete', 'confirmed_no_op')
+     or checkpoint.observed_remote_state not in ('present', 'proven_absent') then
     raise exception 'c2b terminal checkpoint linkage incomplete';
   end if;
   witness := public.inspect_variation_removed_sku_ownership(
