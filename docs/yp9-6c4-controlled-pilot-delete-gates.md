@@ -2,6 +2,10 @@
 
 **Status:** execution plan only. No operator permission to delete images, deploy migrations, or modify the live listing. This plan is narrower than a general image lifecycle service.
 
+**Simplified pilot direction (2026-11-12):** For the current image-cleanup development test, all existing database/R2 listing records may be treated as disposable test data. Historical/legacy URL compatibility, exhaustive past revision classification, persistent SQL freeze registration and a generic automatic deletion executor are **not prerequisites** for the pilot. The operational path is a read-only exact-key manifest followed by manual removal of the two identified R2 objects in Cloudflare's dashboard, with a separate precise local-file check. Preserve the live eBay listing and surviving variations; disposable test status is not blanket authorization to delete unrelated resources. Do not apply EXEC1/EXEC4a migrations, remove images, or modify production data under this planning instruction.
+
+**Minimal pilot checks:** Match exact source keys and archive paths to the confirmed retired copy; check current survivor and Standard media references; keep capture/upload writers paused for the manual action; compare exact keys in the dashboard before deletion, never a prefix/folder; after manual action recheck target absence and surviving image presence. The former full historical/JSON audit and crash-safe automatic executor are optional research, not pilot gates. No current user message authorizes a live deletion.
+
 ## Target and protected scope
 
 - Production eBay listing: `800881949284`
@@ -12,7 +16,7 @@
 - Survivors: `BSKBL-ProductionOOSPilot01-000001` and `BSKBL-ProductionOOSPilot01-000003`. Do not change their images, counts, listing availability, offers, or inventory.
 - Never delete the entire Variation R2 prefix or the group's local `processed/` directory. Historical v3 records remain durable.
 
-## What must be true before live deletion
+## Deferred requirements for a future automatic deletion executor
 
 | Gate | Required proof | Current status |
 | --- | --- | --- |
@@ -27,7 +31,7 @@
 
 **Do not use the generic EXEC1 `createPlan` or arbitrary operator-supplied keys as freeze provenance.** Existing c2b completion is a durable record of backend-supplied remote evidence; it is not an independent eBay read or proof of operator identity.
 
-## Smallest next increment
+## Deferred automated implementation plan (superseded for this manual pilot)
 
 1. Generate an **unapplied additive** migration only through `SUPABASE_TELEMETRY_DISABLED=1 supabase migration new create_removed_sku_exact_key_writer_barrier` (CLI **3.1.0**). EXEC4a produced `supabase/migrations/20261111223116_create_removed_sku_exact_key_writer_barrier.sql`; its protected registry starts empty, `deletion_authorized` is constrained false, and no caller-controlled frozen-key INSERT or freeze-approval RPC exists. The validator loads this actual migration; it no longer embeds candidate barrier SQL. The registry is intentionally app-unpopulatable. Any separately reviewed future privileged seed must first call `lock_keys` for the complete sorted exact-key set and insert markers in that same transaction, while quiescing or excluding all external writers; a direct privileged INSERT without that protocol is a race blocker.
 2. EXEC4a's actual migration passes against the effective chain in isolated PostgreSQL 17 (including c2b retirement, read-only ownership witness, and EXEC1 journal objects): both Variation intake RPCs (including frozen duplicate-copy rejection and shared-key RPC serialization), real Standard paired public URL+key writes, encoded unrelated Standard media, direct service-role Standard DML, reversed-order advisory-lock serialization, rollback, fresh missing-row phantom writes, protected marker/trusted-origin/function ACLs including PUBLIC catalog proof, and trigger ordering. Unrelated Standard media remains writable. No hosted DB, migration apply, R2, eBay, local-image, freeze, or deletion operation was run.
@@ -41,6 +45,10 @@
 ## EXEC4c historical and JSON reference inventory — offline, disposable PG17 passed 2026-11-12
 
 `packages/data/tests/removed-sku-historical-reference-audit.prototype.sql` is a **test-only read-only** SQL scanner that reuses EXEC4b's exact-key group/key lock preflight and v3/c2b witness. It scans effective `variation_listing_revisions.snapshot` and `operation_plan`, all `variation_listing_publishing_checkpoints.evidence`, all c2b `variation_listing_removed_sku_remote_retirements.evidence`, and EXEC1 cleanup-journal resource identities for R2 keys and local source references. The older `variation_listing_operations` table was removed from the current schema. A fail-closed EXEC4b owner error (which can represent a live Variation/Standard/copy owner or a historical cross-group reference) is caught only when its SQLSTATE/message match exactly; because PostgreSQL rolls back locks from a caught exception subtransaction, the scanner then reacquires the group→sorted-key locks before scanning. It returns cross-group, same-group-history and journal matches as **unresolved**, not permission to delete. Duplicate scalar occurrences are counted once per document/resource/kind, while the bounded 40-row sample reports truncation and the full count. Strict recursive JSONPath plus the disposable PostgreSQL 17 validator pass nested/escaped and mixed-case percent aliases, scalar cleanup-journal values, negative/non-string JSON leaves, malformed-shape values, exact c2b/v3 lineage, ACL/search_path, marker absence, READ COMMITTED rejection, and a writer-first lock wait; the result uses generic `preflightBlockedByOwnerReference` and never infers the blocker cause. The scanner still covers only these five known stores; ambiguous aliases, unknown JSON/media consumers, historical writer completeness, external R2 ownership and operator approval remain blockers. No hosted migration, registration, or R2/local action is part of EXEC4c.
+
+## EXEC4d — Exact target-copy lineage classification (offline PG17 verified 2026-11-12)
+
+`packages/data/tests/removed-sku-snapshot-copy-lineage.prototype.sql` is a **test-only** SQL classifier. It composes the EXEC4c historical audit and considers only a single complete target-copy match in the two recognized v3 snapshot copy arrays, with target/prior revision bounds, canonical snapshot digest and embedded group attribution, as possible original-copy history. It masks only the exact four media fields in an in-memory diagnostic copy; persisted revisions are unchanged and any remaining scalar match stays unresolved. `validate-variation-removed-sku-snapshot-lineage.mjs` passes against the effective migration chain plus EXEC4a/4b/4c in network-isolated PostgreSQL 17. Counterexamples cover both recognized paths, duplicate and multi-copy shapes, missing/null/non-string or mismatched identities, forged group attribution, non-v3/future/tampered revisions, extra same-copy properties, encoded/UTF-8/malformed aliases, opaque snapshot/operation-plan/checkpoint/retirement/journal references, bounded samples, generic owner blocking, ACL/search-path, READ COMMITTED rejection, a real writer-lock wait and an empty marker registry. Every completeness/authority flag remains false. This is **not** ownership, exhaustive alias/reference coverage, freeze registration or deletion authority; unknown consumers, external R2 writers, local quarantine, R2 identity and human confirmation remain blockers.
 
 ## Reuse boundary
 
