@@ -30,20 +30,22 @@ import {
 const SNAPSHOT_VERSION = 3;
 const INTENT_VERSION = 1;
 
-function canonicalJson(value: Json): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+function canonicalJson(value: Json, utf8ByteOrder = false): string {
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry, utf8ByteOrder)).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     return `{${Object.entries(value)
       .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child as Json)}`)
+      .sort(([left], [right]) => utf8ByteOrder
+        ? Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))
+        : left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child as Json, utf8ByteOrder)}`)
       .join(',')}}`;
   }
   return JSON.stringify(value);
 }
 
-function digestJson(value: Json): string {
-  return createHash('sha256').update(canonicalJson(value)).digest('hex');
+function digestJson(value: Json, utf8ByteOrder = false): string {
+  return createHash('sha256').update(canonicalJson(value, utf8ByteOrder)).digest('hex');
 }
 
 function requireJsonEqual(actual: Json, expected: Json, label: string): void {
@@ -946,13 +948,34 @@ export async function prepareVariationListingFrozenActiveRevision(
   ) {
     throw new Error('Variation listing previous revision does not match the current confirmed watermark.');
   }
-  if (digestJson(input.previousRevision.snapshot) !== input.previousRevision.snapshot_digest) {
+  const priorPlan = Array.isArray(input.previousRevision.operation_plan)
+    ? input.previousRevision.operation_plan as unknown as { operation_key: string; operation_kind: string }[]
+    : [];
+  // C/UTF-8 key ordering was used when capturing permanent-removal revisions.
+  // Keep the original locale order for previously confirmed active revisions.
+  const priorSnapshot = input.previousRevision.snapshot;
+  const priorRoot = priorSnapshot !== null && typeof priorSnapshot === 'object' && !Array.isArray(priorSnapshot)
+    ? priorSnapshot as Record<string, Json>
+    : null;
+  const priorMetadata = priorRoot?.permanentRemoval;
+  const priorAggregate = priorRoot?.aggregate;
+  const priorGroup = priorAggregate !== null && typeof priorAggregate === 'object' && !Array.isArray(priorAggregate)
+    ? (priorAggregate as Record<string, Json>).group
+    : undefined;
+  const priorIsRemoval = input.previousRevision.snapshot_version === 3 &&
+    priorMetadata !== undefined && priorMetadata !== null && typeof priorMetadata === 'object' && !Array.isArray(priorMetadata) &&
+    (priorMetadata as Record<string, Json>).version === 1 &&
+    (priorMetadata as Record<string, Json>).groupKey === current.group.group_key &&
+    priorGroup !== undefined && priorGroup !== null && typeof priorGroup === 'object' && !Array.isArray(priorGroup) &&
+    (priorGroup as Record<string, Json>).group_key === current.group.group_key &&
+    input.previousRevision.operation_count === 1 && priorPlan.length === 1 &&
+    priorPlan[0]?.operation_key === 'remove-group-membership' &&
+    priorPlan[0]?.operation_kind === 'permanent_removal_group_membership' &&
+    (priorPlan[0] as { target_ref?: string }).target_ref === current.group.group_key;
+  if (digestJson(priorSnapshot) !== input.previousRevision.snapshot_digest &&
+      (!priorIsRemoval || digestJson(priorSnapshot, true) !== input.previousRevision.snapshot_digest)) {
     throw new Error('Variation listing previous confirmed revision snapshot digest does not match its durable snapshot.');
   }
-
-  const priorPlan = Array.isArray(input.previousRevision.operation_plan)
-    ? input.previousRevision.operation_plan as unknown as { operation_key: string }[]
-    : [];
   const priorOperationKeys = new Set(priorPlan.map((operation) => operation.operation_key));
   for (const checkpoint of input.previousCheckpoints) {
     if (checkpoint.revision_id !== input.previousRevision.revision_id || !priorOperationKeys.has(checkpoint.operation_key)) {

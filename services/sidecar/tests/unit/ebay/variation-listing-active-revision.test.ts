@@ -52,6 +52,103 @@ function digest(value: Json): string {
   const canonical = (v: Json): string => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v !== null && typeof v === 'object' ? `{${Object.entries(v).sort(([a],[b]) => a.localeCompare(b)).map(([k,c]) => `${JSON.stringify(k)}:${canonical(c as Json)}`).join(',')}}` : JSON.stringify(v);
   return createHash('sha256').update(canonical(value)).digest('hex');
 }
+function utf8Digest(value: Json): string {
+  const canonical = (v: Json): string => Array.isArray(v)
+    ? `[${v.map(canonical).join(',')}]`
+    : v !== null && typeof v === 'object'
+      ? `{${Object.entries(v).sort(([a], [b]) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))).map(([k, c]) => `${JSON.stringify(k)}:${canonical(c as Json)}`).join(',')}}`
+      : JSON.stringify(v);
+  return createHash('sha256').update(canonical(value)).digest('hex');
+}
+
+function permanentRemovalRevision(): {
+  revision: VariationListingRevisionRow;
+  previous: VariationListingAggregateSnapshot;
+  current: VariationListingAggregateSnapshot;
+  remote: ReturnType<typeof remoteFor>['remote'];
+} {
+  const previous = aggregate({
+    group: group({ desired_revision: 8, last_confirmed_revision: 7, lifecycle_state: 'active' }),
+    variations: [variation('A', 0), variation('B', 1), variation('C', 2)],
+    copies: [copy('A'), copy('B'), copy('C')],
+  });
+  const current = aggregate({
+    group: group({ desired_revision: 9, last_confirmed_revision: 8, lifecycle_state: 'active' }),
+    variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('C', 2, 'copy-C')],
+    copies: [copy('A'), copy('C')],
+  });
+  const survivor = {
+    ...structuredClone(previous),
+    variations: [previous.variations[0]!, previous.variations[2]!],
+    copies: [previous.copies[0]!, previous.copies[2]!],
+    group: { ...previous.group, desired_revision: 8 },
+  };
+  const images = representativeImages(previous);
+  const survivorImages = images.filter((image) => image.copyId !== 'copy-B');
+  const remoteFixture = remoteFor(survivor);
+  const inventoryItemPayloadsBySku = Object.fromEntries(remoteFixture.bundle.children.map((child) => [child.sku, child.inventoryItem])) as Json;
+  const offerPayloadsBySku = Object.fromEntries(remoteFixture.bundle.children.map((child) => [child.sku, child.offer])) as Json;
+  const snapshot = {
+    aggregate: survivor,
+    confirmed: {
+      aggregate: previous,
+      representativeImages: images,
+      remote: {
+        listingId: 'listing-1',
+        offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-C': 'offer-SKU-C' },
+        quantitiesBySku: {
+          'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+          'SKU-C': { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+        },
+      },
+      revisionId: 'revision-8-parent',
+    },
+    mediaResources: [],
+    representativeImages: survivorImages,
+    // Case-sensitive and underscore keys force a different localeCompare hash.
+    permanentRemoval: {
+      version: 1,
+      groupKey: 'GROUP-1',
+      targetVariationId: 'variation-B',
+      targetSku: 'SKU-B',
+      marketplaceId: 'EBAY_US',
+      survivorSkus: ['SKU-A', 'SKU-C'],
+      listingId: 'listing-1',
+      offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-C': 'offer-SKU-C' },
+      quantitiesBySku: {
+        'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+        'SKU-C': { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+      },
+      inventoryItemPayloadsBySku,
+      offerPayloadsBySku,
+      expectedGroupPayload: remoteFixture.bundle.group as unknown as Json,
+      replacementGroupPayload: remoteFixture.bundle.group as unknown as Json,
+      _proof: true,
+      A: 1,
+    },
+  } as unknown as Json;
+  const operationPlan = [{
+    intent: { groupKey: 'GROUP-1', targetSku: 'SKU-B', survivorSkus: ['SKU-A', 'SKU-C'] } as Json,
+    intent_digest: digest({ groupKey: 'GROUP-1', targetSku: 'SKU-B', survivorSkus: ['SKU-A', 'SKU-C'] }),
+    intent_version: 1,
+    operation_key: 'remove-group-membership',
+    operation_kind: 'permanent_removal_group_membership',
+    sequence_no: 1,
+    target_ref: 'GROUP-1',
+  }];
+  const revision: VariationListingRevisionRow = {
+    captured_at: timestamp,
+    captured_desired_revision: 8,
+    group_id: 'group-1',
+    operation_count: 1,
+    operation_plan: operationPlan,
+    revision_id: 'revision-8-parent',
+    snapshot,
+    snapshot_digest: utf8Digest(snapshot),
+    snapshot_version: 3,
+  };
+  return { revision, previous: survivor, current, remote: remoteFixture.remote };
+}
 function representativeImages(previous: VariationListingAggregateSnapshot) {
   return previous.copies.map((entry) => {
     const token = entry.copy_id.replace(/^copy-/, '');
@@ -467,6 +564,109 @@ describe('documented bulkUpdatePriceQuantity response contract', () => {
 });
 
 describe('YP8.2 active revision preparation', () => {
+  it('accepts a UTF-8-digested permanent-removal parent for a positive-only survivor quantity change', async () => {
+    const fixture = permanentRemovalRevision();
+    expect(fixture.revision.snapshot_digest).not.toBe(digest(fixture.revision.snapshot));
+
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote: fixture.remote,
+      revisionId: 'revision-9',
+    });
+
+    expect(prepared.snapshot.confirmed.aggregate.variations.map((entry) => entry.sku)).toEqual(['SKU-A', 'SKU-C']);
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-A')?.quantity).toBe(2);
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-C')?.quantity).toBe(1);
+    expect(prepared.snapshot.aggregate.variations.map((entry) => entry.position)).toEqual([0, 2]);
+    expect(prepared.captureInput.operationPlan.some((operation) => operation.operationKey === 'child-offer:variation-C')).toBe(false);
+  });
+
+  it('rejects a tampered removal snapshot before any downstream remote reads', async () => {
+    const fixture = permanentRemovalRevision();
+    const tampered = structuredClone(fixture.revision);
+    const snapshot = tampered.snapshot as Record<string, Json>;
+    (snapshot.permanentRemoval as Record<string, Json>).A = 2;
+    let reads = 0;
+    const remote = {
+      ...fixture.remote,
+      async getInventoryItemGroup(groupKey: string) {
+        reads += 1;
+        return fixture.remote.getInventoryItemGroup(groupKey);
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: tampered,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('Variation listing previous confirmed revision snapshot digest does not match its durable snapshot.');
+    expect(reads).toBe(0);
+  });
+
+  it('continues to accept a legacy localeCompare-digested v3 active parent', async () => {
+    const fixture = permanentRemovalRevision();
+    const revision = structuredClone(fixture.revision);
+    const snapshot = revision.snapshot as Record<string, Json>;
+    delete snapshot.permanentRemoval;
+    revision.snapshot_digest = digest(revision.snapshot);
+    revision.operation_plan = [{
+      intent: {},
+      intent_digest: digest({}),
+      intent_version: 1,
+      operation_key: 'group-publish',
+      operation_kind: 'group_publish',
+      sequence_no: 1,
+      target_ref: 'GROUP-1',
+    }];
+    revision.operation_count = 1;
+    const checkpoints = [checkpointFrom({
+      revisionId: revision.revision_id,
+      operationKey: 'group-publish',
+      attemptNumber: 1,
+      checkpointNumber: 1,
+      state: 'confirmed_complete',
+      observedRemoteState: 'present',
+      evidence: { listingId: 'listing-1' },
+    })];
+
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: revision,
+      previousCheckpoints: checkpoints,
+      remote: fixture.remote,
+      revisionId: 'revision-9',
+    });
+    expect(prepared.snapshot.confirmed.remote.listingId).toBe('listing-1');
+  });
+
+  it('does not allow a wrong removal operation kind to use the UTF-8 fallback', async () => {
+    const fixture = permanentRemovalRevision();
+    const revision = structuredClone(fixture.revision);
+    const operation = revision.operation_plan[0] as Record<string, Json>;
+    operation.operation_kind = 'group_publish';
+    let reads = 0;
+    const remote = {
+      ...fixture.remote,
+      async getInventoryItemGroup(groupKey: string) {
+        reads += 1;
+        return fixture.remote.getInventoryItemGroup(groupKey);
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('Variation listing previous confirmed revision snapshot digest does not match its durable snapshot.');
+    expect(reads).toBe(0);
+  });
+
   it('freezes a self-contained version-3 revision after exact confirmed active preflight', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({ variations: [variation('A', 0, 'copy-A', 1.49), variation('B', 1)] });
