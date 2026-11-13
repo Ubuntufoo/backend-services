@@ -840,7 +840,8 @@ async function verifyFrozenRemoteBaseline(
     observed = await reconcilePublishedQuantityBaseline(
       input.remote,
       input.frozen.confirmedBundle,
-      input.frozen.snapshot.confirmed.remote
+      input.frozen.snapshot.confirmed.remote,
+      true, // Require Trading-verified evidence for omitted published Offer policies.
     );
   } catch (error) {
     if (reprepareOnQuantityDrift) {
@@ -997,7 +998,9 @@ export async function prepareVariationListingFrozenActiveRevision(
     representativeImages: previousImages,
   });
   const durableRemoteIdentity = reconstructConfirmedRemoteIdentity(input.previousRevision, input.previousCheckpoints);
-  const confirmedRemote = await reconcilePublishedQuantityBaseline(input.remote, localConfirmedBundle, durableRemoteIdentity);
+  const confirmedRemote = await reconcilePublishedQuantityBaseline(
+    input.remote, localConfirmedBundle, durableRemoteIdentity, true,
+  );
   const remoteIdentity = {
     listingId: durableRemoteIdentity.listingId,
     offerIdsBySku: durableRemoteIdentity.offerIdsBySku,

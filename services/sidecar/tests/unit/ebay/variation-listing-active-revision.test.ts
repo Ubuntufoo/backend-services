@@ -23,7 +23,7 @@ import {
   type VariationListingActiveRevisionExecutionInput,
   type VariationListingFrozenActiveRevision,
 } from '@/ebay/variation-listing-active-revision.js';
-import { assertBulkPriceQuantitySuccess } from '@/ebay/variation-listing-actions.js';
+import { assertBulkPriceQuantitySuccess, normalizeOffers } from '@/ebay/variation-listing-actions.js';
 
 const eps = (name: string): string => `https://i.ebayimg.com/images/g/${name}/s-l1600.jpg`;
 const timestamp = '2026-09-01T00:00:00Z';
@@ -254,6 +254,72 @@ function remoteFor(
       async getInventoryItemGroup(_groupKey: string) { return { state: 'present' as const, value: { payload: bundle.group as unknown as Json, variantSKUs: [...bundle.group.variantSKUs].reverse() } }; },
     },
   };
+}
+
+function omittedPublishedOfferPoliciesRemote(base: ReturnType<typeof remoteFor>['remote']) {
+  const fallbackCalls: string[] = [];
+  let listingReads = 0;
+  const remote = {
+    ...base,
+    async getOffers(sku: string, marketplaceId: string) {
+      if (sku === 'SKU-A' || sku === 'SKU-C') {
+        return {
+          state: 'unknown' as const,
+          reason: 'Inventory item semantic offer fulfillment policy ID is missing or invalid.',
+        };
+      }
+      return base.getOffers(sku, marketplaceId);
+    },
+    async getListing(listingId: string) {
+      listingReads += 1;
+      const listing = await base.getListing(listingId);
+      if (!listing || typeof listing !== 'object' || Array.isArray(listing)) return listing;
+      const item = (listing as Record<string, unknown>).Item;
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return listing;
+      return {
+        ...listing,
+        Item: {
+          ...(item as Record<string, unknown>),
+          SellerProfiles: {
+            SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+            SellerPaymentProfile: { PaymentProfileID: 'payment' },
+            SellerReturnProfile: { ReturnProfileID: 'return' },
+          },
+        },
+      };
+    },
+    async getOffersWithVerifiedPolicies(
+      sku: string,
+      marketplaceId: string,
+      verified: { listingId: string; fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string },
+    ) {
+      fallbackCalls.push(sku);
+      expect(verified).toEqual({
+        listingId: 'listing-1',
+        fulfillmentPolicyId: 'fulfillment',
+        paymentPolicyId: 'payment',
+        returnPolicyId: 'return',
+      });
+      const read = await base.getOffers(sku, marketplaceId);
+      if (read.state !== 'present' || read.value.length !== 1) return read;
+      const offer = read.value[0]!;
+      const rawOffer = {
+        ...(offer.payload as Record<string, Json>),
+        offerId: offer.offerId,
+        status: offer.status,
+        listing: { listingId: offer.listingId, listingStatus: 'ACTIVE' },
+        // The first GET omitted only this semantic policy field. The gateway
+        // must restore it through the independently verified Trading proof.
+        listingPolicies: {
+          eBayPlusIfEligible: false,
+          paymentPolicyId: 'payment',
+          returnPolicyId: 'return',
+        },
+      };
+      return { state: 'present' as const, value: normalizeOffers({ offers: [rawOffer] }, verified) };
+    },
+  };
+  return { remote, fallbackCalls, listingReads: () => listingReads };
 }
 
 function durableRevision(frozen: VariationListingFrozenActiveRevision): VariationListingRevisionRow {
@@ -564,6 +630,231 @@ describe('documented bulkUpdatePriceQuantity response contract', () => {
 });
 
 describe('YP8.2 active revision preparation', () => {
+  it('uses one exact Trading policy proof to reconcile omitted published Offer policies across A/C', async () => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote: omitted.remote,
+      revisionId: 'revision-9',
+    });
+
+    expect(omitted.listingReads()).toBe(1);
+    expect(omitted.fallbackCalls).toEqual(['SKU-A', 'SKU-C']);
+    expect(prepared.snapshot.confirmed.remote.quantitiesBySku).toEqual({
+      'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+      'SKU-C': { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 },
+    });
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-A')?.quantity).toBe(2);
+    expect(prepared.desiredBundlePreview?.children.find((child) => child.sku === 'SKU-C')?.quantity).toBe(1);
+    expect(prepared.captureInput.operationPlan.some((operation) => operation.operationKey === 'child-offer:variation-C')).toBe(false);
+  });
+
+  it.each([
+    ['conflicting Trading policies', {
+      Item: {
+        ItemID: 'listing-1',
+        SellerProfiles: {
+          SellerShippingProfile: { ShippingProfileID: 'wrong-fulfillment' },
+          SellerPaymentProfile: { PaymentProfileID: 'payment' },
+          SellerReturnProfile: { ReturnProfileID: 'return' },
+        },
+      },
+    }],
+    ['missing Trading policies', { Item: { ItemID: 'listing-1', SellerProfiles: {} } }],
+    ['wrong Trading listing ID', {
+      Item: {
+        ItemID: 'listing-other',
+        SellerProfiles: {
+          SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+          SellerPaymentProfile: { PaymentProfileID: 'payment' },
+          SellerReturnProfile: { ReturnProfileID: 'return' },
+        },
+      },
+    }],
+  ] as const)('blocks omitted Offer policies when %s', async (_label, listing) => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const remote = { ...omitted.remote, async getListing() { return listing; } };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('policies cannot be verified');
+    expect(omitted.fallbackCalls).toHaveLength(0);
+  });
+
+  it('does not apply policy fallback to an unrelated Offer read failure', async () => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const remote = {
+      ...omitted.remote,
+      async getOffers(sku: string, _marketplaceId: string) {
+        if (sku === 'SKU-A' || sku === 'SKU-C') return { state: 'unknown' as const, reason: 'Offer read unavailable' };
+        return fixture.remote.getOffers(sku, 'EBAY_US');
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('Offer read unavailable');
+    expect(omitted.listingReads()).toBe(0);
+    expect(omitted.fallbackCalls).toHaveLength(0);
+  });
+
+  it('rejects a mixed listing identity returned by the verified Offer fallback', async () => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const remote = {
+      ...omitted.remote,
+      async getOffersWithVerifiedPolicies(sku: string, marketplaceId: string) {
+        const read = await fixture.remote.getOffers(sku, marketplaceId);
+        if (sku !== 'SKU-C' || read.state !== 'present') return read;
+        return { ...read, value: [{ ...read.value[0]!, listingId: 'listing-other' }] };
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('does not match the durable previous revision identity');
+  });
+
+  it('preserves an explicit wrong policy from the fallback and does not patch it', async () => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const remote = {
+      ...omitted.remote,
+      async getOffersWithVerifiedPolicies(sku: string, marketplaceId: string, verified: { listingId: string; fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string }) {
+        omitted.fallbackCalls.push(sku);
+        const read = await fixture.remote.getOffers(sku, marketplaceId);
+        if (read.state !== 'present' || read.value.length !== 1) return read;
+        const offer = read.value[0]!;
+        const rawOffer = {
+          ...(offer.payload as Record<string, Json>),
+          offerId: offer.offerId,
+          status: offer.status,
+          listing: { listingId: offer.listingId, listingStatus: 'ACTIVE' },
+          listingPolicies: {
+            eBayPlusIfEligible: false,
+            fulfillmentPolicyId: 'wrong-fulfillment',
+            paymentPolicyId: 'payment',
+            returnPolicyId: 'return',
+          },
+        };
+        try {
+          return { state: 'present' as const, value: normalizeOffers({ offers: [rawOffer] }, verified) };
+        } catch (error) {
+          return { state: 'unknown' as const, reason: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('fulfillmentPolicyId conflicts');
+    expect(omitted.fallbackCalls).toEqual(['SKU-A']);
+  });
+
+  it('keeps nonquantity Offer semantics strict after policy omission is verified', async () => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const fallback = omitted.remote.getOffersWithVerifiedPolicies!;
+    const remote = {
+      ...omitted.remote,
+      async getOffersWithVerifiedPolicies(
+        sku: string,
+        marketplaceId: string,
+        verified: { listingId: string; fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string },
+      ) {
+        const read = await fallback(sku, marketplaceId, verified);
+        if (sku !== 'SKU-C' || read.state !== 'present') return read;
+        const payload = structuredClone(read.value[0]!.payload) as Record<string, Json>;
+        payload.merchantLocationKey = 'different-location';
+        return { ...read, value: [{ ...read.value[0]!, payload }] };
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('confirmed offer SKU-C changed outside quantity');
+    expect(omitted.fallbackCalls).toEqual(['SKU-A', 'SKU-C']);
+  });
+
+  it('applies the same verified-policy preflight before execution and still rejects frozen quantity drift', async () => {
+    const fixture = permanentRemovalRevision();
+    const preparedRemote = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote: preparedRemote.remote,
+      revisionId: 'revision-9',
+    });
+    const driftedRemote = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const remote = {
+      ...driftedRemote.remote,
+      async getInventoryItem(sku: string) {
+        const read = await fixture.remote.getInventoryItem(sku);
+        if (sku !== 'SKU-C' || read.state !== 'present') return read;
+        const payload = structuredClone(read.value.payload) as Record<string, Json>;
+        const availability = payload.availability as Record<string, Json>;
+        const ship = availability.shipToLocationAvailability as Record<string, Json>;
+        ship.quantity = 2;
+        return { ...read, value: { ...read.value, payload } };
+      },
+      async getOffersWithVerifiedPolicies(sku: string, marketplaceId: string) {
+        driftedRemote.fallbackCalls.push(sku);
+        const read = await fixture.remote.getOffers(sku, marketplaceId);
+        if (sku !== 'SKU-C' || read.state !== 'present') return read;
+        const payload = structuredClone(read.value[0]!.payload) as Record<string, Json>;
+        payload.availableQuantity = 2;
+        return { ...read, value: [{ ...read.value[0]!, payload }] };
+      },
+    };
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    let mutationCalls = 0;
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => { mutationCalls += 1; return { offerId: 'unexpected' }; },
+      createOrReplaceInventoryItem: async () => { mutationCalls += 1; },
+      createOrReplaceInventoryItemGroup: async () => { mutationCalls += 1; },
+      publishOffer: async () => { mutationCalls += 1; return { listingId: 'listing-1' }; },
+      updateOffer: async () => { mutationCalls += 1; },
+    };
+
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(
+      prepared,
+      revisions,
+      [],
+      remote,
+      mutations,
+    ))).rejects.toThrow('active_revision_reprepare_required');
+    expect(driftedRemote.listingReads()).toBe(1);
+    expect(driftedRemote.fallbackCalls).toEqual(['SKU-A', 'SKU-C']);
+    expect(mutationCalls).toBe(0);
+  });
+
   it('accepts a UTF-8-digested permanent-removal parent for a positive-only survivor quantity change', async () => {
     const fixture = permanentRemovalRevision();
     expect(fixture.revision.snapshot_digest).not.toBe(digest(fixture.revision.snapshot));
