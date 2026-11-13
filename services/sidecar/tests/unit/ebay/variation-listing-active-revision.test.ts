@@ -664,6 +664,26 @@ describe('YP8.2 active revision preparation', () => {
         },
       },
     }],
+    ['conflicting Trading payment policy', {
+      Item: {
+        ItemID: 'listing-1',
+        SellerProfiles: {
+          SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+          SellerPaymentProfile: { PaymentProfileID: 'wrong-payment' },
+          SellerReturnProfile: { ReturnProfileID: 'return' },
+        },
+      },
+    }],
+    ['conflicting Trading return policy', {
+      Item: {
+        ItemID: 'listing-1',
+        SellerProfiles: {
+          SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+          SellerPaymentProfile: { PaymentProfileID: 'payment' },
+          SellerReturnProfile: { ReturnProfileID: 'wrong-return' },
+        },
+      },
+    }],
     ['missing Trading policies', { Item: { ItemID: 'listing-1', SellerProfiles: {} } }],
     ['wrong Trading listing ID', {
       Item: {
@@ -708,6 +728,33 @@ describe('YP8.2 active revision preparation', () => {
       remote,
       revisionId: 'revision-9',
     })).rejects.toThrow('Offer read unavailable');
+    expect(omitted.listingReads()).toBe(0);
+    expect(omitted.fallbackCalls).toHaveLength(0);
+  });
+
+  it('does not apply policy fallback to a prefixed policy-like error', async () => {
+    const fixture = permanentRemovalRevision();
+    const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const remote = {
+      ...omitted.remote,
+      async getOffers(sku: string, _marketplaceId: string) {
+        if (sku === 'SKU-A' || sku === 'SKU-C') {
+          return {
+            state: 'unknown' as const,
+            reason: 'wrapper: Inventory item semantic offer fulfillment policy ID is missing or invalid.',
+          };
+        }
+        return fixture.remote.getOffers(sku, 'EBAY_US');
+      },
+    };
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote,
+      revisionId: 'revision-9',
+    })).rejects.toThrow('wrapper: Inventory item semantic offer fulfillment policy ID is missing or invalid.');
     expect(omitted.listingReads()).toBe(0);
     expect(omitted.fallbackCalls).toHaveLength(0);
   });
@@ -853,6 +900,75 @@ describe('YP8.2 active revision preparation', () => {
     expect(driftedRemote.listingReads()).toBe(1);
     expect(driftedRemote.fallbackCalls).toEqual(['SKU-A', 'SKU-C']);
     expect(mutationCalls).toBe(0);
+  });
+
+  it('re-proves omitted published Offer policies before the child-item write and records an exact unknown PRE', async () => {
+    const fixture = permanentRemovalRevision();
+    const preparedRemote = omittedPublishedOfferPoliciesRemote(fixture.remote);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: fixture.current,
+      previousRevision: fixture.revision,
+      previousCheckpoints: [],
+      remote: preparedRemote.remote,
+      revisionId: 'revision-9',
+    });
+    const offerReads = new Map<string, number>();
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...preparedRemote.remote,
+      async getOffers(sku: string, marketplaceId: string) {
+        const count = (offerReads.get(sku) ?? 0) + 1;
+        offerReads.set(sku, count);
+        if (sku === 'SKU-A' && count >= 2) {
+          return {
+            state: 'unknown' as const,
+            reason: 'Inventory item semantic offer fulfillment policy ID is missing or invalid.',
+          };
+        }
+        return fixture.remote.getOffers(sku, marketplaceId);
+      },
+      async getListing(listingId: string) {
+        const listing = await preparedRemote.remote.getListing!(listingId);
+        if (!listing || typeof listing !== 'object' || Array.isArray(listing)) return listing;
+        return {
+          ...listing,
+          Item: {
+            ...((listing as Record<string, unknown>).Item as Record<string, unknown>),
+            SellerProfiles: {
+              SellerShippingProfile: { ShippingProfileID: 'wrong-fulfillment' },
+              SellerPaymentProfile: { PaymentProfileID: 'payment' },
+              SellerReturnProfile: { ReturnProfileID: 'return' },
+            },
+          },
+        };
+      },
+    };
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    let mutationCalls = 0;
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => { mutationCalls += 1; return { offerId: 'unexpected' }; },
+      createOrReplaceInventoryItem: async () => { mutationCalls += 1; },
+      createOrReplaceInventoryItemGroup: async () => { mutationCalls += 1; },
+      publishOffer: async () => { mutationCalls += 1; return { listingId: 'listing-1' }; },
+      updateOffer: async () => { mutationCalls += 1; },
+    };
+
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(
+      prepared,
+      revisions,
+      checkpoints,
+      remote,
+      mutations,
+    ))).rejects.toThrow('policies cannot be verified');
+    expect(offerReads.get('SKU-A')).toBeGreaterThanOrEqual(2);
+    expect(preparedRemote.listingReads()).toBe(3);
+    expect(preparedRemote.fallbackCalls).toEqual(['SKU-A', 'SKU-C']);
+    expect(mutationCalls).toBe(0);
+    expect(checkpoints.map((row) => [row.operation_key, row.state])).toEqual([
+      ['child-item:variation-A', 'started'],
+      ['child-item:variation-A', 'unknown'],
+    ]);
+    expect(checkpoints.at(-1)).toMatchObject({ observed_remote_state: 'unknown' });
   });
 
   it('accepts a UTF-8-digested permanent-removal parent for a positive-only survivor quantity change', async () => {
@@ -2932,7 +3048,7 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'child-offer:variation-A', state: 'unknown', observed_remote_state: 'unknown' });
   });
 
-  it('publishes a combined price and quantity change through bulk price/quantity and verifies every listing variation', async () => {
+  it('publishes a combined price and quantity change with fresh omitted-policy proofs', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
       group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
@@ -2940,7 +3056,8 @@ describe('YP8.2 active revision executor acceptance', () => {
       copies: [copy('A'), copy('A2', 'variation-A'), copy('B')],
     });
     const base = remoteFor(previous, { 'SKU-A': { inventoryItemQuantity: 1, offerQuantity: 1 } });
-    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: base.remote, revisionId: 'revision-2' });
+    const preparedRemote = omittedPublishedOfferPoliciesRemote(base.remote);
+    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: preparedRemote.remote, revisionId: 'revision-2' });
     const desired = buildVariationListingInventoryPayloadBundle({ aggregate: current, representativeImages: prepared.snapshot.confirmed.representativeImages });
     const desiredA = desired.children.find((child) => child.sku === 'SKU-A')!;
     const initialItem = await base.remote.getInventoryItem('SKU-A');
@@ -2948,6 +3065,8 @@ describe('YP8.2 active revision executor acceptance', () => {
     if (initialItem.state !== 'present' || initialOffer.state !== 'present' || initialOffer.value.length !== 1) throw new Error('test setup failed');
     let itemA = initialItem.value;
     let offerA = initialOffer.value[0]!;
+    let policyProofCalls = 0;
+    let tradingListingReads = 0;
     const listingChildren = [desiredA, desired.children.find((child) => child.sku === 'SKU-B')!];
     const offerPrice = (payload: Json): Record<string, Json> => {
       const pricing = (payload as Record<string, Json>).pricingSummary as Record<string, Json>;
@@ -2956,11 +3075,37 @@ describe('YP8.2 active revision executor acceptance', () => {
     const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
       ...base.remote,
       async getInventoryItem(sku) { return sku === 'SKU-A' ? { state: 'present' as const, value: itemA } : base.remote.getInventoryItem(sku); },
-      async getOffers(sku, marketplaceId) { return sku === 'SKU-A' ? { state: 'present' as const, value: [{ ...offerA, marketplaceId }] } : base.remote.getOffers(sku, marketplaceId); },
+      async getOffers(sku, marketplaceId) {
+        return sku === 'SKU-A'
+          ? { state: 'unknown' as const, reason: 'Inventory item semantic offer fulfillment policy ID is missing or invalid.' }
+          : base.remote.getOffers(sku, marketplaceId);
+      },
+      async getOffersWithVerifiedPolicies(sku, marketplaceId, verified) {
+        policyProofCalls += 1;
+        if (sku !== 'SKU-A') return base.remote.getOffers(sku, marketplaceId);
+        const rawOffer = {
+          ...(offerA.payload as Record<string, Json>),
+          offerId: offerA.offerId,
+          status: offerA.status,
+          listing: { listingId: offerA.listingId, listingStatus: 'ACTIVE' },
+          listingPolicies: {
+            eBayPlusIfEligible: false,
+            paymentPolicyId: 'payment',
+            returnPolicyId: 'return',
+          },
+        };
+        return { state: 'present' as const, value: normalizeOffers({ offers: [rawOffer] }, verified) };
+      },
       async getListing(listingId) {
+        tradingListingReads += 1;
         return {
           Item: {
             ItemID: listingId,
+            SellerProfiles: {
+              SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+              SellerPaymentProfile: { PaymentProfileID: 'payment' },
+              SellerReturnProfile: { ReturnProfileID: 'return' },
+            },
             Variations: {
               Variation: listingChildren.map((child) => {
                 const price = child.sku === 'SKU-A' ? offerPrice(offerA.payload) : child.offer.pricingSummary.price;
@@ -3007,6 +3152,12 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(itemWrites).toEqual(['SKU-A']);
     expect(bulkPayloads).toHaveLength(1);
     expect(bulkPayloads[0]).toMatchObject({ requests: [{ sku: 'SKU-A', offers: [{ offerId: 'offer-SKU-A', availableQuantity: 2, price: { value: '1.49', currency: 'USD' } }], shipToLocationAvailability: { quantity: 2 } }] });
+    expect(policyProofCalls).toBeGreaterThanOrEqual(6);
+    expect(tradingListingReads).toBeGreaterThanOrEqual(policyProofCalls);
+    expect((itemA.payload as Record<string, Json>).availability).toMatchObject({ shipToLocationAvailability: { quantity: 2 } });
+    expect(offerA.payload).toEqual(desiredA.offer);
+    expect(checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+    expect(checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
 
     // A second combined edit must freeze the first revision's exact remote
     // state, then route the next price/quantity pair through the same bulk

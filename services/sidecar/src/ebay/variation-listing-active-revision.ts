@@ -29,6 +29,8 @@ import {
 
 const SNAPSHOT_VERSION = 3;
 const INTENT_VERSION = 1;
+const PUBLISHED_OFFER_POLICY_OMISSION_REASON =
+  /^Inventory item semantic offer (?:fulfillment|payment|return) policy ID is missing or invalid\.$/;
 
 function canonicalJson(value: Json, utf8ByteOrder = false): string {
   if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry, utf8ByteOrder)).join(',')}]`;
@@ -630,7 +632,7 @@ export async function reconcilePublishedQuantityBaseline(
     if (
       allowVerifiedOmissions &&
       offerRead.state === 'unknown' &&
-      /offer (?:fulfillment|payment|return) policy ID is missing or invalid/.test(offerRead.reason) &&
+      PUBLISHED_OFFER_POLICY_OMISSION_REASON.test(offerRead.reason) &&
       expectedRemoteIdentity?.listingId && remote.getListing && remote.getOffersWithVerifiedPolicies
     ) {
       listingRead ??= remote.getListing(expectedRemoteIdentity.listingId);
@@ -2172,6 +2174,25 @@ export async function executeVariationListingActiveRevision(
   const previousByVariation = new Map(input.frozen.snapshot.confirmed.aggregate.variations.map((variation) => [variation.variation_id, variation]));
   const priorOfferIds = input.frozen.snapshot.confirmed.remote.offerIdsBySku;
   const frozenListingId = input.frozen.snapshot.confirmed.remote.listingId;
+  // eBay may omit policy IDs from a published Offer. Verify omissions against
+  // the frozen listing's exact Trading policies; never normalize other errors.
+  const readPublishedOffer = async (
+    child: VariationListingInventoryPayloadBundle['children'][number],
+    expectedOffer: VariationListingInventoryPayloadBundle['children'][number]['offer'],
+  ): Promise<Awaited<ReturnType<VariationListingPublicationReadGateway['getOffers']>>> => {
+    const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
+    if (read.state !== 'unknown' ||
+        !PUBLISHED_OFFER_POLICY_OMISSION_REASON.test(read.reason) ||
+        !input.remote.getListing || !input.remote.getOffersWithVerifiedPolicies) return read;
+    const verified = tradingVerifiedListingPolicies(
+      await input.remote.getListing(frozenListingId), frozenListingId, asJson(expectedOffer.listingPolicies),
+    );
+    if (!verified) {
+      throw new Error(`Variation listing confirmed offer ${child.sku} policies cannot be verified from Trading GetItem.`);
+    }
+    return input.remote.getOffersWithVerifiedPolicies(child.sku, child.offer.marketplaceId, verified);
+  };
+
   const newOfferIdsByVariation = new Map<string, string>();
   // Every active publication must match the listing-facing price of each
   // sellable variation, even when the frozen delta is quantity-only or a
@@ -2284,7 +2305,7 @@ export async function executeVariationListingActiveRevision(
         // Item write. A sale/quantity change between itemPre and this closure
         // must block without touching either remote resource.
         const pairedOffer = activeOffer(
-          await input.remote.getOffers(child.sku, child.offer.marketplaceId),
+          await readPublishedOffer(child, priorChild.offer),
           priorChild.offer,
           { offerId: priorOfferId, listingId: frozenListingId },
           'PUBLISHED',
@@ -2320,7 +2341,9 @@ export async function executeVariationListingActiveRevision(
     const offerRows = history.get(offerOperationKey);
     if (offerRows) {
     const offerAfter = async (): Promise<Json | null> => {
-      const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
+      const read = existed && priorChild
+        ? await readPublishedOffer(child, child.offer)
+        : await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (!existed) {
         if (read.state === 'unknown') throw new Error(`Variation listing new offer ${child.sku} read is unknown: ${read.reason}`);
         if (read.state === 'proven_absent' || read.value.length === 0) return null;
@@ -2396,7 +2419,9 @@ export async function executeVariationListingActiveRevision(
       return asJson({ offer: evidence, listing: listingEvidence });
     };
     const offerPre = async (): Promise<Json | null> => {
-      const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
+      const read = existed && priorChild
+        ? await readPublishedOffer(child, priorChild.offer)
+        : await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (!existed) {
         if (read.state === 'unknown') throw new Error(`Variation listing new offer ${child.sku} pre-state is unknown: ${read.reason}`);
         if (read.state === 'proven_absent' || read.value.length === 0) return { absent: true, sku: child.sku };
@@ -2434,7 +2459,9 @@ export async function executeVariationListingActiveRevision(
       // Re-read the target Offer itself immediately before writing. This
       // closes the pre() -> mutate() gap independently of the paired Item
       // guard below.
-      const ownOfferRead = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
+      const ownOfferRead = existed && priorChild
+        ? await readPublishedOffer(child, priorChild.offer)
+        : await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (existed) {
         const observedPriorOffer = priorChild && (restoringSoldOut
           ? activeOfferIgnoringQuantity(ownOfferRead, priorChild.offer, offerIdentity, 'PUBLISHED', true)
@@ -2594,7 +2621,9 @@ export async function executeVariationListingActiveRevision(
     const publishReadAllowsQuantity = (status: 'UNPUBLISHED' | 'PUBLISHED'): boolean =>
       status === 'PUBLISHED' && activeLatest(history.get(operationKey)!) !== null;
     const identifyOffer = async (status: 'UNPUBLISHED' | 'PUBLISHED'): Promise<Json | null> => {
-      const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
+      const read = status === 'PUBLISHED'
+        ? await readPublishedOffer(child, child.offer)
+        : await input.remote.getOffers(child.sku, child.offer.marketplaceId);
       if (read.state === 'unknown') throw new Error(`Variation listing publish offer ${child.sku} read is unknown: ${read.reason}`);
       if (read.state === 'proven_absent' || read.value.length === 0) return null;
       if (read.value.length !== 1) throw new Error(`Variation listing publish offer ${child.sku} must have exactly one offer.`);
@@ -2639,7 +2668,7 @@ export async function executeVariationListingActiveRevision(
     const prior = previousByVariation.has(child.variationId);
     const offerId = prior ? priorOfferIds[child.sku] : newOfferIdsByVariation.get(child.variationId) ?? null;
     if (!offerId) throw new Error(`Variation listing final offer ${child.sku} has no durable offer ID.`);
-    const read = await input.remote.getOffers(child.sku, child.offer.marketplaceId);
+    const read = await readPublishedOffer(child, child.offer);
     const evidence = activeOffer(read, child.offer, { offerId, listingId: frozenListingId }, 'PUBLISHED', true);
     if (!evidence) {
       // A published Offer may retain a different price or quantity; neither
