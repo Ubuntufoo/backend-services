@@ -1470,11 +1470,49 @@ function validateReadOnlyFrozenIdentity(
   }
   const revisionReconcile = frozen.captureInput.operationPlan.filter((operation) => operation.operationKey === 'revision-reconcile' && operation.operationKind === 'revision_reconcile');
   if (revisionReconcile.length !== 1) throw new Error('Variation listing read-only reconciliation requires one frozen revision-reconcile operation.');
-  for (const operation of frozen.captureInput.operationPlan.filter((candidate) => candidate.operationKey !== 'revision-reconcile')) {
-    if ((history.get(operation.operationKey)?.length ?? 0) === 0) {
-      throw new Error(`Variation listing read-only reconciliation operation ${operation.operationKey} history is incomplete.`);
+  const recoveryTarget = readOnlyPreRecoveryTarget(frozen, history);
+  if (!recoveryTarget) {
+    for (const operation of frozen.captureInput.operationPlan.filter((candidate) => candidate.operationKey !== 'revision-reconcile')) {
+      if ((history.get(operation.operationKey)?.length ?? 0) === 0) {
+        throw new Error(`Variation listing read-only reconciliation operation ${operation.operationKey} history is incomplete.`);
+      }
     }
   }
+}
+
+/**
+ * The only intentionally incomplete read-only journal is the first existing
+ * child Item that ended STARTED -> UNKNOWN. Later operations must remain
+ * untouched so this shape can be durably authorized for one explicit retry.
+ */
+function readOnlyPreRecoveryTarget(
+  frozen: VariationListingFrozenActiveRevision,
+  history: ActiveHistory,
+): VariationListingRevisionPlanOperationInput | null {
+  const ordered = [...frozen.captureInput.operationPlan].sort((left, right) => left.sequenceNo - right.sequenceNo);
+  const targetIndex = ordered.findIndex((operation) => !activeTerminal(activeLatest(history.get(operation.operationKey) ?? [])));
+  const target = targetIndex < 0 ? null : ordered[targetIndex];
+  if (!target || target.operationKind !== 'child_inventory_item_write') return null;
+  const rows = [...(history.get(target.operationKey) ?? [])].sort(
+    (left, right) => left.attempt_number - right.attempt_number || left.checkpoint_number - right.checkpoint_number
+  );
+  if (
+    rows.length !== 2 ||
+    rows[0]?.state !== 'started' ||
+    rows[0].attempt_number !== 1 ||
+    rows[0].checkpoint_number !== 1 ||
+    rows[1]?.state !== 'unknown' ||
+    rows[1].observed_remote_state !== 'unknown' ||
+    rows[1].attempt_number !== 1 ||
+    rows[1].checkpoint_number !== 2
+  ) return null;
+  for (const operation of ordered.slice(0, targetIndex)) {
+    const prior = activeLatest(history.get(operation.operationKey) ?? []);
+    if (!activeTerminal(prior)) return null;
+  }
+  if (ordered.slice(targetIndex + 1).some((operation) => (history.get(operation.operationKey)?.length ?? 0) > 0)) return null;
+  if ([...history.values()].some((rowsForOperation) => rowsForOperation.some((row) => row.state === 'retry_authorized' || row.state === 'retry_exhausted'))) return null;
+  return target;
 }
 
 function activeObjectEvidence(value: Json, label: string): Record<string, Json> {
@@ -1883,6 +1921,44 @@ function assertListingPriceSet(
   }
 }
 
+function assertListingPreQuantities(
+  value: unknown,
+  listingId: string,
+  expectedChildren: readonly VariationListingInventoryPayloadBundle['children'][number][],
+  label: string,
+): void {
+  const root = unknownRecord(value, 'Trading GetItem response');
+  const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
+  if (String(item.ItemID ?? '').trim() !== listingId) throw new Error(`Variation listing ${label} listing identity changed.`);
+  const variations = unknownRecord(item.Variations, 'Trading GetItem variations');
+  const rawRows = variations.Variation;
+  const rows = Array.isArray(rawRows) ? rawRows : [rawRows];
+  const expectedBySku = new Map(expectedChildren.map((child) => [child.sku, child.quantity]));
+  if (rows.length !== expectedBySku.size) throw new Error(`Variation listing ${label} SKU set changed.`);
+  const seen = new Set<string>();
+  for (const rawRow of rows) {
+    const row = unknownRecord(rawRow, `Trading GetItem variation ${label}`);
+    const sku = String(row.SKU ?? '').trim();
+    const expectedQuantity = expectedBySku.get(sku);
+    if (!sku || expectedQuantity === undefined || seen.has(sku)) throw new Error(`Variation listing ${label} SKU set changed.`);
+    const totalRaw = row.Quantity;
+    const soldRaw = unknownRecord(row.SellingStatus, `Trading GetItem variation ${sku} SellingStatus`).QuantitySold;
+    const total = Number(totalRaw);
+    const sold = Number(soldRaw);
+    // Trading GetItem may underreport positive Inventory API quantities, even as zero.
+    // Inventory Item and Offer above prove the exact PRE; never accept a Trading
+    // quantity above that PRE or evidence of an intervening sale.
+    if (
+      (typeof totalRaw !== 'number' && (typeof totalRaw !== 'string' || totalRaw.trim() === '')) ||
+      (typeof soldRaw !== 'number' && (typeof soldRaw !== 'string' || soldRaw.trim() === '')) ||
+      !Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(sold) || sold < 0 || sold > total || sold !== 0 || total > expectedQuantity
+    ) {
+      throw new Error(`Variation listing ${label} quantity or QuantitySold changed.`);
+    }
+    seen.add(sku);
+  }
+}
+
 /** Trading GetItem is the listing-facing authority for restoring a sold-out child.
  * An Inventory Item/Offer quantity of 1 is insufficient: eBay may still omit
  * the variation from the published listing. Do not infer quantities from the
@@ -1950,6 +2026,36 @@ function activeItem(
   inventoryItemQuantity(read.value.payload, expected.sku);
   if (canonicalJson(read.value.payload) !== canonicalJson(asJson(expected.inventoryItem))) return null;
   return asJson({ groupKeys: read.value.groupKeys, payload: read.value.payload, sku: read.value.sku });
+}
+
+/**
+ * PRE recovery may bridge a historical raw descriptor array to the exact
+ * deterministic descriptor projection used by the frozen desired revision.
+ * Keep the bridge bounded: only an empty expected array may use the derived
+ * form; unrelated descriptor edits remain a hard mismatch.
+ */
+function preRecoveryChildWithDerivedConditionDescriptors(
+  child: VariationListingInventoryPayloadBundle['children'][number],
+  derivedDescriptors: readonly { name: string; values: readonly string[] }[],
+): VariationListingInventoryPayloadBundle['children'][number] {
+  if (child.inventoryItem.conditionDescriptors.length !== 0) return child;
+  const projected = structuredClone(child);
+  projected.inventoryItem.conditionDescriptors = derivedDescriptors.map((descriptor) => ({
+    name: descriptor.name,
+    values: [...descriptor.values],
+  }));
+  return projected;
+}
+
+function activeItemPreRecovery(
+  read: Awaited<ReturnType<VariationListingPublicationReadGateway['getInventoryItem']>>,
+  expected: VariationListingInventoryPayloadBundle['children'][number],
+  groupKey: string,
+  derivedDescriptors: readonly { name: string; values: readonly string[] }[],
+): Json | null {
+  const exactRaw = activeItem(read, expected, groupKey, true);
+  if (exactRaw !== null || expected.inventoryItem.conditionDescriptors.length !== 0) return exactRaw;
+  return activeItem(read, preRecoveryChildWithDerivedConditionDescriptors(expected, derivedDescriptors), groupKey, true);
 }
 
 /** Reconcile an already-terminal Inventory Item while tolerating only a
@@ -2100,6 +2206,7 @@ export async function executeVariationListingActiveRevision(
   }
   const history = makeActiveHistory(input.frozen, existingCheckpoints);
   if (input.readOnlyReconcile) validateReadOnlyFrozenIdentity(input.frozen, history);
+  const preRecoveryTarget = input.readOnlyReconcile ? readOnlyPreRecoveryTarget(input.frozen, history) : null;
   const mutationGateway = input.readOnlyReconcile ? readOnlyActiveMutationGateway : input.mutations;
   const previousBundle = input.frozen.confirmedBundle;
   const desiredImages = new Map(input.frozen.snapshot.representativeImages.map((image) => [image.copyId, structuredClone(image)]));
@@ -2192,6 +2299,91 @@ export async function executeVariationListingActiveRevision(
     }
     return input.remote.getOffersWithVerifiedPolicies(child.sku, child.offer.marketplaceId, verified);
   };
+
+  if (preRecoveryTarget) {
+    const currentAggregate = await input.transaction.loadAggregate(captureInput.groupId);
+    // Preparation derives condition descriptors in its frozen projection without
+    // persisting them. Accept only the unchanged confirmed DB value or that
+    // exact derived value; never mask an unrelated live condition edit.
+    const projectedCurrent = currentAggregate && structuredClone(currentAggregate);
+    if (projectedCurrent) {
+      const derivedDescriptors = deriveVariationListingRawCardConditionDescriptors(
+        projectedCurrent.group.category_id, projectedCurrent.group.condition_token
+      );
+      const liveDescriptors = canonicalJson(asJson(projectedCurrent.group.condition_descriptors));
+      if (
+        liveDescriptors !== canonicalJson(asJson(input.frozen.snapshot.confirmed.aggregate.group.condition_descriptors)) &&
+        liveDescriptors !== canonicalJson(asJson(derivedDescriptors))
+      ) throw new Error('Variation listing read-only PRE recovery live condition descriptors changed.');
+      projectedCurrent.group.condition_descriptors = derivedDescriptors;
+    }
+    if (
+      !currentAggregate ||
+      currentAggregate.group.group_id !== captureInput.groupId ||
+      currentAggregate.group.desired_revision !== captureInput.capturedDesiredRevision ||
+      currentAggregate.group.last_confirmed_revision !== input.frozen.snapshot.aggregate.group.last_confirmed_revision ||
+      currentAggregate.group.lifecycle_state !== 'active' ||
+      canonicalJson(asJson(projectedCurrent)) !== canonicalJson(asJson(input.frozen.snapshot.aggregate))
+    ) throw new Error('Variation listing read-only PRE recovery current aggregate is stale or changed.');
+
+    const previousVariations = input.frozen.snapshot.confirmed.aggregate.variations;
+    const currentVariations = input.frozen.snapshot.aggregate.variations;
+    if (previousVariations.length !== currentVariations.length) throw new Error('Variation listing read-only PRE recovery cannot add or remove variations.');
+    const previousById = new Map(previousVariations.map((variation) => [variation.variation_id, variation]));
+    for (const variation of currentVariations) {
+      const prior = previousById.get(variation.variation_id);
+      if (!prior || prior.sku !== variation.sku || prior.selector_value !== variation.selector_value || prior.position !== variation.position || prior.inventory_serial !== variation.inventory_serial || prior.representative_copy_id !== variation.representative_copy_id) {
+        throw new Error('Variation listing read-only PRE recovery variation identity changed.');
+      }
+    }
+    if (canonicalJson(asJson(previousBundle.group)) !== canonicalJson(asJson(desiredBundle.group))) throw new Error('Variation listing read-only PRE recovery group changed.');
+
+    const targetVariationId = preRecoveryTarget.operationKey.replace(/^child-item:/, '');
+    if (preRecoveryTarget.targetRef !== desiredBundle.children.find((child) => child.variationId === targetVariationId)?.sku) throw new Error('Variation listing read-only PRE recovery target identity changed.');
+    const target = desiredBundle.children.find((child) => child.variationId === targetVariationId);
+    const targetPrior = previousBundle.children.find((child) => child.variationId === targetVariationId);
+    const targetVariation = currentVariations.find((variation) => variation.variation_id === targetVariationId);
+    const targetPriorVariation = previousVariations.find((variation) => variation.variation_id === targetVariationId);
+    if (!target || !targetPrior || !targetVariation || !targetPriorVariation) throw new Error('Variation listing read-only PRE recovery target is not an existing child.');
+    const targetFrozenQuantity = parseConfirmedRemoteQuantity(remoteQuantities?.[target.sku], target.sku);
+    if (targetFrozenQuantity.inventoryItemQuantity !== 1 || targetFrozenQuantity.offerQuantity !== 1 || targetFrozenQuantity.sellableQuantity !== 1 || targetPrior.quantity !== 1 || target.quantity !== 2 || inventoryItemQuantity(asJson(target.inventoryItem), target.sku) !== 2 || offerQuantity(asJson(target.offer), target.sku) !== 2 || quantityAdjustmentCounter(targetVariation.quantity_adjustment_counter, `current variation ${target.sku}`) - quantityAdjustmentCounter(targetPriorVariation.quantity_adjustment_counter, `previous variation ${target.sku}`) !== 1) {
+      throw new Error('Variation listing read-only PRE recovery requires an exact positive 1-to-2 quantity change.');
+    }
+
+    const siblingEvidence: Json[] = [];
+    const exactGroup = activeGroup(await input.remote.getInventoryItemGroup(previousBundle.groupKey), previousBundle.group);
+    if (!exactGroup) throw new Error('Variation listing read-only PRE recovery group PRE is not exact.');
+    const derivedDescriptors = deriveVariationListingRawCardConditionDescriptors(
+      currentAggregate.group.category_id,
+      currentAggregate.group.condition_token,
+    );
+    for (const priorChild of previousBundle.children) {
+      const currentChild = desiredBundle.children.find((child) => child.variationId === priorChild.variationId);
+      const projectedPriorChild = currentChild ? preRecoveryChildWithDerivedConditionDescriptors(priorChild, derivedDescriptors) : null;
+      if (!currentChild || canonicalJson(asJson(inventoryPayloadWithoutQuantity(currentChild.inventoryItem, currentChild.sku))) !== canonicalJson(asJson(inventoryPayloadWithoutQuantity(projectedPriorChild!.inventoryItem, projectedPriorChild!.sku))) || canonicalJson(asJson(offerPayloadWithoutQuantity(currentChild.offer, currentChild.sku))) !== canonicalJson(asJson(offerPayloadWithoutQuantity(priorChild.offer, priorChild.sku)))) {
+        throw new Error('Variation listing read-only PRE recovery includes a non-quantity sibling change.');
+      }
+      const itemEvidence = activeItemPreRecovery(await input.remote.getInventoryItem(priorChild.sku), priorChild, previousBundle.groupKey, derivedDescriptors);
+      if (!itemEvidence) throw new Error(`Variation listing read-only PRE recovery Item ${priorChild.sku} is not exact.`);
+      const priorOfferId = priorOfferIds[priorChild.sku];
+      if (!priorOfferId) throw new Error(`Variation listing read-only PRE recovery Offer ${priorChild.sku} has no frozen ID.`);
+      const offerEvidence = activeOffer(await readPublishedOffer(currentChild, priorChild.offer), priorChild.offer, { offerId: priorOfferId, listingId: frozenListingId }, 'PUBLISHED', true);
+      if (!offerEvidence) throw new Error(`Variation listing read-only PRE recovery Offer ${priorChild.sku} is not exact.`);
+      siblingEvidence.push(asJson({ item: itemEvidence, offer: offerEvidence, sku: priorChild.sku }));
+    }
+    const getListing = input.remote.getListing;
+    if (!getListing) throw new Error('Variation listing read-only PRE recovery requires Trading GetItem.');
+    const listing = await getListing(frozenListingId);
+    assertListingPriceSet(listing, frozenListingId, previousBundle.children, 'read-only PRE recovery', 'zero-only', true, true);
+    assertListingPreQuantities(listing, frozenListingId, previousBundle.children, 'read-only PRE recovery');
+    const targetRead = await input.remote.getInventoryItem(target.sku);
+    const targetPreEvidence = activeItemPreRecovery(targetRead, targetPrior, previousBundle.groupKey, derivedDescriptors);
+    if (!targetPreEvidence || activeItem(targetRead, target, desiredBundle.groupKey, true) !== null) throw new Error('Variation listing read-only PRE recovery target after-state is already present or PRE is not exact.');
+    const latest = activeLatest(history.get(preRecoveryTarget.operationKey) ?? []);
+    if (!latest) throw new Error('Variation listing read-only PRE recovery target journal is missing.');
+    await activeAppend(input, history, preRecoveryTarget.operationKey, 'retry_authorized', latest.attempt_number + 1, 1, asJson({ reason: 'exact_frozen_pre', listing: asJson(listing), group: exactGroup, siblings: siblingEvidence, target: targetPreEvidence }), 'present');
+    throw new Error(`Variation listing operation ${preRecoveryTarget.operationKey} retry authorized; resume permits exactly one replay.`);
+  }
 
   const newOfferIdsByVariation = new Map<string, string>();
   // Every active publication must match the listing-facing price of each

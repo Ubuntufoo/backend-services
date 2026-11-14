@@ -164,7 +164,7 @@ function version1Revision(previous: VariationListingAggregateSnapshot): Variatio
       representativeImages: images,
       remote: {
         listingId: 'listing-1',
-        offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
+        offerIdsBySku: Object.fromEntries(previous.variations.map((variation) => [variation.sku, `offer-${variation.sku}`])),
       },
       revisionId: 'revision-1',
     },
@@ -2804,6 +2804,305 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(confirmations).toBe(0);
     expect(revisions.captureCalls).toHaveLength(0);
     expect(checkpoints).toHaveLength(0);
+  });
+
+  type PreRecoveryFault =
+    | 'offer-id'
+    | 'offer-listing'
+    | 'offer-marketplace'
+    | 'offer-policy'
+    | 'offer-price'
+    | 'target-item-quantity'
+    | 'target-offer-quantity'
+    | 'group-membership'
+    | 'sibling-c-item'
+    | 'trading-listing'
+    | 'trading-price'
+    | 'trading-sold'
+    | 'trading-malformed'
+    | 'trading-underreported-zero'
+    | 'raw-condition-descriptors-empty'
+    | 'raw-condition-descriptors-drift'
+    | 'trading-partial-after'
+    | 'later-checkpoint'
+    | 'post-write-c-item-descriptor'
+    | 'sibling-c-item-after-a';
+
+  async function preRecoveryFixture(fault?: PreRecoveryFault, rawRemoteDescriptors = false, retryAuthorized = false) {
+    const previous = aggregate({
+      group: group({ desired_revision: 1, last_confirmed_revision: 1, lifecycle_state: 'active', condition_descriptors: rawRemoteDescriptors || fault === 'raw-condition-descriptors-empty' || fault === 'raw-condition-descriptors-drift' ? [] : [{ name: '40001', values: ['400012'] }] }),
+      variations: [variation('A', 0), variation('C', 2)],
+      copies: [copy('A'), copy('C')],
+    });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active', condition_descriptors: rawRemoteDescriptors || fault === 'raw-condition-descriptors-empty' || fault === 'raw-condition-descriptors-drift' ? [] : [{ name: '40001', values: ['400012'] }] }),
+      variations: [variation('A', 0, 'copy-A', 0.99, 1), variation('C', 2)],
+      copies: [copy('A'), copy('C')],
+    });
+    // Historical confirmed payloads retain the raw descriptor array. New
+    // preparation projects the deterministic descriptor without persisting it.
+    const base = remoteFor(previous, {}, true);
+    const prepared = await prepareVariationListingFrozenActiveRevision({ currentAggregate: current, previousRevision: version1Revision(previous), previousCheckpoints: version1Checkpoints(previous), remote: base.remote, revisionId: 'revision-2' });
+    const desired = prepared.desiredBundlePreview!;
+    const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [
+      checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-item:variation-A', attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} }),
+      checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-item:variation-A', attemptNumber: 1, checkpointNumber: 2, state: 'unknown', observedRemoteState: 'unknown', evidence: { error: 'lost response' } }),
+    ];
+    if (retryAuthorized) {
+      checkpoints.push(checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-item:variation-A', attemptNumber: 2, checkpointNumber: 1, state: 'retry_authorized', observedRemoteState: 'present', evidence: { reason: 'exact_frozen_pre' } }));
+    }
+    if (fault === 'later-checkpoint') {
+      checkpoints.push(checkpointFrom({ revisionId: 'revision-2', operationKey: 'child-offer:variation-A', attemptNumber: 1, checkpointNumber: 1, state: 'started', observedRemoteState: null, evidence: {} }));
+    }
+    let itemQuantity = fault === 'target-item-quantity' ? 0 : 1;
+    let offerQuantity = fault === 'target-offer-quantity' ? 0 : 1;
+    let itemWrites = 0;
+    let offerWrites = 0;
+    const itemWritesBySku = new Map<string, number>();
+    const offerWritesBySku = new Map<string, number>();
+    const observedItemPayloads = new Map<string, Json>();
+    const observedOfferPayloads = new Map<string, Json>();
+    let confirmations = 0;
+    let watermarkConfirmed = false;
+    const omittedPolicies = rawRemoteDescriptors ? omittedPublishedOfferPoliciesRemote(base.remote) : null;
+    const remoteBase = omittedPolicies
+      ? {
+        ...omittedPolicies.remote,
+        async getOffersWithVerifiedPolicies(
+          sku: string,
+          marketplaceId: string,
+          verified: { listingId: string; fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string },
+        ) {
+          const read = await omittedPolicies.remote.getOffersWithVerifiedPolicies(sku, marketplaceId, verified);
+          if (read.state !== 'present' || read.value.length !== 1) return read;
+          const payload = structuredClone(read.value[0]!.payload) as Record<string, Json>;
+          if (sku === 'SKU-A') payload.availableQuantity = offerQuantity;
+          observedOfferPayloads.set(sku, structuredClone(payload) as Json);
+          return { ...read, value: [{ ...read.value[0]!, payload }] };
+        },
+      }
+      : base.remote;
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...remoteBase,
+      async getInventoryItem(sku) {
+        const read = await remoteBase.getInventoryItem(sku);
+        if (read.state !== 'present') return read;
+        if (rawRemoteDescriptors && itemWritesBySku.has(sku)) {
+          const desiredChild = desired.children.find((child) => child.sku === sku);
+          if (!desiredChild) throw new Error(`test setup missing desired child ${sku}`);
+          const payload = structuredClone(desiredChild.inventoryItem) as Record<string, Json>;
+          if (fault === 'post-write-c-item-descriptor' && sku === 'SKU-C') {
+            payload.conditionDescriptors = [{ name: '40001', values: ['400013'] }];
+          }
+          observedItemPayloads.set(sku, structuredClone(payload) as Json);
+          return { ...read, value: { ...read.value, payload } };
+        }
+        if (fault === 'raw-condition-descriptors-empty') {
+          const payload = structuredClone(read.value.payload) as Record<string, Json>;
+          payload.conditionDescriptors = [{ name: '40001', values: ['400012'] }];
+          observedItemPayloads.set(sku, structuredClone(payload) as Json);
+          return { ...read, value: { ...read.value, payload } };
+        }
+        if (sku === 'SKU-A') {
+          const payload = quantityPayload(read.value.payload, itemQuantity);
+          observedItemPayloads.set(sku, structuredClone(payload));
+          return { ...read, value: { ...read.value, payload } };
+        }
+        if (sku === 'SKU-C' && (fault === 'sibling-c-item' || (fault === 'sibling-c-item-after-a' && (itemWritesBySku.get('SKU-A') ?? 0) > 0))) {
+          const payload = quantityPayload(read.value.payload, 2);
+          observedItemPayloads.set(sku, structuredClone(payload));
+          return { ...read, value: { ...read.value, payload } };
+        }
+        observedItemPayloads.set(sku, structuredClone(read.value.payload));
+        return read;
+      },
+      async getOffers(sku, marketplaceId) {
+        const read = await remoteBase.getOffers(sku, marketplaceId);
+        if (sku !== 'SKU-A' || read.state !== 'present') return read;
+        const payload = structuredClone(read.value[0]!.payload) as Record<string, Json>;
+        payload.availableQuantity = offerQuantity;
+        if (fault === 'offer-policy') ((payload.listingPolicies as Record<string, Json>).paymentPolicyId) = 'foreign-payment';
+        if (fault === 'offer-price') (((payload.pricingSummary as Record<string, Json>).price as Record<string, Json>).value) = '1.49';
+        observedOfferPayloads.set(sku, structuredClone(payload) as Json);
+        return { state: 'present' as const, value: [{
+          ...read.value[0]!,
+          listingId: fault === 'offer-listing' ? 'foreign-listing' : 'listing-1',
+          marketplaceId: fault === 'offer-marketplace' ? 'EBAY_GB' : marketplaceId,
+          offerId: fault === 'offer-id' ? 'foreign-offer' : 'offer-SKU-A',
+          payload,
+        }] };
+      },
+      async getInventoryItemGroup(groupKey) {
+        const read = await base.remote.getInventoryItemGroup(groupKey);
+        if (fault !== 'group-membership' || read.state !== 'present') return read;
+        return { ...read, value: { ...read.value, variantSKUs: ['SKU-A', 'SKU-C', 'SKU-X'] } };
+      },
+      async getListing(listingId) {
+        const childA = desired.children.find((child) => child.sku === 'SKU-A')!;
+        const childC = desired.children.find((child) => child.sku === 'SKU-C')!;
+        const quantity = fault === 'trading-partial-after' ? 2 : fault === 'trading-underreported-zero' ? 0 : Math.min(itemQuantity, offerQuantity);
+        const target = listingVariation(childA, quantity, fault === 'trading-sold' ? 1 : 0) as Record<string, Json>;
+        if (fault === 'trading-price') target.StartPrice = { '#text': '1.49', '@_currencyID': 'USD' };
+        if (fault === 'trading-malformed') target.SellingStatus = { QuantitySold: '' };
+        const listing = { Item: { ItemID: fault === 'trading-listing' ? 'foreign-listing' : listingId, Variations: { Variation: [target, listingVariation(childC, fault === 'trading-underreported-zero' ? 0 : 1)] } } } as Record<string, Json>;
+        if (rawRemoteDescriptors) {
+          (listing.Item as Record<string, Json>).SellerProfiles = {
+            SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+            SellerPaymentProfile: { PaymentProfileID: 'payment' },
+            SellerReturnProfile: { ReturnProfileID: 'return' },
+          };
+        }
+        return listing;
+      },
+    };
+    const mutations: VariationListingActiveMutationGateway = {
+      createOffer: async () => ({ offerId: 'unexpected' }),
+      async createOrReplaceInventoryItem(sku, payload) {
+        itemWrites += 1;
+        itemWritesBySku.set(sku, (itemWritesBySku.get(sku) ?? 0) + 1);
+        if (sku === 'SKU-A') {
+          itemQuantity = Number(((((payload as Record<string, Json>).availability as Record<string, Json>).shipToLocationAvailability as Record<string, Json>).quantity));
+        }
+      },
+      createOrReplaceInventoryItemGroup: async () => {},
+      publishOffer: async () => ({ listingId: 'listing-1' }),
+      bulkUpdatePriceQuantity: async () => {},
+      async updateOffer(offerId, payload) {
+        if (offerId === 'offer-SKU-A') {
+          offerWrites += 1;
+          offerWritesBySku.set('SKU-A', (offerWritesBySku.get('SKU-A') ?? 0) + 1);
+          offerQuantity = Number((payload as Record<string, Json>).availableQuantity);
+        }
+      },
+    };
+    return {
+      checkpoints,
+      makeInput: (readOnlyReconcile = false) => ({
+        ...activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+          loadAggregate: async () => fault === 'raw-condition-descriptors-drift'
+            ? { ...current, group: { ...current.group, condition_descriptors: [{ name: '40001', values: ['400013'] }] } }
+            : watermarkConfirmed ? { ...current, group: { ...current.group, last_confirmed_revision: 2 } } : current,
+          confirmRevision: async () => { confirmations += 1; watermarkConfirmed = true; return { ...current.group, last_confirmed_revision: 2 }; },
+        }),
+        readOnlyReconcile,
+      }),
+      writes: () => ({ confirmations, itemWrites, offerWrites }),
+      writesBySku: () => ({ itemWritesBySku, offerWritesBySku }),
+      observedPayloads: () => ({ observedItemPayloads, observedOfferPayloads }),
+      policyProofCalls: () => omittedPolicies?.fallbackCalls ?? [],
+    };
+  }
+
+  it('authorizes exact PRE when preparation derived descriptors but durable group retains empty raw descriptors', async () => {
+    const fixture = await preRecoveryFixture('raw-condition-descriptors-empty');
+    await expect(executeVariationListingActiveRevision(fixture.makeInput(true))).rejects.toThrow('retry authorized');
+    expect(fixture.checkpoints.filter((row) => row.state === 'retry_authorized')).toHaveLength(1);
+    expect(fixture.writes()).toEqual({ itemWrites: 0, offerWrites: 0, confirmations: 0 });
+  });
+
+  it('authorizes exact PRE despite Trading GetItem underreporting both positive siblings as zero', async () => {
+    const fixture = await preRecoveryFixture('trading-underreported-zero');
+    await expect(executeVariationListingActiveRevision(fixture.makeInput(true))).rejects.toThrow('retry authorized');
+    expect(fixture.checkpoints.filter((row) => row.state === 'retry_authorized')).toHaveLength(1);
+    expect(fixture.writes()).toEqual({ itemWrites: 0, offerWrites: 0, confirmations: 0 });
+  });
+
+  it('read-only authorizes one exact sparse A/C 1-to-2 Item PRE recovery, then normal execution replays it once', async () => {
+    const fixture = await preRecoveryFixture();
+
+    await expect(executeVariationListingActiveRevision(fixture.makeInput(true))).rejects.toThrow('retry authorized');
+    expect(fixture.writes()).toEqual({ itemWrites: 0, offerWrites: 0, confirmations: 0 });
+    expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(['started', 'unknown', 'retry_authorized']);
+    const authorizedCount = fixture.checkpoints.length;
+    await expect(executeVariationListingActiveRevision(fixture.makeInput(true))).rejects.toThrow('history is incomplete');
+    expect(fixture.checkpoints).toHaveLength(authorizedCount);
+    expect(fixture.writes()).toEqual({ itemWrites: 0, offerWrites: 0, confirmations: 0 });
+
+    await expect(executeVariationListingActiveRevision(fixture.makeInput())).resolves.toMatchObject({ confirmedRevision: 2 });
+    expect(fixture.writes()).toEqual({ itemWrites: 1, offerWrites: 1, confirmations: 1 });
+    expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(['started', 'unknown', 'retry_authorized', 'started', 'confirmed_complete']);
+    await expect(executeVariationListingActiveRevision(fixture.makeInput())).resolves.toMatchObject({ confirmedRevision: 2 });
+    expect(fixture.writes().itemWrites).toBe(1);
+  });
+
+  it('replays the exact frozen A-item/A-offer/C-item/reconcile plan from retry_authorized with raw-empty Item descriptors', async () => {
+    const fixture = await preRecoveryFixture('trading-underreported-zero', true, true);
+    expect(fixture.makeInput().frozen.captureInput.operationPlan.map((operation) => operation.operationKey)).toEqual([
+      'child-item:variation-A',
+      'child-offer:variation-A',
+      'child-item:variation-C',
+      'revision-reconcile',
+    ]);
+    expect(fixture.makeInput().frozen.captureInput.operationPlan.map((operation) => operation.sequenceNo)).toEqual([1, 2, 3, 4]);
+
+    const seededRetry = fixture.checkpoints.filter((row) => row.state === 'retry_authorized');
+    expect(seededRetry).toHaveLength(1);
+    expect(seededRetry[0]).toMatchObject({ operation_key: 'child-item:variation-A', attempt_number: 2, checkpoint_number: 1, observed_remote_state: 'present' });
+    expect((seededRetry[0]!.evidence as Record<string, Json>).reason).toBe('exact_frozen_pre');
+    expect(fixture.writes()).toEqual({ itemWrites: 0, offerWrites: 0, confirmations: 0 });
+
+    await expect(executeVariationListingActiveRevision(fixture.makeInput())).resolves.toMatchObject({ confirmedRevision: 2 });
+    expect(fixture.writes()).toEqual({ itemWrites: 2, offerWrites: 1, confirmations: 1 });
+    expect(fixture.writesBySku().itemWritesBySku).toEqual(new Map([
+      ['SKU-A', 1],
+      ['SKU-C', 1],
+    ]));
+    expect(fixture.writesBySku().offerWritesBySku).toEqual(new Map([['SKU-A', 1]]));
+    const observed = fixture.observedPayloads();
+    const itemQuantity = (sku: string) => Number((((observed.observedItemPayloads.get(sku) as Record<string, Json>).availability as Record<string, Json>).shipToLocationAvailability as Record<string, Json>).quantity);
+    const itemDescriptors = (sku: string) => (observed.observedItemPayloads.get(sku) as Record<string, Json>).conditionDescriptors;
+    const offerQuantity = (sku: string) => Number((observed.observedOfferPayloads.get(sku) as Record<string, Json>).availableQuantity);
+    const offerPrice = (sku: string) => ((observed.observedOfferPayloads.get(sku) as Record<string, Json>).pricingSummary as Record<string, Json>).price;
+    expect(itemQuantity('SKU-A')).toBe(2);
+    expect(itemQuantity('SKU-C')).toBe(1);
+    expect(itemDescriptors('SKU-A')).toEqual([{ name: '40001', values: ['400012'] }]);
+    expect(itemDescriptors('SKU-C')).toEqual([{ name: '40001', values: ['400012'] }]);
+    expect(offerQuantity('SKU-A')).toBe(2);
+    expect(offerQuantity('SKU-C')).toBe(1);
+    expect(offerPrice('SKU-C')).toEqual({ currency: 'USD', value: '0.99' });
+    expect(fixture.policyProofCalls().length).toBeGreaterThan(0);
+    expect(fixture.checkpoints.filter((row) => row.state === 'retry_authorized')).toHaveLength(1);
+    expect(fixture.checkpoints.filter((row) => row.operation_key === 'revision-reconcile').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+    expect(fixture.checkpoints.some((row) => row.operation_key === 'publish-offer:variation-C')).toBe(false);
+    await expect(executeVariationListingActiveRevision(fixture.makeInput())).resolves.toMatchObject({ confirmedRevision: 2 });
+    expect(fixture.writes()).toEqual({ itemWrites: 2, offerWrites: 1, confirmations: 1 });
+  });
+
+  it('records C Item post-write descriptor drift as UNKNOWN without confirmation', async () => {
+    const fixture = await preRecoveryFixture('post-write-c-item-descriptor', true, true);
+    expect(fixture.checkpoints.filter((row) => row.state === 'retry_authorized')).toHaveLength(1);
+    await expect(executeVariationListingActiveRevision(fixture.makeInput())).rejects.toThrow('child-item:variation-C returned without an exact after-state');
+    expect(fixture.writes()).toEqual({ itemWrites: 2, offerWrites: 1, confirmations: 0 });
+    expect(fixture.writesBySku().itemWritesBySku).toEqual(new Map([
+      ['SKU-A', 1],
+      ['SKU-C', 1],
+    ]));
+    expect(fixture.writesBySku().offerWritesBySku).toEqual(new Map([['SKU-A', 1]]));
+    expect(fixture.checkpoints.at(-1)).toMatchObject({ operation_key: 'child-item:variation-C', state: 'unknown', observed_remote_state: 'unknown' });
+    expect(fixture.checkpoints.some((row) => row.operation_key === 'revision-reconcile')).toBe(false);
+  });
+
+  it('blocks C mutation when sibling proof drifts after prior A operations', async () => {
+    const fixture = await preRecoveryFixture('sibling-c-item-after-a', true, true);
+    expect(fixture.checkpoints.filter((row) => row.state === 'retry_authorized')).toHaveLength(1);
+    await expect(executeVariationListingActiveRevision(fixture.makeInput())).rejects.toThrow('child-item:variation-C pre-state is not exact');
+    expect(fixture.writes()).toEqual({ itemWrites: 1, offerWrites: 1, confirmations: 0 });
+    expect(fixture.writesBySku().itemWritesBySku).toEqual(new Map([['SKU-A', 1]]));
+    expect(fixture.writesBySku().offerWritesBySku).toEqual(new Map([['SKU-A', 1]]));
+    expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-C').map((row) => row.state)).toEqual(['started', 'unknown']);
+    expect(fixture.checkpoints.some((row) => row.operation_key === 'revision-reconcile')).toBe(false);
+  });
+
+  it.each([
+    'offer-id', 'offer-listing', 'offer-marketplace', 'offer-policy', 'offer-price',
+    'target-item-quantity', 'target-offer-quantity', 'group-membership', 'sibling-c-item',
+    'trading-listing', 'trading-price', 'trading-sold', 'trading-malformed', 'trading-partial-after', 'later-checkpoint', 'raw-condition-descriptors-drift',
+  ] as const)('read-only PRE recovery fails closed for %s', async (fault) => {
+    const fixture = await preRecoveryFixture(fault);
+    await expect(executeVariationListingActiveRevision(fixture.makeInput(true))).rejects.toThrow();
+    expect(fixture.checkpoints.some((row) => row.state === 'retry_authorized')).toBe(false);
+    expect(fixture.writes()).toEqual({ itemWrites: 0, offerWrites: 0, confirmations: 0 });
   });
 
   it('authorizes exactly one replay after an unknown existing-offer update and then succeeds', async () => {
