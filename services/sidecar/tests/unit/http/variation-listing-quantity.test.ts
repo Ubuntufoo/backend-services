@@ -1044,3 +1044,40 @@ describe('YP9.6b2 quantity API', () => {
     });
   });
 });
+
+describe('two-sellable-variation staging guard', () => {
+  it.each([
+    ['blocks two to one', [1, 1], 409],
+    ['allows three to two', [1, 1, 1], 200],
+    ['allows a decrement that keeps two sellable', [2, 1], 200],
+    ['fails closed when a sibling quantity is missing', [1], 409],
+  ] as const)('%s', async (_case, quantities, expectedStatus) => {
+    const { dataAccess, updateVariationQuantityAdjustment } = successfulQuantityDataAccess(1);
+    const readQuantityStatus = vi.fn(async () => ({
+      groupId,
+      desiredRevision: 4,
+      lastConfirmedRevision: 3,
+      variations: quantities.map((quantity, index) => ({
+        variationId: index === 0 ? variationId : `other-variation-${index}`,
+        sku: `BSKBL-Test-00000${index + 1}`,
+        ebayQuantity: quantity,
+        pendingAdjustment: 0,
+        afterPublish: quantity,
+        soldOutRemovalEligible: false,
+      })),
+    }));
+    const app = express();
+    app.use(express.json());
+    app.use('/api/variation-listings', createVariationListingApiRouter({ dataAccess, readQuantityStatus }));
+
+    const response = await request(app)
+      .patch(`/api/variation-listings/${groupId}/variations/${variationId}/quantity-adjustment`)
+      .send({ expectedDesiredRevision: 4, delta: -1 });
+
+    expect(response.status).toBe(expectedStatus);
+    if (expectedStatus === 409) {
+      expect(response.body.error).toBe('variation_listing_minimum_sellable_variations');
+    }
+    expect(updateVariationQuantityAdjustment).toHaveBeenCalledTimes(expectedStatus === 200 ? 1 : 0);
+  });
+});

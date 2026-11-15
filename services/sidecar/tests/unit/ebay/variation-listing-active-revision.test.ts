@@ -470,14 +470,20 @@ type ZeroStockFailure =
   | 'item-quantity-drift';
 
 async function zeroStockFixture(failure?: ZeroStockFailure) {
-  const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+  const previous = aggregate({
+    group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }),
+    variations: [variation('A', 0), variation('B', 1), variation('C', 2)],
+    copies: [copy('A'), copy('B'), copy('C')],
+  });
   const current = aggregate({
     group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }),
-    variations: [variation('A', 0, 'copy-A', 0.99, -2), variation('B', 1)],
+    variations: [variation('A', 0, 'copy-A', 0.99, -2), variation('B', 1), variation('C', 2)],
+    copies: [copy('A'), copy('B'), copy('C')],
   });
   const base = remoteFor(previous, {
     'SKU-A': { inventoryItemQuantity: 2, offerQuantity: 2 },
     'SKU-B': { inventoryItemQuantity: 1, offerQuantity: 1 },
+    'SKU-C': { inventoryItemQuantity: 1, offerQuantity: 1 },
   });
   let itemAQuantity = 2;
   let offerAQuantity = 2;
@@ -537,7 +543,11 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
       }
       const childA = base.bundle.children.find((child) => child.sku === 'SKU-A')!;
       const childB = base.bundle.children.find((child) => child.sku === 'SKU-B')!;
-      const rows: Json[] = [listingVariation(childB, failure === 'sibling-quantity-drift' ? 2 : 1)];
+      const childC = base.bundle.children.find((child) => child.sku === 'SKU-C')!;
+      const rows: Json[] = [
+        listingVariation(childB, failure === 'sibling-quantity-drift' ? 2 : 1),
+        listingVariation(childC, 1),
+      ];
       const sibling = rows[0] as Record<string, Json>;
       if (failure === 'sibling-missing-quantity' || failure === 'sibling-missing-both') delete sibling.Quantity;
       if (failure === 'sibling-missing-sold' || failure === 'sibling-missing-both') delete sibling.SellingStatus;
@@ -4238,5 +4248,35 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(itemWrites).toBe(1);
     expect(bulkCalls).toBe(0);
     expect(checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(['started', 'unknown']);
+  });
+});
+
+describe('published variation minimum at authoritative preparation', () => {
+  it.each([2, 3] as const)('enforces the projected sellable count with %s existing variations', async (count) => {
+    const previous = aggregate({
+      group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready', next_inventory_serial: count + 1 }),
+      variations: [variation('A', 0), variation('B', 1), ...(count === 3 ? [variation('C', 2)] : [])],
+      copies: [copy('A'), copy('B'), ...(count === 3 ? [copy('C')] : [])],
+    });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active', next_inventory_serial: count + 1 }),
+      variations: [variation('A', 0, 'copy-A', 0.99, -1), variation('B', 1), ...(count === 3 ? [variation('C', 2)] : [])],
+      copies: [copy('A'), copy('B'), ...(count === 3 ? [copy('C')] : [])],
+    });
+    const { remote } = remoteFor(previous);
+    const prepare = () => prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote,
+      revisionId: 'revision-2',
+    });
+
+    if (count === 2) {
+      await expect(prepare()).rejects.toThrow(/at least two sellable variations/);
+    } else {
+      const prepared = await prepare();
+      expect(prepared.desiredBundlePreview?.children.filter((child) => child.quantity > 0)).toHaveLength(2);
+    }
   });
 });

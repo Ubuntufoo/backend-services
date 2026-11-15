@@ -56,6 +56,7 @@ import {
   requireVariationListingCreationProfile,
 } from '@/ebay/variation-listing-profiles.js';
 import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limits.js';
+import { hasAtLeastTwoSellableVariations } from '@/ebay/variation-listing-sellable-guard.js';
 import { hasEffectiveVariationListingPendingChanges, pendingVariationPriceQuantityChanges } from '@/ebay/variation-listing-pending-changes.js';
 import {
   hasPendingStandardCapture,
@@ -1507,6 +1508,16 @@ export function createVariationListingApiRouter(options: VariationListingApiRout
         res.status(409).json({
           error: 'quantity_adjustment_below_zero',
           message: 'The staged adjustment would make this variation quantity negative. Refresh the remote quantity.',
+        });
+        return;
+      }
+      if (body.delta < 0 && !cancelStagedIncrease &&
+        !hasAtLeastTwoSellableVariations(status.variations.map((variation) =>
+          variation.afterPublish + (variation.variationId === params.variationId ? body.delta : 0)
+        ))) {
+        res.status(409).json({
+          error: 'variation_listing_minimum_sellable_variations',
+          message: 'Published variation listings must retain at least two sellable variations. Capture and publish another variation before reducing this one to zero.',
         });
         return;
       }

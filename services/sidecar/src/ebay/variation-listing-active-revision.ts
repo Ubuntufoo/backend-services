@@ -19,6 +19,7 @@ import {
   type VariationListingInventoryPayloadBundle,
   type VariationListingRepresentativeImage,
 } from '@/ebay/variation-listing-payloads.js';
+import { hasAtLeastTwoSellableVariations } from '@/ebay/variation-listing-sellable-guard.js';
 import {
   type VariationListingMediaResource,
   type VariationListingPublicationReadGateway,
@@ -1017,6 +1018,10 @@ export async function prepareVariationListingFrozenActiveRevision(
     previousAggregate,
     confirmedRemote.quantitiesBySku
   );
+  // Only new publication preparation is gated. Existing frozen revisions retain their recovery path.
+  if (!hasAtLeastTwoSellableVariations(Object.values(desiredQuantitiesBySku))) {
+    throw new Error('active_revision_reprepare_required: Published variation listings must retain at least two sellable variations after the pending changes.');
+  }
 
   const mediaResources = structuredClone([...(input.mediaResources ?? [])]);
   const desiredImages = resolveDesiredRepresentativeImages({
