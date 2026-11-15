@@ -1627,6 +1627,39 @@ export async function assertVariationListingSoldOutRemovalEligible(
   }
 }
 
+export function canAutoReconcileTerminalZeroOfferFailure(error: unknown, frozen: VariationListingFrozenActiveRevision): boolean {
+  const missingVariationSpecifics = /Invalid data in the Inventory Item Group\. Missing name in the variation specifics or variation specifics set\./i;
+  if (!(error instanceof Error) || !/^Failed to update offer:/i.test(error.message) || !missingVariationSpecifics.test(error.message)) return false;
+  const seen = new Set<object>();
+  let current: unknown = error;
+  let hasExactEbayError = false;
+  for (let depth = 0; depth < 8 && current !== null && typeof current === 'object'; depth += 1) {
+    const row = current as Record<string, unknown>;
+    if (seen.has(row)) break;
+    seen.add(row);
+    const ebayErrors = row.ebayErrors;
+    if (Array.isArray(ebayErrors) && ebayErrors.some((candidate) => {
+      const ebayError = record(candidate);
+      return ebayError.errorId === 25013 && missingVariationSpecifics.test(String(ebayError.longMessage ?? ebayError.message ?? ''));
+    })) {
+      hasExactEbayError = true;
+      break;
+    }
+    current = row.cause;
+  }
+  if (!hasExactEbayError) return false;
+  const plan = frozen.captureInput.operationPlan;
+  if (plan.length !== 3 || plan[0]?.operationKind !== 'child_inventory_item_write' || plan[1]?.operationKind !== 'child_offer_write' ||
+      plan[2]?.operationKind !== 'revision_reconcile' || plan[0].targetRef !== plan[1].targetRef || !frozen.desiredBundlePreview) return false;
+  const sku = plan[1].targetRef;
+  const prior = frozen.confirmedBundle.children.find((child) => child.sku === sku);
+  const desired = frozen.desiredBundlePreview.children.find((child) => child.sku === sku);
+  const remote = frozen.snapshot.confirmed.remote.quantitiesBySku?.[sku];
+  return prior?.quantity === 1 && desired?.quantity === 0 &&
+    remote?.inventoryItemQuantity === 1 && remote.offerQuantity === 1 && remote.sellableQuantity === 1 &&
+    frozen.desiredBundlePreview.children.filter((child) => child.sku !== sku && child.quantity > 0).length >= 2;
+}
+
 export function createVariationListingActionService(options: VariationListingActionServiceOptions) {
   const ids = options.createId ?? randomUUID;
   const publicBaseUrl = () => options.publicImageBaseUrl ?? loadR2ImageStorageConfig().publicBaseUrl;
@@ -2218,13 +2251,28 @@ export function createVariationListingActionService(options: VariationListingAct
       await deps.assertMerchantLocation(frozen.snapshot.aggregate.group.merchant_location_key);
     }
     assertNoTerminalZeroRestock('publish_changes', frozen);
-    return await executeVariationListingActiveRevisionPublication({
-      frozen,
-      journal: journalFor(existing),
-      mutations: deps.mutations,
-      remote: deps.remote,
-      transaction,
-    });
+    try {
+      return await executeVariationListingActiveRevisionPublication({
+        frozen, journal: journalFor(existing), mutations: deps.mutations, remote: deps.remote, transaction,
+      });
+    } catch (error) {
+      if (!canAutoReconcileTerminalZeroOfferFailure(error, frozen)) throw error;
+      // The remote outcome is ambiguous. Reconcile exact frozen state; never replay the Offer write.
+      progress('reconcile_remote_state', {
+        operationKey: frozen.captureInput.operationPlan[1]!.operationKey,
+        revisionId: frozen.captureInput.revisionId,
+      });
+      try {
+        const captured = (await rows(groupId)).find((revision) => revision.revision_id === frozen.captureInput.revisionId);
+        if (!captured) throw error;
+        return await executeVariationListingActiveRevisionPublication({
+          frozen, journal: journalFor(captured), mutations: deps.mutations, remote: deps.remote, transaction,
+          readOnlyReconcile: true,
+        });
+      } catch {
+        throw error;
+      }
+    }
   });
 
   const retry = (groupId: string) => run('retry', groupId, async (progress) => {

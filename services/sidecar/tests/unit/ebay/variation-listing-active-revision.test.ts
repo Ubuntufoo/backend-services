@@ -19,6 +19,7 @@ import {
   prepareVariationListingFrozenActiveRevision,
   reconstructConfirmedRemoteIdentity,
   reconstructVariationListingConfirmedRepresentativeImages,
+  revisionSnapshotAggregate,
   type VariationListingActiveMutationGateway,
   type VariationListingActiveRevisionExecutionInput,
   type VariationListingFrozenActiveRevision,
@@ -488,6 +489,7 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
   let itemAQuantity = 2;
   let offerAQuantity = 2;
   let groupDrifted = false;
+  let frozenPrepared = false;
   let itemWrites = 0;
   let offerWrites = 0;
   let itemWriteCompleted = false;
@@ -500,6 +502,9 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
         return { state: 'unknown' as const, reason: 'Inventory Item read unavailable' };
       }
       const read = await base.remote.getInventoryItem(sku);
+      if (sku === 'SKU-B' && failure === 'sibling-quantity-drift' && frozenPrepared && read.state === 'present') {
+        return { ...read, value: { ...read.value, payload: quantityPayload(read.value.payload, 2) } };
+      }
       if (sku !== 'SKU-A' || read.state !== 'present') return read;
       if (sku === 'SKU-A' && failure === 'item-quantity-drift' && itemWriteCompleted && itemAfterReadConsumed) {
         return { ...read, value: { ...read.value, payload: quantityPayload(read.value.payload, 1) } };
@@ -545,7 +550,7 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
       const childB = base.bundle.children.find((child) => child.sku === 'SKU-B')!;
       const childC = base.bundle.children.find((child) => child.sku === 'SKU-C')!;
       const rows: Json[] = [
-        listingVariation(childB, failure === 'sibling-quantity-drift' ? 2 : 1),
+        listingVariation(childB, 1),
         listingVariation(childC, 1),
       ];
       const sibling = rows[0] as Record<string, Json>;
@@ -584,6 +589,7 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
     remote,
     revisionId: 'revision-2',
   });
+  frozenPrepared = true;
   const desired = prepared.desiredBundlePreview;
   if (!desired) throw new Error('zero-stock fixture should have complete desired media');
   const revisions = { current: durableRevision(prepared), captureCalls: [] as number[] };
@@ -636,6 +642,30 @@ describe('documented bulkUpdatePriceQuantity response contract', () => {
     { responses: [{ ...offerResult, offerId: 42 }, inventoryResult] },
   ])('rejects malformed or non-authoritative response %j', (response) => {
     expect(() => assertBulkPriceQuantitySuccess(response, 'SKU-A', 'offer-A', true)).toThrow();
+  });
+});
+
+describe('permanent-removal descriptor lineage', () => {
+  it('projects exact confirmed Card Condition descriptors without modifying a frozen removal snapshot', () => {
+    const { revision } = permanentRemovalRevision();
+    const snapshot = structuredClone(revision.snapshot) as Record<string, any>;
+    const confirmedGroup = snapshot.confirmed.aggregate.group;
+    const survivorGroup = snapshot.aggregate.group;
+    confirmedGroup.condition_descriptors = [{ name: '40001', values: ['400012'] }];
+    survivorGroup.condition_descriptors = [];
+
+    const projected = revisionSnapshotAggregate({ ...revision, snapshot });
+    expect(projected.group.condition_descriptors).toEqual(confirmedGroup.condition_descriptors);
+    expect(survivorGroup.condition_descriptors).toEqual([]);
+  });
+
+  it('rejects a stale removal descriptor projection when confirmed lineage conflicts', () => {
+    const { revision } = permanentRemovalRevision();
+    const snapshot = structuredClone(revision.snapshot) as Record<string, any>;
+    snapshot.confirmed.aggregate.group.condition_descriptors = [{ name: '40001', values: ['400013'] }];
+    snapshot.aggregate.group.condition_descriptors = [];
+
+    expect(() => revisionSnapshotAggregate({ ...revision, snapshot })).toThrow('descriptor lineage is inconsistent');
   });
 });
 
@@ -3209,6 +3239,56 @@ describe('YP8.2 active revision executor acceptance', () => {
     expect(checkpoints.at(-1)).toMatchObject({ operation_key: 'child-offer:variation-A', state: 'unknown', observed_remote_state: 'unknown' });
   });
 
+  it.each([0, 2] as const)('permits a new child when Trading reports positive sibling quantity %s but Inventory/Offer agree on 1', async (tradingQuantity) => {
+    const previous = aggregate({
+      group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }),
+    });
+    const current = aggregate({
+      group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active', next_inventory_serial: 4 }),
+      variations: [variation('A', 0), variation('B', 1), variation('C', 2)],
+      copies: [copy('A'), copy('B'), copy('C')],
+    });
+    const base = remoteFor(previous);
+    const prepared = await prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: version1Revision(previous),
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+      mediaResources: [
+        { copyId: 'copy-C', role: 'front', sourceUrl: 'https://source.test/C/front' },
+        { copyId: 'copy-C', role: 'back', sourceUrl: 'https://source.test/C/back' },
+      ],
+    });
+    const remote: VariationListingActiveRevisionExecutionInput['remote'] = {
+      ...base.remote,
+      async getMedia() { return { state: 'proven_absent' as const }; },
+      async getListing(listingId) {
+        return { Item: { ItemID: listingId, Variations: { Variation: [
+          { SKU: 'SKU-A', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: tradingQuantity, SellingStatus: { QuantitySold: 0 } },
+        ] } } };
+      },
+    };
+    const revisions = { current: null as VariationListingRevisionRow | null, captureCalls: [] as number[] };
+    const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+    let mediaAttempts = 0;
+    const mutations: VariationListingActiveMutationGateway = {
+      createMedia: async () => { mediaAttempts += 1; throw new Error('stopped after preflight'); },
+      createOffer: async () => { throw new Error('stopped after preflight'); },
+      createOrReplaceInventoryItem: async () => { throw new Error('stopped after preflight'); },
+      createOrReplaceInventoryItemGroup: async () => { throw new Error('stopped after preflight'); },
+      publishOffer: async () => { throw new Error('stopped after preflight'); },
+      updateOffer: async () => { throw new Error('stopped after preflight'); },
+      bulkUpdatePriceQuantity: async () => { throw new Error('stopped after preflight'); },
+    };
+    await expect(executeVariationListingActiveRevision(activeExecutionInput(prepared, revisions, checkpoints, remote, mutations, {
+      loadAggregate: async () => current,
+    }))).rejects.toThrow('stopped after preflight');
+    expect(revisions.captureCalls).toHaveLength(1);
+    expect(mediaAttempts).toBe(1);
+  });
+
   it('blocks a quantity-only update on pre-existing Trading price drift before any Item or Offer write', async () => {
     const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
     const current = aggregate({
@@ -3541,7 +3621,7 @@ describe('YP8.2 active revision executor acceptance', () => {
       ['retained target with positive sellable quantity', 'target-positive'],
       ['target price drift', 'target-price-drift'],
       ['sibling price drift', 'sibling-price-drift'],
-      ['sibling quantity drift', 'sibling-quantity-drift'],
+      ['sibling quantity drift in authoritative Inventory Item', 'sibling-quantity-drift'],
       ['sibling SKU drift', 'sibling-sku-drift'],
       ['Offer identity drift', 'offer-identity-drift'],
       ['Offer non-quantity drift', 'offer-nonquantity-drift'],

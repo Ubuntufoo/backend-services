@@ -144,11 +144,41 @@ export function revisionSnapshotAggregate(revision: VariationListingRevisionRow)
   if (revision.snapshot_version !== SNAPSHOT_VERSION) {
     throw new Error(`Unsupported confirmed variation listing snapshot version ${revision.snapshot_version}.`);
   }
-  const aggregate = object(root.aggregate, 'confirmed active revision aggregate');
+  const aggregate = validateSnapshotAggregate(
+    object(root.aggregate, 'confirmed active revision aggregate') as unknown as VariationListingAggregateSnapshot
+  );
   const confirmed = object(root.confirmed, 'confirmed active revision parent');
-  const confirmedAggregate = object(confirmed.aggregate, 'confirmed active revision parent aggregate');
-  validateSnapshotAggregate(confirmedAggregate as unknown as VariationListingAggregateSnapshot);
-  return validateSnapshotAggregate(aggregate as unknown as VariationListingAggregateSnapshot);
+  const previous = validateSnapshotAggregate(
+    object(confirmed.aggregate, 'confirmed active revision parent aggregate') as unknown as VariationListingAggregateSnapshot
+  );
+  // Historical removal revisions may have frozen the unchanged DB group with
+  // stale [] descriptors, even when the prior confirmed publication persisted
+  // the derived Card Condition. Project that exact prior value for read-only
+  // reconciliation; never rewrite or weaken the immutable revision.
+  const removal = Array.isArray(revision.operation_plan) && revision.operation_plan.some(
+    (entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry) &&
+      entry.operation_kind === 'permanent_removal_group_membership'
+  );
+  if (!removal || !Array.isArray(aggregate.group.condition_descriptors) ||
+      aggregate.group.condition_descriptors.length !== 0 ||
+      !Array.isArray(previous.group.condition_descriptors) ||
+      previous.group.condition_descriptors.length === 0) return aggregate;
+  if (aggregate.group.group_id !== previous.group.group_id ||
+      aggregate.group.category_id !== previous.group.category_id ||
+      aggregate.group.condition_id !== previous.group.condition_id ||
+      aggregate.group.condition_token !== previous.group.condition_token ||
+      canonicalJson(previous.group.condition_descriptors) !== canonicalJson(
+        deriveVariationListingRawCardConditionDescriptors(aggregate.group.category_id, aggregate.group.condition_token)
+      )) {
+    throw new Error('Permanent-removal confirmed Card Condition descriptor lineage is inconsistent.');
+  }
+  return {
+    ...aggregate,
+    group: {
+      ...aggregate.group,
+      condition_descriptors: structuredClone(previous.group.condition_descriptors),
+    },
+  };
 }
 
 function quantityAdjustmentCounter(value: unknown, label: string): number {
@@ -621,7 +651,20 @@ export async function reconcilePublishedQuantityBaseline(
         canonicalJson(observed) !== canonicalJson(frozen) ||
         !listingId || !getListing
       ) {
-        throw new Error(`Variation listing confirmed item ${child.sku} changed outside quantity.`);
+        const actualRoot = object(observedItem, 'remote inventory item');
+        const expectedRoot = object(expectedItem, 'confirmed inventory item');
+        const actualProduct = object(actualRoot.product, 'remote product');
+        const expectedProduct = object(expectedRoot.product, 'confirmed product');
+        const differences = [
+          ['availability', actualRoot.availability, expectedRoot.availability],
+          ['condition', actualRoot.condition, expectedRoot.condition],
+          ['conditionDescription', actualRoot.conditionDescription, expectedRoot.conditionDescription],
+          ['conditionDescriptors', actualRoot.conditionDescriptors, expectedRoot.conditionDescriptors],
+          ['product.aspects', actualProduct.aspects, expectedProduct.aspects],
+          ['product.imageUrls', actualProduct.imageUrls, expectedProduct.imageUrls],
+        ].filter(([, actual, expected]) => canonicalJson(actual ?? null) !== canonicalJson(expected ?? null))
+          .map(([name]) => name);
+        throw new Error(`Variation listing confirmed item ${child.sku} changed outside quantity (fields: ${differences.join(', ') || 'other'}).`);
       }
       listingRead ??= getListing(listingId);
       if (!tradingConditionMatches(await listingRead, listingId, expectedDescriptors)) {
@@ -881,9 +924,8 @@ async function verifyFrozenListingPriceBaseline(
     (variation) => !confirmedVariationIds.has(variation.variation_id),
   );
   if (hasNewVariation) {
-    // A newly staged child is expected to be absent until its create/publish
-    // operations run. The confirmed listing-facing siblings still require the
-    // same exact quantity evidence as any other quantity-sensitive baseline.
+    // New children must be absent. Trading provides SKU/price proof, while
+    // Inventory Item and Offer provide authoritative positive quantities.
     const prices = listingVariationPrices(listing, listingId, true);
     const stagedNewSkus = new Set(
       input.frozen.snapshot.aggregate.variations
@@ -897,7 +939,7 @@ async function verifyFrozenListingPriceBaseline(
       listingId,
       input.frozen.confirmedBundle.children,
       'frozen active revision pre-state',
-      true,
+      'zero-only',
       true,
       true,
     );
@@ -908,7 +950,7 @@ async function verifyFrozenListingPriceBaseline(
     listingId,
     input.frozen.confirmedBundle.children,
     'frozen active revision pre-state',
-    true,
+    'zero-only',
     true,
     true,
   );

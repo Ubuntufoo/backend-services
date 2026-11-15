@@ -21,6 +21,7 @@ import {
 } from '@/ebay/variation-listing-active-revision.js';
 
 import {
+  deriveVariationListingRawCardConditionDescriptors,
   variationListingInventoryItemGroupPayloadSchema,
 } from '@/ebay/variation-listing-payloads.js';
 
@@ -410,7 +411,23 @@ function groupSignature(payload: Json): string {
   return canonicalJson(group);
 }
 
+function hasTwoSellableSurvivors(
+  skus: readonly string[],
+  quantitiesBySku: VariationListingPermanentRemovalPlan['quantitiesBySku'],
+): boolean {
+  return skus.filter((sku) => {
+    const quantity = quantitiesBySku[sku];
+    return quantity !== undefined &&
+      quantity.inventoryItemQuantity > 0 &&
+      quantity.offerQuantity > 0 &&
+      quantity.sellableQuantity > 0;
+  }).length >= 2;
+}
+
 function assertFrozenReplacement(plan: VariationListingPermanentRemovalPlan): void {
+  if (!hasTwoSellableSurvivors(plan.survivorSkus, plan.quantitiesBySku)) {
+    throw new Error('Permanent removal requires at least two sellable survivors with positive Inventory Item and Offer quantities.');
+  }
   const snapshot = object(plan.captureInput.snapshot, 'frozen permanent removal snapshot');
   const confirmed = object(snapshot.confirmed, 'frozen confirmed parent');
   const prior = object(confirmed.aggregate, 'frozen confirmed aggregate') as unknown as VariationListingAggregateSnapshot;
@@ -464,6 +481,20 @@ function removalSnapshot(input: {
     checkpoints: input.previousCheckpoints,
   });
   const survivor = survivorAggregate(input.aggregate, input.targetVariationId);
+  // Active publication derives Card Condition descriptors in its frozen snapshot,
+  // but older DB group rows may still persist []. Removal does not change Item
+  // condition, so carry forward only the exact confirmed derived descriptor.
+  if (Array.isArray(survivor.group.condition_descriptors) && survivor.group.condition_descriptors.length === 0 &&
+      Array.isArray(previousAggregate.group.condition_descriptors) && previousAggregate.group.condition_descriptors.length > 0) {
+    const prior = previousAggregate.group;
+    const derived = deriveVariationListingRawCardConditionDescriptors(survivor.group.category_id, survivor.group.condition_token);
+    if (prior.group_id !== survivor.group.group_id || prior.category_id !== survivor.group.category_id ||
+        prior.condition_token !== survivor.group.condition_token || prior.condition_id !== survivor.group.condition_id ||
+        canonicalJson(prior.condition_descriptors) !== canonicalJson(derived)) {
+      throw new Error('Permanent-removal confirmed Card Condition descriptors conflict with the current group; do not freeze.');
+    }
+    survivor.group.condition_descriptors = structuredClone(prior.condition_descriptors);
+  }
   const survivorCopyIds = new Set(survivor.variations.map((variation) => variation.representative_copy_id).filter((copyId): copyId is string => typeof copyId === 'string'));
   const representativeImages = previousImages.filter((image) => survivorCopyIds.has(image.copyId));
   // c2 performs no Media mutation. Representative EPS identities are already
@@ -901,6 +932,9 @@ export async function buildVariationListingPermanentRemovalPlan(input: BuildVari
   const targetQuantity = quantitiesBySku[target.sku]!;
   if (targetQuantity.inventoryItemQuantity !== 0 || targetQuantity.offerQuantity !== 0 || targetQuantity.sellableQuantity !== 0) throw new Error('Variation listing removal target must already be zero in Item and Offer.');
   const survivorSkus = previousSurvivors.map((variation) => variation.sku);
+  if (!hasTwoSellableSurvivors(survivorSkus, quantitiesBySku)) {
+    throw new Error('Permanent removal requires at least two sellable survivors with positive Inventory Item and Offer quantities.');
+  }
   const replacementGroupPayload = exactGroupPayload(group.payload, survivorSkus, selectorBySku);
   if (previousIdentity.listingId !== [...listingIds][0]) throw new Error('Variation listing previous confirmed listing identity changed.');
   for (const variation of input.aggregate.variations) {
@@ -991,10 +1025,13 @@ function exactPost(plan: VariationListingPermanentRemovalPlan, state: Awaited<Re
 function exactPre(plan: VariationListingPermanentRemovalPlan, state: Awaited<ReturnType<typeof exactRemoteState>>): boolean {
   const skus = [plan.targetSku, ...plan.survivorSkus];
   const itemsExact = skus.every((sku) => canonicalJson(state.groupKeysBySku[sku]) === canonicalJson([plan.groupKey]) && canonicalJson(state.inventoryItemPayloadsBySku[sku]) === canonicalJson(plan.inventoryItemPayloadsBySku[sku]) && canonicalJson(state.offerPayloadsBySku[sku]) === canonicalJson(plan.offerPayloadsBySku[sku]));
-  return state.targetPresent && itemsExact && exactSkuSet(state.groupSkus, [plan.targetSku, ...plan.survivorSkus]) && canonicalJson(state.quantitiesBySku[plan.targetSku]) === canonicalJson(plan.quantitiesBySku[plan.targetSku]) && state.offerIdsBySku[plan.targetSku] === plan.offerIdsBySku[plan.targetSku] && state.quantitiesBySku[plan.targetSku]?.sellableQuantity === 0 && plan.survivorSkus.every((sku) => canonicalJson(state.quantitiesBySku[sku]) === canonicalJson(plan.quantitiesBySku[sku]) && state.offerIdsBySku[sku] === plan.offerIdsBySku[sku]);
+  return hasTwoSellableSurvivors(plan.survivorSkus, state.quantitiesBySku) && state.targetPresent && itemsExact && exactSkuSet(state.groupSkus, [plan.targetSku, ...plan.survivorSkus]) && canonicalJson(state.quantitiesBySku[plan.targetSku]) === canonicalJson(plan.quantitiesBySku[plan.targetSku]) && state.offerIdsBySku[plan.targetSku] === plan.offerIdsBySku[plan.targetSku] && state.quantitiesBySku[plan.targetSku]?.sellableQuantity === 0 && plan.survivorSkus.every((sku) => canonicalJson(state.quantitiesBySku[sku]) === canonicalJson(plan.quantitiesBySku[sku]) && state.offerIdsBySku[sku] === plan.offerIdsBySku[sku]);
 }
 
 export async function executeVariationListingPermanentRemoval(input: ExecuteVariationListingPermanentRemovalInput): Promise<{ revisionId: string; membershipConfirmed: true }> {
+  if (!hasTwoSellableSurvivors(input.plan.survivorSkus, input.plan.quantitiesBySku)) {
+    throw new Error('Permanent removal requires at least two sellable survivors with positive Inventory Item and Offer quantities.');
+  }
   const existing = await input.journal.loadRevision(input.plan.captureInput.revisionId);
   const captured = existing ?? (await input.transaction.capturePermanentRemovalRevision(input.plan.captureInput)).revision;
   if (captured.revision_id !== input.plan.captureInput.revisionId || captured.group_id !== input.plan.captureInput.groupId || captured.captured_desired_revision !== input.plan.captureInput.capturedDesiredRevision || captured.snapshot_version !== 3 || captured.snapshot_digest !== input.plan.captureInput.snapshotDigest || canonicalJson(captured.operation_plan) !== canonicalJson(input.plan.captureInput.operationPlan.map((operation) => ({ operation_key: operation.operationKey, operation_kind: operation.operationKind, target_ref: operation.targetRef, sequence_no: operation.sequenceNo, intent_version: operation.intentVersion, intent_digest: operation.intentDigest, intent: operation.intent })))) throw new Error('Captured permanent-removal revision does not match frozen plan.');

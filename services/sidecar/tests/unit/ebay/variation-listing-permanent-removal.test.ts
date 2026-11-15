@@ -1222,6 +1222,90 @@ describe('YP9.6c2 permanent removal executor', () => {
     expect(harness.checkpoints.map((checkpoint) => `${checkpoint.attempt_number}:${checkpoint.checkpoint_number}`)).toEqual(['1:1', '1:2']);
   });
 
+  it.each(['item', 'offer'] as const)('rejects sold-out survivor %s at removal planning', async (source) => {
+    const { remote } = remoteHarness();
+    const sku = survivorSkus[0]!;
+    if (source === 'item') {
+      const original = remote.getInventoryItem;
+      remote.getInventoryItem = vi.fn(async (requestedSku: string) => {
+        const read = await original(requestedSku);
+        if (requestedSku === sku && read.state === 'present') {
+          read.value.payload = {
+            availability: { shipToLocationAvailability: { quantity: 0 } },
+            product: { aspects: { Card: [selectorBySku[requestedSku]!] } },
+          };
+        }
+        return read;
+      });
+    } else {
+      const original = remote.getOffers;
+      remote.getOffers = vi.fn(async (requestedSku: string, marketplaceId: string) => {
+        const read = await original(requestedSku, marketplaceId);
+        if (requestedSku === sku && read.state === 'present') {
+          read.value[0]!.payload = { availableQuantity: 0 };
+        }
+        return read;
+      });
+      const originalAllOffers = remote.getAllOffersForSku!;
+      remote.getAllOffersForSku = vi.fn(async (requestedSku: string) => {
+        const offers = await originalAllOffers(requestedSku);
+        return requestedSku === sku
+          ? offers.map((offer) => ({ ...offer, availableQuantity: 0 }))
+          : offers;
+      });
+    }
+    await expect(planFixture(remote)).rejects.toThrow('at least two sellable survivors');
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('rejects a frozen removal plan with a sold-out survivor before capture or replacement', async () => {
+    const { remote } = remoteHarness();
+    const plan = await planFixture(remote);
+    plan.quantitiesBySku[survivorSkus[0]!] = {
+      inventoryItemQuantity: 0, offerQuantity: 0, sellableQuantity: 0,
+    };
+    const harness = transactionHarness();
+    await expect(executeVariationListingPermanentRemoval({ plan, remote, ...harness }))
+      .rejects.toThrow('at least two sellable survivors');
+    expect(harness.transaction.capturePermanentRemovalRevision).not.toHaveBeenCalled();
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('blocks removal if a survivor sells out after freezing', async () => {
+    const { remote } = remoteHarness();
+    const plan = await planFixture(remote);
+    const original = remote.getInventoryItem;
+    remote.getInventoryItem = vi.fn(async (sku: string) => {
+      const read = await original(sku);
+      if (sku === survivorSkus[0] && read.state === 'present') {
+        read.value.payload = {
+          availability: { shipToLocationAvailability: { quantity: 0 } },
+          product: { aspects: { Card: [selectorBySku[sku]!] } },
+        };
+      }
+      return read;
+    });
+    const harness = transactionHarness();
+    await expect(executeVariationListingPermanentRemoval({ plan, remote, ...harness }))
+      .rejects.toThrow('remote state is unknown');
+    expect(remote.replaceInventoryItemGroup).not.toHaveBeenCalled();
+  });
+
+  it('preserves previously confirmed derived Card Condition descriptors in a new removal snapshot', async () => {
+    const { remote } = remoteHarness();
+    const descriptors = [{ name: '40001', values: ['400012'] }];
+    const plan = await planFixture(remote, {
+      tamperPrevious: (row) => {
+        const snapshot = row.snapshot as Record<string, any>;
+        snapshot.aggregate.group.condition_descriptors = descriptors;
+        row.snapshot_digest = digestUtf8(row.snapshot);
+      },
+    });
+    const snapshot = plan.captureInput.snapshot as Record<string, any>;
+    expect(snapshot.aggregate.group.condition_descriptors).toEqual(descriptors);
+    expect(snapshot.confirmed.aggregate.group.condition_descriptors).toEqual(descriptors);
+  });
+
   it('fails closed when target is stocked', async () => {
     const { remote } = remoteHarness();
     const original = remote.getInventoryItem;

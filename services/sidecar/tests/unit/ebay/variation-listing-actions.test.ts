@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import type { VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
+import type { Json, VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
 
 import { assertVariationListingMerchantLocation, createVariationListingActionService, normalizeItem, readRemovedSkuExhaustiveOffers, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
 import { subscribeVariationListingActionEvents } from '@/ebay/variation-listing-action-events.js';
@@ -21,6 +21,7 @@ const copyBId = '77777777-7777-4777-8777-777777777777';
 const withdrawalRevisionId = '88888888-8888-4888-8888-888888888888';
 const variationCId = '99999999-9999-4999-8999-999999999999';
 const copyCId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const missingVariationSpecificsMessage = 'Invalid data in the Inventory Item Group. Missing name in the variation specifics or variation specifics set.';
 
 const intentDigest = (intent: unknown) => createHash('sha256').update(JSON.stringify(intent)).digest('hex');
 const canonicalDigest = (value: unknown): string => {
@@ -168,6 +169,136 @@ function data(input: { aggregate?: VariationListingAggregateSnapshot; revisions?
       returnToReview: vi.fn(),
     },
   };
+}
+
+function terminalZeroPublishChangesHarness(errorId = 25013) {
+  const descriptors = [{ name: '40001', values: ['400012'] }];
+  const previous = aggregate({
+    lifecycle_state: 'active',
+    desired_revision: 3,
+    last_confirmed_revision: 3,
+    next_inventory_serial: 4,
+    condition_descriptors: descriptors,
+  });
+  const first = previous.variations[0]!;
+  const second = { ...first, variation_id: variationBId, inventory_serial: 2, position: 1, sku: 'BSKBL-McGrady-000002', selector_value: 'Card B', representative_copy_id: copyBId };
+  const third = { ...first, variation_id: variationCId, inventory_serial: 3, position: 2, sku: 'BSKBL-McGrady-000003', selector_value: 'Card C', representative_copy_id: copyCId };
+  previous.variations = [first, second, third];
+  previous.copies = [
+    previous.copies[0]!,
+    { ...previous.copies[0]!, copy_id: copyBId, variation_id: variationBId },
+    { ...previous.copies[0]!, copy_id: copyCId, variation_id: variationCId },
+  ];
+  const current = structuredClone(previous);
+  current.group.desired_revision = 4;
+  current.variations[0]!.quantity_adjustment_counter = -1;
+  const images = previous.copies.map((copy) => ({
+    copyId: copy.copy_id,
+    frontEpsUrl: `https://i.ebayimg.com/images/g/${copy.copy_id}-front/s-l1600.jpg`,
+    backEpsUrl: `https://i.ebayimg.com/images/g/${copy.copy_id}-back/s-l1600.jpg`,
+  }));
+  const bundle = buildVariationListingInventoryPayloadBundle({ aggregate: previous, representativeImages: images });
+  const snapshot = {
+    aggregate: previous,
+    confirmed: {
+      aggregate: previous,
+      representativeImages: images,
+      remote: {
+        listingId: 'listing-1',
+        offerIdsBySku: Object.fromEntries(bundle.children.map((child) => [child.sku, `offer-${child.sku}`])),
+        quantitiesBySku: Object.fromEntries(bundle.children.map((child) => [child.sku, { inventoryItemQuantity: 1, offerQuantity: 1, sellableQuantity: 1 }])),
+      },
+      revisionId,
+    },
+    mediaResources: [],
+    representativeImages: images,
+  } as Json;
+  const operationPlan = [
+    ...previous.variations.flatMap((variation, index) => [
+      { sequence_no: index * 2 + 1, operation_key: `child-item:${variation.variation_id}`, operation_kind: 'child_inventory_item_write', target_ref: variation.sku, intent_version: 1, intent_digest: canonicalDigest({}), intent: {} },
+      { sequence_no: index * 2 + 2, operation_key: `child-offer:${variation.variation_id}`, operation_kind: 'child_offer_write', target_ref: variation.sku, intent_version: 1, intent_digest: canonicalDigest({}), intent: {} },
+    ]),
+    { sequence_no: 7, operation_key: 'revision-reconcile', operation_kind: 'revision_reconcile', target_ref: previous.group.group_key, intent_version: 1, intent_digest: canonicalDigest({}), intent: {} },
+  ];
+  const previousRevision: VariationListingRevisionRow = {
+    revision_id: revisionId,
+    group_id: groupId,
+    captured_desired_revision: 3,
+    snapshot_version: 3,
+    snapshot_digest: canonicalDigest(snapshot),
+    snapshot,
+    operation_plan: operationPlan,
+    operation_count: operationPlan.length,
+    captured_at: '2026-09-02T00:00:00Z',
+  };
+  const checkpoints: VariationListingPublishingCheckpointRow[] = [];
+  for (const operation of operationPlan) {
+    const evidence = operation.operation_key.startsWith('child-offer:')
+      ? { offerId: `offer-${operation.target_ref}`, listingId: 'listing-1', sku: operation.target_ref }
+      : operation.operation_key === 'revision-reconcile'
+        ? { listingId: 'listing-1' }
+        : { sku: operation.target_ref };
+    checkpoints.push(
+      { checkpoint_id: `${operation.operation_key}-started`, revision_id: revisionId, operation_key: operation.operation_key, attempt_number: 1, checkpoint_number: 1, state: 'started', observed_remote_state: null, evidence: {}, created_at: '2026-09-02T00:00:00Z' },
+      { checkpoint_id: `${operation.operation_key}-complete`, revision_id: revisionId, operation_key: operation.operation_key, attempt_number: 1, checkpoint_number: 2, state: 'confirmed_complete', observed_remote_state: 'present', evidence, created_at: '2026-09-02T00:00:00Z' },
+    );
+  }
+  const items = new Map(bundle.children.map((child) => [child.sku, structuredClone(child.inventoryItem) as Json]));
+  const offers = new Map(bundle.children.map((child) => [child.sku, structuredClone(child.offer) as Json]));
+  let captured: VariationListingRevisionRow | null = null;
+  const revisions = [previousRevision];
+  const itemWrites = { count: 0 };
+  const offerWrites = { count: 0 };
+  const remote = {
+    getInventoryItemGroup: vi.fn(async () => ({ state: 'present' as const, value: { payload: structuredClone(bundle.group) as Json, variantSKUs: [...bundle.group.variantSKUs].reverse() } })),
+    getInventoryItem: vi.fn(async (sku: string) => ({ state: 'present' as const, value: { sku, groupKeys: [bundle.groupKey], payload: structuredClone(items.get(sku)!) } })),
+    getOffers: vi.fn(async (sku: string, marketplaceId: string) => ({ state: 'present' as const, value: [{ lifecycleClass: 'active' as const, listingId: 'listing-1', marketplaceId, offerId: `offer-${sku}`, payload: structuredClone(offers.get(sku)!), sku, status: 'PUBLISHED' as const }] })),
+    getListing: vi.fn(async (listingId: string) => ({ Item: { ItemID: listingId, Variations: { Variation: [...offers.entries()].flatMap(([sku, offer]) => {
+      const quantity = Math.min(
+        Number((items.get(sku)! as Record<string, Json>).availability && (((items.get(sku)! as Record<string, Json>).availability as Record<string, Json>).shipToLocationAvailability as Record<string, Json>).quantity),
+        Number((offer as Record<string, Json>).availableQuantity),
+      );
+      if (quantity <= 0) return [];
+      const price = ((offer as Record<string, Json>).pricingSummary as Record<string, Json>).price as Record<string, Json>;
+      return [{ SKU: sku, StartPrice: { '#text': price.value, '@_currencyID': price.currency }, Quantity: quantity, SellingStatus: { QuantitySold: 0 } }];
+    }) } } })),
+    getMedia: vi.fn(async () => ({ state: 'proven_absent' as const })),
+  };
+  const terminalFailure = () => new Error(`Failed to update offer: eBay API Error: ${missingVariationSpecificsMessage}`, {
+    cause: Object.assign(new Error(`eBay API Error: ${missingVariationSpecificsMessage}`), { ebayErrors: [{ errorId, longMessage: missingVariationSpecificsMessage }] }),
+  });
+  const mutations = {
+    createMedia: vi.fn(),
+    createOffer: vi.fn(),
+    createOrReplaceInventoryItem: vi.fn(async (sku: string, payload: Json) => { itemWrites.count += 1; items.set(sku, structuredClone(payload)); }),
+    createOrReplaceInventoryItemGroup: vi.fn(),
+    publishOffer: vi.fn(),
+    bulkUpdatePriceQuantity: vi.fn(),
+    updateOffer: vi.fn(async (offerId: string, payload: Json) => {
+      offerWrites.count += 1;
+      const sku = [...offers.keys()].find((candidate) => `offer-${candidate}` === offerId);
+      if (!sku) throw new Error('offer identity missing');
+      offers.set(sku, structuredClone(payload));
+      throw terminalFailure();
+    }),
+  };
+  const access = data({ aggregate: current, revisions, checkpoints });
+  access.value.loadAggregate.mockResolvedValue(current);
+  access.value.listRevisionsByGroupId.mockImplementation(async () => revisions.map((source) => ({ source })));
+  access.value.listCheckpointsByRevisionId.mockImplementation(async (id) => checkpoints.filter((entry) => entry.revision_id === id).map((source) => ({ source })));
+  access.value.captureRevision.mockImplementation(async (input) => {
+    captured = { revision_id: input.revisionId, group_id: input.groupId, captured_desired_revision: input.capturedDesiredRevision, snapshot_version: input.snapshotVersion, snapshot_digest: input.snapshotDigest, snapshot: input.snapshot, operation_plan: input.operationPlan.map((entry) => ({ sequence_no: entry.sequenceNo, operation_key: entry.operationKey, operation_kind: entry.operationKind, target_ref: entry.targetRef, intent_version: entry.intentVersion, intent_digest: entry.intentDigest, intent: entry.intent })), operation_count: input.operationPlan.length, captured_at: '2026-09-02T00:00:00Z' } as VariationListingRevisionRow;
+    revisions.push(captured);
+    return { revision: captured };
+  });
+  access.value.appendJournalCheckpoint.mockImplementation(async (input) => {
+    const source = { checkpoint_id: input.checkpointId, revision_id: input.revisionId, operation_key: input.operationKey, attempt_number: input.attemptNumber, checkpoint_number: input.checkpointNumber, state: input.state, observed_remote_state: input.observedRemoteState ?? null, evidence: input.evidence, created_at: '2026-09-02T00:00:00Z' } as VariationListingPublishingCheckpointRow;
+    checkpoints.push(source);
+    return { checkpoint: source };
+  });
+  access.value.confirmRevision.mockImplementation(async () => ({ ...current.group, last_confirmed_revision: 4, lifecycle_state: 'active' }));
+  const remoteFactory = vi.fn(async () => ({ remote, mutations }));
+  return { access, remoteFactory, mutations, checkpoints, itemWrites, offerWrites, captured };
 }
 
 function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: boolean; failWithdrawalOnce?: boolean; unpublished?: boolean; historicalOverlong?: boolean; saleDrift?: boolean } = {}) {
@@ -457,6 +588,52 @@ function historicalRemovalFixture(options: {
 }
 
 describe('YP6.2 variation listing actions', () => {
+  it('automatically reconciles a fresh terminal-zero 25013 Offer failure without replaying writes', async () => {
+    const harness = terminalZeroPublishChangesHarness();
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+      createId: () => 'fresh-zero-revision',
+    });
+
+    await expect(service.publishChanges(groupId, 4)).resolves.toMatchObject({
+      confirmedRevision: 4,
+      revisionId: 'fresh-zero-revision',
+      listingId: 'listing-1',
+    });
+    expect(harness.itemWrites.count).toBe(1);
+    expect(harness.offerWrites.count).toBe(1);
+    expect(harness.access.value.confirmRevision).toHaveBeenCalledWith({
+      groupId,
+      confirmedRevision: 4,
+      expectedPreviousConfirmedRevision: 3,
+    });
+    expect(harness.checkpoints.filter((row) => row.revision_id === 'fresh-zero-revision' && row.operation_key === 'child-offer:22222222-2222-4222-8222-222222222222').map((row) => row.state)).toEqual(['started', 'unknown', 'confirmed_complete']);
+    expect(harness.checkpoints.filter((row) => row.revision_id === 'fresh-zero-revision' && row.operation_key === 'revision-reconcile').map((row) => row.state)).toEqual(['started', 'confirmed_complete']);
+  });
+
+  it('keeps a same-text non-25013 Offer failure actionable', async () => {
+    const harness = terminalZeroPublishChangesHarness(25012);
+    const service = createVariationListingActionService({
+      data: harness.access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: harness.remoteFactory,
+      createId: () => 'wrong-code-revision',
+    });
+
+    await expect(service.publishChanges(groupId, 4)).rejects.toMatchObject({
+      status: {
+        code: 'variation_listing_remote_outcome_unknown',
+        requiresReconciliation: true,
+        revisionId: 'wrong-code-revision',
+      },
+    });
+    expect(harness.itemWrites.count).toBe(1);
+    expect(harness.offerWrites.count).toBe(1);
+    expect(harness.access.value.confirmRevision).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing or mismatched frozen merchant location before publication can start', async () => {
     await expect(assertVariationListingMerchantLocation(async () => ({ merchantLocationKey: 'other', merchantLocationStatus: 'ENABLED' }), 'frozen-location')).rejects.toThrow('not an exact enabled');
     await expect(assertVariationListingMerchantLocation(async () => ({ merchantLocationKey: 'frozen-location', merchantLocationStatus: 'DISABLED' }), 'frozen-location')).rejects.toThrow('not an exact enabled');
