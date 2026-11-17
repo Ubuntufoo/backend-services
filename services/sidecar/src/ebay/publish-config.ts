@@ -288,14 +288,13 @@ function getVariationListingCreationDefaultsIssues(
   pathPrefix: string
 ): string[] {
   const issues: string[] = [];
-  const fulfillmentPolicyId =
-    normalizeText(fields.groundFulfillmentPolicyId) ?? normalizeText(fields.fulfillmentPolicyId);
+  const combinedFulfillmentPolicyId = normalizeText(fields.combinedFulfillmentPolicyId);
 
-  if (!hasText(fulfillmentPolicyId) || isMockPlaceholder(fulfillmentPolicyId)) {
+  if (!hasText(combinedFulfillmentPolicyId) || isMockPlaceholder(combinedFulfillmentPolicyId)) {
     issues.push(
       buildIssue(
-        'fulfillment_policy_id_missing_for_environment',
-        `${pathPrefix}.groundFulfillmentPolicyId is required for ${environment} Variation listing creation defaults.`
+        'combined_fulfillment_policy_id_missing_for_environment',
+        `${pathPrefix}.combinedFulfillmentPolicyId is required for ${environment} Variation listing creation defaults.`
       )
     );
   }
@@ -339,7 +338,10 @@ export function resolveVariationListingCreationDefaults(
   let pathPrefix = `app_settings.ebay_publish_config.${options.environment}`;
 
   if (options.environment === 'sandbox' && hasLegacyFlatPublishConfig(appSettings)) {
-    fields = getLegacyFlatFields(appSettings);
+    fields = {
+      ...getLegacyFlatFields(appSettings),
+      combinedFulfillmentPolicyId: environmentFields?.combinedFulfillmentPolicyId ?? null,
+    };
     pathPrefix = 'app_settings (sandbox creation defaults)';
   } else if (environmentFields) {
     fields = environmentFields;
@@ -376,8 +378,7 @@ export function resolveVariationListingCreationDefaults(
 
   return {
     config: {
-      fulfillmentPolicyId:
-        normalizeText(fields.groundFulfillmentPolicyId) ?? fields.fulfillmentPolicyId!,
+      fulfillmentPolicyId: fields.combinedFulfillmentPolicyId!,
       merchantLocationKey: fields.merchantLocationKey!,
       marketplaceId: fields.marketplaceId!,
       paymentPolicyId: fields.paymentPolicyId!,

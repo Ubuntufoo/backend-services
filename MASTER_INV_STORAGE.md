@@ -186,3 +186,279 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - This destination setting is separate from Standard/Variation workspace ownership and existing capture modes; preserve routing guards and freeze the selected destination for an in-progress capture.
 - A listing-stage failure must preserve the successfully created master record and allow an idempotent listing-only retry, as previously confirmed.
 - Whether destination selection persists between sessions is not yet decided; the startup/default value is Master + Listing.
+
+## Phase 3 — eBay-first master inventory schema research (2026-11-16/17)
+
+### Confirmed priority
+- **eBay is the highest-value marketplace** and its product data, category/item specifics, condition, images and listing construction requirements must be first-class design constraints.
+- Other marketplaces may need fewer aspects. Do **not** dilute eBay compatibility to accommodate simpler integrations; instead let adapters select and translate the fields they require.
+- The physical master inventory is still marketplace-neutral. eBay offer IDs, publication revisions, business policies, merchant location, listing category, and marketplace-specific availability remain in existing eBay listing/offer domains rather than becoming required attributes of every master physical item.
+
+### External eBay documentation checked (2026-11-16/17)
+- https://developer.ebay.com/api-docs/sell/static/inventory/managing-inventory-and-offers.html — inventory items (SKU, title/description, aspects, images, condition, quantity), item groups, offers.
+- https://developer.ebay.com/api-docs/sell/static/inventory/publishing-offers.html — publication-required item, group and offer fields including policies, marketplace, price, location and quantity.
+- https://developer.ebay.com/api-docs/sell/static/metadata/sell-categories.html — category-dependent required/optional aspects via Taxonomy API `getItemAspectsForCategory`.
+- https://developer.ebay.com/api-docs/sell/static/inventory/inventory-item-to-offer.html — distinct standard offer vs grouped variation publishing flows.
+
+### Verified existing schema inputs
+- `public.listings` mixes catalog-style facts (`title`, `description`, `item_specifics jsonb`, `condition_id`, `condition_notes`, images) with channel/listing terms (`category_id`, SKU, eBay offer/listing IDs, listing status, price, shipping/packaging, location, timestamps). Keep these columns intact throughout initial migration.
+- `public.variation_listing_variations` holds `variation_id`, `group_id`, `sku`, `selector_value`, `variation_metadata jsonb`, `price_amount`, `representative_copy_id`, quantity adjustment counter.
+- `public.variation_listing_copies` is closest to physical-unit tracking: `copy_id`, `variation_id`, `availability_state`, `condition_token`, notes, front/back R2 keys, capture pair ID/provenance. Do **not** reuse `copy_id` as the universal master-item ID; link it to a new independent ID.
+- `public.variation_listing_groups` has shared description, category, common eBay aspects, condition and policies plus publication revisions. Variation-level group publication semantics must remain here.
+
+### Proposed minimal logical schema (not approved DDL)
+1. **`inventory_items`** — one record per individual physical object:
+   - `item_id uuid` immutable primary key; `item_type` (e.g. `sports_card`, `comic_book`, extensible); a compact `name`/description for identifying an unlisted item; optional `condition` and notes.
+   - `attributes jsonb` for stable, item-type-specific facts (sports card year/set/player/card number/team/parallel; comic series/issue/publisher/variant, etc.). Store user-known/evidence-backed facts, not a verbatim eBay listing payload; preserve scalar/multi-value representation needed for eBay aspect transformation.
+   - Optional acquisition/source provenance (`source_name`, `source_url`, `source_external_id`, `acquired_at`, purchase cost/currency). Keep only useful source attributes; do not store complete auction pages or arbitrary large raw responses.
+   - `status` for item lifecycle (available/reserved/sold-archived etc.), `sold_confirmed_at` as authoritative 30-day retention anchor, `created_at`, `updated_at`.
+   - `copied_from_item_id uuid null` *optional* provenance link to an original, with no edit synchronization. Avoid a second `isCopy` flag.
+   - Durable `capture_id` or separate unique capture identity to guarantee one physical record per accepted capture across restarts and listing-stage retries.
+2. **`inventory_item_images`** — narrow child table: `image_id`, `item_id`, `role` (front/back/additional), `sort_order`, `r2_object_key`, optional source/ownership indicator. R2 contains bytes, not PostgreSQL. **Do not** treat deleting an item row as permission to delete a referenced R2 object: explicit cross-reference/ownership verification is required first. Design for legacy backfilled media keys that remain located in original listing/variation paths.
+3. **`inventory_listing_links`** — association of one physical item to a marketplace listing or variation. At minimum `item_id`, `marketplace`, channel listing reference(s), linkage state/timestamps. For eBay, model a standard `listings.listing_id` association or `variation_listing_copies.copy_id` association to the correct existing physical copy; preserve SKU, remote listing/offer IDs and revision in their authoritative listing domain. Future non-eBay channels need their own adapter identifiers, without changing master-item schema.
+4. **Reuse existing eBay tables** rather than duplicate eBay offer/policy/revision schemas. Each eBay adapter transforms master attributes/images/condition into category-validated `product.aspects`, product title/description/condition/imageUrls and uses existing Standard/Variation offer and group flows for price, quantity, category, business policies and merchant location.
+
+**Minimization checkpoint:** Three new logical tables are a *working proposal*, not a requirement. If images can safely be represented in a compact structure without losing per-image ownership, references or deletion proof, evaluate reducing to two. Conversely add a dedicated media-object ownership table only if shared R2 objects actually require it; avoid premature abstraction.
+
+### Boundary between stable facts and eBay publication
+- Store reusable physical-item facts once; an eBay listing may have its own optimized title, description, category mapping, condition ID, selected aspects, price and fulfillment details.
+- **Validation:** eBay category requirements are dynamic and must be checked using the current category-specific aspect/condition metadata; presence of a master record alone must **not** imply eBay publish-ready. The adapter can return missing-field errors for review.
+- Standard listings and You Pick variation groups should consume item facts while retaining existing publication/reconciliation state. Group shared aspects/variation selector belong at the group/variation presentation level, **not** universally on every physical-item row.
+- Availability: one item must not be simultaneously sold twice if future marketplaces are added. Reservation/sale arbitration is a separate Phase 5 design; do not conflate physical item count with eBay SKU quantity. Group count is derived from linked physical units and reconciled authoritative remote evidence.
+
+### Backfill boundaries
+- Pilot: create new inventory IDs, copy verified item characteristics and reference existing image keys; link `listings.listing_id` and existing variation copy IDs without rewriting identifiers, revisions or offer records.
+- Variation quantities can reflect non-captured quantity adjustments; a one-to-one mapping of existing `variation_listing_copies` rows to actual on-hand units is **not automatically guaranteed**. Audit and reconcile count/identity gaps before creating phantom master inventory rows or claiming exact parity.
+- Exclude sold-out historical items outside confirmed retention policy unless needed by separate order requirements; pilot requires explicit no-remote-write and idempotent mapping checks.
+
+### Remaining Phase 3 decisions
+- **Master item enrichment:** Is an inventory item allowed to be saved with incomplete eBay details (recommended), or must required eBay item specifics be present when item is first created?
+- Whether all acquisition metadata should be on `inventory_items` or a small separate acquisition-event/lot provenance table, subject to actual import requirements.
+- Whether master item identity should have a human-friendly optional label in addition to UUID.
+- Image ownership/ref counting and deletion state machine require implementation-level design before enabling 30-day purge.
+- Exact indexes, constraints, RLS policies, migrations, and byte estimates require post-merge validation. No schema change authorized.
+
+## Confirmed decision — incomplete master inventory records (2026-11-16/17)
+- **Allow incomplete master inventory records.** A physical item may be saved at capture/import time even if its eBay category, title, condition mapping, item specifics, or other eBay-required fields are incomplete.
+- **eBay-specific completeness and current category/condition rules are validated before publication**, not as a prerequisite for creating the master record.
+- A record being saved to inventory does **not** imply it is publish-ready. The eBay adapter/listing preparation workflow must identify missing required fields and block publication until corrected, while preserving the master record and images.
+- This applies to both watcher capture destinations: **Master only** and **Master + Listing**. In the latter, master creation must succeed independently even when listing preparation/staging/publishing cannot complete; retain the established idempotent listing-only retry policy.
+- This decision supersedes the corresponding open Phase 3 question. No schema, application, or production data changes are authorized.
+
+## Confirmed decision — acquisition data stored on each item (2026-11-16/17)
+- Store essential acquisition details **directly on each `inventory_items` record**, rather than creating a separate acquisition-event or lot table initially.
+- Candidate optional fields: purchase price and currency, acquisition date, auction/source name, source URL, and external source/lot identifier. **Do not include shipping cost or tax fields** in the master inventory schema. Exact names remain design details, not approved DDL.
+- Items manually added from purchased lots remain independent physical inventory records; a raw purchased lot does not itself become a master inventory item.
+- Keep missing acquisition details nullable and avoid storing full auction page HTML or large raw responses. Duplicate-item creation copies initial fields only; subsequent updates stay independent.
+- Revisit a dedicated acquisition entity only if verified operational needs justify one, such as shared purchase-level accounting or cost allocation.
+
+## Confirmed decision — human-readable inventory ID (2026-11-16/17)
+- Every master inventory item gets a **short, unique, human-readable inventory identifier** (proposed format: `INV-000001`) **in addition to** its immutable internal UUID.
+- Treat the human-readable ID as an inventory lookup/label, not as an eBay SKU. Preserve existing eBay SKU naming conventions.
+- Ensure IDs are unique and assigned atomically, including concurrent watcher captures, imports, backfills, and Duplicate × N operations. Do not recycle identifiers after the 30-day sold-item purge.
+- The exact prefix, padding, and numbering scheme remain implementation details unless separately confirmed.
+- **Acquisition simplification confirmed:** no dedicated shipping cost or tax columns in master inventory; retain optional purchase price, acquisition date, and source/provenance fields directly on each item.
+
+## Confirmed decision — multiple item images (2026-11-16/17)
+- Master inventory must support **additional photographs beyond the normal front/back pair** for comics, collectibles, condition details, and future item types.
+- Do not enforce a fixed database-level limit of two images per item. Preserve image order and an optional role/type (front, back, detail, additional) so eBay adapters can select and order images according to current marketplace rules.
+- Store image metadata and R2 object references, **not binary image data**, in PostgreSQL. Existing watcher front/back capture remains supported; additional photos can be attached separately as the workflow develops.
+- Maintain explicit image ownership and reference/deletion safeguards so the 30-day sold-item purge cannot delete an image still needed by another active item or listing.
+- This decision does not require unlimited upload size or bypass marketplace-specific image count/format restrictions; enforce those at the appropriate adapter or upload boundary.
+
+## Confirmed decision — master inventory remains editable (2026-11-17)
+- **Master inventory records can be edited after creation**, including their identifying title/name, description, condition, item-specific attributes, acquisition details, and image associations/order.
+- Editing one physical item must not synchronize changes to independently duplicated inventory records.
+- **Do not silently mutate already-published eBay listings** when a master item is edited. Existing marketplace publication remains governed by its own explicit staging, validation, publish/reconcile and revision controls; the user must explicitly initiate any corresponding listing update.
+- Preserve existing image ownership/reference safeguards when adding, replacing, reordering, or removing images.
+- This is a requirements decision; no application/schema/database mutation is authorized.
+
+## Confirmed decision — manual reservation/unavailability (2026-11-17)
+- Master inventory must allow an item to be **manually marked Reserved or Unavailable** while retaining its record, metadata, and images.
+- Reserved/Unavailable items **must not be eligible to be added to new staged listings** until explicitly returned to an eligible available state.
+- These manual states do **not** automatically withdraw or modify an existing published eBay listing. Existing remote listing changes continue through explicit guarded publication/reconciliation workflows.
+- Keep this separate from the sold/archived 30-day retention lifecycle. Exact reservation reason, timestamps, and whether status applies to already-staged but unpublished items remain design questions.
+- Future multi-marketplace allocation must also prevent a single physical item from being independently committed/sold twice; detailed arbitration belongs to the marketplace coordination phase.
+
+## Mandatory requirement — simultaneous cross-marketplace listings and sale-triggered withdrawal (2026-11-17)
+- **A single physical inventory item MUST be allowed to be listed simultaneously on multiple marketplaces** (e.g., eBay and Mercari). This is a mandatory architectural requirement, not optional future polish.
+- **When a sale is authoritatively confirmed on any connected marketplace, immediately mark the physical item as sold/unavailable for further allocation and initiate automatic withdrawal/end/deactivation of every other active marketplace listing associated with that same physical item.** Preserve an auditable, retryable outcome for each withdrawal.
+- The sold item enters the confirmed 30-day archive-retention period, subject to existing safety and media-reference checks before permanent purge.
+- The link model must support **multiple active marketplace associations per physical item**; no uniqueness constraint limiting an item to a single marketplace listing. Still prevent duplicate associations to the *same* marketplace listing/variation where inappropriate.
+- **Safety and practical limitations:** marketplace APIs, webhook/polling delays, and concurrent buyers make instantaneous prevention of every cross-marketplace oversell impossible. Design for rapid event ingestion/poll reconciliation, idempotent first-sale handling, prompt fan-out withdrawals, explicit unknown/failed withdrawal recovery, and manual intervention alerts rather than claiming guaranteed atomic cross-platform withdrawal.
+- Existing eBay durable publication/recovery guardrails and explicit authorization boundaries must remain intact. Automated cross-channel sell-down/withdrawal is a newly approved product requirement; implementation authorization and remote-mutation safety policies must be specified separately before any live marketplace writes.
+- **Open follow-up:** define behavior for eBay variation listings representing multiple physical copies, including decrementing shared SKU quantity rather than automatically withdrawing the entire SKU when another marketplace sells one copy; define handling of cancellations/returns after automatic withdrawals.
+
+## Confirmed scope restriction — eBay variation inventory is eBay-exclusive (2026-11-17)
+- **Physical items assigned to eBay You Pick / variation listings will NOT be listed on other marketplaces.** Treat this as an explicit eligibility rule, not merely a test assumption.
+- Therefore cross-marketplace sale handling does not need to decrement an eBay variation's quantity following a sale on Mercari or another marketplace: a variation-linked physical item must be excluded from those channels in the first place.
+- The previously confirmed **mandatory simultaneous cross-marketplace listings and sale-triggered automatic withdrawal** apply to eligible inventory items, such as standard single-item listings; **eBay variation-linked inventory is an exception**.
+- Enforce this exclusivity when staging, publishing, importing, or changing an item's marketplace associations. An item already listed on another marketplace must not silently be assigned to an eBay variation; require a safe transition that resolves other live listings first.
+- Existing eBay variation quantity adjustment, removal, and remote reconciliation behavior stays intact and separate from cross-marketplace sell-down.
+- This resolves the prior open question about decrementing variations after cross-marketplace sales. Detailed transition rules between a standard cross-listed item and eBay-exclusive variation membership remain for later design.
+
+## Confirmed decision — release eBay variation items to general inventory (2026-11-17)
+- A physical master item assigned exclusively to an eBay You Pick variation **may return to general available inventory** after the variation is withdrawn/removed **and eBay's remote state authoritatively confirms that the specific item is no longer offered for sale**.
+- This is **not** an automatic release upon merely requesting or staging withdrawal. Keep the item unavailable for cross-marketplace listing while eBay withdrawal/removal is pending, failed, or remote outcome is unknown; require successful reconciliation first.
+- Once release is confirmed, the same master item ID and its attributes/images are preserved and the item may be offered as a standard single item on eBay or eligible other marketplaces.
+- **Important distinction:** existing You Pick variation permanent-removal logic hard-deletes variation-specific records/media, and zero-quantity withdrawal may represent a sold physical item. The master-inventory release operation must not mistakenly resurrect sold units or delete retained master inventory/images. Before implementation, separate physical-item disposition (still owned vs sold) from eBay variation membership and coordinate media deletion with ownership/reference proofs.
+- Exact transitions for an entire withdrawn bucket versus an individual removed variation, including multi-copy variations, need post-merge code and data contract verification.
+
+## Confirmed decision — automatic release after complete eBay variation-listing withdrawal (2026-11-17)
+- When an **entire eBay You Pick variation listing/group is withdrawn**, automatically return **all remaining physical items verified unsold and still owned** to general available master inventory **after authoritative eBay confirmation** that the listing is no longer purchasable.
+- Do not release sold, unaccounted-for, manually reserved, or otherwise unavailable physical items. Validate the disposition of each underlying physical copy; preserve item IDs, attributes, image references, and history as applicable.
+- Until the complete withdrawal is confirmed and reconciled, keep associated items excluded from other marketplaces. A failed/unknown remote withdrawal must not make any physical copy generally available.
+- The eBay variation's existing hard-delete/remove and image-cleanup code must not delete surviving master-owned inventory or media when returning unsold stock to general inventory. This is a post-merge integration requirement, not authorization to change live You Pick behavior now.
+- Idempotent bulk release is required: retrying the reconciliation must not create duplicate items or improperly unlock items already sold or reserved.
+
+## Confirmed decision — manual reservation does not withdraw active listings (2026-11-17)
+- **Manually marking a master inventory item Reserved does NOT automatically withdraw, end, deactivate, or change any existing marketplace listing**, including eBay or other connected channels.
+- The user knowingly accepts responsibility for managing any already-live listing and its sale risk when applying the manual Reserved status.
+- Reserved items remain blocked from being added to **new** staged listings until returned to an eligible available status, consistent with the previously confirmed reservation policy.
+- **Distinguish manual reservation from confirmed sale:** the mandatory automatic cross-marketplace withdrawal requirement still applies when a sale is authoritatively confirmed. A manual Reserved status must not disable or bypass sale detection, sold-item disposition, or cross-marketplace withdrawal on sale.
+- This decision supersedes earlier suggestions to automatically withdraw active listings upon a manual reservation. No production listing changes or code changes are authorized.
+
+## Confirmed decision — manual Unavailable status leaves existing listings unchanged (2026-11-17)
+- **Manually marking a master inventory item Unavailable must NOT automatically withdraw, end, deactivate, or otherwise modify any already-active marketplace listing.** This follows the same policy as manually marking an item Reserved.
+- An Unavailable item cannot be added to new staged listings until explicitly returned to an eligible available state. Existing marketplace listings remain the user's responsibility to manage.
+- **Confirmed sales are different:** authoritative sale detection must still trigger the mandatory automatic withdrawal of other marketplace listings for eligible cross-listed items, irrespective of a prior manually set Reserved/Unavailable status.
+- No code, schema, or marketplace mutations are authorized by this requirement.
+
+## Confirmed decision — manually restore Reserved/Unavailable items (2026-11-17)
+- Users may **manually change Reserved or Unavailable inventory items back to Available** at any time, provided the item is **not sold** and has **no unresolved marketplace operation** that makes releasing it unsafe.
+- The transition changes master inventory availability and eligibility for **new** listing staging only; it must not automatically create, republish, or otherwise modify existing marketplace listings.
+- Do not permit manual Available status to override confirmed sold disposition, pending/unknown withdrawal, or unresolved marketplace reconciliation. Existing eBay variation exclusivity rules continue to apply.
+- No schema, code, or remote marketplace mutation is authorized by this decision.
+
+## Confirmed requirements — bulk status updates and dedicated Master Inventory page (2026-11-17)
+- **Bulk status updates are required:** select multiple physical master items and change their status to Available, Reserved, or Unavailable in one operation. Apply the same per-item eligibility safeguards as individual status changes; report successes and blocked rows without silently overriding sold or unresolved items. Bulk manual status updates must not automatically modify already-live marketplace listings.
+- **Dedicated full-page Master Inventory UI is required:** add a standalone route/page in the inventory application for exploring, finding, filtering, and editing master inventory records. Do not confine master inventory management to the existing eBay Standard/Variation listing screens.
+- **Editable, highly filterable table:** global search and per-column filters; sortable columns; selectable/visible columns; paging; stable row selection; multi-select bulk actions; fast access to item-specific editing and images; clear inventory availability and marketplace listing association indicators. The UI should show eBay-relevant item specifics while remaining usable for comics and other future item types.
+- **Technology investigation:** recommend TanStack Table (`@tanstack/react-table`) for table state (sort/filter/selection/pagination/visibility) and custom existing Next.js/React/Tailwind markup for the UI. Its headless nature means editing and form persistence are application responsibilities, not automatically supplied by the library. Current `ebay-ui-app-you-pick/package.json` has Next.js 16, React 19, Tailwind 4, and **does not currently include TanStack Table**; existing `app/listings-table-editable.tsx` is a custom native HTML table. Introducing a focused new table dependency is justified by the requested full-feature inventory grid; avoid rewriting existing listing tables.
+- **Performance:** use server-side Supabase filtering, sorting and pagination once inventory grows; never claim only the currently loaded page represents the entire inventory. Bulk selection across filters/pages requires explicit scoped IDs and safe operation semantics. Use narrow projections and lazy-load images/details to minimize bandwidth and client work.
+- **Editing recommendation, not yet confirmed:** compact, editable simple cells (e.g., name, condition, purchase price, status) with validation and explicit save, while rich JSONB aspects, descriptions, and image management open a focused item editor/drawer rather than building a heavy spreadsheet clone.
+- **Security/integrity:** backend applies status and eBay/listing constraints; do not rely solely on disabled frontend controls. Bulk changes should use a bounded, idempotent endpoint with per-item error reporting. Keep existing explicit publication and 30-day deletion safeguards unchanged.
+- **Timing:** implement only after You Pick branches have merged into main and the merged app has passed baseline tests. This is requirements documentation only, not authorization for package installation, frontend modifications, or database migrations.
+
+### Open UX decision
+- Should inline edits autosave on blur, or require an explicit Save action? Recommend explicit Save to reduce accidental writes; bulk status changes should require a single explicit Apply action.
+
+### TanStack source
+- https://tanstack.com/table/latest/docs/overview — headless engine for filtering, sorting, selection and pagination
+- https://tanstack.com/table/latest/docs/framework/react/quick-start — framework integration
+
+## Confirmed decision — explicit saving for Master Inventory editing (2026-11-17)
+- **Individual item/cell edits require an explicit Save action.** Do not automatically persist changes on blur or merely when an editor loses focus.
+- **Bulk status changes require an explicit Apply action** after the user selects the target inventory rows and desired status.
+- Until Save/Apply succeeds, edits remain staged locally; display validation or server errors without pretending they were saved. Backend authorization, eligibility checks, stale-record protection, and per-item results remain required.
+- This resolves the Phase 3 Master Inventory page editing-mode decision. No application code, dependency installation, schema changes, or database writes are authorized by this documentation decision.
+
+## Confirmed decision — saved Master Inventory table views (2026-11-17)
+- The standalone Master Inventory page **must support user-defined saved filter presets/views**, so the user can restore common table configurations without rebuilding filters each time.
+- A saved view should capture relevant search text, column filters, sorting, visible columns, and page size; optionally column order once supported. Reapply criteria against live inventory rather than storing a frozen list of matching item IDs.
+- Provide a sensible **default view** and allow users to create, name, select, update, and delete their own views (e.g., Unlisted Sports Cards, Reserved Items, Comics Ready for eBay).
+- Keep view preferences separate from master item data; selecting or editing a view must not mutate inventory records or marketplace listings.
+- **Open detail:** decide whether column layout/filter view preferences are saved per user or shared across the whole application; for the initial single-operator app, a per-user model is recommended for future extensibility.
+- Implementation remains deferred until the You Pick worktrees are merged to main and the merged baseline is verified. No code or schema modification is authorized yet.
+
+## Confirmed operating model — single-user private home-device app (2026-11-17)
+- The inventory manager is a **strictly single-user application**, used privately on the owner's home device. Do not design Master Inventory saved views, table settings, or editing flows around multiple user accounts, teams, sharing, or roles.
+- **Saved inventory views are application-local/single-operator settings**; no per-user ownership model or shared/private visibility permissions are required. Persist named views and a default view simply, without a multi-tenant access-control layer.
+- Keep access/security **proportionate and minimal**, avoiding unnecessary login, role-based access control, user-management UI, and permission abstractions for the private deployment.
+- Minimal security does **not** relax safety for external credentials or irreversible/remote operations: keep eBay and other marketplace tokens/secrets server-side; continue validating inventory changes on the backend and enforcing explicit Save/Apply, guarded publication/withdrawal, sold-item disposition, and deletion/reconciliation protections.
+- Do not introduce multi-user infrastructure preemptively. Revisit this only if the operating model changes.
+- No code, DB migrations, deployment/config changes, or marketplace operations are authorized by this decision.
+
+## Confirmed decision — restore last selected Master Inventory view (2026-11-17)
+- Remember the **last selected saved Master Inventory view** across page reloads and application restarts on the single-user home device.
+- When the Master Inventory page opens, automatically restore that saved view's filters, sorting, visible columns, and other stored table preferences.
+- If the last selected view has been deleted or is invalid, safely fall back to the default view.
+- Keep this as simple local/application preference state; no per-account ownership or multi-user synchronization is required.
+- Choosing a view or restoring it never modifies inventory records or marketplace listings.
+- No code, database, or marketplace mutations are authorized by this design decision.
+
+## Confirmed decision — CSV export of filtered Master Inventory (2026-11-17)
+- The Master Inventory page **must support exporting filtered inventory records to CSV** for offline analysis and backup-oriented data extraction.
+- Export must respect the active saved-view/search/filter criteria and sorting, and offer the matching result set rather than silently exporting only the currently rendered pagination page.
+- Include useful master inventory fields (stable inventory ID, item name/type, condition, availability, acquisition fields where present, and marketplace association/status indicators), with sane spreadsheet-safe CSV escaping. Define a stable column/field policy at implementation; exclude credentials, tokens, and internal secrets.
+- CSV export is read-only and must never change inventory, saved views, or marketplace listings. Use server-side streaming/batching for potentially large result sets, avoiding loading the full inventory into the browser.
+- CSV is an analysis/portable data export, not a replacement for complete backup and restore of master records, relational links, and R2 image bytes.
+- No code, database, or remote mutations are authorized by this documentation decision.
+
+## Confirmed exclusion — no CSV import (2026-11-17)
+- **Do not implement CSV inventory import** in the Master Inventory page. There is no need for spreadsheet-based record creation, CSV upload, import preview, or CSV import validation workflows.
+- **CSV export remains required** for filtered master inventory data; this is an intentional export-only capability.
+- Inventory creation continues through the confirmed capture/manual-entry/backfill workflows rather than CSV ingestion.
+- Do not add package dependencies, schema, or frontend complexity for CSV import unless requirements explicitly change.
+
+## Confirmed decision — inventory record creation requires image-supported enrichment (2026-11-17)
+- **Do not provide a blank/manual-create inventory item workflow** on the Master Inventory page. Editing existing items manually remains supported with explicit Save; this exclusion concerns creating a new record from scratch.
+- **Creation path A — physical item capture:** Use captured item photographs and **Gemini generative AI** to identify the item and fill missing identifying attributes, similar to the existing watcher → listing pipeline. A new master item should begin with rich, useful item data rather than a largely empty manual form. Preserve source evidence and allow later correction of AI-derived values. Do not treat uncertain model guesses as verified facts; expose uncertainty/missing information for review.
+- **Creation path B — purchased online auction item:** Create a master inventory record from a **won/purchased online auction listing** by scraping/reusing the available auction listing's item details and images. This is an authorized intake route independent of taking fresh photos. Retain source URL/auction ID and acquisition provenance when available; avoid duplicate records when reprocessing the same purchased source item.
+- Both paths must converge on the **same canonical master item schema, unique internal UUID/human inventory ID, images, acquisition fields, and availability lifecycle**. Keep marketplace listing drafts separate from item creation, consistent with earlier optional Master-only vs Master + staged Listing capture choice.
+- Existing photos may be reused for the master inventory record as long as the ingestion respects source access/rights constraints; do not silently overwrite user-taken media or delete shared media references. Record whether images were sourced from camera or auction.
+- **Open follow-up:** whether auction-sourced item records may be entered as Available before physical delivery, or should remain Pending Receipt until the purchase arrives and the owner verifies possession. This affects cross-marketplace sale safety.
+- Implementation remains deferred until the You Pick feature merges into main and passes baseline verification. No scraper, Gemini integration, schema, or application code changes authorized now.
+
+## Confirmed decision — Pending Delivery inventory status (2026-11-17)
+- Add a dedicated inventory availability/lifecycle status for **purchased auction items that have not yet physically arrived**. Proposed UI label: **Pending Delivery**; proposed stable internal value: `pending_receipt` (prefer a clear descriptive identifier over abbreviated `pendDeliver`). Naming can be finalized during schema design.
+- Newly imported won/purchased online auction items begin in Pending Delivery, retaining their scraped identification, source listing details, images, acquisition provenance, and assigned master inventory ID.
+- **Pending Delivery blocks creation/staging/publication of new marketplace listings** until the owner explicitly confirms physical receipt. Do not automatically change to Available because a shipment is marked delivered by a carrier, or simply because time has elapsed.
+- After explicit receipt confirmation, transition the item to **Available**, subject to existing sold/unknown-operation and marketplace-exclusivity safeguards.
+- Treat Pending Delivery separately from manual Reserved/Unavailable and the Sold/Archived retention lifecycle. No automatic marketplace withdrawal is implied solely by setting this status.
+- Existing master item edits continue to require explicit Save. The receipt-confirmation control should be explicit and idempotent.
+- No application code, schema, or remote marketplace changes authorized by this requirement decision.
+
+## Confirmed decision — bulk receipt confirmation (2026-11-17)
+- On the standalone Master Inventory page, allow selection of **multiple Pending Delivery/Pending Receipt items** and a single explicit **Confirm Received / Apply** action to transition verified physically received items to **Available**.
+- Apply the already-confirmed bulk-edit safeguards: explicitly selected records, backend validation of each item's current status and unresolved marketplace operations, per-item success/failure reporting, and retry-safe/idempotent handling. Do not automatically mark an entire purchased auction lot received if the owner selects only a subset of its item records.
+- The bulk action is confirmation of **actual physical possession**, not a carrier-delivery inference. Retain original auction source/provenance and media; this does not initiate new marketplace listings.
+- Do not affect Reserved, Unavailable, Sold, already Available, or otherwise ineligible records silently. No code/schema/remote operations are authorized by this requirements decision.
+
+## Confirmed decision — reuse auction images as primary inventory/listing media (2026-11-17)
+- For items imported digitally from won/purchased online auction listings, **reuse the auction listing's existing item photographs as the primary master inventory images**. This is the intended workflow, designed to avoid additional physical photography and reduce manual work.
+- **Do not require new camera/watch captures or separate owner photographs** before creating a master item, confirming receipt, or staging a marketplace listing when usable source images were imported.
+- Reuse these imported images for downstream marketplace listings, subject to marketplace image requirements and applicable permission/licensing constraints. Do not impose an automatic preference for newly taken owner photos; the auction-source images are the default.
+- Preserve source URL/auction ID and image provenance; import/retain usable image assets in managed storage with stable master-item references and shared-media deletion safeguards. Handle failed downloads or unusable image quality as exceptions rather than requiring recapture for all imports.
+- Optional later photographs may be added or replace images by explicit user edit and Save, consistent with the previously approved editable master inventory fields. Do not automatically duplicate or overwrite source images.
+- This supersedes the earlier suggestion to prefer newly photographed images for auction-imported items. No production scraping, code, database, or remote marketplace modifications are authorized by this documentation decision.
+
+## Confirmed decision — preserve original auction image bytes (2026-11-17)
+- **Preserve auction-imported photographs exactly as downloaded** as the original managed master-inventory image assets. Do not automatically crop, deskew, recompress, re-encode, or otherwise modify those original bytes during import.
+- If a destination marketplace requires different dimensions, format, encoding, or other processing, produce a **separate derived copy** for that specific publication flow. Never overwrite the retained original.
+- Continue using the preserved imported images by default for inventory display and downstream listings when marketplace-compatible; no new camera capture is required.
+- Maintain clear original/derived image provenance and storage references, and apply reference-safe cleanup so neither inventory edits nor listing removal delete an original still owned by a master item.
+- This decision applies specifically to **auction-sourced images**, not necessarily images from the existing watcher camera workflow. No implementation or remote writes authorized at this stage.
+
+## Confirmed decision — prevent duplicate purchased-auction imports (2026-11-17)
+- Detect when the same purchased online auction listing is imported more than once, using a **source-specific stable auction listing/item ID** together with the source marketplace/site identifier. Normalize source URLs as a fallback when no reliable ID exists; do not rely solely on title, photographs, or AI-derived fields.
+- For an already imported source listing, **do not silently create a second master inventory item**. Instead show the existing record and provide a way to inspect/open it.
+- Make auction ingestion idempotent across retries, partial image downloads, and interruption/restart, so a failed attempt can safely resume without duplicate records or media ownership inconsistencies.
+- **Potential exception to design later:** a purchased auction listing may contain multiple physically distinct items or copies. Source-level duplicate detection must not prevent legitimate separate per-physical-item inventory records from a multi-item lot; distinguish the source purchase/listing from individual identified physical items and avoid re-importing previously imported items.
+- No code, schema, scraping, or marketplace mutations are authorized by this requirements decision.
+
+## Confirmed decision — purchased multi-item lots are handled after physical receipt (2026-11-17)
+- **Do not automatically unpack, identify, or create per-item master inventory records from purchased auction lots containing multiple physical items.** Source photographs and AI are insufficiently reliable for this complex workflow.
+- The owner will **physically receive multi-item lots and process their individual contents manually through the existing camera/watcher image-capture plus Gemini-enrichment workflow**. “Manually” refers to controlling capture and physical item separation, not creating blank master-item forms.
+- Keep automatic online auction import for **suitable individually identifiable purchased items** with reusable auction details and photographs, as previously agreed.
+- Do not create a master inventory item representing an entire purchased raw lot simply because it was won; this preserves the earlier decision that raw lots are not automatically inventory items.
+- Duplicate auction-source handling must distinguish intentionally unsupported multi-item lots from individually importable auction purchases. Do not introduce Gemini-based automatic lot splitting, per-item recognition, or speculative record creation for lots.
+- No code, schema, scrape, or marketplace mutations authorized by this requirements decision.
+
+## Confirmed decision — Gemini enrichment is mandatory for every eligible auction-item import (2026-11-17)
+- **Every individually identifiable item imported from a purchased online auction MUST run through Gemini enrichment**, regardless of whether the auction's scraped title, description, and other item details appear complete.
+- Supply Gemini with the auction's existing images and available listing data so it can identify additional item specifics, identifiers, and other relevant physical-item attributes that the auction seller omitted or described incompletely.
+- Merge extracted auction evidence and Gemini-derived details into the same canonical master inventory record, preserving original source data/provenance. Do not silently overwrite a reliable explicit source attribute with a conflicting model guess; surface unresolved conflicts or uncertainty for review.
+- This explicitly supersedes the earlier suggestion to invoke Gemini only when scraped auction data is incomplete. Cost optimization must not skip the enrichment pass.
+- The multi-item auction-lot exclusion remains: Gemini does not automatically split purchased lots into separate records; the owner physically receives and captures those items through the watcher workflow.
+- No code, migrations, scraping, or remote marketplace mutations are authorized by this requirements decision.
+
+## Confirmed decision — automatic auction-import creation, with explicit eBay-only Gemini skip (2026-11-17)
+- **Automatically create the master inventory record after auction-source ingestion and enrichment; no mandatory human review/approval gate before creation.** Created records remain editable afterward with the previously confirmed explicit Save action.
+- **Default: always run Gemini** for eligible individual-item auction imports, including imports from eBay, to enrich identifiers and item specifics.
+- **Narrow exception:** when an item was **purchased directly on eBay** and the source eBay listing already supplies **all applicable item specifics/identifiers**, allow the owner to **explicitly choose Skip Gemini** for that import. This must be an intentional per-import choice, never an automatic inference/silent optimization.
+- If Skip Gemini is not explicitly chosen, always run Gemini, even if the eBay source listing appears complete. Do not extend this exception to non-eBay auction sources without a future separate decision.
+- When the explicit skip is used, preserve the eBay-provided item specifics and image/source provenance as imported; validate enough source data exists for a usable master item and surface any missing/uncertain fields for later manual editing. Do not fabricate missing attributes.
+- Keep the existing exclusion for purchased multi-item auction lots: do not auto-split them into per-physical-item records.
+- Ensure duplicate-import/idempotency checks happen before creating a record or redundantly invoking Gemini. Preserve Pending Delivery as the starting status of purchased imported items until explicit receipt confirmation.
+- No code, schema, AI integration, marketplace write, or deployment changes authorized by this decision.

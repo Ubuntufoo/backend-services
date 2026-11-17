@@ -240,7 +240,43 @@ describe('resolvePublishConfig', () => {
 });
 
 describe('resolveVariationListingCreationDefaults', () => {
-  it('accepts the canonical ground fulfillment policy and the real default sandbox location', () => {
+  it('uses the production Combined policy without changing Standard listing ground defaults', () => {
+    const settings = createAppSettings();
+    const variation = resolveVariationListingCreationDefaults(settings, {
+      environment: 'production', runtimeMarketplaceId: 'EBAY_US',
+    });
+    const standard = resolvePublishConfig(settings, {
+      environment: 'production', runtimeMarketplaceId: 'EBAY_US',
+    });
+    expect(variation.issues).toEqual([]);
+    expect(variation.config?.fulfillmentPolicyId).toBe('LIVE-COMBINED');
+    expect(standard.config?.fulfillmentPolicyId).toBe('LIVE-GROUND');
+  });
+
+  it.each(['missing', 'placeholder'])('fails closed for %s Combined policy', (reason) => {
+    const settings = createAppSettings();
+    const production = (settings.ebay_publish_config as Record<string, Record<string, unknown>>).production;
+    if (reason === 'missing') delete production.combinedFulfillmentPolicyId;
+    else production.combinedFulfillmentPolicyId = 'mock-combined';
+    const result = resolveVariationListingCreationDefaults(settings, {
+      environment: 'production', runtimeMarketplaceId: 'EBAY_US',
+    });
+    expect(result.config).toBeNull();
+    expect(result.issues.some((issue) => issue.startsWith('combined_fulfillment_policy_id_missing_for_environment:'))).toBe(true);
+  });
+
+  it('does not substitute flat Ground fulfillment when sandbox Combined policy is absent', () => {
+    const settings = createAppSettings({ ebay_publish_config: {
+      sandbox: { groundFulfillmentPolicyId: 'SANDBOX-GROUND', marketplaceId: 'EBAY_US' },
+    } });
+    const result = resolveVariationListingCreationDefaults(settings, {
+      environment: 'sandbox', runtimeMarketplaceId: 'EBAY_US',
+    });
+    expect(result.config).toBeNull();
+    expect(result.issues.some((issue) => issue.startsWith('combined_fulfillment_policy_id_missing_for_environment:'))).toBe(true);
+  });
+
+  it('uses the configured Combined fulfillment policy and the real default sandbox location', () => {
     const result = resolveVariationListingCreationDefaults(
       createAppSettings({
         default_fulfillment_policy_id: null,
@@ -250,6 +286,7 @@ describe('resolveVariationListingCreationDefaults', () => {
         merchant_location_key: null,
         ebay_publish_config: {
           sandbox: {
+            combinedFulfillmentPolicyId: 'SANDBOX-COMBINED',
             groundFulfillmentPolicyId: 'SANDBOX-GROUND',
             marketplaceId: 'EBAY_US',
             merchantLocationKey: 'default-main-location',
@@ -263,7 +300,7 @@ describe('resolveVariationListingCreationDefaults', () => {
 
     expect(result).toEqual({
       config: {
-        fulfillmentPolicyId: 'SANDBOX-GROUND',
+        fulfillmentPolicyId: 'SANDBOX-COMBINED',
         merchantLocationKey: 'default-main-location',
         marketplaceId: 'EBAY_US',
         paymentPolicyId: 'SANDBOX-PAYMENT',
@@ -273,7 +310,7 @@ describe('resolveVariationListingCreationDefaults', () => {
     });
   });
 
-  it('prefers bootstrap-managed flat sandbox defaults over stale nested sandbox config', () => {
+  it('uses Combined from sandbox config while keeping flat bootstrap-managed other defaults', () => {
     const result = resolveVariationListingCreationDefaults(
       createAppSettings({
         default_fulfillment_policy_id: 'CURRENT-FULFILLMENT',
@@ -283,6 +320,7 @@ describe('resolveVariationListingCreationDefaults', () => {
         merchant_location_key: 'default-main-location',
         ebay_publish_config: {
           sandbox: {
+            combinedFulfillmentPolicyId: 'SANDBOX-COMBINED',
             groundFulfillmentPolicyId: 'STALE-GROUND',
             marketplaceId: 'EBAY_US',
             merchantLocationKey: 'default-main-location',
@@ -296,7 +334,7 @@ describe('resolveVariationListingCreationDefaults', () => {
 
     expect(result).toEqual({
       config: {
-        fulfillmentPolicyId: 'CURRENT-FULFILLMENT',
+        fulfillmentPolicyId: 'SANDBOX-COMBINED',
         merchantLocationKey: 'default-main-location',
         marketplaceId: 'EBAY_US',
         paymentPolicyId: 'CURRENT-PAYMENT',
@@ -306,11 +344,12 @@ describe('resolveVariationListingCreationDefaults', () => {
     });
   });
 
-  it('prefers canonical flat defaults when nested sandbox config is incomplete', () => {
+  it('uses Combined from partial sandbox config with flat fallback for other defaults', () => {
     const result = resolveVariationListingCreationDefaults(
       createAppSettings({
         ebay_publish_config: {
           sandbox: {
+            combinedFulfillmentPolicyId: 'SANDBOX-COMBINED',
             marketplaceId: 'EBAY_US',
             paymentPolicyId: 'SANDBOX-PAYMENT',
             returnPolicyId: 'SANDBOX-RETURN',
@@ -322,7 +361,7 @@ describe('resolveVariationListingCreationDefaults', () => {
 
     expect(result).toEqual({
       config: {
-        fulfillmentPolicyId: 'LEGACY-FULFILLMENT',
+        fulfillmentPolicyId: 'SANDBOX-COMBINED',
         merchantLocationKey: 'legacy-warehouse',
         marketplaceId: 'EBAY_US',
         paymentPolicyId: 'LEGACY-PAYMENT',
