@@ -369,14 +369,14 @@ describe('YP5.4 variation listing cleanup planning', () => {
     const result = await abandonUntouchedVariationListingGroup({
       groupId: untouched.group.group_id,
       protection: { state: 'clear' },
-      remote: { async getInventoryItemGroup(groupKey) { calls.push(`read:${groupKey}`); return { state: 'proven_absent' as const }; } },
+      remote: { async getInventoryItemGroup(groupKey, options) { calls.push(`read:${groupKey}:${options?.expectedNotFound}`); return { state: 'proven_absent' as const }; } },
       transaction: {
         loadAggregate: async () => untouched,
         abandonUntouchedGroup: async (input) => { calls.push(`abandon:${input.expectedDesiredRevision}`); return { ...untouched.group, lifecycle_state: 'abandoned' }; },
       },
     });
     expect(result.lifecycle_state).toBe('abandoned');
-    expect(calls).toEqual([`read:${untouched.group.group_key}`, 'abandon:0']);
+    expect(calls).toEqual([`read:${untouched.group.group_key}:true`, 'abandon:0']);
   });
 
   it('fails untouched abandonment on remote presence or allocated local state', async () => {

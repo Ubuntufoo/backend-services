@@ -558,7 +558,7 @@ export async function abandonUntouchedVariationListingGroup(
   ) {
     throw new Error('Variation listing untouched abandonment requires an empty revision-0 intake group.');
   }
-  const remoteGroup = await input.remote.getInventoryItemGroup(group.group_key);
+  const remoteGroup = await input.remote.getInventoryItemGroup(group.group_key, { expectedNotFound: true });
   if (remoteGroup.state === 'unknown') {
     throw new Error(`Variation listing untouched abandonment remote group read is unknown: ${remoteGroup.reason}`);
   }
