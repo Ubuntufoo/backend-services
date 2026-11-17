@@ -108,3 +108,81 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - **Migration/backfill strategy is NOT decided.** User explicitly raised backwards-compatibility and recovery risks; do not assume existing eBay listing rows can be replaced or repurposed.
 - **Provisional low-risk investigation direction:** build a read-only inventory reconciliation/mapping report; distinguish standard listings, variation members, and physical copies; identify records with incomplete or unavailable source data; test a staged, idempotent backfill creating new master-item IDs while preserving current listing IDs, SKUs, quantities, revisions, and publish/recovery machinery. Link existing listings to new inventory records only after the relationship is validated. Avoid live eBay mutations and destructive rewrites in the backfill phase.
 - **Open decisions:** whether backfill is automated for all eligible listings, initially limited to a pilot, or reviewed individually; whether all historical sold listings should be excluded, especially given the 30-day purge rule; how to treat active variation SKU copy counts and unavailable images; and which system becomes authoritative during phased adoption.
+
+## Confirmed decision — migration rollout (2026-11-16)
+- Adopt a **small, verified migration pilot first**, including representative existing active eBay standard listings and variation inventory.
+- Verify physical-item identity, quantity parity, existing listing-to-inventory mappings, image references, and unchanged eBay publication/recovery behavior before proceeding.
+- After a successful pilot, **automate the backfill of the remaining active eBay inventory**, using idempotent operations and reconciliation checks.
+- Existing eBay listings, SKUs, listing IDs, and durable revision/recovery records must not be destructively rewritten as part of the pilot.
+- This is a planning decision, not permission to execute migrations or mutate live inventory yet. Selection criteria, rollback/recovery, and acceptance gates remain to be specified during repository analysis.
+
+## Phase 2 — repository and data-flow investigation (2026-11-16/17)
+
+**Status:** Focused read-only investigation completed for the primary capture, storage, frontend routing, and deletion paths. This is architectural evidence, not an implementation authorization. The current worktrees have unrelated in-progress code edits; none were modified by this investigation.
+
+### Confirmed implementation sequencing
+- The **You Pick backend and frontend worktrees will be merged into their respective main branches before master inventory is implemented**. The merged main branches, revalidated after the merge, are the implementation baseline.
+- Keep this analysis in the backend You Pick worktree for now; ensure `MASTER_INV_STORAGE.md` is carried to main during merge. Recheck affected entry points after merge, especially while You Pick publication/removal tests are still changing.
+
+### Current capture architecture: verified source paths
+1. `services/watcher-service/src/cli.ts` starts recovery of pending variation image archives and restores standard pending grouping paths before launching `startWatcherRuntime`.
+2. `services/watcher-service/src/standard-capture-state.ts` stores a `standard | variation` workspace in `.capture-workspace.json`, and standard pending paths in `.standard-capture-pending.json`. Capture workspace is **not** the same dimension as desired master-only vs master+listing.
+3. `services/watcher-service/src/watcher-runtime.ts` watches incoming files, snapshots variation ownership at arrival, and directs events to either variation intake or the legacy standard batch processor. Queued variation images cannot silently switch owner, bucket, mode, or target. Disarmed variation intake is ignored rather than forwarded to standard capture. Retry and pending-state controls are already nontrivial.
+4. **Standard:** `services/watcher-service/src/process-image-batch.ts` groups incoming images, allocates a listing ID, moves images to `processed/` and inserts a `listings` row via `createWatcherListing`. On insertion failure it rolls back the processed move. No separate independent master-inventory persistence step currently exists.
+5. **Variation:** `services/watcher-service/src/variation-listing-runtime.ts` routes a front/back pair through frozen durable intake; derives copy/variation UUIDs from the capture pair ID, prepares images and identity, then persists through `variation-listing-persistence.ts` using `createSupabaseVariationListingTransactionGateway`. The latter checks existing `capture_pair_id` and returns `already_completed` only after matching immutable persisted command fields. This is a candidate idempotency seam for linking the **same physical capture** to a master record.
+6. The current variation `duplicate_copy` mode adds a captured copy to an eBay variation. This differs from **Duplicate × N** of a master record, which must create independent inventory records without synchronizing subsequent edits.
+
+### Frontend and control boundaries
+- `app/workspace-switcher.tsx` uses `/api/variation-listings/intake-session` GET/PATCH and explicitly blocks switching to standard while a variation image pair is pending. `app/listings-realtime.tsx` offers Standard Single/Lot capture mode; `app/variation-listings/variation-listings-workspace.tsx` and `variation-inventory-panel.tsx` control variation arm/new-variation/duplicate-copy targets.
+- **Recommendation (not yet confirmed):** model `master_only | master_and_listing` as an **independent destination choice** from existing Standard/Variation ownership and Single/Lot/duplicate-copy capture modes. Freeze it with each capture so a changing UI cannot redirect queued images. A master-only action should never accidentally fall back to a listing; a disarmed Variation remains disarmed until expressly changed.
+- Open requirement: select default destination and whether the last selected destination persists across restart. Also determine what “currently staged standard listing” means in an existing flow that normally creates a fresh standard listing for each capture.
+
+### Images, local archive and deletion: verified paths
+- `packages/data/src/r2.ts`: standard object keys are currently derived under `listings/{listingId}/...` with content hash in filename.
+- `services/watcher-service/src/variation-listing-intake.ts`: variation object keys use `variation-listing/{groupId}/{variationId}/{copyId}/{front|back}-{hash}...` and create-once conditional uploads; ambiguous upload outcomes deliberately **do not** trigger speculative unconditional R2 deletes.
+- `services/watcher-service/src/variation-image-archive.ts`: post-persistence archiving verifies durable copy/group IDs, pair source paths, R2 keys, source/destination hashes and filesystem identity; it persists recovery journals and has restart recovery.
+- `services/sidecar/src/listings/abandon-needs-review-listing.ts`: after safety checks for allowed status, eBay/export traces, active jobs and orders, standard abandonment currently deletes R2 objects, local processed directory and finally listing row. This deletion pattern assumes listing-scoped media and is unsafe if master inventory also owns/references the same objects without reference checks.
+- **Design conclusion:** master inventory and staged listings must have explicit image ownership/ref semantics. For new captures, prefer inventory-owned images with listings referencing them; for backfilled listings, initially reference existing keys without renaming/moving them. Require owner/ref checks before deletion, distinguish shared image from disposable listing copy, and preserve crash-safe retry/reconciliation behavior. Final schema and storage contract remain open.
+
+### Dual-purpose watcher integration: proposed minimal change
+- Assign a durable capture identity (pair ID or equivalent) and freeze both workspace target and destination mode at capture start; create an independent master item **exactly once**.
+- `master_only`: save item + its owned media; no listing records created.
+- `master_and_listing`: save item first, then stage it in the currently authorized Standard or Variation listing workflow, recording an immutable item→listing association. Persist outcome states to support **inventory saved / listing staging pending or failed / listing staged**.
+- If staging fails, retain master record and media, surface the exact failure, and allow **listing-stage-only** retry on the same item/capture ID. Never blindly recapture or reinsert master data. Preserve existing variation transaction/reconciliation safety and standard file rollback behavior through the new boundary.
+- Treat these as initial architectural recommendations to validate against post-merge state, not approved table or API contracts.
+
+### Existing-live-item migration and lifecycle
+- Pilot then automated active-eBay backfill remains confirmed; use read-only discovery, independent master IDs, no rewriting eBay SKU/listing IDs/revisions and evidence-based quantity/image mappings. Pilot should include representative standard and variation-copy records.
+- One physical item per master record; purchased raw lots are not themselves master records. Independent duplicates may retain optional `copied_from_item_id` for provenance only.
+- Sold items archive for 30 days starting at confirmed sale, then purge their master row, metadata, and owned media; outstanding listing/fulfillment/recovery and reference ownership must prevent unsafe deletion. Whether minimal legal/accounting data needs separate retention remains to assess.
+
+### Risks prioritized
+1. Standard capture currently allocates listing IDs and moves images **before** saving listing data. Master-first persistence must not be accidentally rolled back by the standard listing stage.
+2. Arrival-time Variation ownership and durable pair locks must not be weakened by a new routing selector.
+3. Changing image ownership impacts standard abandonment, variation cleanup, and future sold-item purge; never delete by folder prefix alone.
+4. Multiple e-commerce adapters will require authoritative inventory availability and conflict/oversell policy, not simply multiple platform IDs.
+5. Existing in-flight worktree publication/removal changes require a post-merge baseline verification rather than assumptions about present code.
+
+### Suggested post-merge Phase 2 acceptance checks (planning, not run)
+- Standard two-image capture in both destination modes; standard listing staging failure followed by successful retry with exactly one master record.
+- Variation new-card and additional-copy capture in both destinations where supported; pending-pair ownership remains frozen; disarmed mode cannot leak into standard listing.
+- Duplicate × N creates N independent master records and never propagates edits.
+- Shared-media abandonment and sold-item purge cannot delete any image still used by another item or active listing.
+- Pilot backfill has no remote eBay writes; exact identity/qty/media parity verified and re-running the backfill introduces zero duplicates.
+
+### Remaining design decisions / next phase
+- Default watcher destination: master-only, master+listing, or remember last; needs user confirmation.
+- How a Standard capture targets a “currently staged” standard listing when each existing standard card normally starts a new listing.
+- Source-of-truth for market-wide reservations, partial sale, order cancellation/refunds, and 30-day deletion gating.
+- Whether newly created master inventory needs metadata enrichment before becoming listable.
+- Formal schema, query patterns, storage projections, RLS and adapter interface design belong to subsequent phases.
+
+**Phase 2 outcome:** primary code seams identified, major compatibility/media risks assessed, and post-merge acceptance work defined. No application code, database, eBay or R2 changes were made.
+
+## Confirmed decision — default watcher capture destination (2026-11-16/17)
+- The watcher default capture destination is **Master + Listing**.
+- Every normal capture creates one independent master inventory record and also stages the captured item in the currently authorized Standard or Variation listing workflow.
+- **Master only** remains an explicit selectable alternative and must never silently stage a listing.
+- This destination setting is separate from Standard/Variation workspace ownership and existing capture modes; preserve routing guards and freeze the selected destination for an in-progress capture.
+- A listing-stage failure must preserve the successfully created master record and allow an idempotent listing-only retry, as previously confirmed.
+- Whether destination selection persists between sessions is not yet decided; the startup/default value is Master + Listing.

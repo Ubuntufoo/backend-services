@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { Json, VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
 
+import { revisionSnapshotAggregate } from '@/ebay/variation-listing-active-revision.js';
 import { assertVariationListingMerchantLocation, createVariationListingActionService, normalizeItem, readRemovedSkuExhaustiveOffers, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
 import { subscribeVariationListingActionEvents } from '@/ebay/variation-listing-action-events.js';
 import type { RemovedSkuRetirementStore } from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
@@ -1458,6 +1459,57 @@ describe('YP6.2 variation listing actions', () => {
     expect(harness.remoteFactory).toHaveBeenCalledTimes(1);
   });
 
+  it('withdraws after canceled edits advance desired revision without changing confirmed content', async () => {
+    const harness = activeWithdrawalHarness();
+    const frozen = structuredClone((await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source);
+    harness.access.value.listRevisionsByGroupId.mockImplementation(async () => [{ source: harness.captured() ?? frozen }]);
+    harness.aggregate().group.desired_revision = 34;
+    harness.aggregate().group.condition_descriptors = [];
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
+
+    await expect(service.withdraw(groupId, 34)).resolves.toMatchObject({ lifecycleState: 'withdrawn', revisionId: withdrawalRevisionId });
+    expect(harness.access.value.reserveActionRevision).toHaveBeenCalledWith({ groupId, expectedDesiredRevision: 34 });
+    expect(harness.access.value.captureRevision).toHaveBeenCalledWith(expect.objectContaining({ groupId, capturedDesiredRevision: 35 }));
+    expect(harness.deletes).toEqual([]);
+  });
+
+  it('rejects a newer frozen revision even when local edits have canceled out', async () => {
+    const harness = activeWithdrawalHarness();
+    const frozen = structuredClone((await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source);
+    harness.access.value.listRevisionsByGroupId.mockResolvedValue([{ source: frozen }, { source: { ...frozen, revision_id: 'newer-revision', captured_desired_revision: 7 } }]);
+    harness.aggregate().group.desired_revision = 34;
+    harness.aggregate().group.condition_descriptors = [];
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory });
+
+    await expect(service.withdraw(groupId, 34)).rejects.toMatchObject({ status: { code: 'withdraw_pending_changes', remoteState: 'known_unchanged' } });
+    expect(harness.remoteFactory).not.toHaveBeenCalled();
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+  });
+
+  it('rejects withdrawal when confirmed durable evidence is incomplete before resolving the remote gateway', async () => {
+    const harness = activeWithdrawalHarness();
+    const frozen = (await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source;
+    delete (frozen.snapshot as Record<string, unknown>).confirmed;
+    harness.aggregate().group.desired_revision = 34;
+    harness.aggregate().group.condition_descriptors = [];
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory });
+
+    await expect(service.withdraw(groupId, 34)).rejects.toMatchObject({ status: { code: 'withdraw_pending_changes', remoteState: 'known_unchanged' } });
+    expect(harness.remoteFactory).not.toHaveBeenCalled();
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+  });
+
+  it('rejects withdrawal when confirmed publication recovery is unresolved before resolving the remote gateway', async () => {
+    const harness = activeWithdrawalHarness({ unresolved: true });
+    harness.aggregate().group.desired_revision = 34;
+    harness.aggregate().group.condition_descriptors = [];
+    const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory });
+
+    await expect(service.withdraw(groupId, 34)).rejects.toMatchObject({ status: { code: 'variation_listing_remote_outcome_unknown', remoteState: 'unknown', requiresReconciliation: true } });
+    expect(harness.remoteFactory).not.toHaveBeenCalled();
+    expect(harness.access.value.reserveActionRevision).not.toHaveBeenCalled();
+  });
+
   it('reconstructs published ownership from a historical overlong revision during withdrawal', async () => {
     const harness = activeWithdrawalHarness({ historicalOverlong: true });
     const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory, createId: () => withdrawalRevisionId });
@@ -1890,8 +1942,25 @@ describe('YP6.2 variation listing actions', () => {
     expect(remoteFactory).not.toHaveBeenCalled();
   });
 
-  it('fails cleanly on pending active local changes before remote factory or revision reservation', async () => {
-    const harness = activeWithdrawalHarness({ pending: true });
+  it.each([
+    ['price', (_harness: ReturnType<typeof activeWithdrawalHarness>) => {}, (harness: ReturnType<typeof activeWithdrawalHarness>) => { harness.aggregate().variations[0]!.price_amount = 4.99; }],
+    ['quantity_adjustment_counter', (_harness: ReturnType<typeof activeWithdrawalHarness>) => {}, (harness: ReturnType<typeof activeWithdrawalHarness>) => { harness.aggregate().variations[0]!.quantity_adjustment_counter = 1; }],
+    ['representative_copy_id', (harness: ReturnType<typeof activeWithdrawalHarness>) => {
+      const current = harness.aggregate();
+      current.copies.push({ ...current.copies[0]!, copy_id: copyCId });
+    }, (harness: ReturnType<typeof activeWithdrawalHarness>) => { harness.aggregate().variations[0]!.representative_copy_id = copyCId; }],
+  ] as const)('fails cleanly on pending active %s changes before remote factory or revision reservation', async (change, prepareChange, applyChange) => {
+    const harness = activeWithdrawalHarness();
+    prepareChange(harness);
+    const frozen = structuredClone((await harness.access.value.listRevisionsByGroupId(groupId))[0]!.source);
+    if (change === 'representative_copy_id') {
+      const frozenAggregate = revisionSnapshotAggregate(frozen);
+      expect(frozenAggregate.copies).toEqual(expect.arrayContaining([expect.objectContaining({ copy_id: copyCId, variation_id: variationId })]));
+      expect(frozenAggregate.variations.find((variation) => variation.variation_id === variationId)?.representative_copy_id).toBe(copyId);
+    }
+    harness.access.value.listRevisionsByGroupId.mockImplementation(async () => [{ source: harness.captured() ?? frozen }]);
+    harness.aggregate().group.desired_revision = 4;
+    applyChange(harness);
     const service = createVariationListingActionService({ data: harness.access.value, publicImageBaseUrl: 'https://images.example.test', remoteFactory: harness.remoteFactory });
     await expect(service.withdraw(groupId, 4)).rejects.toMatchObject({ status: { code: 'withdraw_pending_changes', remoteState: 'known_unchanged' } });
     expect(harness.remoteFactory).not.toHaveBeenCalled();

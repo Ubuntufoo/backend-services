@@ -2578,7 +2578,26 @@ export function createVariationListingActionService(options: VariationListingAct
         throw validationError('withdraw', groupId, 'withdraw_lifecycle_blocked', 'Withdrawal requires an active published variation listing.', ['refresh_group']);
       }
       if (!recoveringReservation && aggregate.group.desired_revision !== aggregate.group.last_confirmed_revision) {
-        throw validationError('withdraw', groupId, 'withdraw_pending_changes', 'Withdrawal is blocked while staged local changes are pending. Publish or discard the pending changes first.', ['publish_changes', 'review_pending_changes']);
+        const confirmedRevision = revisions.find((revision) =>
+          revision.captured_desired_revision === aggregate.group.last_confirmed_revision && revisionKind(revision) !== 'cleanup'
+        );
+        if (!confirmedRevision || revisions.some((revision) => revision.captured_desired_revision > confirmedRevision.captured_desired_revision)) {
+          throw validationError('withdraw', groupId, 'withdraw_pending_changes', 'Withdrawal requires no effective staged changes or newer frozen publication revisions.', ['publish_changes', 'review_pending_changes']);
+        }
+        const confirmedHistory = await checkpoints(confirmedRevision.revision_id);
+        try {
+          const recovery = classifyRevisionRow(confirmedRevision, confirmedHistory, aggregate.group.last_confirmed_revision);
+          if (recovery) throwRevisionRecovery('withdraw', groupId, confirmedRevision, confirmedHistory, recovery);
+          const representativeImages = reconstructVariationListingConfirmedRepresentativeImages({ revision: confirmedRevision, checkpoints: confirmedHistory });
+          reconstructConfirmedRemoteIdentity(confirmedRevision, confirmedHistory);
+          buildVariationListingHistoricalInventoryPayloadBundle({ aggregate: snapshotAggregate(confirmedRevision), representativeImages });
+        } catch (error) {
+          if (error instanceof VariationListingActionError) throw error;
+          throw validationError('withdraw', groupId, 'withdraw_pending_changes', 'Withdrawal requires valid durable confirmed publication evidence.', ['inspect_group_history', 'review_pending_changes']);
+        }
+        if (hasEffectiveVariationListingPendingChanges(aggregate, confirmedRevision)) {
+          throw validationError('withdraw', groupId, 'withdraw_pending_changes', 'Withdrawal requires no effective staged changes or newer frozen publication revisions.', ['publish_changes', 'review_pending_changes']);
+        }
       }
       deps = await resolveDependencies();
       const history = await exactOwnedHistory(groupId, aggregate, deps);
