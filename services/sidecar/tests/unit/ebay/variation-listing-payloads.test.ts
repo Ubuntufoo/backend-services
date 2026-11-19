@@ -176,6 +176,14 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
     expect(result.children[1]?.offer.pricingSummary.price.value).toBe('4.99');
   });
 
+  it('uses the saved group description verbatim in current and historical publication payloads', () => {
+    const input = fixture();
+    const description = 'A selection of basketball cards.\n\nChoose one Card variation to see its representative front and back images.';
+    input.aggregate.group.description = description;
+    expect(buildVariationListingInventoryPayloadBundle(input).group.description).toBe(description);
+    expect(buildVariationListingHistoricalInventoryPayloadBundle(input).group.description).toBe(description);
+  });
+
   it('uses the persisted group common-aspect projection without re-deriving child metadata', () => {
     const input = fixture();
     input.aggregate.group.derived_common_ebay_aspects = {

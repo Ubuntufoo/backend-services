@@ -464,6 +464,17 @@ describe('variation-listing group review', () => {
     )).toThrow();
   });
 
+  it('enforces the 4000-character generated description limit', () => {
+    expect(() => parseVariationListingGroupContentResponse(
+      JSON.stringify({ title: 'Group', description: 'd'.repeat(4001), warnings: [] }),
+      undefined,
+    )).toThrow();
+    expect(parseVariationListingGroupContentResponse(
+      JSON.stringify({ title: 'Group', description: 'd'.repeat(4000), warnings: [] }),
+      undefined,
+    ).description).toHaveLength(4000);
+  });
+
   it('requires at least two variations for publish readiness', () => {
     const input: GenerateVariationListingGroupReviewInput = {
       ...baseInput,
@@ -473,6 +484,24 @@ describe('variation-listing group review', () => {
     expect(evaluateVariationListingGroupReadiness(input).blockers).toContain(
       'Variation listing publish readiness requires at least two variations.'
     );
+  });
+
+  it('preserves readable paragraphs in a factual group description', () => {
+    const description = '  A selection of reviewed basketball cards.  \n\n  Choose one card using the Card selector.  \n  Images show the selected variation.  ';
+    const result = parseVariationListingGroupContentResponse(
+      JSON.stringify({ title: 'Basketball Cards', description, warnings: [] }),
+      undefined,
+    );
+    expect(result.description).toBe('A selection of reviewed basketball cards.\n\nChoose one card using the Card selector. Images show the selected variation.');
+  });
+
+  it.each(['\r\n', '\r'])('normalizes %s paragraph line endings', (lineEnding) => {
+    const description = `Shared basketball cards.${lineEnding}${lineEnding}Choose one card with the Card selector.`;
+    const result = parseVariationListingGroupContentResponse(
+      JSON.stringify({ title: 'Basketball Cards', description, warnings: [] }),
+      undefined,
+    );
+    expect(result.description).toBe('Shared basketball cards.\n\nChoose one card with the Card selector.');
   });
 
   it('strictly parses only group title, description, and warnings', () => {
@@ -500,6 +529,11 @@ describe('variation-listing group review', () => {
     const common = deriveVariationListingCommonEbayAspects(baseInput);
     const prompt = buildVariationListingGroupReviewPrompt(baseInput, common);
     expect(prompt).toContain('Generate only one group title and one group description.');
+    expect(prompt).toContain('concise, factual, buyer-ready group description');
+    expect(prompt).toContain('Only describe a detail as shared when it is supported by derivedCommonEbayAspects');
+    expect(prompt).toContain('each purchase is for one card chosen with the Card variation selector');
+    expect(prompt).toContain('Images may represent a variation rather than the exact physical copy');
+    expect(prompt).toContain('no HTML, markdown, headings, bullet lists, or placeholders');
     expect(prompt).toContain('Do not generate item specifics or common aspects.');
     expect(prompt).toContain('No SoldComps, Browse, market-price, or repricing analysis');
     expect(prompt).not.toContain('_identityEvidence');

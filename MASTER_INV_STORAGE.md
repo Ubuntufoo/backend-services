@@ -462,3 +462,9 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - Keep the existing exclusion for purchased multi-item auction lots: do not auto-split them into per-physical-item records.
 - Ensure duplicate-import/idempotency checks happen before creating a record or redundantly invoking Gemini. Preserve Pending Delivery as the starting status of purchased imported items until explicit receipt confirmation.
 - No code, schema, AI integration, marketplace write, or deployment changes authorized by this decision.
+
+## Confirmed decision — manually initiated purchased-auction imports (2026-11-19)
+- **Purchased online auction inventory imports must be explicitly initiated by the owner.** Do not automatically detect purchases, poll marketplaces for completed purchases, or automatically create master inventory records from purchase history.
+- An import can be initiated by supplying an individual purchased auction listing URL or selecting a specific purchased item through a supported source integration, if available. This is one user-triggered import operation, not an automatic synchronization service.
+- Preserve previously confirmed safeguards: suitable single-item purchases only; deduplicate by auction source/item identity; default Gemini enrichment with the explicit skip option only for adequately specified direct eBay purchases; reuse unmodified auction images; automatically create a Pending Delivery master record upon successful import.
+- Keep the initial implementation minimal and defer source-specific selector/URL UX decisions until source integrations are scoped. No code, schema, scraping, or marketplace mutations are authorized by this requirement decision.

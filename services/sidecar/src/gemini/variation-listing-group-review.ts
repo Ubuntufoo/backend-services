@@ -61,6 +61,13 @@ function normalizeText(value: string): string {
   return value.normalize('NFC').replace(/\s+/gu, ' ').trim();
 }
 
+function normalizeDescription(value: string): string {
+  return value.normalize('NFC').replace(/\r\n?/gu, '\n').split(/\n\s*\n/u)
+    .map((paragraph) => paragraph.replace(/\s+/gu, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 function normalizedKey(value: string): string {
   return normalizeText(value).toLowerCase();
 }
@@ -246,7 +253,7 @@ export function parseVariationListingGroupContentResponse(
   return {
     ...result.data,
     title: normalizeText(result.data.title),
-    description: normalizeText(result.data.description),
+    description: normalizeDescription(result.data.description),
     warnings: result.data.warnings.map(normalizeText),
     rawModelResponse,
   };
