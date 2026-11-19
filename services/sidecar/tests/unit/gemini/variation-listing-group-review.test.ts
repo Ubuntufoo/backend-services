@@ -529,11 +529,10 @@ describe('variation-listing group review', () => {
     const common = deriveVariationListingCommonEbayAspects(baseInput);
     const prompt = buildVariationListingGroupReviewPrompt(baseInput, common);
     expect(prompt).toContain('Generate only one group title and one group description.');
-    expect(prompt).toContain('concise, factual, buyer-ready group description');
+    expect(prompt).toContain('one concise, factual Item Info summary');
     expect(prompt).toContain('Only describe a detail as shared when it is supported by derivedCommonEbayAspects');
-    expect(prompt).toContain('each purchase is for one card chosen with the Card variation selector');
-    expect(prompt).toContain('Images may represent a variation rather than the exact physical copy');
-    expect(prompt).toContain('no HTML, markdown, headings, bullet lists, or placeholders');
+    expect(prompt).toContain('The application supplies the exact seller-approved promotion');
+    expect(prompt).toContain('no HTML, markdown, headings, bullet lists, URLs or placeholders');
     expect(prompt).toContain('Do not generate item specifics or common aspects.');
     expect(prompt).toContain('No SoldComps, Browse, market-price, or repricing analysis');
     expect(prompt).not.toContain('_identityEvidence');
@@ -567,7 +566,57 @@ describe('variation-listing group review', () => {
     );
     expect(result.readiness.ready).toBe(true);
     expect(result.derivedCommonEbayAspects.Sport).toEqual(['Basketball']);
+    expect(result.description).toContain('<strong>Buy more, save more:');
+    expect(result.description).toContain('shipping for eligible items is never higher than $1.49');
+    expect(result.description).toContain('5% off 2 · 10% off 3 · 15% off 4 or more');
+    expect(result.description).toContain('<a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a>');
+    expect(result.description).toContain('<strong>Item Info:</strong>');
+    expect(result.description).toContain('Card variation selector');
+    expect(result.description).toContain('equal or better overall condition');
+    expect(result.description).toContain('exact photographed copy is not guaranteed');
+    expect(result.description).toContain('FedEx Ground Economy is available as a $6.49 alternative');
+    expect(result.description.length).toBeLessThanOrEqual(4000);
     expect(result).not.toHaveProperty('price');
+  });
+
+  it('escapes model-authored Item Info while preserving fixed seller HTML', async () => {
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(),
+      generateDraftRaw: vi.fn(async () => ({
+        text: JSON.stringify({
+          title: 'Basketball Cards',
+          description: '<script>alert("x")</script> & cards',
+          warnings: [],
+        }),
+        rawResponse: null,
+      })),
+    };
+    const result = await generateVariationListingGroupReview(baseInput, { model: 'gemini-test' }, {
+      getClient: () => client,
+      loadConfig: () => ({ apiKey: 'test-key' }),
+    });
+    expect(result.description).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; cards');
+    expect(result.description).not.toContain('<script>');
+    expect(result.description).toContain('<strong>Item Info:</strong>');
+    expect(result.description).toContain('<a href="https://www.ebay.com/usr/mfhbusiness">');
+  });
+
+  it('rejects Item Info that exceeds the 600-character model summary limit', async () => {
+    const client: GeminiDraftClient = {
+      prepareImageParts: vi.fn(),
+      generateDraftRaw: vi.fn(async () => ({
+        text: JSON.stringify({
+          title: 'Basketball Cards',
+          description: 'x'.repeat(601),
+          warnings: [],
+        }),
+        rawResponse: null,
+      })),
+    };
+    await expect(generateVariationListingGroupReview(baseInput, { model: 'gemini-test' }, {
+      getClient: () => client,
+      loadConfig: () => ({ apiKey: 'test-key' }),
+    })).rejects.toThrow('Item Info exceeds 600 characters');
   });
 
   it('prepares config, client, and prompt once while falling through a nested 503', async () => {

@@ -3,7 +3,7 @@ import { MAX_VARIATION_GROUP_TITLE_LENGTH } from '@/ebay/variation-listing-limit
 
 const OUTPUT_SHAPE = `{
   "title": "string, 1-${MAX_VARIATION_GROUP_TITLE_LENGTH} characters",
-  "description": "plain-text seller description, 1-4000 characters",
+  "description": "one factual plain-text Item Info summary, 1-600 characters",
   "warnings": ["string"]
 }`;
 
@@ -23,14 +23,13 @@ export function buildVariationListingGroupReviewPrompt(
     'Generate only one group title and one group description. Do not generate per-card titles or descriptions.',
     `The group title must be factual, concise, and at most ${MAX_VARIATION_GROUP_TITLE_LENGTH} characters.`,
     'The title should describe the common merchandising theme of the complete group rather than pretending every heterogeneous child has the same optional facts.',
-    'Write a concise, factual, buyer-ready group description in plain text, following the clear seller-description style used for Standard listings. Do not return only a selector instruction or sales/marketing copy.',
-    'Use two or three short paragraphs: first summarize the shared group theme and only genuinely common, reviewed facts (such as sport, manufacturer, set, player or team); then explain how to choose a card and interpret its photos; optionally add a brief condition reminder.',
-    'Only describe a detail as shared when it is supported by derivedCommonEbayAspects for the entire group. A group theme or one child selector does not establish a fact for every variation. If few shared details exist, be brief rather than inventing filler.',
-    'State clearly that each purchase is for one card chosen with the Card variation selector, not the entire group. The front/back images change to show the selected variation. Images may represent a variation rather than the exact physical copy when multiple copies exist; do not promise an exact photographed copy.',
-    'Refer buyers to the listing condition and selected-card photos without inventing wear, centering, surface quality, grades or per-copy condition guarantees. The shared group condition token is not a license to describe individual copies as identical.',
-    'Use readable plain-text paragraphs separated by a blank line; no HTML, markdown, headings, bullet lists, or placeholders. Keep the description concise and within 4000 characters.',
+    'For description, write only one concise, factual Item Info summary (maximum 600 characters) using reviewed group-shared attributes such as sport, manufacturer, set, player or team. If little is shared, keep it short. Do not write the full seller listing description.',
+    'The application supplies the exact seller-approved promotion, seller link, condition and photography disclosure, Card selector instructions, and shipping terms separately. Do not repeat or rewrite those fixed sections.',
+    'Only describe a detail as shared when it is supported by derivedCommonEbayAspects for every variation. A group theme or an individual selector is not proof that a detail applies to all cards.',
+    'Do not invent wear, centering, surface quality, grades, shipping, discounts, policies, availability, or per-copy condition guarantees. Do not assert the representative images show the exact physical copy shipped.',
+    'The description field must contain only a short plain-text sentence or paragraph: no HTML, markdown, headings, bullet lists, URLs or placeholders.',
     'Do not include condition/grading claims in the title. Do not invent condition details in the description.',
-    'Do not generate or recommend prices, discounts, shipping promotions, quantities, SKUs, category ids, business policies, or eBay publish state.',
+    'Do not generate or recommend prices, discounts, shipping promotions, quantities, SKUs, category ids, business policies, or eBay publish state. Seller-approved copy is appended by the application, not authored by Gemini.',
     'Do not generate item specifics or common aspects. Backend code has already derived truthful common eBay aspects deterministically from all reviewed variations; those values are context only.',
     'Do not add an aspect merely because it is plausible. Heterogeneous optional facts are intentionally omitted from the common projection.',
     'Do not make autograph, certification, grading, rarity, serial-number, rookie, parallel, or insert claims unless they are explicitly present in the supplied reviewed facts and are relevant to the group theme.',

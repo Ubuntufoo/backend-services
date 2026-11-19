@@ -68,6 +68,33 @@ function normalizeDescription(value: string): string {
     .join('\n\n');
 }
 
+function buildSellerGroupDescription(itemInfo: string): string {
+  const summary = normalizeText(itemInfo);
+  if (summary.length > 600) {
+    throw new GeminiDraftServiceError('Gemini variation group Item Info exceeds 600 characters.');
+  }
+  const escapedSummary = summary
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+    .replace(/'/gu, '&#39;');
+
+  const description = [
+    '<strong>Buy more, save more: Combined eBay Standard Envelope shipping for eligible items is never higher than $1.49.</strong>',
+    '<strong>+</strong>',
+    '<strong>Bundle discount for eligible items under $5.00: 5% off 2 · 10% off 3 · 15% off 4 or more.</strong>',
+    '<a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a> - For easy access to this store, and periodic discounts on merchandise.',
+    `<strong>Item Info:</strong> ${escapedSummary} Select one card using the Card variation selector; the photos update to show the selected variation. The purchase includes the selected card only, not all cards pictured.`,
+    '<strong>Condition &amp; Photography:</strong> Please review the high-resolution photos for centering, corners, edges, and surface details. For variations with multiple copies, the photos show a representative card. We select a copy we assess to be in equal or better overall condition than the photographed example; individual centering, corners, edges, and surface characteristics may differ. This is an ungraded seller assessment, not a third-party grade, and the exact photographed copy is not guaranteed. Cards will be shipped securely in a new sleeve, protected against movement, bending, and moisture.',
+    '<strong>Shipping:</strong> Eligible items under $20 ship via eBay Standard Envelope at $1.49. FedEx Ground Economy is available as a $6.49 alternative. Reasonable attempts will be made to combine shipping safely into as few envelopes as possible during fulfillment.',
+  ].join('<br><br>');
+  if (description.length > 4000) {
+    throw new GeminiDraftServiceError('Variation group seller description exceeds 4000 characters.');
+  }
+  return description;
+}
+
 function normalizedKey(value: string): string {
   return normalizeText(value).toLowerCase();
 }
@@ -320,7 +347,7 @@ export function prepareGenerateVariationListingGroupReview(
       return {
         groupId: validated.groupId,
         title: content.title,
-        description: content.description,
+        description: buildSellerGroupDescription(content.description),
         derivedCommonEbayAspects,
         readiness,
         warnings: [...content.warnings],

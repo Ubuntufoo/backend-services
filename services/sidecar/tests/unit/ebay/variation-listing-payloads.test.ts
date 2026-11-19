@@ -178,7 +178,7 @@ describe('buildVariationListingInventoryPayloadBundle', () => {
 
   it('uses the saved group description verbatim in current and historical publication payloads', () => {
     const input = fixture();
-    const description = 'A selection of basketball cards.\n\nChoose one Card variation to see its representative front and back images.';
+    const description = '<strong>Item Info:</strong> Cards &amp; selection.<br><br><strong>Shipping:</strong> $1.49.';
     input.aggregate.group.description = description;
     expect(buildVariationListingInventoryPayloadBundle(input).group.description).toBe(description);
     expect(buildVariationListingHistoricalInventoryPayloadBundle(input).group.description).toBe(description);
