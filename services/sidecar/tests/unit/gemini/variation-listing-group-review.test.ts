@@ -530,6 +530,8 @@ describe('variation-listing group review', () => {
     const prompt = buildVariationListingGroupReviewPrompt(baseInput, common);
     expect(prompt).toContain('Generate only one group title and one group description.');
     expect(prompt).toContain('one concise, factual Item Info summary');
+    expect(prompt).toContain('Do not mention the cards\' language');
+    expect(prompt).toContain('English-language');
     expect(prompt).toContain('Only describe a detail as shared when it is supported by derivedCommonEbayAspects');
     expect(prompt).toContain('The application supplies the exact seller-approved promotion');
     expect(prompt).toContain('no HTML, markdown, headings, bullet lists, URLs or placeholders');
@@ -566,9 +568,10 @@ describe('variation-listing group review', () => {
     );
     expect(result.readiness.ready).toBe(true);
     expect(result.derivedCommonEbayAspects.Sport).toEqual(['Basketball']);
-    expect(result.description).toContain('<strong>Buy more, save more:');
+    expect(result.description).toContain('<strong style="color: green; font-size: 1.1em;">Buy more, save more:');
     expect(result.description).toContain('shipping for eligible items is never higher than $1.49');
-    expect(result.description).toContain('5% off 2 · 10% off 3 · 15% off 4 or more');
+    expect(result.description).toContain('<strong style="color: green; font-size: 1.1em;">+</strong>');
+    expect(result.description).toContain('<strong style="color: green; font-size: 1.1em;">Bundle discount for eligible items under $5.00: 5% off 2 · 10% off 3 · 15% off 4 or more.</strong>');
     expect(result.description).toContain('<a href="https://www.ebay.com/usr/mfhbusiness">Follow / Save this seller</a>');
     expect(result.description).toContain('<strong>Item Info:</strong>');
     expect(result.description).toContain('Card variation selector');

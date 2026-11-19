@@ -26,6 +26,7 @@ export function buildVariationListingGroupReviewPrompt(
     'For description, write only one concise, factual Item Info summary (maximum 600 characters) using reviewed group-shared attributes such as sport, manufacturer, set, player or team. If little is shared, keep it short. Do not write the full seller listing description.',
     'The application supplies the exact seller-approved promotion, seller link, condition and photography disclosure, Card selector instructions, and shipping terms separately. Do not repeat or rewrite those fixed sections.',
     'Only describe a detail as shared when it is supported by derivedCommonEbayAspects for every variation. A group theme or an individual selector is not proof that a detail applies to all cards.',
+    'Do not mention the cards\' language or use terms such as English, English-language, or written in English in Item Info. Language remains an item-specific field, not buyer-facing group description copy.',
     'Do not invent wear, centering, surface quality, grades, shipping, discounts, policies, availability, or per-copy condition guarantees. Do not assert the representative images show the exact physical copy shipped.',
     'The description field must contain only a short plain-text sentence or paragraph: no HTML, markdown, headings, bullet lists, URLs or placeholders.',
     'Do not include condition/grading claims in the title. Do not invent condition details in the description.',
