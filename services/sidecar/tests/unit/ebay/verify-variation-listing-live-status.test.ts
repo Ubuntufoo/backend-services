@@ -8,6 +8,7 @@ import {
   durableIdentityFor,
   isNotFound,
   isOfferLive,
+  hasValidLocalVariationInventory,
   normalizeOffers,
   parseOffer,
   recordDurableOfferOwner,
@@ -25,6 +26,64 @@ const identity = (): {
   listingIds: new Set<string>(),
   hasPublishedHistory: false,
   malformed: false,
+});
+
+describe('complete local Variation inventory', () => {
+  const active = {
+    group_id: 'group-active',
+    group_key: 'VL-G-ACTIVE',
+    lifecycle_state: 'active',
+    marketplace_id: 'EBAY_US',
+    sku_bucket_token: 'ACTIVE',
+  };
+  const abandoned = {
+    ...active,
+    group_id: 'group-abandoned',
+    group_key: 'VL-G-ABANDONED',
+    lifecycle_state: 'abandoned',
+    sku_bucket_token: 'ABANDONED',
+  };
+
+  it('accepts dynamic counts and a zero-SKU abandoned group', () => {
+    const rows = new Map([
+      [active.group_id, [{ group_id: active.group_id, sku: 'SKU-A' }]],
+      [abandoned.group_id, []],
+    ]);
+    expect(hasValidLocalVariationInventory([active, abandoned], rows)).toBe(true);
+  });
+
+  it('rejects zero-SKU active groups and an empty inventory without remote evidence', () => {
+    expect(hasValidLocalVariationInventory([active], new Map([[active.group_id, []]]))).toBe(false);
+    expect(hasValidLocalVariationInventory([], new Map())).toBe(false);
+  });
+
+  it('rejects duplicate group identity, cross-group SKU reuse and mismatched rows', () => {
+    const one = [{ group_id: active.group_id, sku: 'SKU-A' }];
+    expect(hasValidLocalVariationInventory([active, active], new Map([[active.group_id, one]])))
+      .toBe(false);
+    expect(
+      hasValidLocalVariationInventory(
+        [active, abandoned],
+        new Map([[active.group_id, one], [abandoned.group_id, [{ group_id: abandoned.group_id, sku: 'SKU-A' }]]])
+      )
+    ).toBe(false);
+    expect(
+      hasValidLocalVariationInventory(
+        [active],
+        new Map([[active.group_id, [{ group_id: 'other-group', sku: 'SKU-A' }]]])
+      )
+    ).toBe(false);
+  });
+
+  it('fails closed on invalid marketplace or missing local group rows', () => {
+    expect(
+      hasValidLocalVariationInventory(
+        [{ ...active, marketplace_id: 'EBAY_GB' }],
+        new Map([[active.group_id, [{ group_id: active.group_id, sku: 'SKU-A' }]]])
+      )
+    ).toBe(false);
+    expect(hasValidLocalVariationInventory([active], new Map())).toBe(false);
+  });
 });
 
 describe('unknown diagnostics', () => {

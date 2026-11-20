@@ -142,13 +142,18 @@ variation quantity is derived from eligible available physical copies; it is not
 inventory authority. The detailed capture/replenishment contract is in
 [`intake-workflow.md`](intake-workflow.md).
 
-The initial durable boundary is fixed to four additive tables: `variation_listing_groups`,
-`variation_listing_variations`, `variation_listing_copies`, and the dedicated
-`variation_listing_intake_sessions`. Group rows own SKU category/token, next-serial high-water, and
-`desired_revision`/`last_confirmed_revision` watermarks; session rows own station target/mode/price and
-pending-pair snapshots. Revision snapshots, digests, remote IDs, and operation checkpoints remain the
-later YP2.5 ledger, so no publish occurs before that ledger exists. Exact columns, SQL names, triggers,
-FKs, RLS, and CAS semantics are in [`persistence-design.md`](persistence-design.md).
+The original four-table proposal was superseded by the applied YP2.8/YP2.9 **six-table**
+persistence model: `variation_listing_groups`, `variation_listing_variations`,
+`variation_listing_copies`, `variation_listing_intake_sessions`,
+`variation_listing_revisions`, and `variation_listing_publishing_checkpoints`.
+Group rows own SKU namespace/high-water and desired/confirmed revision watermarks;
+intake sessions own capture targeting and pending-pair state. Immutable revisions and
+append-only checkpoints retain publication/recovery evidence. For current SQL columns,
+constraints, triggers, RLS and CAS behavior, use the applied
+[`20260831170000` simplification migration](../../supabase/migrations/20260831170000_simplify_variation_listing_persistence.sql)
+and subsequent V3 migrations and current RPCs. See the
+[`persistence-simplification-audit.md`](persistence-simplification-audit.md) for rationale;
+[`persistence-design.md`](persistence-design.md) is superseded historical provenance only.
 
 - `groupId` and `variationId` are application identities: canonical UUIDs generated once, globally
   unique, immutable, and never reused. They remain the primary identities after withdrawal or
@@ -365,9 +370,10 @@ Lifecycle is aggregate-scoped; variation/SKU identity is variation-scoped; physi
 copy-level condition evidence are copy-scoped. Remote operation progress is checkpoint evidence,
 not a fourth lifecycle. Published groups are long-lived inventory buckets: local additions,
 replenishments, price edits, representative-image changes, and quantity changes may be staged while
-the last confirmed remote revision remains active. The exact durable columns, constraints, and mutation
-guards are fixed in [`persistence-design.md`](persistence-design.md); semantic scopes may not be
-derived from another scope by label.
+the last confirmed remote revision remains active. The current durable constraints and mutation
+guards are defined by applied migrations and live RPC/source contracts, not the superseded
+[`persistence-design.md`](persistence-design.md). Semantic scopes may not be derived from another
+scope by label.
 
 ### Aggregate lifecycle
 

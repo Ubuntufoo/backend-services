@@ -9,4 +9,4 @@ Applied canonical sources remain byte-identical:
 - Gate A `20261026140000` — hosted `20261027145825` — SHA-256 `0f4583e3292da919bd62e43c2c49a9528fb45a40e4cc7286da1388bf5ae8d9df`
 - RPC alias `20261027201000` — hosted `20261028014018` — SHA-256 `7adf18fdc56346d119ac2f5a7bb8b0502f2ba0aeab70acd1da587c221035e8b8`
 
-Later incident-delete and incident-offer-delete migrations were unapplied and have been removed with their incident-only runtime, scripts, validators, tests, and runbooks.
+The later incident-delete migration was applied as hosted record `20261028141612` (`v20261028120000_c2b_removal01_incident_delete`); its current installed statement has no corresponding source in this repository or reachable Git history. Its incident row remains `unknown`, and its guard/RPC/trigger package remains installed. Incident-offer-delete source/runtime was removed and no corresponding hosted migration record was found. Preserve the installed incident-delete history and safeguards; do not reconstruct, replay, disable, or drop them without a separately approved recovery/disposition migration.

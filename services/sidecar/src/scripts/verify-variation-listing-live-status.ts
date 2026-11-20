@@ -17,8 +17,6 @@ import { loadEbayOAuthValidationConfig } from '@/ebay/config.js';
 import { getSidecarDataAccess } from '@/data/sidecar-data.js';
 import { setLogLevel } from '@/utils/logger.js';
 
-const EXPECTED_GROUP_COUNT = 10;
-const EXPECTED_SKU_COUNT = 53;
 const EXPECTED_MARKETPLACE = 'EBAY_US';
 const EXPECTED_API_BASE_URL = 'https://api.ebay.com';
 
@@ -62,6 +60,7 @@ interface HistoricalNamespace {
 interface RawVariationGroup {
   group_id: string;
   group_key: string;
+  lifecycle_state: string;
   marketplace_id: string;
   sku_bucket_token: string;
 }
@@ -84,6 +83,7 @@ interface RawCheckpoint {
 }
 
 interface SupabaseQueryResult<T> {
+  count?: number | null;
   data: T[] | null;
   error: { message: string } | null;
 }
@@ -496,10 +496,19 @@ export function countUniqueLiveListingIds(offers: Iterable<OfferSummary>): numbe
   ).size;
 }
 
-async function queryRows<T>(query: PromiseLike<unknown>): Promise<T[]> {
+async function queryRows<T>(query: PromiseLike<unknown>, requireExactCount = false): Promise<T[]> {
   const result = (await query) as SupabaseQueryResult<T>;
   if (result.error) throw new Error(`Supabase read failed: ${result.error.message}`);
-  return result.data ?? [];
+  if (!Array.isArray(result.data)) throw new Error('Supabase returned no rows payload');
+  if (
+    requireExactCount &&
+    (typeof result.count !== 'number' ||
+      !Number.isSafeInteger(result.count) ||
+      result.count !== result.data.length)
+  ) {
+    throw new Error('Supabase exact-count read is incomplete');
+  }
+  return result.data;
 }
 
 async function listGroups(
@@ -508,8 +517,11 @@ async function listGroups(
   return await queryRows<RawVariationGroup>(
     database
       .from('variation_listing_groups')
-      .select('group_id,group_key,marketplace_id,sku_bucket_token')
-      .order('created_at', { ascending: true })
+      .select('group_id,group_key,lifecycle_state,marketplace_id,sku_bucket_token', {
+        count: 'exact',
+      })
+      .order('created_at', { ascending: true }),
+    true
   );
 }
 
@@ -520,9 +532,10 @@ async function listVariations(
   return await queryRows<RawVariation>(
     database
       .from('variation_listing_variations')
-      .select('group_id,sku')
+      .select('group_id,sku', { count: 'exact' })
       .eq('group_id', groupId)
-      .order('position', { ascending: true })
+      .order('position', { ascending: true }),
+    true
   );
 }
 
@@ -557,6 +570,41 @@ async function listCheckpoints(
 function namespaceFor(group: RawVariationGroup, skus: string[]): HistoricalNamespace {
   const bucket = nonEmptyString(group.sku_bucket_token) ?? '[missing]';
   return { groupKey: group.group_key, skuBucketToken: bucket, skus: [...skus] };
+}
+
+/** Validates the complete local inventory before any remote read; empty abandoned groups are valid. */
+export function hasValidLocalVariationInventory(
+  groups: readonly RawVariationGroup[],
+  variationsByGroup: ReadonlyMap<string, readonly RawVariation[]>
+): boolean {
+  if (groups.length === 0 || groups.length !== variationsByGroup.size) return false;
+  const groupIds = new Set<string>();
+  const groupKeys = new Set<string>();
+  const skus = new Set<string>();
+  for (const group of groups) {
+    if (
+      !nonEmptyString(group.group_id) ||
+      !nonEmptyString(group.group_key) ||
+      !nonEmptyString(group.sku_bucket_token) ||
+      group.marketplace_id !== EXPECTED_MARKETPLACE ||
+      groupIds.has(group.group_id) ||
+      groupKeys.has(group.group_key)
+    ) return false;
+    groupIds.add(group.group_id);
+    groupKeys.add(group.group_key);
+    const variations = variationsByGroup.get(group.group_id);
+    if (!variations || (variations.length === 0 && group.lifecycle_state !== 'abandoned'))
+      return false;
+    for (const variation of variations) {
+      if (
+        variation.group_id !== group.group_id ||
+        !nonEmptyString(variation.sku) ||
+        skus.has(variation.sku)
+      ) return false;
+      skus.add(variation.sku);
+    }
+  }
+  return true;
 }
 
 export function baseReport(
@@ -654,7 +702,6 @@ export async function verifyVariationListingLiveStatus(): Promise<VariationListi
   report.groupsChecked = groups.length;
   const variationsByGroup = new Map<string, RawVariation[]>();
   const allSkus = new Set<string>();
-  let skuRowCount = 0;
   for (const group of groups) {
     const variations = await listVariations(database, group.group_id);
     variationsByGroup.set(group.group_id, variations);
@@ -665,18 +712,11 @@ export async function verifyVariationListingLiveStatus(): Promise<VariationListi
       )
     );
     for (const variation of variations) {
-      skuRowCount += 1;
       allSkus.add(variation.sku);
     }
   }
   report.skusChecked = allSkus.size;
-  if (
-    groups.length !== EXPECTED_GROUP_COUNT ||
-    skuRowCount !== EXPECTED_SKU_COUNT ||
-    allSkus.size !== EXPECTED_SKU_COUNT ||
-    report.retainedHistoricalNamespaces.some((entry) => entry.skus.length === 0) ||
-    groups.some((group) => group.marketplace_id !== EXPECTED_MARKETPLACE)
-  ) {
+  if (!hasValidLocalVariationInventory(groups, variationsByGroup)) {
     addUnknown(report, 'authoritative_counts_mismatch');
     return report;
   }

@@ -1,6 +1,8 @@
-# YP10.10 — Guarded Production Variation Pilot
+# Archived — YP10.10 Guarded Production Variation Pilot
 
-This runbook supersedes the two-card YP9.3 pilot. The independent YP10.10 audit concluded **NO-GO for live mutation until the readiness gates below are met**. This document authorizes no environment edit, restart, API call, publication, deletion, or withdrawal.
+> **Historical checklist, not a current execution procedure.** This originally documented the preflight gates before the 2026-11 Production Variation pilots. Later accepted tests used ProductionOOSPilot01/03, PolicyCheck03, and GeneratedDescripTest01; their results and remaining exceptions are recorded in `../../ROADMAP-VARIATION-LISTINGS.md`. Unchecked boxes and historical **NO-GO**/**BLOCKED** labels below represent the earlier preflight, not the present feature status. Do not reuse historical bucket/SKU IDs or infer that these steps grant authorization for any new live test, withdrawal, data cleanup, or publish. Current operations require fresh read-only preflight, exact seller/resource identity and separate approval.
+
+This runbook superseded the two-card YP9.3 pilot. The original independent audit concluded **NO-GO until the stated readiness gates were satisfied**. The archived checklist authorizes no environment edit, restart, API call, publication, deletion, or withdrawal.
 
 ## Scope and pilot cards
 

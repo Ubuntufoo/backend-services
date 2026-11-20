@@ -468,3 +468,44 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - An import can be initiated by supplying an individual purchased auction listing URL or selecting a specific purchased item through a supported source integration, if available. This is one user-triggered import operation, not an automatic synchronization service.
 - Preserve previously confirmed safeguards: suitable single-item purchases only; deduplicate by auction source/item identity; default Gemini enrichment with the explicit skip option only for adequately specified direct eBay purchases; reuse unmodified auction images; automatically create a Pending Delivery master record upon successful import.
 - Keep the initial implementation minimal and defer source-specific selector/URL UX decisions until source integrations are scoped. No code, schema, scraping, or marketplace mutations are authorized by this requirement decision.
+
+## Confirmed decision — auction import initiated and resolved in Master Inventory dashboard (2026-11-20)
+- The standalone Master Inventory page must provide an **Import from Auction** action to manually initiate import of an eligible individually purchased auction item (e.g., by auction listing URL or supported source selector).
+- **Any human-in-the-loop import resolution must happen inside the inventory application's dashboard**, not by expanding browser-extension UI, workflows, or dependencies. Keep browser extensions focused on their existing responsibilities; import orchestration and resolution belong in the application.
+- Normal successful imports remain **automatic** without a mandatory review/approval step. Present a dashboard review/resolution UI only when an import requires intervention (e.g., conflicting identifiers, inaccessible/unsuitable source data, missing photos, or an uncertain duplicate). Allow retry or correction without creating duplicate inventory items.
+- Preserve the existing decisions: imports are always explicitly user-triggered; single-item purchases only; acquired auction images used as-is; Gemini runs by default with a **user-explicit skip option only for complete direct-eBay purchases**; create Pending Delivery items; handle multi-item lots through physical watcher capture instead; explicit Save/Apply for manual edits.
+- Maintain clear in-dashboard import status/errors, with recoverable retry and idempotent source identity; avoid new browser-extension features or broad architectural integrations solely to support import troubleshooting.
+- Design and documentation only: implement after You Pick merges into main and passes baseline verification; no code, database changes, scraper integrations, or marketplace mutations authorized now.
+
+## Confirmed decision — durable, recoverable auction import attempts (2026-11-20)
+- **Preserve incomplete or failed auction import attempts** in the Master Inventory dashboard, retaining all successfully retrieved auction source information, downloaded image references, Gemini output where available, and actionable error details.
+- The user must be able to **inspect, correct, and retry/resume** an interrupted import directly from the dashboard without starting from scratch or redoing successful work.
+- Use a **minimal durable import-status mechanism** rather than a new general-purpose workflow engine. Distinguish in-progress, needs-attention/failed, and completed attempts; do not represent a partially completed attempt as a finalized master inventory item unless its creation has actually succeeded.
+- Retries must be **idempotent**: preserve stable source identity, avoid duplicate master inventory items or duplicate R2 originals, and execute only missing/failed stages when practicable.
+- Automatically completed imports still require **no mandatory human review**; show intervention controls only for exceptions. If successfully created, the item begins **Pending Delivery** as previously agreed.
+- Store enough error context to diagnose problems without exposing marketplace credentials or secrets; ensure abandoned temporary assets eventually receive reference-safe cleanup.
+- This records requirements only. No code, schema, scraper, Gemini, or remote marketplace mutations are authorized.
+
+## Confirmed decision — exactly one automatic retry for transient auction-import failures (2026-11-20)
+- For transient failures in the auction import process (e.g., network timeout, temporary upstream API error, rate limit), allow **at most one automatic retry** of the failed operation after the initial attempt, using a short bounded delay/backoff and respecting an upstream `Retry-After` hint where practical.
+- If that single automatic retry also fails, mark the durable import attempt **Needs Attention** and provide the existing in-dashboard manual correction/retry action; do not create unbounded automatic retry loops or restart already successful stages.
+- **Permanent/non-retryable failures** (e.g., unsupported multi-item lot, invalid source URL, definitive validation error) go directly to Needs Attention without automatic retry.
+- Keep retry operations idempotent, preserve scraped data and downloaded images, and do not create duplicate master items or media during retries. A manual user-initiated retry is distinct from the automatic one-retry allowance.
+- No code, schema, scraper, AI, or remote marketplace mutations are authorized by this decision.
+
+## Confirmed navigation and Import Activity UX — four compact top-level destinations (2026-11-20)
+- Extend the application's **existing Standard / Variation mode toggle/navigation** with two additional destinations: **Inventory** and **Imports**. Keep navigation compact; conventional navigation links/tabs are acceptable rather than forcing the current toggle control to scale awkwardly.
+- **Standard** remains the existing standard listing workflow, and **Variation** remains the existing You Pick variation workflow; preserve their functional behavior and capture-routing rules.
+- **Inventory** opens the standalone master-inventory table/dashboard with saved views, search, editing, status management, CSV export, and an entry point to import purchased auction items.
+- **Imports** opens a dedicated **Import Activity** workspace listing current/in-progress, successful, and failed/Needs Attention auction imports. Include status, source/item identification, actionable error details, and controls to open/correct/retry the import without losing successfully processed stages.
+- A compact global navigation may be implemented as Standard | Variation | Inventory | Imports, using ordinary links or tabs. Avoid building a complex navigation system or extra extension UI.
+- The **Import from Auction** action remains accessible from the Inventory dashboard as already confirmed; its progress and exceptions can be managed in Imports. Keep the navigation destinations clear without duplicating the import orchestration logic.
+- Preserve all previously agreed retry policy (one automatic retry for transient errors, none for permanent errors), source idempotency, Pending Delivery status, and explicit manual import initiation.
+- **Implementation after You Pick merge to main**, following baseline verification; no code, database, or remote marketplace changes authorized by this design decision.
+
+## Confirmed decision — 14-day completed import activity retention (2026-11-20)
+- Retain **successful/completed auction import activity/history entries for 14 days (two weeks)**, then automatically prune their transient activity records.
+- **Failed / Needs Attention / in-progress attempts must remain available until resolved**, rather than expiring while the owner might still need to inspect, correct, or retry them. Once an attempt succeeds or is explicitly dismissed/resolved, apply the 14-day completed-history retention policy from its resolution timestamp.
+- Pruning an import activity entry **must never delete its created master inventory item, retained original images, acquisition provenance, or listing associations**. Keep any minimal stable source identity/deduplication record required to prevent the same purchase from being imported again after its activity history is pruned.
+- Import-history cleanup is separate from the **30-day sold-item archival and cleanup** policy. Abandoned temporary assets still require reference-safe cleanup.
+- Implementation remains deferred until the You Pick branches merge into main; no code, schema, or remote changes authorized by this documentation update.

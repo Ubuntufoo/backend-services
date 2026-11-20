@@ -77,9 +77,9 @@ this read. Its technical eligibility does not make it the application selector.
 The persistence boundary for these layers is explicit: variation-specific facts are stored in
 `variation_listing_variations.variation_metadata`; the recomputed truthful group projection is stored
 in `variation_listing_groups.derived_common_ebay_aspects`; and neither is copied into physical-copy
-rows or used as a hidden eBay variation axis. The four-table persistence design (including revision
-watermarks and durable intake sessions) is authoritative for storage mechanics; this document remains
-authoritative for category-aspect ownership and projection semantics.
+rows or used as a hidden eBay variation axis. The applied six-table persistence model governs storage
+mechanics; see [`architecture.md`](architecture.md) and the applied migrations for current schema
+details. This document remains authoritative for category-aspect ownership and projection semantics.
 
 The contract has three explicit layers:
 

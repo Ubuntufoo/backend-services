@@ -1,7 +1,9 @@
 # Controlled Live Pilot Notes
 
-> **Scope:** Standard single-listing pilot notes only. Variation pilots use
-> [`docs/variation-listings/production-pilot-checklist.md`](docs/variation-listings/production-pilot-checklist.md).
+> **Scope:** Standard single-listing pilot notes only. The earlier Variation pilot
+> [checklist](docs/variation-listings/production-pilot-checklist.md) is archived;
+> see [ROADMAP-VARIATION-LISTINGS.md](ROADMAP-VARIATION-LISTINGS.md) for current
+> Variation acceptance status. Neither document authorizes live operations.
 
 ## Purpose
 

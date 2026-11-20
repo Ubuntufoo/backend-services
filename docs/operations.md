@@ -70,4 +70,5 @@ The frontend-facing equivalent is `POST /api/listings/:listingId/delete-sandbox`
 - eBay config/publish notes: [ebay-integration.md](ebay-integration.md)
 - Troubleshooting: [troubleshooting.md](troubleshooting.md)
 - Generated eBay status feed snapshot: [API_STATUS.md](API_STATUS.md)
-- Guarded Variation production pilot: [variation-listings/production-pilot-checklist.md](variation-listings/production-pilot-checklist.md)
+- Variation implementation status and current acceptance decisions: [ROADMAP-VARIATION-LISTINGS.md](../ROADMAP-VARIATION-LISTINGS.md)
+- Archived Variation production pilot preflight (historical only): [variation-listings/production-pilot-checklist.md](variation-listings/production-pilot-checklist.md)
