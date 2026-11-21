@@ -509,3 +509,113 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - Pruning an import activity entry **must never delete its created master inventory item, retained original images, acquisition provenance, or listing associations**. Keep any minimal stable source identity/deduplication record required to prevent the same purchase from being imported again after its activity history is pruned.
 - Import-history cleanup is separate from the **30-day sold-item archival and cleanup** policy. Abandoned temporary assets still require reference-safe cleanup.
 - Implementation remains deferred until the You Pick branches merge into main; no code, schema, or remote changes authorized by this documentation update.
+
+## Confirmed decision — manually dismiss failed auction imports (2026-11-20)
+- The **Imports** workspace must allow the owner to **manually dismiss a Failed / Needs Attention import attempt** that they do not intend to correct or retry.
+- Require an **explicit confirmation** before dismissal. The action closes the incomplete attempt; it must not create, delete, or modify any successfully created master inventory record or marketplace listing.
+- Dismissal may release/delete **temporary assets owned exclusively by the abandoned attempt** only after verifying no master inventory item, active import, or other record references them. Preserve shared R2 original images and other retained media.
+- Treat the dismissed attempt as **resolved** for the previously confirmed **14-day import activity retention** policy, counting from dismissal time. After that period, prune its transient activity/history record.
+- **Keep durable source identity/deduplication separate from transient activity history.** A dismissal of an attempt that never successfully created an item must not incorrectly mark the source purchase as already imported; a later intentional fresh import should be possible. If a master item already exists, preserve the completed-source deduplication record regardless of dismissal or activity pruning.
+- Ensure confirmation, action status, and retry-safe handling are managed entirely in the dashboard. No code, database, or remote marketplace mutations are authorized by this requirements decision.
+
+## Confirmed decision — serial auction imports (2026-11-20)
+- Process **only one purchased-auction import at a time** in the initial Master Inventory / Imports implementation. Do not run multiple independent auction import pipelines concurrently.
+- Keep the UI clear when an import is already in progress. Additional manually initiated imports may be deferred until the active one completes; do not silently launch concurrent scrape, image-download, or Gemini tasks.
+- Preserve the previously agreed durable per-import progress, one automatic retry for transient failures, manual Needs Attention recovery/dismissal, and source-based duplicate prevention. Serialize execution without losing recoverable attempts.
+- Treat serial import execution as the current implementation scope rather than a permanent prohibition on future concurrency. Avoid implementing speculative parallel-worker infrastructure.
+- No application code, database, scraping, or marketplace changes are authorized by this requirements decision.
+
+## Confirmed correction — batch submission with sequential auction-import queue (2026-11-20)
+- **Auction purchases arrive in batches; the owner must be able to submit multiple purchased-item URLs in one action** (or otherwise make one batch submission). Repeated manual start/wait/start for each item is unacceptable.
+- Maintain **one active import worker at a time** as previously agreed, but automatically **queue the rest of the submitted items and process them sequentially** without requiring user action between successful imports.
+- The queue and per-item import progress must be **durable across page navigation, reload, process restarts, and interrupted jobs**. A queued item must not be lost, run concurrently, or inadvertently be imported twice.
+- Dashboard **Imports** displays each queued/processing/completed/Needs Attention entry and batch-level progress. An item that requires manual resolution should be retained as Needs Attention and should **not automatically block unrelated queued items**; continue processing the rest where safe.
+- Apply the existing **one automatic retry** only to transient errors **per failed operation/item**, then mark that item Needs Attention. Preserve all existing source deduplication, original-image, Gemini, explicit eBay-only Gemini skip, Pending Delivery, and 14-day resolved-history decisions.
+- **This supersedes the previously suggested 'block new import until the current finishes' UX.** Manual initiation applies to the **batch**, not a repeated manual initiation for each item. Do not implement speculative concurrent import workers or a complex distributed queue engine; prefer a minimal durable database-backed sequential queue.
+- **Open follow-up:** for a mixed batch containing eBay purchases, should the explicit 'Skip Gemini' option be configurable separately for each eligible eBay item? Default remains Gemini on for every item unless explicitly skipped.
+- This is a requirements/documentation decision only; no code, schema, external scraping, AI calls, or marketplace mutations are authorized.
+
+## Confirmed decision — explicit per-item Gemini skip within auction import batches (2026-11-20)
+- In a manually submitted batch of purchased auction items, provide a **per-item Skip Gemini option** for individually eligible **direct eBay purchases** whose source listing already contains complete relevant item specifics and identifiers.
+- **Gemini enrichment is enabled by default on every import item.** Skip must be explicitly selected for each eligible eBay item; selecting Skip for one item must not affect other entries in the same batch, even when they share a source marketplace.
+- Non-eBay auction imports continue to **always run Gemini**; do not offer or silently apply Skip Gemini to those items.
+- The explicit skip selection must be captured and preserved with that import's queued/durable request so it remains consistent through sequential processing, restarts, and retry/resume. Treat each queued item's configuration independently.
+- Before allowing an eBay skip, verify that the scraped eBay listing supplies sufficiently complete applicable item specifics/identifiers. If source data fails that check, require Gemini or surface a clear item-level issue; do not silently create a poorly identified item while claiming enrichment was unnecessary.
+- Automatic successful creation, preserved original auction photos, Pending Delivery status, duplicate prevention, and the one-transient-retry rule remain unchanged.
+- No code, schema, scraper, AI, or marketplace mutations are authorized by this documentation decision.
+
+## Confirmed decision — cancel individual queued imports (2026-11-20)
+- On the **Imports** page, allow the owner to **cancel a single import item that is still queued and has not begun processing**, without canceling or disrupting other items in the same batch.
+- Once cancelled, the item must not start processing; remove it from the pending queue atomically, with an unambiguous Cancelled status. Do not create a master item or perform Gemini/image downloads for that cancelled entry.
+- Do not silently apply this queued-only cancel action to a currently processing item. Cancellation of in-progress work is a separate, undecided feature and must not be implied by this requirement.
+- Other queued items continue normally. Preserve stable source identity/idempotency so a cancelled (never-imported) auction item can be manually queued again later without being mistaken for a previously imported inventory item.
+- Treat Cancelled as a resolved import activity state subject to the existing **14-day history retention**; avoid deleting any shared images or existing master inventory records.
+- No code, schema, or remote mutations are authorized by this requirements decision.
+
+## Confirmed exclusion — no pause/resume controls for the auction import queue (2026-11-20)
+- **Do not add user-facing Pause Queue or Resume Queue controls.** Once a manually submitted batch starts, the sequential worker should continue processing eligible queued items without requiring further user interaction.
+- The already-confirmed **per-item cancellation of not-yet-processing queued imports** is sufficient to handle a mistaken or unwanted auction URL. Cancelling a queued item does not interrupt other imports.
+- Durability/recovery after application restarts or transient errors is still required; this is automatic operational recovery, **not** a user-controlled queue pause/resume feature.
+- Avoid pause-state schema, queue-wide stop controls, and extra UI complexity unless future requirements change.
+- No code, schema, or remote operations are authorized by this documentation update.
+
+## Confirmed decision — correct queued URLs by cancel and re-add (2026-11-20)
+- **Do not support editing/replacing the URL of an existing queued auction import.** An incorrect URL is corrected by **cancelling the not-yet-processing queue entry and submitting a new import with the correct URL**.
+- Retain the previously approved single-item queued cancellation behavior: other imports in the batch continue uninterrupted. The replacement entry is a distinct queued request, checked for source duplicates as usual.
+- Avoid queue-entry editing controls, mutable source identities, or special URL-replacement logic. Do not permit changing the URL of an import that has already begun processing.
+- This does not alter the durable recovery and dashboard correction of failed/Needs Attention imports, which may require fixing recoverable import metadata without rewriting the identity of an existing queued request.
+- This is requirements documentation only; no application code, database schema, or marketplace mutations are authorized.
+
+## Confirmed decision — validate and deduplicate auction URLs before queuing (2026-11-20)
+- On submitting an auction import batch, **prevalidate every supplied URL before starting the sequential queue**. Detect empty/malformed URLs, unsupported auction sources, duplicate URLs within the same submitted batch, and sources already successfully imported or currently queued/processing when reliably identifiable.
+- Normalize source URLs and extract stable provider listing/item IDs where possible. Deduplicate using source plus stable item ID, not only literal URL equality, so tracking/query variants do not bypass protection.
+- **Show per-entry validation results before submission** and exclude invalid/duplicate entries from processing; allow all valid entries to proceed together without restarting the entire batch. Provide a link to an existing inventory record where the purchase has already been imported.
+- Keep validation lightweight: a preliminary URL/identity check should not trigger unnecessary scraping, Gemini calls, or image downloads. If duplicate/unsupported-source facts become clear only during processing, handle the item through the existing per-import Needs Attention/deduplication flow and continue the remaining queue.
+- The user must be able to fix incorrect entries by the already agreed **cancel and re-add** approach, not by editing the identity of an active queued import.
+- No code, schema, scraper, Gemini, or external marketplace mutations are authorized by this design decision.
+
+## Confirmed decision — multiline URL entry for auction import batches (2026-11-20)
+- The **Import from Auction** interface must allow the owner to **paste multiple auction listing URLs in one multiline text field**, with **one URL per line**.
+- Parse nonempty lines into individual import candidates; trim surrounding whitespace and ignore blank lines. Show the previously confirmed preflight checks for URL validity, supported sources, and duplicate source identities before queue submission.
+- Each accepted URL becomes a distinct **durable sequential queue entry**, inheriting the already confirmed per-item eBay-only explicit Gemini skip setting, cancellation, retry, Needs Attention recovery, and source idempotency behavior.
+- Keep the UX lightweight; **no CSV/file upload or separate bulk-import document format is needed**. Valid entries should proceed without being blocked by invalid or duplicate lines.
+- This resolves the batch entry method. No application code, database schema, AI integration, or marketplace mutations are authorized by this documentation update.
+
+## Confirmed decision — compact batch progress summary on Imports page (2026-11-20)
+- Show a **compact batch-level progress summary** above the import activity table, counting items by status: **Queued, Processing, Completed, Needs Attention/Failed, and Cancelled**.
+- Derive counts from the durable import queue/activity records, not from only the visible paginated rows. Counts must update as sequential processing proceeds and remain accurate after reload/restart.
+- Keep the summary read-only and simple; existing per-item actions for queued cancellation and failed-import resolution remain in the activity table.
+- Distinguish completed imports from the master inventory records they created; the 14-day resolved activity retention still applies, and pruning activity never affects retained inventory.
+- No code, schema, scraping, AI, or marketplace changes are authorized by this requirements decision.
+
+## Confirmed decision — submit new auction batches while sequential processing is active (2026-11-21)
+- Allow the owner to **submit additional auction URL batches even while an earlier batch is still processing**.
+- Prevalidate and deduplicate each newly submitted batch, then **append its accepted import items to the end of the existing durable FIFO queue**. Do not interrupt or restart the currently processing item or previously queued items.
+- Continue enforcing **exactly one active import at a time** across all batches; do not introduce parallel workers or a manual pause/resume mechanism.
+- The Imports page must show batch-specific status summaries and allow each queued import to be cancelled individually before processing, regardless of which batch submitted it.
+- Persist source identity, per-item explicit eBay-only Gemini-skip choices, batch association, queue order, progress, and failures across app restarts. A failed item enters Needs Attention without preventing later queued items from proceeding when safe.
+- This applies the already approved batch intake and recovery rules. No code, schema, marketplace, or other production mutations are authorized by this requirements update.
+
+## Confirmed exclusion — no bulk Retry All Failed action (2026-11-21)
+- Do **not** add a **Retry All Failed** action to the Imports page. Failed/Needs Attention import attempts must be reviewed and retried **individually** by the operator.
+- Preserve existing one automatic retry for transient failures on each operation, per-item manual correction/retry, and continued sequential processing of unrelated queued imports.
+- Avoid accidentally resubmitting all failed requests or hiding persistent import errors behind bulk retry behavior.
+- No application code, schema, marketplace or production changes are authorized by this requirements decision.
+
+## Confirmed decision — completed imports link to their master inventory items (2026-11-21)
+- Each successfully completed import row on the Imports page provides a **View Inventory Item** link to the exact master inventory record created or reused by that import.
+- Keep inventory editing on the Inventory item view; do not duplicate editing functionality in the Imports page.
+- The link must use the persisted master inventory item identity, not a guessed title, URL, or source listing ID. Do not show a created-item link for an import that never created or resolved to a master record.
+- No implementation, schema, or production mutation is authorized by this requirement.
+
+## Confirmed decision — retain clickable source auction listing (2026-11-21)
+- For each auction-imported physical item, preserve the **original source auction URL** as purchase provenance and show a clickable **View Original Auction** link on the master inventory item detail view.
+- Retain source name and provider/listing ID (when available) alongside the URL; keep this provenance even if the external auction page later expires or becomes inaccessible.
+- Never treat the external URL as the inventory item's permanent identity; continue using the immutable master item ID and normalized provider/listing identity for import deduplication.
+- This is a documentation-only requirement; no application code, schema, marketplace, or production changes are authorized.
+
+## Confirmed decision — import timestamp separate from purchase date (2026-11-21)
+- Automatically record the **date and time an auction import completes / the master inventory item is created** as an import timestamp, distinct from the user-entered or source-derived **purchase date**.
+- Capture this timestamp without additional operator input. Use an unambiguous stored instant (UTC) and display it in the user's local time.
+- Retain this timestamp as inventory provenance; do not overwrite the original import time during subsequent edits or retries of the same successfully imported item.
+- This is requirements documentation only; no code, database, or marketplace mutations are authorized.
