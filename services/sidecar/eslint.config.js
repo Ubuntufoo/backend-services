@@ -14,6 +14,7 @@ export default tseslint.config(
       'dist/**',
       'coverage/**',
       'docs/**',
+      'tmp/**',
       '*.config.js',
       '*.config.mjs',
       'smoke-test-trading.mjs',

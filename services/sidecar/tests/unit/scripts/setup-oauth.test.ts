@@ -15,6 +15,7 @@ describe('setup OAuth refresh verification', () => {
       'https://api.ebay.com/oauth/api_scope',
       'https://api.ebay.com/oauth/api_scope/sell.inventory',
       'https://api.ebay.com/oauth/api_scope/sell.account',
+      'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',
       'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
     ]);
     expect(scopes).not.toContain('https://api.ebay.com/oauth/api_scope/sell.marketing');

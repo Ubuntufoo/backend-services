@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { Json, VariationListingAggregateSnapshot, VariationListingPublishingCheckpointRow, VariationListingRevisionRow } from '@ebay-inventory/data';
 
-import { revisionSnapshotAggregate } from '@/ebay/variation-listing-active-revision.js';
-import { assertVariationListingMerchantLocation, createVariationListingActionService, normalizeItem, readRemovedSkuExhaustiveOffers, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
+import { revisionSnapshotAggregate, type VariationListingFrozenActiveRevision } from '@/ebay/variation-listing-active-revision.js';
+import { assertVariationListingMerchantLocation, canAutoReconcileTerminalZeroOfferFailure, createVariationListingActionService, normalizeItem, readRemovedSkuExhaustiveOffers, VariationListingActionError } from '@/ebay/variation-listing-actions.js';
 import { subscribeVariationListingActionEvents } from '@/ebay/variation-listing-action-events.js';
 import type { RemovedSkuRetirementStore } from '@/ebay/variation-listing-removed-sku-remote-retirement.js';
 import {
@@ -221,6 +221,28 @@ function terminalZeroPublishChangesHarness(errorId = 25013) {
     ]),
     { sequence_no: 7, operation_key: 'revision-reconcile', operation_kind: 'revision_reconcile', target_ref: previous.group.group_key, intent_version: 1, intent_digest: canonicalDigest({}), intent: {} },
   ];
+  const desired = structuredClone(previous);
+  desired.copies[0] = { ...desired.copies[0]!, availability_state: 'unavailable' };
+  const desiredBundle = buildVariationListingInventoryPayloadBundle({ aggregate: desired, representativeImages: images });
+  const frozenOperationPlan = [
+    { sequenceNo: 1, operationKey: 'child-item:first', operationKind: 'child_inventory_item_write', targetRef: first.sku, intentVersion: 1, intentDigest: canonicalDigest({}), intent: {} },
+    { sequenceNo: 2, operationKey: 'child-offer:first', operationKind: 'child_offer_write', targetRef: first.sku, intentVersion: 1, intentDigest: canonicalDigest({}), intent: {} },
+    { sequenceNo: 3, operationKey: 'revision-reconcile', operationKind: 'revision_reconcile', targetRef: previous.group.group_key, intentVersion: 1, intentDigest: canonicalDigest({}), intent: {} },
+  ];
+  const frozen = {
+    captureInput: {
+      capturedDesiredRevision: current.group.desired_revision,
+      groupId,
+      operationPlan: frozenOperationPlan,
+      revisionId,
+      snapshot,
+      snapshotDigest: canonicalDigest(snapshot),
+      snapshotVersion: 3,
+    },
+    confirmedBundle: bundle,
+    desiredBundlePreview: desiredBundle,
+    snapshot,
+  } as unknown as VariationListingFrozenActiveRevision;
   const previousRevision: VariationListingRevisionRow = {
     revision_id: revisionId,
     group_id: groupId,
@@ -299,7 +321,7 @@ function terminalZeroPublishChangesHarness(errorId = 25013) {
   });
   access.value.confirmRevision.mockImplementation(async () => ({ ...current.group, last_confirmed_revision: 4, lifecycle_state: 'active' }));
   const remoteFactory = vi.fn(async () => ({ remote, mutations }));
-  return { access, remoteFactory, mutations, checkpoints, itemWrites, offerWrites, captured };
+  return { access, remoteFactory, mutations, checkpoints, itemWrites, offerWrites, captured, frozen };
 }
 
 function activeWithdrawalHarness(options: { pending?: boolean; unresolved?: boolean; failWithdrawalOnce?: boolean; unpublished?: boolean; historicalOverlong?: boolean; saleDrift?: boolean } = {}) {
@@ -589,6 +611,21 @@ function historicalRemovalFixture(options: {
 }
 
 describe('YP6.2 variation listing actions', () => {
+  it.each([
+    ['present malformed longMessage does not fall back to message', { errorId: 25013, longMessage: { value: missingVariationSpecificsMessage }, message: missingVariationSpecificsMessage }, false],
+    ['object errorId is rejected', { errorId: { value: 25013 }, longMessage: missingVariationSpecificsMessage }, false],
+    ['object message is rejected when longMessage is absent', { errorId: 25013, message: { value: missingVariationSpecificsMessage } }, false],
+    ['absent longMessage falls back to message', { errorId: 25013, message: missingVariationSpecificsMessage }, true],
+    ['null longMessage falls back to message', { errorId: 25013, longMessage: null, message: missingVariationSpecificsMessage }, true],
+    ['valid longMessage takes precedence over malformed message', { errorId: 25013, longMessage: missingVariationSpecificsMessage, message: { value: missingVariationSpecificsMessage } }, true],
+  ] as const)('classifies provider error shape: %s', (_label, ebayError, expected) => {
+    const harness = terminalZeroPublishChangesHarness();
+    const error = new Error(`Failed to update offer: eBay API Error: ${missingVariationSpecificsMessage}`, {
+      cause: Object.assign(new Error(`eBay API Error: ${missingVariationSpecificsMessage}`), { ebayErrors: [ebayError] }),
+    });
+    expect(canAutoReconcileTerminalZeroOfferFailure(error, harness.frozen)).toBe(expected);
+  });
+
   it('automatically reconciles a fresh terminal-zero 25013 Offer failure without replaying writes', async () => {
     const harness = terminalZeroPublishChangesHarness();
     const service = createVariationListingActionService({
@@ -1131,6 +1168,44 @@ describe('YP6.2 variation listing actions', () => {
     expect(status).toMatchObject({ code: 'ebay_validation_failed', category: 'remote', remoteState: 'known_unchanged' });
     expect(status.issues[0]).toMatchObject({ code: '25002', field: 'Sport', message: 'Invalid aspect' });
     expect(JSON.stringify(status)).not.toContain('stack');
+  });
+
+  it('fails closed and redacts malformed eBay issue primitives', async () => {
+    const access = data();
+    const ebayError = {
+      response: {
+        status: 400,
+        data: {
+          errors: [{
+            errorId: { value: 25002 },
+            longMessage: { value: 'https://user:pass@example.test/?token=secret' },
+            message: { value: 'unsafe fallback' },
+            domain: { value: 'API_INVENTORY' },
+          }],
+        },
+      },
+    };
+    const service = createVariationListingActionService({
+      data: access.value,
+      publicImageBaseUrl: 'https://images.example.test',
+      remoteFactory: failingRemote(ebayError),
+    });
+
+    let caught: unknown;
+    try {
+      await service.publish(groupId, 3);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(VariationListingActionError);
+    const status = (caught as VariationListingActionError).status;
+    const serialized = JSON.stringify(status);
+    expect(status).toMatchObject({ code: 'ebay_validation_failed', issues: [{ message: 'eBay rejected the request.' }] });
+    expect(status.issues[0]).not.toHaveProperty('code');
+    expect(status.issues[0]).not.toHaveProperty('resource');
+    expect(serialized).not.toContain('[object Object]');
+    expect(serialized).not.toContain('user:pass');
+    expect(serialized).not.toContain('token=secret');
   });
 
   it('reads exhaustive Offers with page-index offsets and rejects incomplete terminal metadata', async () => {

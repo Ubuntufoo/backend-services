@@ -547,11 +547,21 @@ function desiredActiveQuantities(
 
 /** Inventory Item GET may omit a persisted raw-card descriptor. The listing-facing
  * Trading response is an acceptable proof only for that exact omission. */
+function tradingPrimitiveText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value);
+  return '';
+}
+
+function tradingSkuText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 function tradingConditionMatches(raw: unknown, listingId: string, expected: Json): boolean {
   const root = unknownRecord(raw, 'Trading GetItem condition response');
   const item = unknownRecord(root.Item ?? root, 'Trading GetItem condition item');
   // This variation-listing payload family is restricted to raw cards (condition 4000).
-  if (String(item.ItemID ?? '') !== listingId || String(item.ConditionID ?? '') !== '4000') return false;
+  if (tradingPrimitiveText(item.ItemID) !== listingId || tradingPrimitiveText(item.ConditionID) !== '4000') return false;
   const wrapper = item.ConditionDescriptors;
   if (!wrapper || typeof wrapper !== 'object' || Array.isArray(wrapper)) return false;
   const rawRows = (wrapper as Record<string, unknown>).ConditionDescriptor;
@@ -583,7 +593,7 @@ export function tradingVerifiedListingPolicies(
   const itemValue = root?.Item ?? root;
   if (!itemValue || typeof itemValue !== 'object' || Array.isArray(itemValue)) return null;
   const item = itemValue as Record<string, unknown>;
-  if (String(item.ItemID ?? '') !== listingId) return null;
+  if (tradingPrimitiveText(item.ItemID) !== listingId) return null;
   const profiles = item.SellerProfiles;
   if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) return null;
   const rows = profiles as Record<string, unknown>;
@@ -663,7 +673,7 @@ export async function reconcilePublishedQuantityBaseline(
           ['product.aspects', actualProduct.aspects, expectedProduct.aspects],
           ['product.imageUrls', actualProduct.imageUrls, expectedProduct.imageUrls],
         ].filter(([, actual, expected]) => canonicalJson(actual ?? null) !== canonicalJson(expected ?? null))
-          .map(([name]) => name);
+          .map(([name]) => typeof name === 'string' ? name : 'other');
         throw new Error(`Variation listing confirmed item ${child.sku} changed outside quantity (fields: ${differences.join(', ') || 'other'}).`);
       }
       listingRead ??= getListing(listingId);
@@ -767,14 +777,21 @@ export function reconstructConfirmedRemoteIdentity(
   checkpoints: readonly VariationListingPublishingCheckpointRow[]
 ): Pick<VariationListingConfirmedRemoteIdentity, 'listingId' | 'offerIdsBySku'> {
   const aggregate = revisionSnapshotAggregate(revision);
-  const operations = Array.isArray(revision.operation_plan)
-    ? revision.operation_plan as unknown as { operation_key: string; operation_kind: string; target_ref?: string }[]
-    : [];
-  const normalizedOperations = operations.map((operation) => ({
-    key: operation.operation_key,
-    kind: operation.operation_kind,
-    targetRef: operation.target_ref,
-  }));
+  const operations = Array.isArray(revision.operation_plan) ? revision.operation_plan : [];
+  const normalizedOperations = operations.map((value) => {
+    const operation = unknownRecord(value, 'previous revision operation plan entry');
+    const key = operation.operation_key;
+    const kind = operation.operation_kind;
+    const targetRef = operation.target_ref;
+    if (
+      typeof key !== 'string' || key.trim() === '' ||
+      typeof kind !== 'string' || kind.trim() === '' ||
+      (targetRef !== undefined && targetRef !== null && typeof targetRef !== 'string')
+    ) {
+      throw new Error('Variation listing previous revision operation plan has malformed fields.');
+    }
+    return { key, kind, targetRef: typeof targetRef === 'string' ? targetRef : undefined };
+  });
   const byKey = new Map<string, { key: string; kind: string }>();
   for (const operation of normalizedOperations) {
     if (!operation.key || byKey.has(operation.key)) throw new Error('Variation listing previous revision operation keys must be unique.');
@@ -1860,8 +1877,8 @@ function listingVariationPrices(value: unknown, listingId: string, allowEmpty = 
   const itemCandidate = root.Item ?? root;
   const item = unknownRecord(itemCandidate, 'Trading GetItem item');
   const observedListingId = item.ItemID;
-  if (observedListingId === undefined || String(observedListingId).trim() !== listingId) {
-    throw new Error(`Variation listing Trading GetItem returned listing ${String(observedListingId)} instead of ${listingId}.`);
+  if (tradingPrimitiveText(observedListingId).trim() !== listingId) {
+    throw new Error(`Variation listing Trading GetItem returned listing ${tradingPrimitiveText(observedListingId) || 'invalid'} instead of ${listingId}.`);
   }
   if ((item.Variations === undefined || item.Variations === null) && allowEmpty) return new Map();
   const variationsContainer = unknownRecord(item.Variations, 'Trading GetItem variations');
@@ -1874,7 +1891,7 @@ function listingVariationPrices(value: unknown, listingId: string, allowEmpty = 
   const prices = new Map<string, ListingVariationPrice>();
   for (const rawVariation of rows) {
     const variation = unknownRecord(rawVariation, 'Trading GetItem variation');
-    const sku = String(variation.SKU ?? '').trim();
+    const sku = tradingSkuText(variation.SKU).trim();
     if (!sku) throw new Error('Variation listing Trading GetItem variation is missing SKU.');
     if (prices.has(sku)) throw new Error(`Variation listing Trading GetItem returned duplicate SKU ${sku}.`);
     prices.set(sku, listingPrice(variation.StartPrice, `Trading GetItem variation ${sku}`));
@@ -1891,8 +1908,8 @@ function listingVariationSellableQuantities(
 ): Map<string, number> {
   const root = unknownRecord(value, 'Trading GetItem response');
   const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
-  if (item.ItemID === undefined || String(item.ItemID).trim() !== listingId) {
-    throw new Error(`Variation listing Trading GetItem returned listing ${String(item.ItemID)} instead of ${listingId}.`);
+  if (tradingPrimitiveText(item.ItemID).trim() !== listingId) {
+    throw new Error(`Variation listing Trading GetItem returned listing ${tradingPrimitiveText(item.ItemID) || 'invalid'} instead of ${listingId}.`);
   }
   if ((item.Variations === undefined || item.Variations === null) && allowEmpty) return new Map();
   const container = unknownRecord(item.Variations, 'Trading GetItem variations');
@@ -1905,7 +1922,7 @@ function listingVariationSellableQuantities(
   const quantities = new Map<string, number>();
   for (const rawVariation of rows) {
     const variation = unknownRecord(rawVariation, 'Trading GetItem variation');
-    const sku = String(variation.SKU ?? '').trim();
+    const sku = tradingSkuText(variation.SKU).trim();
     if (!sku || quantities.has(sku)) throw new Error('Variation listing Trading GetItem variation identity is malformed or duplicated.');
     if (requiredSkus && !requiredSkus.has(sku)) continue;
     const totalRaw = variation.Quantity;
@@ -1976,7 +1993,7 @@ function assertListingPreQuantities(
 ): void {
   const root = unknownRecord(value, 'Trading GetItem response');
   const item = unknownRecord(root.Item ?? root, 'Trading GetItem item');
-  if (String(item.ItemID ?? '').trim() !== listingId) throw new Error(`Variation listing ${label} listing identity changed.`);
+  if (tradingPrimitiveText(item.ItemID).trim() !== listingId) throw new Error(`Variation listing ${label} listing identity changed.`);
   const variations = unknownRecord(item.Variations, 'Trading GetItem variations');
   const rawRows = variations.Variation;
   const rows = Array.isArray(rawRows) ? rawRows : [rawRows];
@@ -1985,7 +2002,7 @@ function assertListingPreQuantities(
   const seen = new Set<string>();
   for (const rawRow of rows) {
     const row = unknownRecord(rawRow, `Trading GetItem variation ${label}`);
-    const sku = String(row.SKU ?? '').trim();
+    const sku = tradingSkuText(row.SKU).trim();
     const expectedQuantity = expectedBySku.get(sku);
     if (!sku || expectedQuantity === undefined || seen.has(sku)) throw new Error(`Variation listing ${label} SKU set changed.`);
     const totalRaw = row.Quantity;
@@ -2024,7 +2041,7 @@ function listingRestockEvidence(
   const rowsContainer = unknownRecord(item.Variations, 'Trading GetItem variations');
   const rawRows = rowsContainer.Variation;
   const rows = Array.isArray(rawRows) ? rawRows : [rawRows];
-  const raw = rows.find((row) => row && typeof row === 'object' && !Array.isArray(row) && String((row as Record<string, unknown>).SKU ?? '').trim() === child.sku);
+  const raw = rows.find((row) => row && typeof row === 'object' && !Array.isArray(row) && tradingSkuText((row as Record<string, unknown>).SKU).trim() === child.sku);
   if (!raw) return null;
   const variation = unknownRecord(raw, 'Trading GetItem restocked variation');
   const readQuantity = (rawQuantity: unknown, label: string): number => {

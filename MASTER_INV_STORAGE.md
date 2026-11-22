@@ -619,3 +619,22 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - Capture this timestamp without additional operator input. Use an unambiguous stored instant (UTC) and display it in the user's local time.
 - Retain this timestamp as inventory provenance; do not overwrite the original import time during subsequent edits or retries of the same successfully imported item.
 - This is requirements documentation only; no code, database, or marketplace mutations are authorized.
+
+## Confirmed decision — Inventory table filters by intake/import source (2026-11-21)
+- Support filtering master inventory items by their **origin/intake source**, including **eBay auction import**, **AuctionNinja auction import**, and **physical camera/watcher capture**, along with any other supported import providers added later.
+- Implement this as a normal filter in the existing Inventory table filtering/saved-view system, not as a separate screen or subsystem.
+- Preserve the distinction between **origin channel** (camera versus digital auction import) and **auction provider** (eBay, AuctionNinja, etc.), so the filter can reliably select camera-captured items or imports from a specific source.
+- No implementation, schema, or production changes are authorized by this documentation-only decision.
+
+## Confirmed decision — filter Inventory by purchase date range (2026-11-21)
+- The Master Inventory table supports filtering by an optional **purchase date range**, including start and end dates, through the existing table filter and saved-view mechanism.
+- Apply the date filter to the item's **purchase/acquisition date**, not the separate automatic import timestamp or item-created timestamp.
+- Do not invent purchase dates for items lacking them; define a clear blank/unknown-date behavior when implementing the filter.
+- Preserve the selected purchase date range within named saved views, consistent with other table filters.
+- This is documentation only; no application, schema, marketplace, or production changes are authorized.
+
+## Confirmed decision — filter Inventory by purchase price range (2026-11-21)
+- Support optional minimum and maximum **purchase/acquisition price** filters in the existing Master Inventory table and saved-view system (for example, $1–$10 or $10–$50).
+- Filter against each item's recorded acquisition price, not marketplace listing price or suggested resale price. Treat missing acquisition prices as unknown rather than zero; do not invent values.
+- Preserve both bounds in named saved views. Use straightforward currency-aware comparisons; do not introduce conversion or reporting features absent separate approval.
+- This is requirements documentation only; no code, database, or production changes are authorized.

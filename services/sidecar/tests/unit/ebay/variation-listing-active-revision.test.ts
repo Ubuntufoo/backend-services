@@ -20,6 +20,7 @@ import {
   reconstructConfirmedRemoteIdentity,
   reconstructVariationListingConfirmedRepresentativeImages,
   revisionSnapshotAggregate,
+  tradingVerifiedListingPolicies,
   type VariationListingActiveMutationGateway,
   type VariationListingActiveRevisionExecutionInput,
   type VariationListingFrozenActiveRevision,
@@ -467,6 +468,7 @@ type ZeroStockFailure =
   | 'group-unknown'
   | 'listing-unknown'
   | 'listing-malformed'
+  | 'listing-object-sku'
   | 'listing-identity-drift'
   | 'item-quantity-drift';
 
@@ -481,6 +483,10 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
     variations: [variation('A', 0, 'copy-A', 0.99, -2), variation('B', 1), variation('C', 2)],
     copies: [copy('A'), copy('B'), copy('C')],
   });
+  if (failure === 'listing-object-sku') {
+    previous.variations[1]!.sku = '[object Object]';
+    current.variations[1]!.sku = '[object Object]';
+  }
   const base = remoteFor(previous, {
     'SKU-A': { inventoryItemQuantity: 2, offerQuantity: 2 },
     'SKU-B': { inventoryItemQuantity: 1, offerQuantity: 1 },
@@ -545,6 +551,12 @@ async function zeroStockFixture(failure?: ZeroStockFailure) {
       if (failure === 'listing-unknown' && itemAQuantity === 0) throw new Error('Trading read unavailable');
       if (failure === 'listing-malformed' && itemAQuantity === 0) {
         return { Item: { ItemID: listingId, Variations: { Variation: [{ SKU: 'SKU-B', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1 }] } } };
+      }
+      if (failure === 'listing-object-sku' && itemAQuantity === 0) {
+        return { Item: { ItemID: listingId, Variations: { Variation: [
+          { SKU: { value: 'SKU-B' }, StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+          { SKU: 'SKU-C', StartPrice: { '#text': '0.99', '@_currencyID': 'USD' }, Quantity: 1, SellingStatus: { QuantitySold: 0 } },
+        ] } } };
       }
       const childA = base.bundle.children.find((child) => child.sku === 'SKU-A')!;
       const childB = base.bundle.children.find((child) => child.sku === 'SKU-B')!;
@@ -670,6 +682,96 @@ describe('permanent-removal descriptor lineage', () => {
 });
 
 describe('YP8.2 active revision preparation', () => {
+  it('accepts numeric Trading ItemID and rejects object-valued listing identity', () => {
+    const expected = {
+      fulfillmentPolicyId: 'fulfillment',
+      paymentPolicyId: 'payment',
+      returnPolicyId: 'return',
+    } as Json;
+    const profiles = {
+      SellerShippingProfile: { ShippingProfileID: 'fulfillment' },
+      SellerPaymentProfile: { PaymentProfileID: 'payment' },
+      SellerReturnProfile: { ReturnProfileID: 'return' },
+    };
+    expect(tradingVerifiedListingPolicies({ Item: { ItemID: 123, SellerProfiles: profiles } }, '123', expected)).toEqual({
+      listingId: '123',
+      fulfillmentPolicyId: 'fulfillment',
+      paymentPolicyId: 'payment',
+      returnPolicyId: 'return',
+    });
+    expect(tradingVerifiedListingPolicies({ Item: { ItemID: { value: 123 }, SellerProfiles: profiles } }, '123', expected)).toBeNull();
+  });
+
+  it.each([
+    ['numeric ItemID and ConditionID', 123, 4000, true],
+    ['object ItemID', { value: 123 }, 4000, false],
+    ['object ConditionID', 123, { value: 4000 }, false],
+    ['NaN ItemID', Number.NaN, 4000, false],
+    ['fractional ItemID', 123.5, 4000, false],
+    ['infinite ItemID', Number.POSITIVE_INFINITY, 4000, false],
+    ['NaN ConditionID', 123, Number.NaN, false],
+    ['fractional ConditionID', 123, 4000.5, false],
+    ['infinite ConditionID', 123, Number.POSITIVE_INFINITY, false],
+  ] as const)('handles malformed Trading condition identity: %s', async (_label, itemId, conditionId, accepted) => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
+    const base = remoteFor(previous);
+    const revision = version1Revision(previous);
+    const snapshot = revision.snapshot as Record<string, Json>;
+    const confirmed = snapshot.confirmed as Record<string, Json>;
+    const confirmedRemote = confirmed.remote as Record<string, Json>;
+    confirmedRemote.listingId = '123';
+    revision.snapshot_digest = digest(revision.snapshot);
+    const checkpoints = version1Checkpoints(previous).map((row) => {
+      const evidence = row.evidence as Record<string, Json>;
+      return evidence.listingId === 'listing-1'
+        ? { ...row, evidence: { ...evidence, listingId: '123' } }
+        : row;
+    });
+    const remote = {
+      ...base.remote,
+      async getInventoryItem(sku: string) {
+        const read = await base.remote.getInventoryItem(sku);
+        if (read.state !== 'present') return read;
+        const payload = structuredClone(read.value.payload) as Record<string, Json>;
+        payload.conditionDescriptors = [];
+        return { ...read, value: { ...read.value, payload: payload as Json, conditionDescriptorsOmitted: true } };
+      },
+      async getOffers(sku: string, marketplaceId: string) {
+        const read = await base.remote.getOffers(sku, marketplaceId);
+        return read.state === 'present'
+          ? { ...read, value: read.value.map((offer) => ({ ...offer, listingId: '123' })) }
+          : read;
+      },
+      async getListing(listingId: string) {
+        const listing = await base.remote.getListing(listingId);
+        const item = (listing as Record<string, unknown>).Item as Record<string, unknown>;
+        return {
+          ...listing,
+          Item: {
+            ...item,
+            ItemID: itemId,
+            ConditionID: conditionId,
+            ConditionDescriptors: { ConditionDescriptor: { Name: 40001, Value: 400012 } },
+          },
+        };
+      },
+    };
+
+    const prepared = prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: revision,
+      previousCheckpoints: checkpoints,
+      remote,
+      revisionId: 'revision-2',
+    });
+    if (accepted) {
+      await expect(prepared).resolves.toMatchObject({ snapshot: { confirmed: { remote: { listingId: '123' } } } });
+    } else {
+      await expect(prepared).rejects.toThrow('condition descriptor cannot be verified');
+    }
+  });
+
   it('uses one exact Trading policy proof to reconcile omitted published Offer policies across A/C', async () => {
     const fixture = permanentRemovalRevision();
     const omitted = omittedPublishedOfferPoliciesRemote(fixture.remote);
@@ -1407,6 +1509,62 @@ describe('YP8.2 active revision preparation', () => {
       listingId: 'listing-1',
       offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
     });
+  });
+
+  it.each([
+    ['null operation plan', null],
+    ['object operation plan', { entries: [] }],
+    ['null operation entry', [null]],
+    ['non-string operation key', [{ operation_key: 42, operation_kind: 'child_offer_write', target_ref: 'SKU-A' }]],
+    ['non-string operation kind', [{ operation_key: 'child-offer:variation-A', operation_kind: { value: 'child_offer_write' }, target_ref: 'SKU-A' }]],
+    ['non-string target reference', [{ operation_key: 'child-offer:variation-A', operation_kind: 'child_offer_write', target_ref: { value: 'SKU-A' } }]],
+  ] as const)('rejects %s in a durable operation plan', (_label, operationPlan) => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const revision = version1Revision(previous);
+    revision.operation_plan = operationPlan as unknown as VariationListingRevisionRow['operation_plan'];
+    expect(() => reconstructConfirmedRemoteIdentity(revision, version1Checkpoints(previous))).toThrow(/operation plan|operation count/i);
+  });
+
+  it('accepts omitted and null target references for operations that do not consume them', () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const checkpoints = version1Checkpoints(previous);
+    for (const targetRef of ['string', 'null', 'omitted'] as const) {
+      const revision = version1Revision(previous);
+      const plan = revision.operation_plan as unknown as Record<string, unknown>[];
+      for (const operation of plan) {
+        if (operation.operation_kind !== 'group_publish' && operation.operation_kind !== 'revision_reconcile') continue;
+        if (targetRef === 'string') operation.target_ref = 'GROUP-1';
+        if (targetRef === 'null') operation.target_ref = null;
+        if (targetRef === 'omitted') delete operation.target_ref;
+      }
+      expect(reconstructConfirmedRemoteIdentity(revision, checkpoints)).toEqual({
+        listingId: 'listing-1',
+        offerIdsBySku: { 'SKU-A': 'offer-SKU-A', 'SKU-B': 'offer-SKU-B' },
+      });
+    }
+  });
+
+  it('rejects a malformed durable plan before reading the remote gateway', async () => {
+    const previous = aggregate({ group: group({ desired_revision: 1, last_confirmed_revision: null, lifecycle_state: 'publish-ready' }) });
+    const current = aggregate({ group: group({ desired_revision: 2, last_confirmed_revision: 1, lifecycle_state: 'active' }) });
+    const revision = version1Revision(previous);
+    revision.operation_plan = [null] as unknown as VariationListingRevisionRow['operation_plan'];
+    const base = remoteFor(previous);
+    const remoteReads = [
+      vi.spyOn(base.remote, 'getInventoryItemGroup'),
+      vi.spyOn(base.remote, 'getInventoryItem'),
+      vi.spyOn(base.remote, 'getOffers'),
+      vi.spyOn(base.remote, 'getListing'),
+    ];
+
+    await expect(prepareVariationListingFrozenActiveRevision({
+      currentAggregate: current,
+      previousRevision: revision,
+      previousCheckpoints: version1Checkpoints(previous),
+      remote: base.remote,
+      revisionId: 'revision-2',
+    })).rejects.toThrow();
+    for (const read of remoteReads) expect(read).not.toHaveBeenCalled();
   });
 
   it('plans an offer-only mutation for a price-only edit', async () => {
@@ -3632,15 +3790,17 @@ describe('YP8.2 active revision executor acceptance', () => {
       ['group read unknown after Item write', 'group-unknown'],
       ['Trading read unknown', 'listing-unknown'],
       ['Trading read malformed', 'listing-malformed'],
+      ['Trading object SKU', 'listing-object-sku'],
       ['Trading listing identity drift', 'listing-identity-drift'],
       ['desired Item quantity drift', 'item-quantity-drift'],
     ] as const)('fails closed for %s', async (_label, failure) => {
       const fixture = await zeroStockFixture(failure);
       await expect(execute(fixture)).rejects.toThrow();
-      expect(fixture.itemWrites()).toBe(failure === 'sibling-quantity-drift' ? 0 : 1);
+      const blockedBeforeItem = failure === 'sibling-quantity-drift' || failure === 'listing-object-sku';
+      expect(fixture.itemWrites()).toBe(blockedBeforeItem ? 0 : 1);
       expect(fixture.offerWrites()).toBe(0);
-      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(failure === 'sibling-quantity-drift' ? [] : ['started', 'confirmed_complete']);
-      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(failure === 'sibling-quantity-drift' ? [] : ['started', 'unknown']);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-item:variation-A').map((row) => row.state)).toEqual(blockedBeforeItem ? [] : ['started', 'confirmed_complete']);
+      expect(fixture.checkpoints.filter((row) => row.operation_key === 'child-offer:variation-A').map((row) => row.state)).toEqual(blockedBeforeItem ? [] : ['started', 'unknown']);
       expect(fixture.checkpoints.some((row) => row.operation_key === 'revision-reconcile' && row.state === 'confirmed_complete')).toBe(false);
     });
   });

@@ -272,8 +272,16 @@ function sanitizeUiText(value: string): string {
     .trim();
 }
 
+function providerPrimitiveText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value);
+  return null;
+}
+
 function conciseDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error
+    ? error.message
+    : providerPrimitiveText(error) ?? providerPrimitiveText(record(error).message) ?? 'Unknown eBay error.';
   return sanitizeUiText(message).slice(0, 500);
 }
 
@@ -295,11 +303,14 @@ function eBayIssues(error: unknown): VariationListingUiIssue[] {
     const field = parameters
       .map((parameter) => typeof parameter.name === 'string' ? parameter.name.trim() : '')
       .find(Boolean);
+    const code = providerPrimitiveText(row.errorId);
+    const message = providerPrimitiveText(row.longMessage) ?? providerPrimitiveText(row.message) ?? 'eBay rejected the request.';
+    const resource = providerPrimitiveText(row.domain);
     return {
-      ...(row.errorId !== undefined ? { code: String(row.errorId) } : {}),
+      ...(code !== null ? { code } : {}),
       ...(field ? { field } : {}),
-      message: sanitizeUiText(String(row.longMessage ?? row.message ?? 'eBay rejected the request.')).slice(0, 300),
-      ...(row.domain ? { resource: sanitizeUiText(String(row.domain)).slice(0, 120) } : {}),
+      message: sanitizeUiText(message).slice(0, 300),
+      ...(resource ? { resource: sanitizeUiText(resource).slice(0, 120) } : {}),
     };
   });
 }
@@ -1640,7 +1651,8 @@ export function canAutoReconcileTerminalZeroOfferFailure(error: unknown, frozen:
     const ebayErrors = row.ebayErrors;
     if (Array.isArray(ebayErrors) && ebayErrors.some((candidate) => {
       const ebayError = record(candidate);
-      return ebayError.errorId === 25013 && missingVariationSpecifics.test(String(ebayError.longMessage ?? ebayError.message ?? ''));
+      const message = ebayError.longMessage ?? ebayError.message;
+      return ebayError.errorId === 25013 && typeof message === 'string' && missingVariationSpecifics.test(message);
     })) {
       hasExactEbayError = true;
       break;
