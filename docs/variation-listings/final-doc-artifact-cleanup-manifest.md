@@ -1,7 +1,7 @@
 # YP-FINAL.DOC-ARTIFACT-CLEANUP — Native purge manifest
 
-Date: 2026-11-19  
-Scope: `backend-services-you-pick` and `ebay-ui-app-you-pick`, both `feature/you-pick`  
+Date: 2026-11-19
+Scope: `backend-services-you-pick` and `ebay-ui-app-you-pick`, both `feature/you-pick`
 Method: Codex native filesystem access only; no GPT-REPO-MCP configuration or cleanup API.
 
 ## Removal rules
