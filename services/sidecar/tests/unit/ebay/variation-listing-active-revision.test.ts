@@ -18,7 +18,6 @@ import {
   executeVariationListingActiveRevision,
   prepareVariationListingFrozenActiveRevision,
   reconstructConfirmedRemoteIdentity,
-  reconstructVariationListingConfirmedRepresentativeImages,
   revisionSnapshotAggregate,
   tradingVerifiedListingPolicies,
   type VariationListingActiveMutationGateway,

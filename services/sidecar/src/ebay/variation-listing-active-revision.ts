@@ -572,7 +572,7 @@ function tradingConditionMatches(raw: unknown, listingId: string, expected: Json
     return null;
   };
   if (rows.length === 0) return false;
-  const descriptors: Array<{ name: string; values: string[] }> = [];
+  const descriptors: { name: string; values: string[] }[] = [];
   for (const rawRow of rows) {
     if (!rawRow || typeof rawRow !== 'object' || Array.isArray(rawRow)) return false;
     const row = rawRow as Record<string, unknown>;
@@ -1838,7 +1838,7 @@ function activeOfferIgnoringQuantity(
   return asJson({ offerId: offer.offerId, listingId: offer.listingId, payload: offer.payload, sku: offer.sku });
 }
 
-type ListingVariationPrice = { currency: string; value: string };
+interface ListingVariationPrice { currency: string; value: string }
 
 function unknownRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {

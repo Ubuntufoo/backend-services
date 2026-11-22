@@ -10,14 +10,14 @@ export type VariationListingActionName =
   | 'cleanup'
   | 'return_to_review';
 
-export type VariationListingActionEvent = {
+export interface VariationListingActionEvent {
   action: VariationListingActionName;
   at: string;
   groupId: string;
   kind: 'action_started' | 'action_progress' | 'action_succeeded' | 'action_failed';
   stage: string;
   status?: unknown;
-};
+}
 
 const emitter = new EventEmitter();
 emitter.setMaxListeners(100);

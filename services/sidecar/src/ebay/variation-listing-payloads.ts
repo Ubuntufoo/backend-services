@@ -217,7 +217,7 @@ function jsonObject(value: Json, label: string): Record<string, Json> {
   return value as Record<string, Json>;
 }
 
-function parseConditionDescriptors(value: Json): Array<{ name: string; values: string[] }> {
+function parseConditionDescriptors(value: Json): { name: string; values: string[] }[] {
   if (!Array.isArray(value)) throw new Error('Variation listing condition_descriptors must be an array.');
   const parsed = z.array(conditionDescriptorSchema).parse(value);
   if (new Set(parsed.map((descriptor) => descriptor.name)).size !== parsed.length) {
@@ -229,7 +229,7 @@ function parseConditionDescriptors(value: Json): Array<{ name: string; values: s
 export function deriveVariationListingRawCardConditionDescriptors(
   categoryId: string,
   conditionToken: string
-): Array<{ name: string; values: string[] }> {
+): { name: string; values: string[] }[] {
   if (!isConditionToken(conditionToken)) {
     throw new Error(`Unsupported variation listing group condition ${conditionToken}.`);
   }

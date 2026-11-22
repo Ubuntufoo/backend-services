@@ -15,7 +15,6 @@ import { EbaySellerApi } from '@/api/index.js';
 import { getEbayConfig } from '@/config/environment.js';
 import { withExpectedApiNotFound } from '@/utils/logger.js';
 import {
-  buildVariationListingInventoryPayloadBundle,
   buildVariationListingHistoricalInventoryPayloadBundle,
   validateVariationListingNewPublicationPayload,
   type VariationListingInventoryPayloadBundle,
@@ -122,8 +121,8 @@ export interface VariationListingActionDataAccess {
   /** Durable c2b Item/Offer retirement state; absent only in read-only test harnesses. */
   remoteRetirementStore?: RemovedSkuRetirementStore;
   loadAggregate(groupId: string): Promise<VariationListingAggregateSnapshot | null>;
-  listRevisionsByGroupId(groupId: string): Promise<Array<{ source: VariationListingRevisionRow }>>;
-  listCheckpointsByRevisionId(revisionId: string): Promise<Array<{ source: VariationListingPublishingCheckpointRow }>>;
+  listRevisionsByGroupId(groupId: string): Promise<{ source: VariationListingRevisionRow }[]>;
+  listCheckpointsByRevisionId(revisionId: string): Promise<{ source: VariationListingPublishingCheckpointRow }[]>;
   markPublishReady(input: { groupId: string; expectedDesiredRevision: number }): Promise<unknown>;
   reserveActionRevision(input: import('@ebay-inventory/data').ReserveVariationListingActionRevisionInput): Promise<import('@ebay-inventory/data').VariationListingGroupRow>;
   captureRevision: import('@ebay-inventory/data').VariationListingTransactionGateway['captureRevision'];
@@ -168,14 +167,14 @@ export interface VariationListingActionServiceOptions {
       updateOffer(offerId: string, payload: Json): Promise<void>;
       withdrawInventoryItemGroup(groupKey: string, marketplaceId: string): Promise<void>;
       /** Exhaustive, all-marketplace Offer read for removed-SKU ownership proof. */
-      getAllOffersForSku?(sku: string): Promise<Array<{
+      getAllOffersForSku?(sku: string): Promise<{
         offerId: string;
         sku: string;
         marketplaceId: string;
         status: 'PUBLISHED' | 'UNPUBLISHED';
         listingId: string | null;
         availableQuantity: number;
-      }>>;
+      }[]>;
     };
     remote: VariationListingPublicationRemoteGateway;
     /** Read-only Fulfillment getOrders; unavailable readers block destructive retirement. */
@@ -492,7 +491,7 @@ export function normalizeItem(raw: unknown, sku: string) {
       }
       return values;
     });
-  const groupKeys = aliases.length === 0 ? null : aliases[0]!;
+  const groupKeys = aliases.length === 0 ? null : aliases[0];
   if (aliases.some((values) => JSON.stringify([...values].sort()) !== JSON.stringify([...(groupKeys ?? [])].sort()))) {
     throw new Error(`eBay inventory item ${sku} group aliases conflict.`);
   }
@@ -786,23 +785,23 @@ function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirem
     readAllOffers: async (sku) => {
       const exhaustive = await allOffers(sku);
       if (exhaustive.length === 0) return { complete: true, offers: [] };
-      const marketplace = exhaustive[0]!.marketplaceId;
+      const marketplace = exhaustive[0].marketplaceId;
       if (exhaustive.length !== 1 || exhaustive.some((offer) => offer.marketplaceId !== marketplace)) {
         throw new Error('Removed-SKU exhaustive Offer ownership cannot be reconciled to one marketplace.');
       }
       const scoped = await deps.remote.getOffers(sku, marketplace, { expectedNotFound: true });
       if (scoped.state !== 'present' || scoped.value.length !== 1 ||
-          scoped.value[0]!.sku !== sku || scoped.value[0]!.marketplaceId !== marketplace ||
-          scoped.value[0]!.offerId !== exhaustive[0]!.offerId) {
+          scoped.value[0].sku !== sku || scoped.value[0].marketplaceId !== marketplace ||
+          scoped.value[0].offerId !== exhaustive[0].offerId) {
         throw new Error('Removed-SKU scoped Offer payload is missing or conflicts with exhaustive ownership.');
       }
-      const observed = scoped.value[0]!;
-      if (observed.status !== exhaustive[0]!.status || observed.listingId !== exhaustive[0]!.listingId ||
-          quantityFromOfferPayload(observed.payload) !== exhaustive[0]!.availableQuantity) {
+      const observed = scoped.value[0];
+      if (observed.status !== exhaustive[0].status || observed.listingId !== exhaustive[0].listingId ||
+          quantityFromOfferPayload(observed.payload) !== exhaustive[0].availableQuantity) {
         throw new Error('Removed-SKU exhaustive and scoped Offer lifecycle/quantity disagree.');
       }
       return { complete: true, offers: [{
-        ...exhaustive[0]!,
+        ...exhaustive[0],
         payload: offerPayloadWithoutQuantity(observed.payload),
       }] };
     },
@@ -827,11 +826,11 @@ function removedSkuRemote(deps: RemovedSkuActionDependencies): RemovedSkuRetirem
         // be hidden by the scoped read and target deletion could proceed.
         const exhaustiveOffers = await allOffers(sku);
         if (!Array.isArray(exhaustiveOffers) || exhaustiveOffers.length !== 1) return false;
-        const exhaustiveOffer = exhaustiveOffers[0]!;
+        const exhaustiveOffer = exhaustiveOffers[0];
         if (exhaustiveOffer.sku !== sku || exhaustiveOffer.offerId !== plan.offerIdsBySku[sku] || exhaustiveOffer.marketplaceId !== plan.marketplaceId || exhaustiveOffer.status !== 'PUBLISHED' || exhaustiveOffer.listingId !== plan.listingId || exhaustiveOffer.availableQuantity !== plan.quantitiesBySku[sku]?.offerQuantity) return false;
         const offers = await deps.remote.getOffers(sku, plan.marketplaceId, { expectedNotFound: true });
         if (offers.state !== 'present' || offers.value.length !== 1) return false;
-        const offer = offers.value[0]!;
+        const offer = offers.value[0];
         if (offer.offerId !== plan.offerIdsBySku[sku] || offer.status !== 'PUBLISHED' || offer.lifecycleClass !== 'active' || offer.listingId !== plan.listingId || quantityFromOfferPayload(offer.payload) !== plan.quantitiesBySku[sku]?.offerQuantity || canonicalJson(offerPayloadWithoutQuantity(offer.payload)) !== canonicalJson(plan.offerPayloadsBySku[sku])) return false;
       }
       return true;
@@ -1053,9 +1052,9 @@ function latestUnresolvedOperation(
   )[0];
 }
 
-export type VariationListingRevisionRecoveryOperation = { operationKey: string; operationKind: string; sequenceNo: number };
-export type VariationListingRevisionRecoveryCheckpoint = { operationKey: string; state: VariationListingPublishingCheckpointRow['state']; observedRemoteState: VariationListingPublishingCheckpointRow['observed_remote_state']; attemptNumber: number; checkpointNumber: number };
-export type VariationListingRevisionRecovery = { operationKey: string; operationKind: string; kind: 'checkpoint' | 'missing' | 'watermark_pending'; state: VariationListingPublishingCheckpointRow['state'] | 'pending' | 'confirmation_pending'; observedRemoteState: VariationListingPublishingCheckpointRow['observed_remote_state']; checkpoint?: VariationListingRevisionRecoveryCheckpoint; foreign?: boolean };
+export interface VariationListingRevisionRecoveryOperation { operationKey: string; operationKind: string; sequenceNo: number }
+export interface VariationListingRevisionRecoveryCheckpoint { operationKey: string; state: VariationListingPublishingCheckpointRow['state']; observedRemoteState: VariationListingPublishingCheckpointRow['observed_remote_state']; attemptNumber: number; checkpointNumber: number }
+export interface VariationListingRevisionRecovery { operationKey: string; operationKind: string; kind: 'checkpoint' | 'missing' | 'watermark_pending'; state: VariationListingPublishingCheckpointRow['state'] | 'pending' | 'confirmation_pending'; observedRemoteState: VariationListingPublishingCheckpointRow['observed_remote_state']; checkpoint?: VariationListingRevisionRecoveryCheckpoint; foreign?: boolean }
 
 export function classifyVariationListingRevisionRecovery(input: {
   capturedDesiredRevision: number;
@@ -1463,7 +1462,7 @@ export async function readVariationListingQuantityStatus(
   const durableRemoteIdentity = reconstructConfirmedRemoteIdentity(confirmedRevision, checkpoints);
   const dependencies = await (options.remoteFactory ?? createProductionRemote)();
   const observed = await reconcilePublishedQuantityBaseline(
-    dependencies!.remote,
+    dependencies.remote,
     confirmedBundle,
     durableRemoteIdentity,
     true,
@@ -1629,10 +1628,10 @@ export async function assertVariationListingSoldOutRemovalEligible(
   const rows = status.variations.filter((row) => row.variationId === input.variationId && row.sku === target.sku);
   if (
     rows.length !== 1 ||
-    rows[0]!.inventoryItemQuantity !== 0 ||
-    rows[0]!.offerQuantity !== 0 ||
-    rows[0]!.pendingAdjustment !== 0 ||
-    rows[0]!.afterPublish !== 0
+    rows[0].inventoryItemQuantity !== 0 ||
+    rows[0].offerQuantity !== 0 ||
+    rows[0].pendingAdjustment !== 0 ||
+    rows[0].afterPublish !== 0
   ) {
     throw permanentRemovalEligibilityError(input.groupId, 'Sold-out removal is allowed only for a confirmed SKU whose Inventory Item and Offer are both already at quantity zero, with no pending replenishment.');
   }
@@ -2017,9 +2016,9 @@ export function createVariationListingActionService(options: VariationListingAct
     if (
       existingPlan &&
       livePendingTargets.length === 1 &&
-      (existingPlan.targetVariationId !== livePendingTargets[0]!.variation_id ||
-        existingPlan.targetSku !== livePendingTargets[0]!.sku ||
-        targetVariationId !== livePendingTargets[0]!.variation_id)
+      (existingPlan.targetVariationId !== livePendingTargets[0].variation_id ||
+        existingPlan.targetSku !== livePendingTargets[0].sku ||
+        targetVariationId !== livePendingTargets[0].variation_id)
     ) {
       throw validationError(
         action,
@@ -2027,7 +2026,7 @@ export function createVariationListingActionService(options: VariationListingAct
         'permanent_removal_target_mismatch',
         'The frozen permanent-removal target does not match the live staged target; inspect action history before retrying.',
         ['inspect_group_history', 'refresh_group'],
-        { variationId: livePendingTargets[0]!.variation_id, sku: livePendingTargets[0]!.sku },
+        { variationId: livePendingTargets[0].variation_id, sku: livePendingTargets[0].sku },
       );
     }
     const deps = await resolveDependencies();
@@ -2231,7 +2230,7 @@ export function createVariationListingActionService(options: VariationListingAct
       }
     }
     if (pendingRemovals.length === 1) {
-      const target = pendingRemovals[0]!;
+      const target = pendingRemovals[0];
       if (!hasOnlyVariationListingPermanentRemovalPending(aggregate, previous, target.variation_id)) {
         throw validationError('publish_changes', groupId, 'permanent_removal_mixed_changes',
           'Permanent removal cannot include quantity, price, copy, or group edits. Cancel the removal and publish other changes separately.',

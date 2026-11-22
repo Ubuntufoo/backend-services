@@ -638,3 +638,38 @@ Audit performed with Supabase metadata tools and SELECT-only SQL. No production 
 - Filter against each item's recorded acquisition price, not marketplace listing price or suggested resale price. Treat missing acquisition prices as unknown rather than zero; do not invent values.
 - Preserve both bounds in named saved views. Use straightforward currency-aware comparisons; do not introduce conversion or reporting features absent separate approval.
 - This is requirements documentation only; no code, database, or production changes are authorized.
+
+## Confirmed exclusion — no bulk purchase-price editing (2026-11-21)
+- Do **not** support bulk editing of acquisition/purchase prices across selected master inventory items.
+- Purchase prices are item-specific and can be corrected only by opening an individual inventory item and explicitly saving its price edit.
+- Preserve previously approved bulk actions for applicable inventory statuses; this exclusion applies specifically to purchase/acquisition price fields.
+- This is documentation only; no code, schema, marketplace, or production changes are authorized.
+
+## Confirmed organizational practice — sport/type SKU and nonrepeating numeric ranges (2026-11-22)
+- The operator already uses the **SKU itself as the physical inventory organizational/lookup system**; example `BSKBL-Single-000031` identifies basketball (`BSKBL`), standard single (`Single`), and a unique numbered position within the established range.
+- Numerical SKU identifiers **must not repeat or be recycled**. Preserve established sport and listing-type prefixes and existing SKUs during backfill; do not invent a separate box/shelf/binder-location workflow as a requirement.
+- Keep the physical item's immutable internal master UUID concept distinct from its existing human-readable SKU: importing a physical item or migrating a Standard listing must not silently reassign or overwrite an existing SKU.
+- Whether digitally imported, not-yet-listed inventory should receive an SKU at import or only when listing/capture assignment occurs remains **open for operator confirmation**.
+- This is documentation only; no code, schema, or production changes are authorized.
+
+## Confirmed decision — assign permanent SKU at digital auction import (2026-11-22)
+- Every successfully imported individually purchased auction item receives a **permanent, unique, nonrecycled SKU immediately when its master inventory item is created**, even while its status remains Pending Delivery/Receipt and before physical arrival.
+- Preserve the established **sport prefix / item type / sequential number** convention, e.g. `BSKBL-Single-000031`, using the next available identifier without collisions with existing Standard, Variation, or imported records. The SKU must remain stable after receipt and subsequent listing.
+- Maintain the separate immutable master inventory UUID as the internal primary identity. Neither retrying an import nor subsequently receiving or publishing the item may create a duplicate SKU or change the assigned SKU.
+- If the importer lacks reliable evidence to determine the correct sport/type, do not guess; flag the item for operator correction before permanently issuing a potentially incorrect SKU. Implementation detail for reservation/atomic sequence handling remains to be designed.
+- No application code, schema, marketplace, or production mutations are authorized by this requirements update.
+
+## Confirmed decision — resolve uncertain sport/category before permanent SKU issuance (2026-11-22)
+- If Gemini and the source information do not reliably identify the imported item's sport or type required for the established SKU prefix, **do not guess or assign a permanent SKU**.
+- Put only the affected import in **Needs Attention**, retaining its source/images/enrichment progress, and request an explicit operator sport/category selection on the Imports page.
+- Once the operator selects the correct classification, resume the affected import from its existing durable stage, create/resolve the master item and assign its unique nonrecycled sport/type SKU atomically. Do not redo successful stages unnecessarily or duplicate inventory records.
+- Other queued imports continue processing sequentially rather than being held behind the unresolved classification.
+- Preserve the separate master UUID and the earlier decision to assign a permanent SKU at master-item creation, before physical receipt, once classification is sufficiently verified.
+- Requirements documentation only; no code, schema, eBay, or production changes are authorized.
+
+## Confirmed decision — assigned SKUs are read-only (2026-11-22)
+- Once a permanent physical inventory SKU has been assigned, display it as **read-only** in ordinary Master Inventory item and bulk editing workflows.
+- Do not permit accidental edits, automatic reassignment, renumbering, recycling, or replacement of an existing SKU when an item is received, enriched again, relisted, or migrated.
+- A genuine misclassification or data-repair case may be handled only through a future **separate, explicitly authorized correction procedure** with checks for physical organization, marketplace associations, and uniqueness; no routine SKU-edit control is part of the initial feature.
+- Preserve the independent immutable master item UUID as the internal record identity.
+- Documentation-only decision; no application, schema, marketplace, or production changes are authorized.

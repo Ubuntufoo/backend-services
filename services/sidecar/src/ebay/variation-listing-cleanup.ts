@@ -608,7 +608,7 @@ type CleanupCheckpointState =
   | 'confirmed_complete'
   | 'confirmed_no_op';
 type CleanupHistory = Map<string, VariationListingPublishingCheckpointRow[]>;
-type CleanupEvidence = { evidence: Json; observed: 'present' | 'proven_absent' };
+interface CleanupEvidence { evidence: Json; observed: 'present' | 'proven_absent' }
 
 function cleanupLatest(rows: readonly VariationListingPublishingCheckpointRow[]): VariationListingPublishingCheckpointRow | null {
   return [...rows].sort((a, b) => a.attempt_number - b.attempt_number || a.checkpoint_number - b.checkpoint_number).at(-1) ?? null;
