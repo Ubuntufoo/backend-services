@@ -5,6 +5,7 @@ import type {
   ListingRow,
   ResolvedAiModelRoute,
 } from '@ebay-inventory/data';
+import type * as ApiModule from '@/api/index.js';
 import { afterAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 const jobLoggerDebug = vi.hoisted(() => vi.fn());
@@ -57,10 +58,12 @@ vi.mock('@/pricing/provider-resolver.js', async () => {
 // an optional active-market shadow after baseline pricing. Prevent that shadow
 // from initializing OAuth/eBay when no explicit traversal seam is supplied.
 vi.mock('@/api/index.js', async () => {
-  const actual = await vi.importActual<typeof import('@/api/index.js')>('@/api/index.js');
+  const actual = await vi.importActual<ApiModule>('@/api/index.js');
+  const actualRecord = actual as unknown as Record<string, unknown>;
+  const ebaySellerApiBase = actualRecord.EbaySellerApi as ApiModule['EbaySellerApi'];
   return {
-    ...actual,
-    EbaySellerApi: class OfflineEbaySellerApi extends actual.EbaySellerApi {
+    ...actualRecord,
+    EbaySellerApi: class OfflineEbaySellerApi extends ebaySellerApiBase {
       override async initialize(): Promise<void> {
         throw new Error('active-market shadow disabled in unit tests');
       }

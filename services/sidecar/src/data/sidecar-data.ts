@@ -108,6 +108,7 @@ import {
   type ConfirmVariationListingPermanentRemovalInput,
   type UpdateVariationListingSelectorValueInput,
   type UpdateVariationListingRepresentativeCopyInput,
+  type ReserveVariationListingActionRevisionInput,
   type VariationListingAggregateSnapshot,
   type VariationListingGroup,
   type VariationListingPublishingCheckpoint,
@@ -206,7 +207,7 @@ export interface SidecarDataAccess {
     createGroup(input: CreateVariationListingGroupInput): Promise<VariationListingGroupRow>;
     applyGroupReviewDraft(input: ApplyVariationListingGroupReviewDraftInput): Promise<VariationListingGroupRow>;
     markPublishReady(input: MarkVariationListingPublishReadyInput): Promise<VariationListingGroupRow>;
-    reserveActionRevision(input: import('@ebay-inventory/data').ReserveVariationListingActionRevisionInput): Promise<VariationListingGroupRow>;
+    reserveActionRevision(input: ReserveVariationListingActionRevisionInput): Promise<VariationListingGroupRow>;
     returnToReview(input: ReturnVariationListingToReviewInput): Promise<VariationListingGroupRow>;
     captureRevision(input: CaptureVariationListingRevisionInput): Promise<CaptureVariationListingRevisionResult>;
     appendJournalCheckpoint(input: AppendVariationListingJournalCheckpointInput): Promise<AppendVariationListingJournalCheckpointResult>;

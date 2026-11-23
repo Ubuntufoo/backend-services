@@ -86,8 +86,8 @@ function buildImagePartFromDataUrl(imageUrl: string): Part {
   if (!match) {
     throw formatImageUrlError(imageUrl, 'must be a base64-encoded image data URL.');
   }
-  const mimeType = match[1]!;
-  const data = match[2]!;
+  const mimeType = match[1];
+  const data = match[2];
   if (!isValidBase64Payload(data)) {
     throw formatImageUrlError(imageUrl, 'must contain valid base64 data.');
   }

@@ -163,13 +163,13 @@ function normalizeText(value: string | null | undefined): string | null {
   return hasText(value) ? value.trim() : null;
 }
 
-function jsonObject(value: Json | null | undefined): { [key: string]: Json | undefined } {
+function jsonObject(value: Json | null | undefined): Record<string, Json | undefined> {
   return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
 }
 
 function mergeSandboxPublishConfig(
   base: Json | null | undefined,
-  updates: { [key: string]: Json | undefined }
+  updates: Record<string, Json | undefined>
 ): Json {
   const root = jsonObject(base);
   return {
